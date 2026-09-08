@@ -70,6 +70,7 @@ const ROUTES = {
   "/monitory": "monitors",
   "/filtry": "filters",
   "/zprava": "message",
+  "/nastaveni": "settings",
 };
 
 const PAGE_TITLES = {
@@ -77,6 +78,7 @@ const PAGE_TITLES = {
   monitors: "Monitory",
   filters: "Filtry",
   message: "Zpráva",
+  settings: "Nastavení",
 };
 
 function currentPage() {
@@ -90,7 +92,7 @@ function applyRoute() {
     const href = link.getAttribute("href");
     link.classList.toggle("on", ROUTES[href] === page);
   });
-  ["overview", "monitors", "filters", "message"].forEach((name) => {
+  ["overview", "monitors", "filters", "message", "settings"].forEach((name) => {
     const view = $(`view-${name}`);
     if (view) view.hidden = name !== page;
   });
@@ -696,6 +698,58 @@ $("update-btn")?.addEventListener("click", async () => {
   const result = await post("/api/update", undefined, "Aktualizace se instaluje, aplikace se restartuje");
   if (result?.restarting) toast("Za chvíli se okno zavře a spustí nová verze", "info");
 });
+
+function downloadBackup(url, label) {
+  const link = document.createElement("a");
+  link.href = url;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  toast(label);
+}
+
+$("export-pack")?.addEventListener("click", () => downloadBackup("/api/backup/pack", "Stahuji zip balíček"));
+$("export-json")?.addEventListener("click", () => downloadBackup("/api/backup/json", "Stahuji JSON"));
+$("export-db")?.addEventListener("click", () => downloadBackup("/api/backup/sqlite", "Stahuji databázi"));
+
+async function importBackup(file) {
+  if (!file) return;
+  if (!confirm("Nahrát zálohu? Přepíše monitory a případně databázi na tomto počítači.")) return;
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    const response = await fetch("/api/backup/import", { method: "POST", body });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Import selhal");
+    if (data.status) renderStatus(data.status);
+    toast("Záloha je nahraná");
+  } catch (err) {
+    toast(err.message, "error");
+  }
+}
+
+$("import-file")?.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  importBackup(file);
+  event.target.value = "";
+});
+
+const drop = $("import-drop");
+if (drop) {
+  ["dragenter", "dragover"].forEach((type) => {
+    drop.addEventListener(type, (event) => {
+      event.preventDefault();
+      drop.classList.add("over");
+    });
+  });
+  ["dragleave", "drop"].forEach((type) => {
+    drop.addEventListener(type, (event) => {
+      event.preventDefault();
+      drop.classList.remove("over");
+    });
+  });
+  drop.addEventListener("drop", (event) => importBackup(event.dataTransfer?.files?.[0]));
+}
 
 async function boot() {
   applyRoute();

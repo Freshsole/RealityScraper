@@ -88,6 +88,7 @@ def main() -> None:
             "colorama",
             "pyyaml",
             "sniffio",
+            "python-multipart",
         ]
     )
     site = python_dir / "Lib" / "site-packages"

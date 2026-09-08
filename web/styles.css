@@ -511,6 +511,24 @@ a { color: var(--forest); }
 }
 #tpl-color { font-variant-numeric: tabular-nums; text-transform: lowercase; }
 
+.settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.settings-copy { color: var(--gray); margin: 0 0 16px; }
+.drop {
+  display: grid !important;
+  place-items: center;
+  gap: 6px;
+  min-height: 140px;
+  padding: 24px;
+  border-radius: 20px;
+  background: var(--mint);
+  color: var(--forest);
+  text-align: center;
+  cursor: pointer;
+}
+.drop span { color: var(--gray-2); font-weight: 400; font-size: 14px; }
+.drop.over { background: var(--green); }
+@media (max-width: 900px) { .settings-grid { grid-template-columns: 1fr; } }
+
 .form-card { margin-bottom: 32px; }
 .monitor-list { display: grid; gap: 12px; }
 .monitor-card {

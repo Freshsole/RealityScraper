@@ -25,6 +25,7 @@
         <a class="tab" href="/monitory">Monitory</a>
         <a class="tab" href="/filtry">Filtry</a>
         <a class="tab" href="/zprava">Zpráva</a>
+        <a class="tab" href="/nastaveni">Nastavení</a>
       </div>
       <div class="nav-aside">
         <span id="app-version" class="ver">v–</span>
@@ -167,6 +168,35 @@
               <p class="card-label">Náhled Discord</p>
               <div id="discord-preview" class="discord"></div>
             </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-settings" hidden>
+      <section class="section section-white">
+        <div class="section-inner">
+          <h2>Nastavení</h2>
+          <p class="lead-inline">Naklikej monitory a šablony na Macu, stáhni balíček a na Windows ho nahraj. Webhook i databáze jedou s tebou.</p>
+          <div class="settings-grid">
+            <article class="card form-card">
+              <p class="card-label">Export</p>
+              <p class="settings-copy">Zip obsahuje JSON (monitory, šablony, webhook) i SQLite databázi se známými inzeráty.</p>
+              <div class="actions">
+                <button class="btn" id="export-pack" type="button">Stáhnout balíček</button>
+                <button class="btn btn-ghost" id="export-json" type="button">Jen JSON</button>
+                <button class="btn btn-ghost" id="export-db" type="button">Jen databáze</button>
+              </div>
+            </article>
+            <article class="card form-card">
+              <p class="card-label">Import na Windows</p>
+              <p class="settings-copy">Nahraj zip z Macu, nebo zvlášť JSON / SQLite. Databáze přepíše sledovaná ID, JSON bez databáze nastaví monitory a první běh je zase potichu nasadí.</p>
+              <label class="drop" id="import-drop">
+                <input id="import-file" type="file" accept=".zip,.json,.sqlite,.db" hidden />
+                <strong>Vyber soubor</strong>
+                <span>sreality-backup.zip, config.json nebo monitor.sqlite</span>
+              </label>
+            </article>
           </div>
         </div>
       </section>

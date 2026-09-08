@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import sys
+import zipfile
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import config
+from app.backup import export_config, export_pack, export_sqlite, import_config, replace_sqlite
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
@@ -52,7 +56,7 @@ def page() -> FileResponse:
 
 
 app.add_api_route("/", page, methods=["GET"], include_in_schema=False)
-for _path in ("/prehled", "/monitory", "/filtry", "/zprava"):
+for _path in ("/prehled", "/monitory", "/filtry", "/zprava", "/nastaveni"):
     app.add_api_route(_path, page, methods=["GET"], include_in_schema=False)
 
 
@@ -177,3 +181,70 @@ async def filter_parse(payload: dict[str, Any]) -> dict:
     if not url:
         raise HTTPException(400, "Chybí url")
     return {"url": url, "filters": parse_url(url)}
+
+
+@app.get("/api/backup/json")
+async def backup_json() -> Response:
+    payload = json.dumps(export_config(hub.store), ensure_ascii=False, indent=2)
+    return Response(
+        payload,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="sreality-config.json"'},
+    )
+
+
+@app.get("/api/backup/sqlite")
+async def backup_sqlite() -> Response:
+    return Response(
+        export_sqlite(hub.store),
+        media_type="application/vnd.sqlite3",
+        headers={"Content-Disposition": 'attachment; filename="monitor.sqlite"'},
+    )
+
+
+@app.get("/api/backup/pack")
+async def backup_pack() -> Response:
+    return Response(
+        export_pack(hub.store),
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="sreality-backup.zip"'},
+    )
+
+
+@app.post("/api/backup/import")
+async def backup_import(file: UploadFile = File(...)) -> dict:
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Prázdný soubor")
+    name = (file.filename or "").lower()
+    was_running = hub.running
+    await hub.stop()
+    while hub.checking:
+        await asyncio.sleep(0.05)
+    try:
+        if name.endswith(".zip") or raw[:2] == b"PK":
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                names = archive.namelist()
+                sqlite_name = next((item for item in names if item.endswith((".sqlite", ".db"))), None)
+                json_name = next((item for item in names if item.endswith(".json")), None)
+                if sqlite_name:
+                    hub.store = replace_sqlite(hub.store, archive.read(sqlite_name))
+                if json_name:
+                    payload = json.loads(archive.read(json_name))
+                    import_config(hub.store, payload, reset_seeded=sqlite_name is None)
+                if not sqlite_name and not json_name:
+                    raise HTTPException(400, "V zipu chybí config.json nebo monitor.sqlite")
+        elif name.endswith(".json") or raw[:1] in {b"{", b"["}:
+            import_config(hub.store, json.loads(raw.decode("utf-8")), reset_seeded=True)
+        elif name.endswith((".sqlite", ".db")) or raw[:16] == b"SQLite format 3\x00":
+            hub.store = replace_sqlite(hub.store, raw)
+        else:
+            raise HTTPException(400, "Nahraj .zip, .json nebo .sqlite")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        if was_running:
+            await hub.start()
+    return {"ok": True, "status": hub.status()}
