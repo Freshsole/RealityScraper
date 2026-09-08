@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sreality Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M3 8.5 6.2 12 13 4" stroke="#163300" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        Sreality monitor
+      </div>
+      <div class="nav-tabs">
+        <a class="tab" href="/">Přehled</a>
+        <a class="tab" href="/monitory">Monitory</a>
+        <a class="tab" href="/filtry">Filtry</a>
+        <a class="tab" href="/zprava">Zpráva</a>
+      </div>
+      <div class="nav-aside">
+        <span id="app-version" class="ver">v–</span>
+        <button id="update-btn" class="btn" type="button" hidden>Aktualizovat</button>
+        <div id="live-pill" class="live-pill" data-state="off">
+          <span class="dot"></span>
+          <span id="live-label">Zastaveno</span>
+        </div>
+      </div>
+    </nav>
+
+    <div id="view-overview">
+      <header class="hero">
+        <div>
+          <p class="kicker">Víc hledání najednou · nový byt i změna ceny · Discord</p>
+          <h1 class="display">Hlídám<br />pražské<br />pronájmy</h1>
+          <p class="lead">
+            Každý monitor má vlastní URL a šablonu Discord zprávy. Nový byt nebo změna ceny jde rovnou do kanálu.
+          </p>
+          <div class="actions">
+            <button id="toggle" class="btn" type="button">Zastavit hlídání</button>
+            <button id="check" class="btn btn-ghost" type="button">Zkontrolovat teď</button>
+            <button id="test" class="btn btn-ghost" type="button">Test na Discord</button>
+          </div>
+          <p id="error" class="error" hidden></p>
+        </div>
+        <aside class="card">
+          <p class="card-label">Nové dnes</p>
+          <div id="new-today" class="stat-num">0</div>
+          <p class="stat-unit">notifikací na Discord</p>
+          <div class="mint" id="mint">První běh každého monitoru si uloží aktuální nabídku potichu.</div>
+          <div class="rows">
+            <div class="row"><span>Sledovaných ID</span><strong id="tracked">–</strong></div>
+            <div class="row"><span>Celkem v hledáních</span><strong id="total">–</strong></div>
+            <div class="row"><span>Poslední kontrola</span><strong id="last-check">ještě ne</strong></div>
+            <div class="row"><span>Interval</span><strong id="interval">60 s</strong></div>
+          </div>
+        </aside>
+      </header>
+      <section class="section">
+        <div class="section-inner">
+          <h2>Nové zásahy</h2>
+          <div id="grid" class="grid"></div>
+          <p id="empty" class="empty">Zatím žádný nový listing.</p>
+          <div class="map-card">
+            <div id="hits-map" role="img" aria-label="Mapa nových zásahů"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-monitors" hidden>
+      <section class="section section-white">
+        <div class="section-inner">
+          <h2>Monitory</h2>
+          <p class="lead-inline">Každý monitor hlídá jednu Sreality URL a posílá zásahy svojí Discord šablonou.</p>
+          <form id="monitor-form" class="card form-card">
+            <input type="hidden" id="monitor-id" />
+            <p class="card-label">Nový / úprava monitoru</p>
+            <label>Název<input id="monitor-name" placeholder="Praha 2+kk" /></label>
+            <label>Sreality URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/..."></textarea></label>
+            <label>Discord webhook<input id="monitor-webhook" placeholder="prázdné = výchozí z .env" /></label>
+            <label>Šablona zprávy<select id="monitor-template"></select></label>
+            <label class="check"><input type="checkbox" id="monitor-enabled" checked /> Zapnutý</label>
+            <div class="actions">
+              <button class="btn" type="submit">Uložit monitor</button>
+              <button class="btn btn-ghost" id="monitor-reset" type="button">Vyčistit</button>
+            </div>
+          </form>
+          <div id="monitor-list" class="monitor-list"></div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-filters" hidden>
+      <section class="section section-white">
+        <div class="section-inner">
+          <h2>Generátor URL</h2>
+          <p class="lead-inline">Stejné filtry jako na Sreality. Z výsledné adresy rovnou založíš monitor.</p>
+          <div class="actions" style="margin-bottom: 20px">
+            <button class="btn btn-ghost" id="filters-sample" type="button">Načíst ukázkové filtry</button>
+            <button class="btn btn-ghost" id="filters-clear" type="button">Vyčistit</button>
+          </div>
+          <div id="filter-groups"></div>
+          <div class="card form-card">
+            <p class="card-label">Vygenerovaná URL</p>
+            <textarea id="generated-url" rows="4" readonly></textarea>
+            <div class="range-grid">
+              <label>Cena od<input id="f-price-from" type="number" /></label>
+              <label>Cena do<input id="f-price-to" type="number" /></label>
+              <label>Plocha od<input id="f-area-from" type="number" /></label>
+              <label>Plocha do<input id="f-area-to" type="number" /></label>
+              <label>Patro od<input id="f-floor-from" type="number" /></label>
+              <label>Patro do<input id="f-floor-to" type="number" /></label>
+              <label>POI do km<input id="f-poi-km" type="number" /></label>
+            </div>
+            <div class="actions">
+              <button class="btn" id="filters-to-monitor" type="button">Vytvořit monitor z URL</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="view-message" hidden>
+      <section class="section section-white">
+        <div class="section-inner">
+          <h2>Discord zpráva</h2>
+          <p class="lead-inline">Náhled vypadá jako zpráva na Discordu. Do polí dáš text nebo {{proměnnou}} a šablonu přiřadíš monitoru.</p>
+          <div class="message-layout">
+            <div>
+              <label>Šablona
+                <select id="template-select"></select>
+              </label>
+              <label>Název šablony<input id="template-name" /></label>
+              <label>Username<input id="tpl-username" /></label>
+              <label>Barva embedu
+                <span class="color-row">
+                  <input id="tpl-color-picker" type="color" value="#9fe870" />
+                  <input id="tpl-color" value="#9fe870" spellcheck="false" />
+                </span>
+              </label>
+              <label>Titulek embedu<input id="tpl-title" /></label>
+              <label>Footer<input id="tpl-footer" /></label>
+              <label class="check"><input type="checkbox" id="tpl-image" checked /> Zobrazit fotku</label>
+              <p class="card-label">Text zprávy</p>
+              <div id="tpl-lines"></div>
+              <button class="btn btn-ghost" id="tpl-add-line" type="button">Přidat řádek</button>
+              <p class="card-label">Pole v embedu</p>
+              <div id="tpl-fields"></div>
+              <button class="btn btn-ghost" id="tpl-add-field" type="button">Přidat pole</button>
+              <p class="card-label">Proměnné</p>
+              <div id="var-list" class="var-list"></div>
+              <div class="actions" style="margin-top: 20px">
+                <button class="btn" id="tpl-save" type="button">Uložit šablonu</button>
+                <button class="btn btn-ghost" id="tpl-new" type="button">Nová šablona</button>
+              </div>
+            </div>
+            <div>
+              <p class="card-label">Náhled Discord</p>
+              <div id="discord-preview" class="discord"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="footer">Osobní hlídání veřejných inzerátů. Webhook drž v .env, ne v gitu. <span id="footer-version"></span></footer>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
