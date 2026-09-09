@@ -23,6 +23,10 @@ IMAGE_TRANSFORM = "fl=res,800,600,3|shr,,20|jpg,80"
 AREA_RE = re.compile(r"(\d+)\s*m", re.IGNORECASE)
 
 
+class ListingGone(Exception):
+    """Portal listing is no longer available."""
+
+
 @dataclass
 class Listing:
     id: int
@@ -189,6 +193,8 @@ class SrealityClient:
     async def fetch_detail(self, listing: Listing) -> Listing:
         try:
             return await self._fetch_detail_next(listing)
+        except ListingGone:
+            raise
         except Exception:
             return listing
 
@@ -208,6 +214,8 @@ class SrealityClient:
                 url,
                 headers={"Accept": "application/json", "x-nextjs-data": "1"},
             )
+        if response.status_code == 404:
+            raise ListingGone(listing.url)
         response.raise_for_status()
         return apply_detail(listing, response.json())
 

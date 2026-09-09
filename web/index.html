@@ -8,7 +8,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n11" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n33" />
   </head>
   <body>
     <nav class="nav">
@@ -21,16 +22,16 @@
         Sreality monitor
       </div>
       <div class="nav-tabs">
-        <a class="tab" href="/">Přehled</a>
-        <a class="tab" href="/nabidka">Nabídka</a>
-        <a class="tab" href="/monitory">Monitory</a>
-        <a class="tab" href="/filtry">Filtry</a>
-        <a class="tab" href="/zprava">Zpráva</a>
-        <a class="tab" href="/nastaveni">Nastavení</a>
+        <a class="tab" href="/" data-icon="home">Přehled</a>
+        <a class="tab" href="/nabidka" data-icon="listings">Nabídka</a>
+        <a class="tab" href="/monitory" data-icon="radar">Monitory</a>
+        <a class="tab" href="/filtry" data-icon="sliders">Filtry</a>
+        <a class="tab" href="/zprava" data-icon="message">Zpráva</a>
+        <a class="tab" href="/nastaveni" data-icon="cog">Nastavení</a>
       </div>
       <div class="nav-aside">
         <span id="app-version" class="ver">v–</span>
-        <button id="update-btn" class="btn" type="button" hidden>Aktualizovat</button>
+        <button id="update-btn" class="btn" type="button" hidden data-icon="download">Aktualizovat</button>
         <div id="live-pill" class="live-pill" data-state="off">
           <span class="dot"></span>
           <span id="live-label">Zastaveno</span>
@@ -47,9 +48,9 @@
             Každý monitor má vlastní URL a šablonu Discord zprávy. Nový byt nebo změna ceny jde rovnou do kanálu.
           </p>
           <div class="actions">
-            <button id="toggle" class="btn" type="button">Zastavit hlídání</button>
-            <button id="check" class="btn btn-ghost" type="button">Zkontrolovat teď</button>
-            <button id="test" class="btn btn-ghost" type="button">Test na Discord</button>
+            <button id="toggle" class="btn" type="button" data-icon="pause">Zastavit hlídání</button>
+            <button id="check" class="btn btn-ghost" type="button" data-icon="refresh">Zkontrolovat teď</button>
+            <button id="test" class="btn btn-ghost" type="button" data-icon="send">Test na Discord</button>
           </div>
           <p id="error" class="error" hidden></p>
         </div>
@@ -82,6 +83,15 @@
       <div class="catalog-shell">
         <div class="catalog-map-wrap">
           <div id="catalog-map"></div>
+          <div class="map-tools">
+            <button type="button" class="map-tool" id="map-circle-btn" data-icon="circle">Kruh</button>
+            <label class="map-radius" id="map-radius-wrap" hidden>
+              <span id="map-radius-label">2 km</span>
+              <input id="map-radius" type="range" min="200" max="15000" step="100" value="2000" />
+            </label>
+            <button type="button" class="map-tool" id="map-circle-clear" hidden data-icon="x">Zrušit</button>
+          </div>
+          <p class="map-draw-hint" id="map-draw-hint" hidden>Klikni do mapy pro střed kruhu</p>
         </div>
         <aside class="catalog-side">
           <div class="catalog-filters">
@@ -93,23 +103,34 @@
               <p id="catalog-count">Načítám…</p>
             </div>
             <div class="chip-row" id="cat-portals">
-              <button type="button" class="chip on" data-portal="">Všechny</button>
-              <button type="button" class="chip" data-portal="sreality">Sreality</button>
-              <button type="button" class="chip" data-portal="bezrealitky">Bezrealitky</button>
+              <button type="button" class="chip on" data-portal="" data-icon="grid">Všechny</button>
+              <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
+              <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
             </div>
-            <input id="cat-q" class="catalog-search" placeholder="Lokalita, název, ulice, popis" />
+            <div class="chip-row" id="cat-status">
+              <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
+              <button type="button" class="chip" data-status="saved" data-icon="bookmark">Uložené</button>
+              <button type="button" class="chip" data-status="hidden" data-icon="eyeOff">Skryté</button>
+              <button type="button" class="chip" data-status="all" data-icon="listings">Vše</button>
+              <button type="button" class="chip" data-discounted="1" data-icon="percent">Zlevněné</button>
+            </div>
+            <div class="catalog-views" id="catalog-views"></div>
+            <div class="catalog-search-wrap">
+              <span data-icon="search" aria-hidden="true"></span>
+              <input id="cat-q" class="catalog-search" placeholder="Lokalita, název, ulice, popis" />
+            </div>
             <div class="catalog-row">
               <input id="cat-price-from" type="number" placeholder="Cena od" />
               <input id="cat-price-to" type="number" placeholder="Cena do" />
               <input id="cat-area-from" type="number" placeholder="m² od" />
               <input id="cat-area-to" type="number" placeholder="m² do" />
             </div>
-            <button class="catalog-toggle" id="cat-toggle" type="button">Všechny filtry</button>
-            <button class="btn" id="cat-search" type="button">Vyhledat</button>
+            <button class="catalog-toggle" id="cat-toggle" type="button" data-icon="filter">Všechny filtry</button>
+            <button class="btn" id="cat-search" type="button" data-icon="search">Vyhledat</button>
           </div>
           <div id="catalog-list" class="catalog-list"></div>
           <p id="catalog-empty" class="empty" hidden>Nic v uložené nabídce neodpovídá filtrům.</p>
-          <button class="btn btn-ghost catalog-load" id="catalog-more" type="button" hidden>Načíst další</button>
+          <button class="btn btn-ghost catalog-load" id="catalog-more" type="button" hidden data-icon="more">Načíst další</button>
         </aside>
       </div>
     </div>
@@ -121,15 +142,23 @@
           <p class="lead-inline">Každý monitor hlídá jednu URL na Sreality nebo Bezrealitky a posílá zásahy svojí Discord šablonou.</p>
           <form id="monitor-form" class="card form-card">
             <input type="hidden" id="monitor-id" />
-            <p class="card-label">Nový / úprava monitoru</p>
+            <p class="card-label">Nový monitor</p>
             <label>Název<input id="monitor-name" placeholder="Praha 2+kk" /></label>
             <label>URL hledání<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/… nebo https://www.bezrealitky.cz/vyhledat?…"></textarea></label>
             <label>Discord webhook<input id="monitor-webhook" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
             <label>Šablona zprávy<select id="monitor-template"></select></label>
-            <label class="check"><input type="checkbox" id="monitor-enabled" checked /> Zapnutý</label>
+            <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
+              <label class="switch-field">
+                <span class="switch-copy">
+                  <span class="switch-title">Stav</span>
+                  <span class="switch-state"></span>
+                </span>
+                <input type="checkbox" id="monitor-enabled" checked />
+                <span class="switch-ui" aria-hidden="true"></span>
+              </label>
             <div class="actions">
-              <button class="btn" type="submit">Uložit monitor</button>
-              <button class="btn btn-ghost" id="monitor-reset" type="button">Vyčistit</button>
+              <button class="btn" type="submit" data-icon="check">Uložit monitor</button>
+              <button class="btn btn-ghost" id="monitor-reset" type="button" data-icon="x">Vyčistit</button>
             </div>
           </form>
           <div id="monitor-list" class="monitor-list"></div>
@@ -145,13 +174,13 @@
           <div class="filter-group">
             <h3>Portál</h3>
             <div class="chip-row" id="filter-source">
-              <button type="button" class="chip on" data-source="sreality">Sreality</button>
-              <button type="button" class="chip" data-source="bezrealitky">Bezrealitky</button>
+              <button type="button" class="chip on" data-source="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
+              <button type="button" class="chip" data-source="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
             </div>
           </div>
           <div class="actions" style="margin-bottom: 20px">
-            <button class="btn btn-ghost" id="filters-sample" type="button">Načíst ukázkové filtry</button>
-            <button class="btn btn-ghost" id="filters-clear" type="button">Vyčistit</button>
+            <button class="btn btn-ghost" id="filters-sample" type="button" data-icon="download">Načíst ukázkové filtry</button>
+            <button class="btn btn-ghost" id="filters-clear" type="button" data-icon="x">Vyčistit</button>
           </div>
           <div id="filter-groups"></div>
           <div class="card form-card">
@@ -203,14 +232,14 @@
               <label>Hledat lokalitu
                 <span class="locality-row">
                   <input id="f-br-locality-q" placeholder="Kraj, okres, město, adresa" />
-                  <button class="btn btn-ghost" id="f-br-locality-btn" type="button">Hledat</button>
+                  <button class="btn btn-ghost" id="f-br-locality-btn" type="button" data-icon="search">Hledat</button>
                 </span>
               </label>
               <div id="f-br-locality-hits" class="chip-row"></div>
               <label>Vložit URL z Bezrealitky<textarea id="f-br-paste" rows="3" placeholder="https://www.bezrealitky.cz/vyhledat?..."></textarea></label>
             </div>
             <div class="actions">
-              <button class="btn" id="filters-to-monitor" type="button">Vytvořit monitor z URL</button>
+              <button class="btn" id="filters-to-monitor" type="button" data-icon="plus">Vytvořit monitor z URL</button>
             </div>
           </div>
         </div>
@@ -240,15 +269,15 @@
               <label class="check"><input type="checkbox" id="tpl-image" checked /> Zobrazit fotku</label>
               <p class="card-label">Text zprávy</p>
               <div id="tpl-lines"></div>
-              <button class="btn btn-ghost" id="tpl-add-line" type="button">Přidat řádek</button>
+              <button class="btn btn-ghost" id="tpl-add-line" type="button" data-icon="plus">Přidat řádek</button>
               <p class="card-label">Pole v embedu</p>
               <div id="tpl-fields"></div>
-              <button class="btn btn-ghost" id="tpl-add-field" type="button">Přidat pole</button>
+              <button class="btn btn-ghost" id="tpl-add-field" type="button" data-icon="plus">Přidat pole</button>
               <p class="card-label">Proměnné</p>
               <div id="var-list" class="var-list"></div>
               <div class="actions" style="margin-top: 20px">
-                <button class="btn" id="tpl-save" type="button">Uložit šablonu</button>
-                <button class="btn btn-ghost" id="tpl-new" type="button">Nová šablona</button>
+                <button class="btn" id="tpl-save" type="button" data-icon="check">Uložit šablonu</button>
+                <button class="btn btn-ghost" id="tpl-new" type="button" data-icon="plus">Nová šablona</button>
               </div>
             </div>
             <div>
@@ -267,12 +296,28 @@
           <p class="lead-inline">Naklikej monitory a šablony na Macu, stáhni balíček a na Windows ho nahraj. Webhook i databáze jedou s tebou.</p>
           <div class="settings-grid">
             <article class="card form-card">
+              <p class="card-label">Ranní digest</p>
+              <p class="settings-copy">Okamžité Discord notifikace zůstanou. V zvolenou hodinu přijde ještě souhrn nových bytů a slev.</p>
+              <label>Hodina souhrnu<input id="digest-hour" type="number" min="0" max="23" value="8" /></label>
+              <label>Discord webhook<input id="digest-webhook" type="url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" /></label>
+              <div class="actions">
+                <button class="btn" id="settings-save" type="button" data-icon="check">Uložit nastavení</button>
+                <button class="btn btn-ghost" id="digest-test" type="button" data-icon="send">Poslat test</button>
+              </div>
+            </article>
+            <article class="card form-card">
+              <p class="card-label">Body dojezdu</p>
+              <p class="settings-copy">Až dva body (práce, metro). Napiš ulici a vyber adresu z nápovědy. V detailu nabídky se spočítá čas autem a pěšky.</p>
+              <div id="commute-points"></div>
+              <button class="btn btn-ghost" id="commute-add" type="button" data-icon="pin">Přidat bod</button>
+            </article>
+            <article class="card form-card">
               <p class="card-label">Export</p>
               <p class="settings-copy">Zip obsahuje JSON (monitory, šablony, webhook) i SQLite databázi se známými inzeráty.</p>
               <div class="actions">
-                <button class="btn" id="export-pack" type="button">Stáhnout balíček</button>
-                <button class="btn btn-ghost" id="export-json" type="button">Jen JSON</button>
-                <button class="btn btn-ghost" id="export-db" type="button">Jen databáze</button>
+                <button class="btn" id="export-pack" type="button" data-icon="download">Stáhnout balíček</button>
+                <button class="btn btn-ghost" id="export-json" type="button" data-icon="file">Jen JSON</button>
+                <button class="btn btn-ghost" id="export-db" type="button" data-icon="database">Jen databáze</button>
               </div>
             </article>
             <article class="card form-card">
@@ -280,7 +325,7 @@
               <p class="settings-copy">Nahraj zip z Macu, nebo zvlášť JSON / SQLite. Databáze přepíše sledovaná ID, JSON bez databáze nastaví monitory a první běh je zase potichu nasadí.</p>
               <label class="drop" id="import-drop">
                 <input id="import-file" type="file" accept=".zip,.json,.sqlite,.db" hidden />
-                <strong>Vyber soubor</strong>
+                <strong data-icon="upload">Vyber soubor</strong>
                 <span>sreality-backup.zip, config.json nebo monitor.sqlite</span>
               </label>
             </article>
@@ -289,6 +334,20 @@
       </section>
     </div>
 
+    <div id="compare-tray" class="compare-tray" hidden>
+      <p class="compare-tray-label">Porovnání</p>
+      <div id="compare-items" class="compare-items"></div>
+      <button class="btn" id="compare-open" type="button" data-icon="columns">Porovnat</button>
+      <button class="btn btn-ghost" id="compare-clear" type="button" data-icon="x">Vyčistit</button>
+    </div>
+    <div id="compare-modal" class="catalog-modal" hidden>
+      <div class="catalog-modal-card compare-card">
+        <button class="catalog-close" id="compare-close" type="button" aria-label="Zavřít">×</button>
+        <p class="card-label">Porovnání</p>
+        <h2>Vedle sebe</h2>
+        <div id="compare-grid" class="compare-grid"></div>
+      </div>
+    </div>
     <footer class="footer">Osobní hlídání veřejných inzerátů. Webhook drž v .env, ne v gitu. <span id="footer-version"></span></footer>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <div id="filters-modal" class="catalog-modal filters-modal" hidden>
@@ -397,14 +456,23 @@
               <option value="price_desc">Cena sestupně</option>
               <option value="area_desc">Největší plocha</option>
               <option value="area_asc">Nejmenší plocha</option>
+              <option value="discount_desc">Největší sleva</option>
             </select>
           </div>
           <p class="catalog-hint">Vlastnictví, stav, konstrukce a vybavení bytu se doplní až po otevření detailu, nebo u nových zásahů z Bezrealitky. Dispozice, Praha, cena a plocha jdou použít hned.</p>
         </div>
         <div class="filters-actions">
-          <button class="btn btn-ghost" id="filters-reset" type="button">Vymazat</button>
-          <button class="btn" id="filters-apply" type="button">Použít filtry</button>
+          <button class="btn btn-ghost" id="filters-reset" type="button" data-icon="x">Vymazat</button>
+          <button class="btn" id="filters-apply" type="button" data-icon="check">Použít filtry</button>
         </div>
+      </div>
+    </div>
+    <div id="monitor-modal" class="catalog-modal" hidden>
+      <div class="catalog-modal-card monitor-modal-card">
+        <button class="catalog-close" id="monitor-modal-close" type="button" aria-label="Zavřít">×</button>
+        <p class="card-label">Úprava monitoru</p>
+        <h2 id="monitor-modal-title"></h2>
+        <div id="monitor-edit-body"></div>
       </div>
     </div>
     <div id="catalog-modal" class="catalog-modal" hidden>
@@ -421,7 +489,10 @@
       <p id="lightbox-count"></p>
     </div>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="/static/app.js?v=1.2.0-n11"></script>
-    <script src="/static/catalog.js?v=1.2.0-n11"></script>
+    <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
+    <script src="/static/icons.js?v=1.2.0-n33"></script>
+    <script src="/static/app.js?v=1.2.0-n37"></script>
+    <script src="/static/catalog.js?v=1.2.0-n33"></script>
   </body>
 </html>

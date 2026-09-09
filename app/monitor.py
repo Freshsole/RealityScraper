@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import traceback
+from datetime import datetime, timezone
 from typing import Any
 
 from app import config
-from app.discord_notify import send_listing, send_text
-from app.sreality import Listing, format_price, is_recently_created
+from app.discord_notify import send_digest, send_listing, send_sold, send_text
+from app.sreality import Listing, ListingGone, format_price, is_recently_created
 from app.sources import client_for, source_name, webhook_for
 from app.store import Store, utc_now
 from app.version import current_version
@@ -19,6 +20,7 @@ class Hub:
         self.running = False
         self.checking = False
         self._task: asyncio.Task[None] | None = None
+        self._sold_task: asyncio.Task[None] | None = None
         self.last_error: str | None = None
 
     def client_for(self, search_url: str):
@@ -34,17 +36,21 @@ class Hub:
         self.running = True
         self.last_error = None
         self._task = asyncio.create_task(self._loop(), name="sreality-hub")
+        self._sold_task = asyncio.create_task(self._sold_loop(), name="sreality-sold")
         asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
 
     async def stop(self) -> None:
         self.running = False
-        if self._task:
-            self._task.cancel()
+        for task in (self._task, self._sold_task):
+            if not task:
+                continue
+            task.cancel()
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+        self._task = None
+        self._sold_task = None
 
     async def close(self) -> None:
         await self.stop()
@@ -55,15 +61,47 @@ class Hub:
     async def _loop(self) -> None:
         while self.running:
             try:
-                await self.check_once()
+                await self.check_due()
+                await self.maybe_send_digest()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self.last_error = f"{exc}"
             try:
-                await asyncio.sleep(config.POLL_INTERVAL_SEC)
+                await asyncio.sleep(10)
             except asyncio.CancelledError:
                 raise
+
+    def _monitor_due(self, monitor: dict[str, Any]) -> bool:
+        interval = monitor.get("interval_sec") or config.POLL_INTERVAL_SEC
+        try:
+            interval = max(20, int(interval))
+        except (TypeError, ValueError):
+            interval = config.POLL_INTERVAL_SEC
+        last = monitor.get("last_check")
+        if not last:
+            return True
+        try:
+            seen = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        return (datetime.now(timezone.utc) - seen).total_seconds() >= interval
+
+    async def check_due(self) -> dict[str, Any]:
+        if self.checking:
+            return {"ok": False, "reason": "already-checking"}
+        self.checking = True
+        try:
+            results = []
+            for monitor in self.store.list_monitors():
+                if not monitor.get("enabled") or not self._monitor_due(monitor):
+                    continue
+                results.append(await self.check_monitor(monitor))
+            return {"ok": True, "results": results}
+        finally:
+            self.checking = False
 
     async def check_once(self, monitor_id: str | None = None) -> dict[str, Any]:
         if self.checking:
@@ -97,6 +135,7 @@ class Hub:
                 self.store.update_monitor_stats(
                     monitor_id,
                     last_check=utc_now(),
+                    last_inventory=utc_now(),
                     last_error=None,
                     last_total=total,
                     last_found=len(listings),
@@ -111,21 +150,29 @@ class Hub:
                 try:
                     alert = await self._classify(client, listing, known.get(listing.id))
                     if alert is None:
+                        self.store.snapshot_scrape_price(monitor_id, listing)
                         if listing.kind == "refresh":
                             self.store.upsert_seen(monitor_id, listing, notified=False, kind="refresh")
                         elif listing.lat is not None:
                             self.store.update_location(listing, monitor_id)
                         continue
-                    await send_listing(
-                        webhook,
-                        alert,
-                        template_config=template_config,
-                        monitor_name=monitor.get("name") or "",
-                    )
-                    self.store.upsert_seen(monitor_id, alert, notified=True)
-                    notified.append(alert)
+                    already = self.store.url_already_notified(alert.url, exclude_monitor_id=monitor_id)
+                    if already:
+                        self.store.upsert_seen(monitor_id, alert, notified=True, kind=alert.kind or "new")
+                    else:
+                        await send_listing(
+                            webhook,
+                            alert,
+                            template_config=template_config,
+                            monitor_name=monitor.get("name") or "",
+                        )
+                        self.store.upsert_seen(monitor_id, alert, notified=True)
+                        notified.append(alert)
+                except ListingGone:
+                    await self.notify_sold(monitor, listing.id)
                 except Exception as exc:
                     errors.append(f"{listing.id}: {exc}")
+            await self._probe_sold(monitor, client, self.store.stale_listings(monitor_id, days=1, limit=5))
             self.store.update_monitor_stats(
                 monitor_id,
                 last_check=utc_now(),
@@ -176,6 +223,150 @@ class Hub:
             return listing
         listing.kind = "seen"
         return None
+
+    async def notify_sold(self, monitor: dict[str, Any] | None, listing_id: int, monitor_id: str | None = None) -> None:
+        mid = (monitor or {}).get("id") or monitor_id
+        if not mid:
+            return
+        row = self.store.mark_gone(mid, listing_id)
+        if not row:
+            return
+        await self._send_sold_ping(row, (monitor or {}).get("name") or row.get("monitor_name") or "")
+
+    async def _send_sold_ping(self, row: dict[str, Any], monitor_name: str = "") -> None:
+        if row.get("sold_notified"):
+            return
+        if not self._should_ping_sold(row):
+            self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
+            return
+        webhook = config.SOLD_WEBHOOK_URL
+        if not webhook:
+            return
+        if self.store.url_sold_notified(row.get("url") or "", exclude_monitor_id=row.get("monitor_id")):
+            self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
+            return
+        try:
+            await send_sold(webhook, row, monitor_name=monitor_name)
+            self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
+        except Exception as exc:
+            self.last_error = f"Sold Discord: {exc}"
+
+    def _should_ping_sold(self, row: dict[str, Any]) -> bool:
+        if row.get("notified"):
+            return True
+        first = row.get("first_seen")
+        try:
+            seen = datetime.fromisoformat(str(first).replace("Z", "+00:00"))
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return False
+        return (datetime.now(timezone.utc) - seen).days <= 14
+
+    def _listing_from_row(self, row: dict[str, Any]) -> Listing:
+        return Listing(
+            id=int(row["id"]),
+            name=row.get("name") or "",
+            price_czk=row.get("price_czk"),
+            price_label=row.get("price_label") or "",
+            disposition=row.get("disposition") or "",
+            area_m2=row.get("area_m2"),
+            locality=row.get("locality") or "",
+            url=row.get("url") or "",
+            image_url=row.get("image_url"),
+        )
+
+    def _inventory_due(self, monitor: dict[str, Any]) -> bool:
+        last = monitor.get("last_inventory")
+        if not last:
+            return True
+        try:
+            seen = datetime.fromisoformat(str(last).replace("Z", "+00:00"))
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return True
+        return (datetime.now(timezone.utc) - seen).total_seconds() >= config.SOLD_INVENTORY_SEC
+
+    async def _sold_loop(self) -> None:
+        await asyncio.sleep(15)
+        while self.running:
+            try:
+                await self._sold_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"{exc}"
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                raise
+
+    async def _sold_tick(self) -> None:
+        for pending in self.store.pending_sold_pings(limit=10):
+            await self._send_sold_ping(pending, pending.get("monitor_name") or "")
+        for monitor in self.store.list_monitors():
+            if not monitor.get("enabled") or not self._inventory_due(monitor):
+                continue
+            client = self.client_for(monitor["search_url"])
+            try:
+                found, total = await client.fetch_all(newest=True)
+            except Exception as exc:
+                self.store.update_monitor_stats(monitor["id"], last_inventory=utc_now(), last_error=f"{exc}")
+                return
+            present = {item.id for item in found}
+            self.store.touch_last_seen(monitor["id"], [item.id for item in found])
+            self.store.update_monitor_stats(monitor["id"], last_inventory=utc_now(), last_error=None)
+            complete = bool(total) and len(found) >= total
+            rows = (
+                self.store.active_missing(monitor["id"], present, limit=20)
+                if complete
+                else self.store.stale_listings(monitor["id"], days=1, limit=8)
+            )
+            await self._probe_sold(monitor, client, rows)
+            return
+
+    async def _probe_sold(self, monitor: dict[str, Any], client, rows: list[dict[str, Any]]) -> None:
+        for row in rows:
+            listing = self._listing_from_row(row)
+            try:
+                listing = await client.fetch_detail(listing)
+                self.store.upsert_seen(monitor["id"], listing, notified=False, kind="refresh")
+            except ListingGone:
+                await self.notify_sold(monitor, int(row["id"]))
+            except Exception:
+                continue
+            await asyncio.sleep(0.2)
+
+    async def maybe_send_digest(self) -> None:
+        settings = self.store.app_settings()
+        hour = int(settings.get("digest_hour") or 8)
+        now = datetime.now().astimezone()
+        if now.hour != hour:
+            return
+        last = settings.get("digest_last") or ""
+        today = now.date().isoformat()
+        if str(last).startswith(today):
+            return
+        since = last or now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        items = self.store.digest_items(since)
+        webhook = self.store.digest_webhook()
+        if webhook and items:
+            await send_digest(webhook, items)
+        self.store.set_meta("digest_last", utc_now())
+
+    async def send_digest_test(self, webhook_url: str | None = None) -> dict[str, Any]:
+        if webhook_url is not None:
+            self.store.save_app_settings({"digest_webhook": str(webhook_url).strip()})
+        settings = self.store.app_settings()
+        last = settings.get("digest_last") or ""
+        since = last or datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        items = self.store.digest_items(since)
+        webhook = (settings.get("digest_webhook") or "").strip() or self.store.digest_webhook()
+        if not webhook:
+            raise RuntimeError("Chybí webhook pro ranní digest")
+        await send_digest(webhook, items, test=True)
+        return {"ok": True, "count": len(items)}
 
     async def send_test(self, monitor_id: str | None = None) -> dict[str, Any]:
         monitors = self.store.list_monitors()
@@ -243,6 +434,7 @@ class Hub:
             "recent": self.store.recent_notified(),
             "monitors": monitors,
             "templates": self.store.list_templates(),
+            "settings": self.store.app_settings(),
             "version": current_version(),
         }
 

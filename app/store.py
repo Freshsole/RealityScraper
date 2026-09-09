@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from app import config
 from app.bezrealitky import default_search_url as bezrealitky_default_url
@@ -16,6 +17,16 @@ from app.templates import default_template_config
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _is_discord_webhook(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and "/api/webhooks/" in (parsed.path or "")
+        and (host == "discord.com" or host == "discordapp.com" or host.endswith(".discord.com"))
+    )
 
 
 def _csv(value: Any) -> list[str]:
@@ -39,6 +50,28 @@ def _tri_state(where: list[str], params: list[Any], value: str, clauses: list[st
     known = "(" + " OR ".join(clauses) + ")"
     where.append(known if value == "s" else f"NOT {known}")
     params.extend(clause_params)
+
+
+def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
+    try:
+        lat = float(filters.get("lat") or "")
+        lon = float(filters.get("lon") or "")
+        radius = float(filters.get("radius_m") or "")
+    except (TypeError, ValueError):
+        return
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180 and 50 <= radius <= 50_000):
+        return
+    where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
+    where.append(
+        """
+        (6371000 * acos(max(-1.0, min(1.0,
+            cos(? * 0.017453292519943295) * cos(listings.lat * 0.017453292519943295)
+            * cos((listings.lon - ?) * 0.017453292519943295)
+            + sin(? * 0.017453292519943295) * sin(listings.lat * 0.017453292519943295)
+        )))) <= ?
+        """
+    )
+    params.extend([lat, lon, lat, radius])
 
 
 PRAGUE_DISTRICTS = {
@@ -129,6 +162,7 @@ class Store:
             self._migrate_listings(conn)
             self._migrate_events(conn)
             self._ensure_catalog(conn)
+            self._migrate_monitors(conn)
             self._ensure_defaults(conn)
 
     def _migrate_listings(self, conn: sqlite3.Connection) -> None:
@@ -146,11 +180,16 @@ class Store:
             ("lon", "REAL"),
             ("description", "TEXT"),
             ("extras", "TEXT"),
+            ("last_seen", "TEXT"),
+            ("gone", "INTEGER"),
+            ("sold_notified", "INTEGER"),
         )
         existing = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
         for column, decl in extras:
             if column not in existing:
                 conn.execute(f"ALTER TABLE listings ADD COLUMN {column} {decl}")
+        if "sold_notified" not in existing:
+            conn.execute("UPDATE listings SET sold_notified = 1 WHERE IFNULL(gone, 0) = 1")
         if pk_cols == ["id"]:
             conn.executescript(
                 """
@@ -315,17 +354,23 @@ class Store:
         now = utc_now()
         search_url = (payload.get("search_url") or "").strip()
         webhook = (payload.get("webhook_url") or "").strip() or webhook_for(search_url)
+        interval = payload.get("interval_sec")
+        try:
+            interval_sec = max(20, int(interval)) if interval not in (None, "") else None
+        except (TypeError, ValueError):
+            interval_sec = None
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, interval_sec, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     search_url = excluded.search_url,
                     webhook_url = excluded.webhook_url,
                     template_id = excluded.template_id,
-                    enabled = excluded.enabled
+                    enabled = excluded.enabled,
+                    interval_sec = excluded.interval_sec
                 """,
                 (
                     monitor_id,
@@ -334,6 +379,7 @@ class Store:
                     webhook,
                     payload.get("template_id") or "default",
                     1 if payload.get("enabled", True) else 0,
+                    interval_sec,
                     now,
                 ),
             )
@@ -370,6 +416,76 @@ class Store:
         with self.connect() as conn:
             row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
             return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str | None) -> None:
+        with self.connect() as conn:
+            if value is None:
+                conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+                return
+            conn.execute(
+                "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+
+    def app_settings(self) -> dict[str, Any]:
+        raw_points = self.get_meta("commute_points") or "[]"
+        try:
+            points = json.loads(raw_points)
+        except json.JSONDecodeError:
+            points = []
+        if not isinstance(points, list):
+            points = []
+        try:
+            hour = int(self.get_meta("digest_hour") or 8)
+        except (TypeError, ValueError):
+            hour = 8
+        return {
+            "digest_hour": max(0, min(23, hour)),
+            "digest_webhook": (self.get_meta("digest_webhook") or "").strip(),
+            "digest_last": self.get_meta("digest_last"),
+            "commute_points": points[:2],
+        }
+
+    def digest_webhook(self) -> str:
+        return (self.get_meta("digest_webhook") or "").strip() or config.DISCORD_WEBHOOK_URL
+
+    def save_app_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if "digest_hour" in payload:
+            try:
+                hour = max(0, min(23, int(payload.get("digest_hour"))))
+            except (TypeError, ValueError):
+                hour = 8
+            self.set_meta("digest_hour", str(hour))
+        if "digest_webhook" in payload:
+            url = str(payload.get("digest_webhook") or "").strip()
+            if url and not _is_discord_webhook(url):
+                raise ValueError("Webhook musí být Discord URL")
+            self.set_meta("digest_webhook", url)
+        if "commute_points" in payload:
+            points = []
+            for raw in payload.get("commute_points") or []:
+                if not isinstance(raw, dict):
+                    continue
+                try:
+                    lat = float(raw.get("lat"))
+                    lon = float(raw.get("lon"))
+                except (TypeError, ValueError):
+                    continue
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                    continue
+                points.append(
+                    {
+                        "id": str(raw.get("id") or uuid.uuid4().hex[:6]),
+                        "name": (raw.get("name") or "Bod").strip() or "Bod",
+                        "address": (raw.get("address") or "").strip(),
+                        "lat": lat,
+                        "lon": lon,
+                    }
+                )
+                if len(points) >= 2:
+                    break
+            self.set_meta("commute_points", json.dumps(points, ensure_ascii=False))
+        return self.app_settings()
 
     def get_many(self, monitor_id: str, ids: list[int]) -> dict[int, dict[str, Any]]:
         if not ids:
@@ -417,8 +533,8 @@ class Store:
                     id, monitor_id, name, price_czk, price_label, disposition, area_m2,
                     locality, url, image_url, first_seen, notified,
                     created_on, edited_on, views, old_price_czk, last_kind, lat, lon,
-                    description, extras
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description, extras, last_seen, gone
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(monitor_id, id) DO UPDATE SET
                     name = excluded.name,
                     price_czk = excluded.price_czk,
@@ -440,6 +556,8 @@ class Store:
                         WHEN excluded.extras IS NOT NULL AND excluded.extras != '' AND excluded.extras != '{}'
                         THEN excluded.extras ELSE listings.extras
                     END,
+                    last_seen = excluded.last_seen,
+                    gone = 0,
                     notified = CASE WHEN excluded.notified = 1 THEN 1 ELSE listings.notified END
                 """,
                 (
@@ -464,6 +582,7 @@ class Store:
                     listing.lon,
                     (listing.description or "").strip() or None,
                     _extras_json(listing.extras),
+                    now,
                 ),
             )
             conn.execute(
@@ -472,6 +591,45 @@ class Store:
             )
             self._record_price(conn, monitor_id, listing, now)
             self._save_photos(conn, monitor_id, listing)
+
+    def snapshot_scrape_price(self, monitor_id: str, listing: Listing) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            prev = conn.execute(
+                "SELECT price_czk FROM listings WHERE monitor_id = ? AND id = ?",
+                (monitor_id, listing.id),
+            ).fetchone()
+            if not prev:
+                return
+            old = prev["price_czk"]
+            dropped = (
+                listing.price_czk is not None
+                and old is not None
+                and int(old) != int(listing.price_czk)
+                and int(old) > int(listing.price_czk)
+            )
+            conn.execute(
+                """
+                UPDATE listings SET
+                    price_czk = COALESCE(?, price_czk),
+                    price_label = CASE WHEN ? != '' THEN ? ELSE price_label END,
+                    last_seen = ?,
+                    gone = 0,
+                    old_price_czk = CASE WHEN ? THEN ? ELSE old_price_czk END
+                WHERE monitor_id = ? AND id = ?
+                """,
+                (
+                    listing.price_czk,
+                    listing.price_label or "",
+                    listing.price_label or "",
+                    now,
+                    1 if dropped else 0,
+                    old,
+                    monitor_id,
+                    listing.id,
+                ),
+            )
+            self._record_price(conn, monitor_id, listing, now)
 
     def recent_notified(self, limit: int = 12, monitor_id: str | None = None) -> list[dict[str, Any]]:
         sql = """
@@ -488,7 +646,9 @@ class Store:
         params.append(limit)
         with self.connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [enrich_maps(dict(row)) for row in rows]
+        items = [public_listing(dict(row)) for row in rows]
+        self._attach_catalog_extras(items)
+        return items
 
     def missing_coords(self, notified_only: bool = True) -> list[dict[str, Any]]:
         clause = "WHERE lat IS NULL AND url IS NOT NULL"
@@ -506,13 +666,13 @@ class Store:
         with self.connect() as conn:
             if monitor_id:
                 conn.execute(
-                    "UPDATE listings SET lat = ?, lon = ? WHERE monitor_id = ? AND id = ?",
-                    (listing.lat, listing.lon, monitor_id, listing.id),
+                    "UPDATE listings SET lat = ?, lon = ?, last_seen = ? WHERE monitor_id = ? AND id = ?",
+                    (listing.lat, listing.lon, utc_now(), monitor_id, listing.id),
                 )
             else:
                 conn.execute(
-                    "UPDATE listings SET lat = ?, lon = ? WHERE id = ?",
-                    (listing.lat, listing.lon, listing.id),
+                    "UPDATE listings SET lat = ?, lon = ?, last_seen = ? WHERE id = ?",
+                    (listing.lat, listing.lon, utc_now(), listing.id),
                 )
 
     def _ensure_catalog(self, conn: sqlite3.Connection) -> None:
@@ -535,6 +695,12 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS idx_price_history_listing
                 ON price_history(monitor_id, listing_id, seen_at);
+            CREATE TABLE IF NOT EXISTS listing_user (
+                url TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT '',
+                note TEXT,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         if not conn.execute("SELECT 1 FROM price_history LIMIT 1").fetchone():
@@ -554,6 +720,13 @@ class Store:
                 """
             )
         self._fix_sreality_images(conn)
+
+    def _migrate_monitors(self, conn: sqlite3.Connection) -> None:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(monitors)")}
+        if "interval_sec" not in cols:
+            conn.execute("ALTER TABLE monitors ADD COLUMN interval_sec INTEGER")
+        if "last_inventory" not in cols:
+            conn.execute("ALTER TABLE monitors ADD COLUMN last_inventory TEXT")
 
     def _fix_sreality_images(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -595,14 +768,16 @@ class Store:
             return
         last = conn.execute(
             """
-            SELECT price_czk FROM price_history
+            SELECT price_czk, seen_at FROM price_history
             WHERE monitor_id = ? AND listing_id = ?
             ORDER BY seen_at DESC, id DESC LIMIT 1
             """,
             (monitor_id, listing.id),
         ).fetchone()
         if last and last["price_czk"] == listing.price_czk:
-            return
+            last_day = str(last["seen_at"] or "")[:10]
+            if last_day == str(seen_at)[:10]:
+                return
         conn.execute(
             """
             INSERT INTO price_history(monitor_id, listing_id, price_czk, price_label, seen_at)
@@ -639,7 +814,19 @@ class Store:
 
     def save_listing_enrichment(self, monitor_id: str, listing: Listing) -> None:
         extras = _extras_json(listing.extras)
+        now = utc_now()
         with self.connect() as conn:
+            prev = conn.execute(
+                "SELECT price_czk FROM listings WHERE monitor_id = ? AND id = ?",
+                (monitor_id, listing.id),
+            ).fetchone()
+            old = prev["price_czk"] if prev else None
+            dropped = (
+                listing.price_czk is not None
+                and old is not None
+                and int(old) != int(listing.price_czk)
+                and int(old) > int(listing.price_czk)
+            )
             conn.execute(
                 """
                 UPDATE listings SET
@@ -651,10 +838,13 @@ class Store:
                     created_on = COALESCE(?, created_on),
                     edited_on = COALESCE(?, edited_on),
                     views = COALESCE(?, views),
-                    old_price_czk = COALESCE(?, old_price_czk),
+                    price_czk = COALESCE(?, price_czk),
+                    price_label = CASE WHEN ? != '' THEN ? ELSE price_label END,
+                    old_price_czk = CASE WHEN ? THEN ? ELSE COALESCE(?, old_price_czk) END,
                     lat = COALESCE(?, lat),
                     lon = COALESCE(?, lon),
-                    image_url = COALESCE(?, image_url)
+                    image_url = COALESCE(?, image_url),
+                    last_seen = ?
                 WHERE monitor_id = ? AND id = ?
                 """,
                 (
@@ -666,14 +856,21 @@ class Store:
                     listing.created_on,
                     listing.edited_on,
                     listing.views,
+                    listing.price_czk,
+                    listing.price_label or "",
+                    listing.price_label or "",
+                    1 if dropped else 0,
+                    old,
                     listing.old_price_czk,
                     listing.lat,
                     listing.lon,
                     cdn_image_url(listing.image_url),
+                    now,
                     monitor_id,
                     listing.id,
                 ),
             )
+            self._record_price(conn, monitor_id, listing, now)
             self._save_photos(conn, monitor_id, listing)
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
@@ -838,6 +1035,32 @@ class Store:
                         ]
                     )
             _or_likes(where, params, "listings.extras", patterns)
+        _apply_circle(where, params, filters)
+        status = (filters.get("status") or "").strip()
+        if status == "saved":
+            where.append("EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'saved')")
+        elif status == "hidden":
+            where.append("EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'hidden')")
+        elif status != "all":
+            where.append("NOT EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'hidden')")
+        if str(filters.get("discounted") or "").strip() in {"1", "true", "yes"}:
+            where.append(
+                """
+                (
+                    (listings.old_price_czk IS NOT NULL AND listings.price_czk IS NOT NULL AND listings.old_price_czk > listings.price_czk)
+                    OR IFNULL(listings.extras, '') LIKE '%"discounted"%'
+                    OR EXISTS (
+                        SELECT 1 FROM price_history ph
+                        WHERE ph.monitor_id = listings.monitor_id AND ph.listing_id = listings.id
+                          AND ph.price_czk IS NOT NULL AND listings.price_czk IS NOT NULL
+                        GROUP BY ph.monitor_id, ph.listing_id
+                        HAVING MAX(ph.price_czk) > listings.price_czk
+                    )
+                )
+                """
+            )
+        if filters.get("pins_only"):
+            return self._catalog_pins(where, params)
         sorts = {
             "newest": "listings.first_seen DESC",
             "oldest": "listings.first_seen ASC",
@@ -845,6 +1068,7 @@ class Store:
             "price_desc": "listings.price_czk IS NULL, listings.price_czk DESC",
             "area_asc": "listings.area_m2 IS NULL, listings.area_m2 ASC",
             "area_desc": "listings.area_m2 IS NULL, listings.area_m2 DESC",
+            "discount_desc": "CASE WHEN listings.old_price_czk IS NOT NULL AND listings.price_czk IS NOT NULL THEN listings.old_price_czk - listings.price_czk ELSE 0 END DESC",
         }
         order = sorts.get((filters.get("sort") or "newest").strip(), sorts["newest"])
         limit = min(max(int(filters.get("limit") or 36), 1), 120)
@@ -885,8 +1109,24 @@ class Store:
             urls = photos.get((item["monitor_id"], int(item["id"]))) or ([item["image_url"]] if item.get("image_url") else [])
             item["photos"] = _photo_urls(urls)
             items.append(item)
+        self._attach_catalog_extras(items)
         facets = self.catalog_facets()
         return {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
+
+    def _catalog_pins(self, where: list[str], params: list[Any]) -> dict[str, Any]:
+        clause = " AND ".join(where)
+        sql = f"""
+            SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
+                   listings.price_czk, listings.price_label, listings.name, listings.locality
+            FROM listings
+            WHERE {clause}
+            AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+            AND listings.rowid IN (SELECT MIN(rowid) FROM listings GROUP BY url)
+            LIMIT 2500
+        """
+        with self.connect() as conn:
+            items = [dict(row) for row in conn.execute(sql, params).fetchall()]
+        return {"items": items}
 
     def catalog_facets(self) -> dict[str, Any]:
         with self.connect() as conn:
@@ -940,19 +1180,325 @@ class Store:
             )
             if not item["photos"] and item.get("image_url"):
                 item["photos"] = _photo_urls([item["image_url"]])
-            item["price_history"] = [
-                dict(hist)
-                for hist in conn.execute(
+            item["price_history"] = _price_series(
+                [
+                    dict(hist)
+                    for hist in conn.execute(
+                        """
+                        SELECT price_czk, price_label, seen_at
+                        FROM price_history
+                        WHERE monitor_id = ? AND listing_id = ?
+                        ORDER BY seen_at
+                        """,
+                        (monitor_id, listing_id),
+                    )
+                ],
+                item,
+            )
+        self._attach_catalog_extras([item])
+        return item
+
+    def set_listing_user(self, url: str, status: str | None = None, note: str | None = None) -> dict[str, Any]:
+        url = (url or "").strip()
+        if not url:
+            raise ValueError("Chybí url")
+        current = self.get_listing_user(url)
+        next_status = current.get("status") or ""
+        if status is not None:
+            next_status = status if status in {"saved", "hidden"} else ""
+        next_note = current.get("note") if note is None else str(note)
+        now = utc_now()
+        with self.connect() as conn:
+            if not next_status and not (next_note or "").strip():
+                conn.execute("DELETE FROM listing_user WHERE url = ?", (url,))
+                return {"url": url, "status": "", "note": ""}
+            conn.execute(
+                """
+                INSERT INTO listing_user(url, status, note, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at
+                """,
+                (url, next_status, next_note or "", now),
+            )
+        return {"url": url, "status": next_status, "note": next_note or ""}
+
+    def get_listing_user(self, url: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute("SELECT url, status, note FROM listing_user WHERE url = ?", (url,)).fetchone()
+        if not row:
+            return {"url": url, "status": "", "note": ""}
+        return {"url": row["url"], "status": row["status"] or "", "note": row["note"] or ""}
+
+    def url_already_notified(self, url: str, exclude_monitor_id: str | None = None) -> bool:
+        if not url:
+            return False
+        sql = "SELECT 1 FROM listings WHERE url = ? AND notified = 1"
+        params: list[Any] = [url]
+        if exclude_monitor_id:
+            sql += " AND monitor_id != ?"
+            params.append(exclude_monitor_id)
+        with self.connect() as conn:
+            return bool(conn.execute(sql, params).fetchone())
+
+    def mark_gone(self, monitor_id: str, listing_id: int) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM listings WHERE monitor_id = ? AND id = ?",
+                (monitor_id, listing_id),
+            ).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            if data.get("gone"):
+                return data
+            conn.execute(
+                "UPDATE listings SET gone = 1, last_kind = 'sold' WHERE monitor_id = ? AND id = ?",
+                (monitor_id, listing_id),
+            )
+            conn.execute(
+                "INSERT INTO events(listing_id, monitor_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
+                (listing_id, monitor_id, "sold", now, data.get("name") or "Staženo z inzerce"),
+            )
+            data["gone"] = 1
+            data["gone_at"] = now
+            data["last_kind"] = "sold"
+            return data
+
+    def mark_sold_notified(self, monitor_id: str, listing_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE listings SET sold_notified = 1 WHERE monitor_id = ? AND id = ?",
+                (monitor_id, listing_id),
+            )
+
+    def url_sold_notified(self, url: str, exclude_monitor_id: str | None = None) -> bool:
+        if not url:
+            return False
+        sql = "SELECT 1 FROM listings WHERE url = ? AND IFNULL(sold_notified, 0) = 1"
+        params: list[Any] = [url]
+        if exclude_monitor_id:
+            sql += " AND monitor_id != ?"
+            params.append(exclude_monitor_id)
+        with self.connect() as conn:
+            return bool(conn.execute(sql, params).fetchone())
+
+    def pending_sold_pings(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT listings.*, monitors.name AS monitor_name
+                FROM listings
+                LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                WHERE IFNULL(listings.gone, 0) = 1
+                  AND IFNULL(listings.sold_notified, 0) = 0
+                ORDER BY listings.last_seen DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def active_missing(self, monitor_id: str, present_ids: set[int], limit: int = 20) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
                     """
-                    SELECT price_czk, price_label, seen_at
-                    FROM price_history
-                    WHERE monitor_id = ? AND listing_id = ?
-                    ORDER BY seen_at
+                    SELECT * FROM listings
+                    WHERE monitor_id = ? AND IFNULL(gone, 0) = 0
+                    ORDER BY last_seen IS NULL DESC, last_seen ASC
                     """,
-                    (monitor_id, listing_id),
+                    (monitor_id,),
                 )
             ]
-        return item
+        missing = [row for row in rows if int(row["id"]) not in present_ids]
+        return missing[:limit]
+
+    def touch_last_seen(self, monitor_id: str, ids: list[int]) -> None:
+        if not ids:
+            return
+        now = utc_now()
+        with self.connect() as conn:
+            for offset in range(0, len(ids), 400):
+                chunk = ids[offset : offset + 400]
+                placeholders = ",".join("?" * len(chunk))
+                conn.execute(
+                    f"UPDATE listings SET last_seen = ?, gone = 0 WHERE monitor_id = ? AND id IN ({placeholders})",
+                    (now, monitor_id, *chunk),
+                )
+
+    def stale_listings(self, monitor_id: str, days: int = 5, limit: int = 5) -> list[dict[str, Any]]:
+        cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM listings
+                WHERE monitor_id = ?
+                  AND IFNULL(gone, 0) = 0
+                  AND (last_seen IS NULL OR last_seen < ?)
+                ORDER BY last_seen IS NULL DESC, last_seen ASC
+                LIMIT ?
+                """,
+                (monitor_id, cutoff_iso, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def monitor_preview(self, monitor_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    FROM listings
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE listings.monitor_id = ?
+                    ORDER BY listings.first_seen DESC
+                    LIMIT ?
+                    """,
+                    (monitor_id, limit),
+                )
+            ]
+        items = [public_listing(row) for row in rows]
+        self._attach_catalog_extras(items)
+        return items
+
+    def digest_items(self, since: str | None = None) -> list[dict[str, Any]]:
+        if not since:
+            since = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        with self.connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT listings.*, monitors.name AS monitor_name, events.kind AS event_kind, events.created_at AS event_at
+                    FROM events
+                    JOIN listings ON listings.monitor_id = events.monitor_id AND listings.id = events.listing_id
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE events.kind IN ('new', 'changed') AND events.created_at >= ?
+                    ORDER BY events.created_at DESC
+                    """,
+                    (since,),
+                )
+            ]
+        seen: set[str] = set()
+        items = []
+        for row in rows:
+            url = row.get("url") or ""
+            if url in seen:
+                continue
+            seen.add(url)
+            item = public_listing(row)
+            item["kind"] = row.get("event_kind") or item.get("last_kind")
+            items.append(item)
+        return items
+
+    def _attach_catalog_extras(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        urls = [item.get("url") for item in items if item.get("url")]
+        if not urls:
+            return
+        holders = ",".join("?" * len(urls))
+        with self.connect() as conn:
+            users = {
+                row["url"]: {"status": row["status"] or "", "note": row["note"] or ""}
+                for row in conn.execute(f"SELECT url, status, note FROM listing_user WHERE url IN ({holders})", urls)
+            }
+            monitor_rows = conn.execute(
+                f"""
+                SELECT listings.url, monitors.id, monitors.name
+                FROM listings
+                JOIN monitors ON monitors.id = listings.monitor_id
+                WHERE listings.url IN ({holders})
+                GROUP BY listings.url, monitors.id
+                ORDER BY monitors.name
+                """,
+                urls,
+            ).fetchall()
+            history = {}
+            keys = [(item.get("monitor_id"), item.get("id")) for item in items if item.get("monitor_id") and item.get("id") is not None]
+            if keys:
+                clause = " OR ".join("(monitor_id = ? AND listing_id = ?)" for _ in keys)
+                flat = [item for pair in keys for item in pair]
+                for row in conn.execute(
+                    f"SELECT monitor_id, listing_id, price_czk FROM price_history WHERE {clause} AND price_czk IS NOT NULL",
+                    flat,
+                ):
+                    history.setdefault((row["monitor_id"], int(row["listing_id"])), []).append(int(row["price_czk"]))
+            twins = {}
+            for item in items:
+                twin = self._find_twin(conn, item)
+                if twin:
+                    twins[item.get("url")] = twin
+        monitors_by_url: dict[str, list[dict[str, str]]] = {}
+        for row in monitor_rows:
+            monitors_by_url.setdefault(row["url"], []).append({"id": row["id"], "name": row["name"]})
+        for item in items:
+            user = users.get(item.get("url") or "", {})
+            item["status"] = user.get("status") or ""
+            item["note"] = user.get("note") or ""
+            item["monitors"] = monitors_by_url.get(item.get("url") or "", [{"id": item.get("monitor_id"), "name": item.get("monitor_name")}])
+            item["twin"] = twins.get(item.get("url"))
+            item["gone"] = bool(item.get("gone"))
+            prices = history.get((item.get("monitor_id"), int(item["id"]) if item.get("id") is not None else -1), [])
+            _apply_discount(item, prices)
+
+    def _find_twin(self, conn: sqlite3.Connection, item: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            lat = float(item["lat"])
+            lon = float(item["lon"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        url = item.get("url") or ""
+        other = "%bezrealitky.cz%" if "sreality" in url else "%sreality.cz%"
+        box = 0.001
+        rows = conn.execute(
+            """
+            SELECT listings.*, monitors.name AS monitor_name
+            FROM listings
+            LEFT JOIN monitors ON monitors.id = listings.monitor_id
+            WHERE listings.url != ? AND listings.url LIKE ?
+              AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?
+              AND listings.rowid IN (SELECT MIN(rowid) FROM listings GROUP BY url)
+            LIMIT 40
+            """,
+            (url, other, lat - box, lat + box, lon - box, lon + box),
+        ).fetchall()
+        best = None
+        best_score = 0.0
+        for row in rows:
+            cand = dict(row)
+            try:
+                dist = _haversine_m(lat, lon, float(cand["lat"]), float(cand["lon"]))
+            except (TypeError, ValueError):
+                continue
+            if dist > 80:
+                continue
+            disp_a = (item.get("disposition") or "").strip().lower()
+            disp_b = (cand.get("disposition") or "").strip().lower()
+            if disp_a and disp_b and disp_a != disp_b:
+                continue
+            area_a, area_b = item.get("area_m2"), cand.get("area_m2")
+            if area_a and area_b and abs(int(area_a) - int(area_b)) / max(int(area_a), int(area_b)) > 0.08:
+                continue
+            price_a, price_b = item.get("price_czk"), cand.get("price_czk")
+            if price_a and price_b and abs(int(price_a) - int(price_b)) / max(int(price_a), int(price_b)) > 0.12:
+                continue
+            score = 1 / (1 + dist)
+            if score > best_score:
+                best_score = score
+                best = {
+                    "monitor_id": cand.get("monitor_id"),
+                    "id": cand.get("id"),
+                    "url": cand.get("url"),
+                    "portal": "Bezrealitky" if "bezrealitky" in (cand.get("url") or "") else "Sreality",
+                    "name": cand.get("name"),
+                    "price_label": cand.get("price_label"),
+                    "distance_m": round(dist),
+                }
+        return best
 
     def _template_row(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
@@ -963,6 +1509,7 @@ class Store:
         data = dict(row)
         data["enabled"] = bool(data["enabled"])
         data["seeded"] = bool(data["seeded"])
+        data["interval_sec"] = data.get("interval_sec")
         data["tracked"] = self.count(data["id"])
         data["new_today"] = self.new_today_count(data["id"])
         return data
@@ -991,6 +1538,28 @@ def _extras_json(extras: Any) -> str | None:
     return json.dumps(extras, ensure_ascii=False)
 
 
+def _price_series(history: list[dict[str, Any]], item: dict[str, Any]) -> list[dict[str, Any]]:
+    series = [dict(row) for row in history]
+    current = item.get("price_czk")
+    label = item.get("price_label") or ""
+    stamp = item.get("last_seen") or item.get("first_seen")
+    if current is None:
+        return series
+    point = {"price_czk": current, "price_label": label, "seen_at": stamp}
+    if not series:
+        return [point]
+    last = series[-1]
+    try:
+        same = last.get("price_czk") is not None and int(last["price_czk"]) == int(current)
+    except (TypeError, ValueError):
+        same = last.get("price_czk") == current
+    if not same:
+        series.append(point)
+    elif stamp and str(last.get("seen_at") or "")[:16] != str(stamp)[:16]:
+        series.append(point)
+    return series
+
+
 def public_listing(row: dict[str, Any]) -> dict[str, Any]:
     item = enrich_maps(row)
     item["portal"] = "Bezrealitky" if "bezrealitky" in (item.get("url") or "") else "Sreality"
@@ -1002,4 +1571,42 @@ def public_listing(row: dict[str, Any]) -> dict[str, Any]:
             extras = {}
     item["extras"] = extras or {}
     item["flags"] = item["extras"].get("flags") or []
+    item["gone"] = bool(item.get("gone"))
+    _apply_discount(item, [])
     return item
+
+
+def _apply_discount(item: dict[str, Any], history: list[int]) -> None:
+    old = item.get("old_price_czk")
+    price = item.get("price_czk")
+    try:
+        old_n = int(old) if old is not None else None
+        price_n = int(price) if price is not None else None
+    except (TypeError, ValueError):
+        old_n = None
+        price_n = None
+    if history:
+        high = max(history)
+        low = history[-1] if history else price_n
+        if old_n is None and price_n is not None and high > price_n:
+            old_n = high
+        if price_n is None and low is not None:
+            price_n = low
+    if old_n is not None and price_n is not None and old_n > price_n:
+        drop = old_n - price_n
+        item["discount_czk"] = drop
+        item["discount_pct"] = round(100 * drop / old_n)
+    else:
+        item["discount_czk"] = None
+        item["discount_pct"] = None
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    from math import asin, cos, radians, sin, sqrt
+
+    radius = 6371000
+    phi1, phi2 = radians(lat1), radians(lat2)
+    d_phi = radians(lat2 - lat1)
+    d_lam = radians(lon2 - lon1)
+    a = sin(d_phi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(d_lam / 2) ** 2
+    return 2 * radius * asin(min(1.0, sqrt(a)))

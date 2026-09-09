@@ -348,6 +348,8 @@ class BezrealitkyClient:
         return listings, total
 
     async def fetch_detail(self, listing: Listing) -> Listing:
+        from app.sreality import ListingGone
+
         data = await self._graphql(
             f"""
             query {{
@@ -357,7 +359,10 @@ class BezrealitkyClient:
             }}
             """
         )
-        parsed = self._parse(data.get("advert") or {})
+        raw = data.get("advert") if data else None
+        if not raw:
+            raise ListingGone(listing.url)
+        parsed = self._parse(raw)
         if not parsed:
             return listing
         if parsed.views is None:

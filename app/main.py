@@ -20,7 +20,7 @@ from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
 from app import bezrealitky_url, url_builder
 from app.filter_bridge import convert_search_url
-from app.sreality import Listing
+from app.commute import route_times
 
 hub = Hub()
 monitor = hub
@@ -125,6 +125,14 @@ async def discord_test(payload: dict[str, Any] | None = Body(None)) -> dict:
         raise HTTPException(502, f"Discord test selhal: {exc}") from exc
 
 
+@app.post("/api/digest/test")
+async def digest_test(payload: dict[str, Any] | None = Body(None)) -> dict:
+    try:
+        return await hub.send_digest_test((payload or {}).get("webhook_url"))
+    except Exception as exc:
+        raise HTTPException(502, f"Test digestu selhal: {exc}") from exc
+
+
 @app.get("/api/listings")
 async def listings() -> dict:
     return {"items": hub.store.recent_notified(24)}
@@ -151,6 +159,11 @@ async def catalog(
     roommate: str = "",
     pets: str = "",
     short_term: str = "",
+    lat: str = "",
+    lon: str = "",
+    radius_m: str = "",
+    status: str = "",
+    discounted: str = "",
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
@@ -176,9 +189,72 @@ async def catalog(
             "roommate": roommate,
             "pets": pets,
             "short_term": short_term,
+            "lat": lat,
+            "lon": lon,
+            "radius_m": radius_m,
+            "status": status,
+            "discounted": discounted,
             "sort": sort,
             "limit": limit,
             "offset": offset,
+        }
+    )
+
+
+@app.get("/api/catalog/pins")
+async def catalog_pins(
+    portal: str = "",
+    q: str = "",
+    disposition: str = "",
+    price_from: str = "",
+    price_to: str = "",
+    area_from: str = "",
+    area_to: str = "",
+    monitor_id: str = "",
+    amenities: str = "",
+    offer: str = "",
+    district: str = "",
+    estate: str = "",
+    ownership: str = "",
+    condition: str = "",
+    building: str = "",
+    equipped: str = "",
+    roommate: str = "",
+    pets: str = "",
+    short_term: str = "",
+    lat: str = "",
+    lon: str = "",
+    radius_m: str = "",
+    status: str = "",
+    discounted: str = "",
+) -> dict:
+    return hub.store.catalog(
+        {
+            "portal": portal,
+            "q": q,
+            "disposition": disposition,
+            "price_from": price_from,
+            "price_to": price_to,
+            "area_from": area_from,
+            "area_to": area_to,
+            "monitor_id": monitor_id,
+            "amenities": amenities,
+            "offer": offer,
+            "district": district,
+            "estate": estate,
+            "ownership": ownership,
+            "condition": condition,
+            "building": building,
+            "equipped": equipped,
+            "roommate": roommate,
+            "pets": pets,
+            "short_term": short_term,
+            "lat": lat,
+            "lon": lon,
+            "radius_m": radius_m,
+            "status": status,
+            "discounted": discounted,
+            "pins_only": True,
         }
     )
 
@@ -210,9 +286,33 @@ async def catalog_item(monitor_id: str, id: int) -> dict:
             listing = await hub.client_for(item["search_url"]).fetch_detail(listing)
             hub.store.save_listing_enrichment(monitor_id, listing)
             item = hub.store.catalog_item(monitor_id, id) or item
+        except ListingGone:
+            await hub.notify_sold(hub.store.get_monitor(monitor_id), id)
+            item = hub.store.catalog_item(monitor_id, id) or item
         except Exception:
             pass
     return item
+
+
+@app.post("/api/catalog/user")
+async def save_listing_user(payload: dict[str, Any]) -> dict:
+    try:
+        return hub.store.set_listing_user(payload.get("url") or "", payload.get("status"), payload.get("note"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/settings")
+async def get_settings() -> dict:
+    return hub.store.app_settings()
+
+
+@app.post("/api/settings")
+async def save_settings(payload: dict[str, Any]) -> dict:
+    try:
+        return hub.store.save_app_settings(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/monitors")
@@ -225,6 +325,14 @@ async def save_monitor(payload: dict[str, Any]) -> dict:
     if not (payload.get("search_url") or "").strip():
         raise HTTPException(400, "Chybí search_url")
     return hub.store.save_monitor(payload)
+
+
+@app.get("/api/monitors/{monitor_id}/preview")
+async def preview_monitor(monitor_id: str) -> dict:
+    monitor = hub.store.get_monitor(monitor_id)
+    if not monitor:
+        raise HTTPException(404, "Monitor neexistuje")
+    return {"items": hub.store.monitor_preview(monitor_id)}
 
 
 @app.get("/api/monitors/{monitor_id}/convert")
@@ -351,6 +459,117 @@ async def filter_locality(q: str = Query("", min_length=2)) -> dict:
         seen.add(ident)
         items.append({"id": ident, "label": row.get("display_name") or ident})
     return {"items": items}
+
+
+def _photon_label(props: dict[str, Any]) -> str:
+    street = (props.get("street") or props.get("name") or "").strip()
+    number = (props.get("housenumber") or "").strip()
+    district = (props.get("district") or props.get("locality") or "").strip()
+    city = (props.get("city") or props.get("town") or props.get("village") or "").strip()
+    line = f"{street} {number}".strip()
+    parts = [part for part in (line, district if district != city else "", city) if part]
+    return ", ".join(parts) or (props.get("name") or "").strip()
+
+
+def _nominatim_label(row: dict[str, Any]) -> str:
+    addr = row.get("address") or {}
+    street = (addr.get("road") or addr.get("pedestrian") or addr.get("footway") or "").strip()
+    number = (addr.get("house_number") or "").strip()
+    district = (addr.get("suburb") or addr.get("neighbourhood") or addr.get("quarter") or "").strip()
+    city = (addr.get("city") or addr.get("town") or addr.get("village") or "").strip()
+    line = f"{street} {number}".strip()
+    parts = [part for part in (line, district if district != city else "", city) if part]
+    return ", ".join(parts) or (row.get("display_name") or "").split(",")[0].strip()
+
+
+def _add_geocode_item(items: list[dict[str, Any]], seen: set[str], label: str, lat: float, lon: float) -> None:
+    label = (label or "").strip()
+    if not label:
+        return
+    key = f"{label.casefold()}|{round(lat, 5)}|{round(lon, 5)}"
+    if key in seen:
+        return
+    seen.add(key)
+    items.append({"label": label, "lat": lat, "lon": lon})
+
+
+@app.get("/api/geocode")
+async def geocode(q: str = Query("", min_length=2)) -> dict:
+    import httpx
+
+    query = q.strip()
+    if len(query) < 2:
+        return {"items": []}
+    headers = {"User-Agent": "RealityScraper/1.2"}
+    queries = [query]
+    if "praha" not in query.casefold() and "prague" not in query.casefold():
+        queries.append(f"{query} Praha")
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+        for term in queries:
+            try:
+                response = await client.get(
+                    "https://photon.komoot.io/api/",
+                    params={"q": term, "limit": 8, "lat": 50.087, "lon": 14.421},
+                )
+                response.raise_for_status()
+                for feature in (response.json() or {}).get("features") or []:
+                    props = feature.get("properties") or {}
+                    if (props.get("countrycode") or "").upper() not in {"CZ", "SK", ""}:
+                        continue
+                    coords = (feature.get("geometry") or {}).get("coordinates") or []
+                    if len(coords) < 2:
+                        continue
+                    _add_geocode_item(items, seen, _photon_label(props), float(coords[1]), float(coords[0]))
+            except Exception:
+                pass
+            try:
+                response = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": term,
+                        "format": "json",
+                        "addressdetails": 1,
+                        "limit": 8,
+                        "countrycodes": "cz,sk",
+                        "viewbox": "14.22,50.18,14.72,49.94",
+                    },
+                )
+                response.raise_for_status()
+                for row in response.json() or []:
+                    try:
+                        lat = float(row.get("lat"))
+                        lon = float(row.get("lon"))
+                    except (TypeError, ValueError):
+                        continue
+                    _add_geocode_item(items, seen, _nominatim_label(row), lat, lon)
+            except Exception:
+                pass
+            if len(items) >= 8:
+                break
+    return {"items": items[:8]}
+
+
+@app.get("/api/commute")
+async def commute_times(
+    from_lat: float = Query(...),
+    from_lon: float = Query(...),
+    to_lat: float = Query(...),
+    to_lon: float = Query(...),
+    from_address: str = Query(""),
+    to_address: str = Query(""),
+) -> dict:
+    if not (-90 <= from_lat <= 90 and -90 <= to_lat <= 90 and -180 <= from_lon <= 180 and -180 <= to_lon <= 180):
+        raise HTTPException(400, "Neplatné souřadnice")
+    return await route_times(
+        from_lat,
+        from_lon,
+        to_lat,
+        to_lon,
+        from_address=from_address,
+        to_address=to_address,
+    )
 
 
 @app.get("/api/backup/json")

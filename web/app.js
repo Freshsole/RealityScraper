@@ -11,6 +11,7 @@ const empty = $("empty");
 
 let hitsMap = null;
 let hitsLayer = null;
+let hitsPins = [];
 let lastMapKey = "";
 let statusCache = { monitors: [], templates: [] };
 let filterCatalog = null;
@@ -38,6 +39,29 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function listingCardHtml(item, { compact = false } = {}) {
+  const photo = item.image_url || item.photos?.[0] || "";
+  const area = item.area_m2 ? `${item.area_m2} m²` : "rozloha neuvedena";
+  const kindLabel = { changed: "Změna", refresh: "Obnoveno", new: "Nový" }[item.last_kind] || "Nový";
+  const monitors = (item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "";
+  const discount = item.discount_czk ? ` · −${Number(item.discount_czk).toLocaleString("cs-CZ")} Kč` : "";
+  const meta = compact
+    ? `${escapeHtml(item.disposition || "—")} · ${escapeHtml(area)}<br />${escapeHtml(item.locality || "")}${
+        item.discount_czk ? `<br />−${Number(item.discount_czk).toLocaleString("cs-CZ")} Kč` : ""
+      }`
+    : `${escapeHtml(monitors)} · ${escapeHtml(kindLabel)}${discount} · ${escapeHtml(item.disposition || "—")} · ${escapeHtml(area)}<br />${escapeHtml(item.locality || "")}`;
+  return `
+    <a class="listing" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noreferrer">
+      ${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : `<div class="listing-photo-empty" aria-hidden="true"></div>`}
+      <div class="listing-body">
+        <h3>${escapeHtml(item.name || item.locality || "Nabídka")}</h3>
+        <div class="price">${escapeHtml(item.price_label || "")}</div>
+        <div class="meta">${meta}</div>
+      </div>
+    </a>
+  `;
 }
 
 function setBusy(busy) {
@@ -111,7 +135,7 @@ function renderStatus(status) {
   const running = Boolean(status.running);
   livePill.dataset.state = status.last_error ? "error" : running ? "on" : "off";
   liveLabel.textContent = status.last_error ? "Chyba" : running ? "Hlídám" : "Zastaveno";
-  toggleBtn.textContent = running ? "Zastavit hlídání" : "Spustit hlídání";
+  setLabeled(toggleBtn, running ? "Zastavit hlídání" : "Spustit hlídání", running ? "pause" : "play");
   $("new-today").textContent = status.new_today ?? 0;
   $("tracked").textContent = status.tracked ?? 0;
   $("total").textContent = status.search_total || "–";
@@ -133,39 +157,112 @@ function renderStatus(status) {
   }
 
   const recent = status.recent || [];
-  grid.innerHTML = "";
+  grid.innerHTML = recent.map((item) => listingCardHtml(item)).join("");
   empty.hidden = recent.length > 0;
-  for (const item of recent) {
-    const area = item.area_m2 ? `${item.area_m2} m²` : "rozloha neuvedena";
-    const card = document.createElement("a");
-    card.className = "listing";
-    card.href = item.url;
-    card.target = "_blank";
-    card.rel = "noreferrer";
-    const kindLabel = { changed: "Změna", refresh: "Obnoveno", new: "Nový" }[item.last_kind] || "Nový";
-    card.innerHTML = `
-      ${item.image_url ? `<img src="${item.image_url}" alt="" />` : ""}
-      <div class="listing-body">
-        <h3>${escapeHtml(item.name)}</h3>
-        <div class="price">${escapeHtml(item.price_label || "")}</div>
-        <div class="meta">${escapeHtml(item.monitor_name || "")} · ${escapeHtml(kindLabel)} · ${escapeHtml(item.disposition)} · ${escapeHtml(area)}<br />${escapeHtml(item.locality || "")}</div>
-      </div>
-    `;
-    grid.appendChild(card);
-  }
   renderMap(recent);
   renderMonitors(status.monitors || []);
   fillTemplateSelects(status.templates || []);
 }
 
+function pinPrice(item) {
+  if (item.price_czk != null && Number.isFinite(Number(item.price_czk))) {
+    return `${Number(item.price_czk).toLocaleString("cs-CZ")} Kč`;
+  }
+  return String(item.price_label || "Cena")
+    .replace(/\s*\/\s*měsíc.*/i, "")
+    .replace(/\s*\(.*/, "")
+    .trim() || "Cena";
+}
+
+function clusterCell(zoom) {
+  if (zoom >= 16) return 0;
+  if (zoom >= 14) return 0.004;
+  if (zoom >= 13) return 0.008;
+  if (zoom >= 12) return 0.016;
+  if (zoom >= 11) return 0.03;
+  return 0.06;
+}
+
+function groupedPins(items, zoom) {
+  const cell = clusterCell(zoom);
+  if (!cell) return items.map((item) => ({ items: [item], lat: item.lat, lon: item.lon }));
+  const groups = new Map();
+  for (const item of items) {
+    const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
+    const group = groups.get(key) || { items: [], lat: 0, lon: 0 };
+    group.items.push(item);
+    group.lat += item.lat;
+    group.lon += item.lon;
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => ({
+    items: group.items,
+    lat: group.lat / group.items.length,
+    lon: group.lon / group.items.length,
+  }));
+}
+
 function ensureMap() {
   if (hitsMap || typeof L === "undefined") return;
-  hitsMap = L.map("hits-map", { scrollWheelZoom: false }).setView([50.08, 14.44], 12);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap",
-    maxZoom: 19,
+  hitsMap = L.map("hits-map", { scrollWheelZoom: false, attributionControl: false }).setView([50.08, 14.44], 12);
+  L.maplibreGL({
+    style: "https://tiles.openfreemap.org/styles/liberty",
   }).addTo(hitsMap);
   hitsLayer = L.layerGroup().addTo(hitsMap);
+  hitsMap.on("zoomend", () => drawHitsPins(false));
+}
+
+function hitMarker(item) {
+  const pin = L.divIcon({
+    className: "price-pin-wrap",
+    html: `<div class="price-pin">${escapeHtml(pinPrice(item))}</div>`,
+    iconSize: [88, 32],
+    iconAnchor: [44, 16],
+    popupAnchor: [0, -18],
+  });
+  const maps = item.maps_url
+    ? `<a class="map-popup-link" href="${item.maps_url}" target="_blank" rel="noreferrer">Google Maps</a>`
+    : "";
+  const portal = String(item.url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
+  const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true });
+  marker.bindPopup(
+    `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links"><a class="map-popup-link" href="${item.url}" target="_blank" rel="noreferrer">${portal}</a>${maps}</div></div></div>`,
+    { className: "map-popup", maxWidth: 280, minWidth: 240 },
+  );
+  marker.on("popupopen", () => marker.getElement()?.classList.add("is-open"));
+  marker.on("popupclose", () => marker.getElement()?.classList.remove("is-open"));
+  return marker;
+}
+
+function drawHitsPins(fit) {
+  if (!hitsMap || !hitsLayer) return;
+  const mappable = hitsPins.filter((item) => item.lat != null && item.lon != null);
+  hitsLayer.clearLayers();
+  const groups = groupedPins(mappable, hitsMap.getZoom());
+  const points = [];
+  for (const group of groups) {
+    if (group.items.length === 1) {
+      hitsLayer.addLayer(hitMarker(group.items[0]));
+    } else {
+      const size = group.items.length > 99 ? 48 : group.items.length > 9 ? 42 : 36;
+      const marker = L.marker([group.lat, group.lon], {
+        icon: L.divIcon({
+          className: "price-cluster-wrap",
+          html: `<div class="price-cluster">${group.items.length}</div>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        }),
+      });
+      marker.on("click", () => hitsMap.setView([group.lat, group.lon], Math.min(hitsMap.getZoom() + 2, 16)));
+      hitsLayer.addLayer(marker);
+    }
+    points.push([group.lat, group.lon]);
+  }
+  if (fit) {
+    if (points.length === 1) hitsMap.setView(points[0], 14);
+    else if (points.length > 1) hitsMap.fitBounds(points, { padding: [48, 48], maxZoom: 14 });
+  }
+  setTimeout(() => hitsMap.invalidateSize(), 80);
 }
 
 function renderMap(items) {
@@ -173,37 +270,13 @@ function renderMap(items) {
   if (!hitsMap || !hitsLayer) return;
   const mappable = items.filter((item) => item.lat != null && item.lon != null);
   const nextKey = mappable.map((item) => `${item.id}:${item.lat}:${item.lon}:${item.image_url || ""}`).join("|");
+  hitsPins = mappable;
   if (nextKey === lastMapKey) {
     setTimeout(() => hitsMap.invalidateSize(), 80);
     return;
   }
   lastMapKey = nextKey;
-  hitsLayer.clearLayers();
-  const points = [];
-  for (const item of mappable) {
-    const photo = item.image_url ? `<img src="${item.image_url}" alt="" />` : `<span class="photo-pin-fallback"></span>`;
-    const pin = L.divIcon({
-      className: "photo-pin-wrap",
-      html: `<div class="photo-pin">${photo}<i></i></div>`,
-      iconSize: [56, 68],
-      iconAnchor: [28, 64],
-      popupAnchor: [0, -56],
-    });
-    const maps = item.maps_url
-      ? `<a class="map-popup-link" href="${item.maps_url}" target="_blank" rel="noreferrer">Google Maps</a>`
-      : "";
-    const portal = String(item.url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
-    const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true });
-    marker.bindPopup(
-      `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links"><a class="map-popup-link" href="${item.url}" target="_blank" rel="noreferrer">${portal}</a>${maps}</div></div></div>`,
-      { className: "map-popup", maxWidth: 280, minWidth: 240 },
-    );
-    hitsLayer.addLayer(marker);
-    points.push([item.lat, item.lon]);
-  }
-  if (points.length === 1) hitsMap.setView(points[0], 14);
-  else if (points.length > 1) hitsMap.fitBounds(points, { padding: [48, 48], maxZoom: 14 });
-  setTimeout(() => hitsMap.invalidateSize(), 80);
+  drawHitsPins(true);
 }
 
 function portalLabel(url) {
@@ -216,32 +289,146 @@ function portalIcon(url) {
     : "/static/icons/sreality.svg";
 }
 
+let editingMonitorId = null;
+let editingDraft = null;
+
+function templateOptions(selected) {
+  return (statusCache.templates || [])
+    .map((row) => `<option value="${escapeHtml(row.id)}"${row.id === selected ? " selected" : ""}>${escapeHtml(row.name)}</option>`)
+    .join("");
+}
+
+function templateName(id) {
+  const key = id || "default";
+  return (statusCache.templates || []).find((row) => row.id === key)?.name || key;
+}
+
+function readMonitorDraft(form) {
+  return {
+    name: form.querySelector("[name='name']")?.value || "",
+    search_url: form.querySelector("[name='search_url']")?.value || "",
+    webhook_url: form.querySelector("[name='webhook_url']")?.value || "",
+    template_id: form.querySelector("[name='template_id']")?.value || "default",
+    enabled: Boolean(form.querySelector("[name='enabled']")?.checked),
+    interval_sec: form.querySelector("[name='interval_sec']")?.value || "",
+  };
+}
+
+function monitorEditorHtml(item, draft) {
+  const data = {
+    name: draft?.name ?? item.name ?? "",
+    search_url: draft?.search_url ?? item.search_url ?? "",
+    webhook_url: draft?.webhook_url ?? item.webhook_url ?? "",
+    template_id: draft?.template_id ?? item.template_id ?? "default",
+    enabled: draft?.enabled ?? Boolean(item.enabled),
+    interval_sec: draft?.interval_sec ?? item.interval_sec ?? "",
+  };
+  return `
+    <form class="form-card" data-monitor-edit="${escapeHtml(item.id)}">
+      <label>Název<input name="name" value="${escapeHtml(data.name)}" /></label>
+      <label>URL hledání<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
+      <label>Discord webhook<input name="webhook_url" value="${escapeHtml(data.webhook_url)}" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
+      <label>Šablona zprávy<select name="template_id">${templateOptions(data.template_id)}</select></label>
+      <label>Interval (s)<input name="interval_sec" type="number" min="20" value="${escapeHtml(data.interval_sec || "")}" placeholder="výchozí 60" /></label>
+      <p class="monitor-preview-label">Náhled nabídek</p>
+      <div class="monitor-preview" id="monitor-preview"></div>
+      <label class="switch-field">
+        <span class="switch-copy">
+          <span class="switch-title">Stav</span>
+          <span class="switch-state"></span>
+        </span>
+        <input name="enabled" type="checkbox"${data.enabled ? " checked" : ""} />
+        <span class="switch-ui" aria-hidden="true"></span>
+      </label>
+      <div class="actions">
+        <button class="btn" type="submit" data-icon="check">Uložit</button>
+        <button class="btn btn-ghost" type="button" data-cancel-edit data-icon="x">Zrušit</button>
+      </div>
+    </form>
+  `;
+}
+
+function editForm() {
+  return document.querySelector("#monitor-modal [data-monitor-edit]");
+}
+
+function closeMonitorEditor() {
+  editingMonitorId = null;
+  editingDraft = null;
+  const modal = $("monitor-modal");
+  if (modal) modal.hidden = true;
+  document.body.classList.remove("monitor-modal-open");
+  const body = $("monitor-edit-body");
+  if (body) body.innerHTML = "";
+}
+
+function openMonitorEditor(id, draft = null) {
+  const item = (statusCache.monitors || []).find((row) => String(row.id) === String(id));
+  if (!item) return;
+  editingMonitorId = item.id;
+  editingDraft = draft;
+  $("monitor-modal-title").textContent = draft?.name || item.name;
+  $("monitor-edit-body").innerHTML = monitorEditorHtml(item, draft);
+  decorateIcons($("monitor-edit-body"));
+  $("monitor-modal").hidden = false;
+  document.body.classList.add("monitor-modal-open");
+  fetch(`/api/monitors/${encodeURIComponent(item.id)}/preview`)
+    .then((res) => res.json())
+    .then((data) => {
+      const host = $("monitor-preview");
+      if (!host) return;
+      const items = data.items || [];
+      host.classList.toggle("is-empty", items.length === 0);
+      host.innerHTML = items.length
+        ? items.map((row) => listingCardHtml(row, { compact: true })).join("")
+        : `<p class="monitor-preview-empty">Zatím žádné nabídky v tomto monitoru.</p>`;
+    })
+    .catch(() => {});
+}
+
 function renderMonitors(items) {
   const list = $("monitor-list");
   if (!list) return;
+  const form = editForm();
+  if (form && editingMonitorId && !$("monitor-modal").hidden) editingDraft = readMonitorDraft(form);
   list.innerHTML = items
     .map((item) => {
       const portal = portalLabel(item.search_url);
+      const editing = String(item.id) === String(editingMonitorId);
       return `
-      <article class="monitor-card">
+      <article class="monitor-card${editing ? " is-editing" : ""}${item.enabled ? "" : " is-off"}" data-monitor-card="${item.id}">
         <div class="monitor-main">
           <img class="monitor-logo" src="${portalIcon(item.search_url)}" alt="${escapeHtml(portal)}" />
           <div class="monitor-copy">
-            <strong>${escapeHtml(item.name)}</strong>
-            <p>${escapeHtml(portal)} · ${escapeHtml(item.search_url)}</p>
-            <p>${item.enabled ? "Zapnutý" : "Vypnutý"} · ${item.seeded ? "nasazený" : "čeká na první běh"} · ${item.tracked} ID · šablona ${escapeHtml(item.template_id || "default")}</p>
-            <div class="actions">
-              <button class="btn btn-ghost" type="button" data-edit-monitor="${item.id}">Upravit</button>
-              <button class="btn btn-ghost" type="button" data-check-monitor="${item.id}">Zkontrolovat</button>
-              <button class="btn btn-ghost" type="button" data-mirror-monitor="${item.id}">Zkopírovat na ${portal === "Bezrealitky" ? "Sreality" : "Bezrealitky"}</button>
-              <button class="btn btn-ghost" type="button" data-del-monitor="${item.id}">Smazat</button>
+            <div class="monitor-head">
+              <strong>${escapeHtml(item.name)}</strong>
+              <span class="monitor-portal">${escapeHtml(portal)}</span>
+            </div>
+            <div class="monitor-meta">
+              <span>${item.seeded ? "Nasazený" : "Čeká na běh"}</span>
+              <span>${item.tracked} ID</span>
+              <span>${escapeHtml(templateName(item.template_id))}</span>
+              <span>${item.interval_sec || 60} s</span>
             </div>
           </div>
+        </div>
+        <div class="monitor-foot">
+          <div class="actions">
+            <button class="btn btn-ghost" type="button" data-edit-monitor="${item.id}" data-icon="pencil">Upravit</button>
+            <button class="btn btn-ghost" type="button" data-check-monitor="${item.id}" data-icon="refresh">Zkontrolovat</button>
+            <button class="btn btn-ghost" type="button" data-mirror-monitor="${item.id}" data-icon="swap">Na ${portal === "Bezrealitky" ? "Sreality" : "Bezrealitky"}</button>
+            <button class="btn btn-ghost" type="button" data-del-monitor="${item.id}" data-icon="trash">Smazat</button>
+          </div>
+          <label class="switch-field monitor-switch" title="${item.enabled ? "Zapnutý" : "Vypnutý"}">
+            <input type="checkbox" data-toggle-monitor="${item.id}"${item.enabled ? " checked" : ""} />
+            <span class="switch-ui" aria-hidden="true"></span>
+          </label>
         </div>
       </article>
     `;
     })
     .join("");
+  decorateIcons(list);
 }
 
 const NEW_TEMPLATE_ID = "__new__";
@@ -308,22 +495,22 @@ function fillMonitorForm(item) {
   $("monitor-webhook").value = item?.webhook_url || "";
   $("monitor-template").value = item?.template_id || "default";
   $("monitor-enabled").checked = item ? Boolean(item.enabled) : true;
+  if ($("monitor-interval")) $("monitor-interval").value = item?.interval_sec || "";
 }
 
 $("monitor-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const editing = Boolean($("monitor-id").value);
   const saved = await post(
     "/api/monitors",
     {
-      id: $("monitor-id").value || undefined,
       name: $("monitor-name").value,
       search_url: $("monitor-url").value,
       webhook_url: $("monitor-webhook").value,
       template_id: $("monitor-template").value,
       enabled: $("monitor-enabled").checked,
+      interval_sec: $("monitor-interval")?.value || "",
     },
-    editing ? "Monitor upraven" : "Monitor uložen",
+    "Monitor uložen",
   );
   if (saved) fillMonitorForm(null);
 });
@@ -333,18 +520,67 @@ $("monitor-reset").addEventListener("click", () => {
   toast("Formulář vyčištěn", "info");
 });
 
+$("monitor-list").addEventListener("change", async (event) => {
+  const toggle = event.target.closest("[data-toggle-monitor]");
+  if (!toggle) return;
+  const item = (statusCache.monitors || []).find((row) => String(row.id) === String(toggle.dataset.toggleMonitor));
+  if (!item) return;
+  const saved = await post(
+    "/api/monitors",
+    {
+      id: item.id,
+      name: item.name,
+      search_url: item.search_url,
+      webhook_url: item.webhook_url,
+      template_id: item.template_id,
+      interval_sec: item.interval_sec || "",
+      enabled: toggle.checked,
+    },
+    toggle.checked ? "Monitor zapnutý" : "Monitor vypnutý",
+  );
+  if (!saved) toggle.checked = !toggle.checked;
+});
+
+$("monitor-modal").addEventListener("submit", async (event) => {
+  const form = event.target.closest("[data-monitor-edit]");
+  if (!form) return;
+  event.preventDefault();
+  const draft = readMonitorDraft(form);
+  const id = form.dataset.monitorEdit;
+  closeMonitorEditor();
+  const saved = await post("/api/monitors", { id, ...draft }, "Monitor upraven");
+  if (!saved) openMonitorEditor(id, draft);
+});
+
+$("monitor-modal").addEventListener("click", (event) => {
+  if (event.target.id === "monitor-modal" || event.target.closest("[data-cancel-edit]")) {
+    closeMonitorEditor();
+    renderMonitors(statusCache.monitors || []);
+  }
+});
+
+$("monitor-modal-close").addEventListener("click", () => {
+  closeMonitorEditor();
+  renderMonitors(statusCache.monitors || []);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || $("monitor-modal").hidden) return;
+  closeMonitorEditor();
+  renderMonitors(statusCache.monitors || []);
+});
+
 $("monitor-list").addEventListener("click", async (event) => {
   const edit = event.target.closest("[data-edit-monitor]");
   const del = event.target.closest("[data-del-monitor]");
   const check = event.target.closest("[data-check-monitor]");
   const mirror = event.target.closest("[data-mirror-monitor]");
   if (edit) {
-    const item = (statusCache.monitors || []).find((row) => row.id === edit.dataset.editMonitor);
-    fillMonitorForm(item);
-    toast(`Upravuješ ${item?.name || "monitor"}`, "info");
-    $("monitor-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    openMonitorEditor(edit.dataset.editMonitor);
+    renderMonitors(statusCache.monitors || []);
   }
   if (del && confirm("Smazat monitor i jeho uložená ID?")) {
+    if (String(del.dataset.delMonitor) === String(editingMonitorId)) closeMonitorEditor();
     const response = await fetch(`/api/monitors/${del.dataset.delMonitor}`, { method: "DELETE" });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -880,7 +1116,7 @@ async function checkUpdates() {
     if (!btn) return info;
     if (info.update_available) {
       btn.hidden = false;
-      btn.textContent = `Aktualizovat na ${info.latest}`;
+      setLabeled(btn, `Aktualizovat na ${info.latest}`, "download");
       toast(`Je nová verze ${info.latest}`, "info");
     } else {
       btn.hidden = true;
@@ -908,6 +1144,260 @@ function downloadBackup(url, label) {
 
 $("export-pack")?.addEventListener("click", () => downloadBackup("/api/backup/pack", "Stahuji zip balíček"));
 $("export-json")?.addEventListener("click", () => downloadBackup("/api/backup/json", "Stahuji JSON"));
+function commutePlaceholder(index) {
+  return index === 0 ? "Práce" : "Metro";
+}
+
+function commuteAddressLabel(point) {
+  if (point.address) return point.address;
+  if (point.lat !== "" && point.lat != null && point.lon !== "" && point.lon != null) {
+    return `${point.lat}, ${point.lon}`;
+  }
+  return "";
+}
+
+function renderCommutePoints(points) {
+  const host = $("commute-points");
+  if (!host) return;
+  const rows = (points || []).slice(0, 2);
+  if (!rows.length) rows.push({ name: "Práce", address: "", lat: "", lon: "" });
+  host.innerHTML = rows
+    .map((point, index) => {
+      const address = commuteAddressLabel(point);
+      const picked = point.lat !== "" && point.lat != null && point.lon !== "" && point.lon != null;
+      return `
+      <div class="commute-row" data-commute="${index}">
+        <label>Název<input data-cname value="${escapeHtml(point.name || commutePlaceholder(index))}" placeholder="${commutePlaceholder(index)}" /></label>
+        <label class="commute-search">Adresa
+          <input data-caddress value="${escapeHtml(address)}" placeholder="Ulice, číslo, Praha" autocomplete="off" />
+          <div class="commute-suggest" hidden></div>
+          <input type="hidden" data-clat value="${point.lat ?? ""}" />
+          <input type="hidden" data-clon value="${point.lon ?? ""}" />
+        </label>
+        <button class="btn btn-ghost commute-remove" type="button" data-clear-commute data-icon="x" aria-label="Odebrat bod"></button>
+        <p class="commute-picked"${picked ? "" : " hidden"}>${picked ? `Vybraná adresa: ${escapeHtml(address)}` : ""}</p>
+      </div>
+    `;
+    })
+    .join("");
+  decorateIcons(host);
+  if ($("commute-add")) $("commute-add").hidden = host.querySelectorAll(".commute-row").length >= 2;
+}
+
+function readCommutePoints() {
+  return [...document.querySelectorAll(".commute-row")]
+    .map((row, index) => ({
+      id: String(index + 1),
+      name: row.querySelector("[data-cname]")?.value.trim() || commutePlaceholder(index),
+      address: row.querySelector("[data-caddress]")?.value.trim() || "",
+      lat: row.querySelector("[data-clat]")?.value,
+      lon: row.querySelector("[data-clon]")?.value,
+    }))
+    .filter((point) => point.lat !== "" && point.lon !== "");
+}
+
+function closeCommuteSuggest(row) {
+  const box = row?.querySelector(".commute-suggest");
+  if (box) {
+    box.hidden = true;
+    box.innerHTML = "";
+  }
+}
+
+function pickCommuteAddress(row, item) {
+  if (!row || !item) return;
+  const input = row.querySelector("[data-caddress]");
+  const lat = row.querySelector("[data-clat]");
+  const lon = row.querySelector("[data-clon]");
+  const picked = row.querySelector(".commute-picked");
+  if (input) input.value = item.label || "";
+  if (lat) lat.value = item.lat;
+  if (lon) lon.value = item.lon;
+  if (picked) {
+    picked.hidden = false;
+    picked.textContent = `Vybraná adresa: ${item.label}`;
+  }
+  closeCommuteSuggest(row);
+  persistCommutePoints("Adresa uložena");
+}
+
+async function persistCommutePoints(okMessage) {
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        digest_hour: $("digest-hour")?.value || 8,
+        commute_points: readCommutePoints(),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "Uložení selhalo");
+    window.dispatchEvent(new CustomEvent("app-settings", { detail: data }));
+    if (okMessage) toast(okMessage);
+    return data;
+  } catch (err) {
+    toast(err.message || "Uložení selhalo", "error");
+    return null;
+  }
+}
+
+let commuteTimer = null;
+let commuteSaveTimer = null;
+let commuteFocus = -1;
+
+async function searchCommuteAddress(row) {
+  const input = row.querySelector("[data-caddress]");
+  const box = row.querySelector(".commute-suggest");
+  const q = input?.value.trim() || "";
+  if (!box) return;
+  if (q.length < 3) {
+    closeCommuteSuggest(row);
+    return;
+  }
+  const response = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+  const data = await response.json().catch(() => ({}));
+  const items = data.items || [];
+  commuteFocus = -1;
+  if (!response.ok) {
+    box.innerHTML = `<p class="empty">Hledání adres teď neběží. Restartuj appku a zkus znovu.</p>`;
+    box.hidden = false;
+    return;
+  }
+  if (!items.length) {
+    box.innerHTML = `<p class="empty">Nic se nenašlo. Zkus ulici i s Prahou, třeba „Prelova Praha“.</p>`;
+    box.hidden = false;
+    return;
+  }
+  box.innerHTML = items
+    .map(
+      (item) =>
+        `<button type="button" data-lat="${escapeHtml(item.lat)}" data-lon="${escapeHtml(item.lon)}">${escapeHtml(item.label)}</button>`,
+    )
+    .join("");
+  box.hidden = false;
+}
+
+async function loadAppSettings() {
+  const data = await fetch("/api/settings").then((res) => res.json()).catch(() => null);
+  if (!data) return;
+  if ($("digest-hour")) $("digest-hour").value = data.digest_hour ?? 8;
+  if ($("digest-webhook")) $("digest-webhook").value = data.digest_webhook || "";
+  renderCommutePoints(data.commute_points || []);
+}
+
+$("digest-test")?.addEventListener("click", () =>
+  post(
+    "/api/digest/test",
+    { webhook_url: $("digest-webhook")?.value.trim() || "" },
+    "Test ranního souhrnu odeslán na Discord",
+  ),
+);
+
+$("settings-save")?.addEventListener("click", async () => {
+  const saved = await post(
+    "/api/settings",
+    {
+      digest_hour: $("digest-hour")?.value || 8,
+      digest_webhook: $("digest-webhook")?.value.trim() || "",
+      commute_points: readCommutePoints(),
+    },
+    "Nastavení uloženo",
+  );
+  if (saved) renderCommutePoints(saved.commute_points || []);
+});
+
+$("commute-add")?.addEventListener("click", () => {
+  const host = $("commute-points");
+  const rows = [...(host?.querySelectorAll(".commute-row") || [])];
+  if (rows.length >= 2) {
+    toast("Jdou jen dva body", "info");
+    return;
+  }
+  const current = rows.map((row, index) => ({
+    name: row.querySelector("[data-cname]")?.value.trim() || commutePlaceholder(index),
+    address: row.querySelector("[data-caddress]")?.value.trim() || "",
+    lat: row.querySelector("[data-clat]")?.value,
+    lon: row.querySelector("[data-clon]")?.value,
+  }));
+  current.push({ name: commutePlaceholder(current.length), address: "", lat: "", lon: "" });
+  renderCommutePoints(current);
+});
+
+$("commute-points")?.addEventListener("input", (event) => {
+  const name = event.target.closest("[data-cname]");
+  if (name) {
+    clearTimeout(commuteSaveTimer);
+    commuteSaveTimer = setTimeout(() => persistCommutePoints(), 400);
+    return;
+  }
+  const input = event.target.closest("[data-caddress]");
+  if (!input) return;
+  const row = input.closest(".commute-row");
+  const lat = row?.querySelector("[data-clat]");
+  const lon = row?.querySelector("[data-clon]");
+  const picked = row?.querySelector(".commute-picked");
+  if (lat) lat.value = "";
+  if (lon) lon.value = "";
+  if (picked) picked.hidden = true;
+  clearTimeout(commuteTimer);
+  commuteTimer = setTimeout(() => searchCommuteAddress(row), 280);
+});
+
+$("commute-points")?.addEventListener("keydown", (event) => {
+  const row = event.target.closest(".commute-row");
+  const box = row?.querySelector(".commute-suggest");
+  const options = [...(box?.querySelectorAll("button") || [])];
+  if (!row || !box || box.hidden) return;
+  if (event.key === "Escape") {
+    closeCommuteSuggest(row);
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!options.length) return;
+    commuteFocus = (commuteFocus + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+    options.forEach((btn, index) => btn.classList.toggle("on", index === commuteFocus));
+    options[commuteFocus]?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (event.key === "Enter" && commuteFocus >= 0 && options[commuteFocus]) {
+    event.preventDefault();
+    const btn = options[commuteFocus];
+    pickCommuteAddress(row, { label: btn.textContent, lat: btn.dataset.lat, lon: btn.dataset.lon });
+  }
+});
+
+$("commute-points")?.addEventListener("click", (event) => {
+  const row = event.target.closest(".commute-row");
+  if (!row) return;
+  if (event.target.closest("[data-clear-commute]")) {
+    const host = $("commute-points");
+    const left = [...(host?.querySelectorAll(".commute-row") || [])]
+      .filter((item) => item !== row)
+      .map((item, index) => ({
+        name: item.querySelector("[data-cname]")?.value.trim() || commutePlaceholder(index),
+        address: item.querySelector("[data-caddress]")?.value.trim() || "",
+        lat: item.querySelector("[data-clat]")?.value,
+        lon: item.querySelector("[data-clon]")?.value,
+      }));
+    renderCommutePoints(left);
+    persistCommutePoints("Bod smazán");
+    return;
+  }
+  const btn = event.target.closest(".commute-suggest button");
+  if (!btn) return;
+  pickCommuteAddress(row, { label: btn.textContent, lat: btn.dataset.lat, lon: btn.dataset.lon });
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".commute-search")) return;
+  document.querySelectorAll(".commute-suggest").forEach((box) => {
+    const row = box.closest(".commute-row");
+    if (row) closeCommuteSuggest(row);
+  });
+});
+
 $("export-db")?.addEventListener("click", () => downloadBackup("/api/backup/sqlite", "Stahuji databázi"));
 
 async function importBackup(file) {
@@ -960,6 +1450,7 @@ async function boot() {
   variables = tpl.variables || [];
   sampleVars = tpl.sample || {};
   await refresh();
+  await loadAppSettings();
   checkUpdates();
   const params = new URLSearchParams(location.search);
   const drafted = params.get("url");

@@ -14,6 +14,7 @@ from app.version import current_version
 
 ENV_KEYS = {
     "discord_webhook_url": "DISCORD_WEBHOOK_URL",
+    "sold_webhook_url": "SOLD_WEBHOOK_URL",
     "search_url": "SEARCH_URL",
     "poll_interval_sec": "POLL_INTERVAL_SEC",
     "poll_pages": "POLL_PAGES",
@@ -27,6 +28,7 @@ ENV_KEYS = {
 def current_settings() -> dict[str, Any]:
     return {
         "discord_webhook_url": config.DISCORD_WEBHOOK_URL,
+        "sold_webhook_url": config.SOLD_WEBHOOK_URL,
         "search_url": config.SEARCH_URL,
         "poll_interval_sec": config.POLL_INTERVAL_SEC,
         "poll_pages": config.POLL_PAGES,
@@ -41,6 +43,10 @@ def export_config(store: Store) -> dict[str, Any]:
     with store.connect() as conn:
         monitors = [dict(row) for row in conn.execute("SELECT * FROM monitors ORDER BY created_at")]
         meta = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM meta")}
+        try:
+            listing_user = [dict(row) for row in conn.execute("SELECT * FROM listing_user")]
+        except sqlite3.OperationalError:
+            listing_user = []
     return {
         "kind": "sreality-monitor",
         "version": current_version(),
@@ -49,6 +55,7 @@ def export_config(store: Store) -> dict[str, Any]:
         "monitors": monitors,
         "templates": store.list_templates(),
         "meta": meta,
+        "listing_user": listing_user,
     }
 
 
@@ -79,6 +86,8 @@ def apply_settings(settings: dict[str, Any] | None) -> None:
         return
     if settings.get("discord_webhook_url"):
         config.DISCORD_WEBHOOK_URL = str(settings["discord_webhook_url"]).strip()
+    if settings.get("sold_webhook_url"):
+        config.SOLD_WEBHOOK_URL = str(settings["sold_webhook_url"]).strip()
     if settings.get("search_url"):
         config.SEARCH_URL = str(settings["search_url"]).strip()
     if settings.get("poll_interval_sec"):
@@ -164,8 +173,8 @@ def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) 
                     """
                     INSERT INTO monitors(
                         id, name, search_url, webhook_url, template_id, enabled, seeded,
-                        last_check, last_error, last_total, last_found, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        last_check, last_error, last_total, last_found, interval_sec, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         item.get("id") or "default",
@@ -179,8 +188,19 @@ def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) 
                         item.get("last_error"),
                         item.get("last_total"),
                         item.get("last_found"),
+                        item.get("interval_sec"),
                         item.get("created_at") or now,
                     ),
+                )
+        users = payload.get("listing_user") or []
+        if users:
+            conn.execute("DELETE FROM listing_user")
+            for item in users:
+                if not item.get("url"):
+                    continue
+                conn.execute(
+                    "INSERT OR REPLACE INTO listing_user(url, status, note, updated_at) VALUES (?, ?, ?, ?)",
+                    (item["url"], item.get("status") or "", item.get("note") or "", item.get("updated_at") or now),
                 )
 
 
