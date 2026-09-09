@@ -6,7 +6,8 @@ from typing import Any
 
 from app import config
 from app.discord_notify import send_listing, send_text
-from app.sreality import Listing, SrealityClient, format_price, is_recently_created
+from app.sreality import Listing, format_price, is_recently_created
+from app.sources import client_for, source_name, webhook_for
 from app.store import Store, utc_now
 from app.version import current_version
 
@@ -14,16 +15,16 @@ from app.version import current_version
 class Hub:
     def __init__(self) -> None:
         self.store = Store(config.DB_PATH)
-        self.clients: dict[str, SrealityClient] = {}
+        self.clients: dict[str, object] = {}
         self.running = False
         self.checking = False
         self._task: asyncio.Task[None] | None = None
         self.last_error: str | None = None
 
-    def client_for(self, search_url: str) -> SrealityClient:
+    def client_for(self, search_url: str):
         client = self.clients.get(search_url)
         if client is None:
-            client = SrealityClient(search_url)
+            client = client_for(search_url)
             self.clients[search_url] = client
         return client
 
@@ -86,7 +87,7 @@ class Hub:
         client = self.client_for(monitor["search_url"])
         template = self.store.get_template(monitor.get("template_id") or "default")
         template_config = (template or {}).get("config")
-        webhook = (monitor.get("webhook_url") or config.DISCORD_WEBHOOK_URL).strip()
+        webhook = webhook_for(monitor.get("search_url") or "", monitor.get("webhook_url"))
         try:
             if not monitor.get("seeded"):
                 listings, total = await client.fetch_all(newest=True)
@@ -150,7 +151,7 @@ class Hub:
 
     async def _classify(
         self,
-        client: SrealityClient,
+        client,
         listing: Listing,
         prev: dict[str, Any] | None,
     ) -> Listing | None:
@@ -184,10 +185,10 @@ class Hub:
             raise RuntimeError("Žádný monitor")
         client = self.client_for(monitor["search_url"])
         listings, _ = await client.fetch_pages(1, newest=True)
-        webhook = (monitor.get("webhook_url") or config.DISCORD_WEBHOOK_URL).strip()
+        webhook = webhook_for(monitor.get("search_url") or "", monitor.get("webhook_url"))
         template = self.store.get_template(monitor.get("template_id") or "default")
         if not listings:
-            await send_text(webhook, "Test monitoru: Sreality teď nevrátilo žádný listing.")
+            await send_text(webhook, f"Test monitoru: {source_name(monitor.get('search_url') or '')} teď nevrátilo žádný listing.")
             return {"ok": True, "listing": None}
         listing = listings[0]
         await send_listing(
@@ -237,7 +238,8 @@ class Hub:
             "tracked": self.store.count(),
             "new_today": self.store.new_today_count(),
             "search_total": sum(item.get("last_total") or 0 for item in monitors),
-            "webhook_ready": bool(config.DISCORD_WEBHOOK_URL),
+            "webhook_ready": any(webhook_for(item.get("search_url") or "", item.get("webhook_url")) for item in monitors)
+            or bool(config.DISCORD_WEBHOOK_URL or config.BEZREALITKY_WEBHOOK_URL),
             "recent": self.store.recent_notified(),
             "monitors": monitors,
             "templates": self.store.list_templates(),

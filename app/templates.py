@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from app.sreality import Listing, format_cz_date
+from app.sources import source_name
 
 VAR_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
 
@@ -16,7 +17,7 @@ VARIABLES = [
     ("area", "Rozloha s m²"),
     ("area_m2", "Rozloha číslem"),
     ("locality", "Lokalita"),
-    ("url", "Odkaz na Sreality"),
+    ("url", "Odkaz na inzerát"),
     ("maps_url", "Odkaz na Google Maps"),
     ("image_url", "URL fotky"),
     ("created_on", "Datum vložení"),
@@ -61,10 +62,11 @@ def default_template_config() -> dict[str, Any]:
 
 def listing_vars(listing: Listing, monitor_name: str = "") -> dict[str, str]:
     area = f"{listing.area_m2} m²" if listing.area_m2 else "neuvedena"
+    portal = source_name(listing.url)
     headline = {
-        "changed": "Změna inzerátu na Sreality",
-        "refresh": "Obnovený inzerát na Sreality",
-    }.get(listing.kind, "Nový byt na Sreality")
+        "changed": f"Změna inzerátu na {portal}",
+        "refresh": f"Obnovený inzerát na {portal}",
+    }.get(listing.kind, f"Nový byt na {portal}")
     changes = ""
     if listing.changes:
         changes = "\n".join(f"{label}: {before} → {after}" for label, before, after in listing.changes)

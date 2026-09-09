@@ -34,6 +34,7 @@ class Listing:
     locality: str
     url: str
     image_url: str | None
+    photos: list[str] = field(default_factory=list)
     lat: float | None = None
     lon: float | None = None
     created_on: str | None = None
@@ -41,6 +42,8 @@ class Listing:
     views: int | None = None
     old_price_czk: int | None = None
     advert_code: str | None = None
+    description: str | None = None
+    extras: dict[str, Any] = field(default_factory=dict)
     kind: str = "new"
     changes: list[tuple[str, str, str]] = field(default_factory=list)
 
@@ -237,7 +240,120 @@ def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
     if lat is not None and lon is not None:
         listing.lat = lat
         listing.lon = lon
+    extra = image_urls(estate.get("images") or params.get("images") or [])
+    if extra:
+        listing.photos = list(dict.fromkeys([*(listing.photos or []), *extra]))
+        listing.image_url = listing.photos[0]
+    text = (estate.get("description") or "").replace("\xa0", " ").strip()
+    if text:
+        listing.description = text
+    listing.extras = extras_from_sreality(estate)
     return listing
+
+
+def extras_from_sreality(estate: dict[str, Any]) -> dict[str, Any]:
+    params = estate.get("params") or {}
+    flags: list[str] = []
+    specs: list[dict[str, str]] = []
+
+    def add_spec(label: str, value: Any) -> None:
+        text = _param_label(value)
+        if text:
+            specs.append({"label": label, "value": text})
+
+    if params.get("balcony"):
+        flags.append("balcony")
+        area = params.get("balconyArea")
+        specs.append({"label": "Balkon", "value": f"{area} m²" if area else "ano"})
+    if params.get("loggia"):
+        flags.append("loggia")
+        area = params.get("loggiaArea")
+        specs.append({"label": "Lodžie", "value": f"{area} m²" if area else "ano"})
+    if params.get("cellar"):
+        flags.append("cellar")
+        area = params.get("cellarArea")
+        specs.append({"label": "Sklep", "value": f"{area} m²" if area else "ano"})
+    if params.get("terrace"):
+        flags.append("terrace")
+        area = params.get("terraceArea")
+        specs.append({"label": "Terasa", "value": f"{area} m²" if area else "ano"})
+    if params.get("garage") or params.get("garageCount"):
+        flags.append("garage")
+        add_spec("Garáž", params.get("garageCount") or True)
+    if _param_truthy(params.get("elevator")):
+        flags.append("lift")
+        specs.append({"label": "Výtah", "value": "ano"})
+    if params.get("parkingLots") or _param_truthy(params.get("parking")):
+        flags.append("parking")
+        add_spec("Parkování", params.get("parkingLots") or params.get("parking"))
+    if _param_truthy(params.get("easyAccess")):
+        flags.append("barrier_free")
+        add_spec("Bezbariérový", params.get("easyAccess"))
+    if params.get("garden") or params.get("gardenArea"):
+        flags.append("garden")
+        area = params.get("gardenArea")
+        specs.append({"label": "Zahrada", "value": f"{area} m²" if area else "ano"})
+    if _param_truthy(params.get("pets")) or _param_truthy(params.get("animals")):
+        flags.append("pets")
+        specs.append({"label": "Mazlíčci", "value": "povolení"})
+
+    floor_no = params.get("floorNumber")
+    floors = params.get("floors")
+    if floor_no not in (None, ""):
+        specs.append({"label": "Podlaží", "value": f"{floor_no}/{floors}" if floors else str(floor_no)})
+    add_spec("Vlastnictví", params.get("ownership"))
+    add_spec("Stav", params.get("buildingCondition"))
+    add_spec("Konstrukce", params.get("buildingType"))
+    add_spec("Vybavení", params.get("furnished"))
+    add_spec("Energetická náročnost", params.get("energyEfficiencyRating"))
+    add_spec("Kauce", params.get("refundableDeposit"))
+    if params.get("costOfLiving"):
+        add_spec("Poplatky", params.get("costOfLiving"))
+    if params.get("priceNote"):
+        add_spec("Poznámka k ceně", params.get("priceNote"))
+    internet = params.get("internetConnectionTypeSet") or []
+    if isinstance(internet, list) and internet:
+        names = [name for item in internet if (name := _param_label(item))]
+        if names:
+            specs.append({"label": "Internet", "value": ", ".join(names)})
+    offer = _param_label(estate.get("categoryTypeCb"))
+    estate_kind = _param_label(estate.get("categoryMainCb"))
+    sub = _param_label(estate.get("categorySubCb")) or ""
+    if "pokoj" in (estate_kind or "").lower() or sub.lower() == "pokoj":
+        flags.append("roommate")
+        specs.append({"label": "Spolubydlení", "value": "ano"})
+    return {
+        "offer": offer,
+        "estate": estate_kind,
+        "flags": flags,
+        "specs": specs,
+    }
+
+
+def _param_label(value: Any) -> str | None:
+    if value in (None, "", False):
+        return None
+    if value is True:
+        return "ano"
+    if isinstance(value, dict):
+        name = str(value.get("name") or "").replace("\xa0", " ").strip()
+        if not name or name.startswith("-"):
+            return None
+        return name
+    text = str(value).replace("\xa0", " ").strip()
+    return text or None
+
+
+def _param_truthy(value: Any) -> bool:
+    if value in (None, "", False, 0):
+        return False
+    if isinstance(value, dict):
+        raw = value.get("value")
+        name = str(value.get("name") or "")
+        if name.startswith("-"):
+            return False
+        return raw not in (None, "", False, 0)
+    return True
 
 
 def _as_date(value: Any) -> str | None:
@@ -305,7 +421,8 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
     locality = format_locality(loc)
     lat, lon = coords_from_locality(loc)
     url = build_detail_url(raw)
-    image_url = first_image_url(raw.get("images") or [])
+    photos = image_urls(raw.get("images") or [])
+    extras = {"flags": ["roommate"]} if disposition.lower() == "pokoj" else {}
     return Listing(
         id=int(listing_id),
         name=name,
@@ -315,9 +432,11 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
         area_m2=area,
         locality=locality,
         url=url,
-        image_url=image_url,
+        image_url=photos[0] if photos else None,
+        photos=photos,
         lat=lat,
         lon=lon,
+        extras=extras,
     )
 
 
@@ -393,21 +512,38 @@ def build_detail_url(raw: dict[str, Any]) -> str:
     return f"https://www.sreality.cz/detail/{offer}/{kind}/{disposition}/{slug}/{raw['id']}"
 
 
-def first_image_url(images: list[dict[str, Any]]) -> str | None:
-    if not images:
-        return None
-    raw = (images[0].get("url") or "").strip()
+def cdn_image_url(url: str | None) -> str | None:
+    raw = str(url or "").strip()
     if not raw:
         return None
     if raw.startswith("//"):
         raw = "https:" + raw
-    if "fl=" not in raw:
+    if "fl=" in raw:
+        return raw
+    if "sdn.cz" in raw or "sreality" in raw:
         sep = "&" if "?" in raw else "?"
-        raw = f"{raw}{sep}{IMAGE_TRANSFORM}"
+        return f"{raw}{sep}{IMAGE_TRANSFORM}"
     return raw
 
 
+def first_image_url(images: list[dict[str, Any]]) -> str | None:
+    urls = image_urls(images)
+    return urls[0] if urls else None
+
+
+def image_urls(images: list[dict[str, Any]], limit: int = 16) -> list[str]:
+    result: list[str] = []
+    for item in images:
+        raw = cdn_image_url(item.get("url") if isinstance(item, dict) else item)
+        if raw and raw not in result:
+            result.append(raw)
+        if len(result) >= limit:
+            break
+    return result
+
+
 async def download_image(client: httpx.AsyncClient, url: str) -> tuple[bytes, str] | None:
+    url = cdn_image_url(url) or url
     try:
         response = await client.get(url, headers={**BROWSER_HEADERS, "Accept": "image/*"})
         response.raise_for_status()

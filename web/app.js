@@ -15,6 +15,7 @@ let lastMapKey = "";
 let statusCache = { monitors: [], templates: [] };
 let filterCatalog = null;
 let filterState = {};
+let filterSuggestedName = "";
 let templateState = null;
 let variables = [];
 let sampleVars = {};
@@ -57,7 +58,7 @@ function toast(message, kind = "ok") {
     item.classList.remove("in");
     setTimeout(() => item.remove(), 240);
   };
-  const timer = setTimeout(hide, kind === "error" ? 5200 : 3200);
+  const timer = setTimeout(hide, kind === "error" || message.length > 80 ? 7000 : 3200);
   item.addEventListener("click", () => {
     clearTimeout(timer);
     hide();
@@ -67,6 +68,7 @@ function toast(message, kind = "ok") {
 const ROUTES = {
   "/": "overview",
   "/prehled": "overview",
+  "/nabidka": "catalog",
   "/monitory": "monitors",
   "/filtry": "filters",
   "/zprava": "message",
@@ -75,6 +77,7 @@ const ROUTES = {
 
 const PAGE_TITLES = {
   overview: "Přehled",
+  catalog: "Nabídka",
   monitors: "Monitory",
   filters: "Filtry",
   message: "Zpráva",
@@ -92,12 +95,13 @@ function applyRoute() {
     const href = link.getAttribute("href");
     link.classList.toggle("on", ROUTES[href] === page);
   });
-  ["overview", "monitors", "filters", "message", "settings"].forEach((name) => {
+  ["overview", "catalog", "monitors", "filters", "message", "settings"].forEach((name) => {
     const view = $(`view-${name}`);
     if (view) view.hidden = name !== page;
   });
   document.title = `${PAGE_TITLES[page]} · Sreality monitor`;
   if (page === "overview" && hitsMap) setTimeout(() => hitsMap.invalidateSize(), 80);
+  if (page === "catalog") window.dispatchEvent(new Event("catalog-show"));
 }
 
 applyRoute();
@@ -157,9 +161,8 @@ function renderStatus(status) {
 function ensureMap() {
   if (hitsMap || typeof L === "undefined") return;
   hitsMap = L.map("hits-map", { scrollWheelZoom: false }).setView([50.08, 14.44], 12);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
-    attribution: "&copy; OpenStreetMap &copy; CARTO",
-    subdomains: "abcd",
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap",
     maxZoom: 19,
   }).addTo(hitsMap);
   hitsLayer = L.layerGroup().addTo(hitsMap);
@@ -189,9 +192,10 @@ function renderMap(items) {
     const maps = item.maps_url
       ? `<a class="map-popup-link" href="${item.maps_url}" target="_blank" rel="noreferrer">Google Maps</a>`
       : "";
+    const portal = String(item.url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
     const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true });
     marker.bindPopup(
-      `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links"><a class="map-popup-link" href="${item.url}" target="_blank" rel="noreferrer">Sreality</a>${maps}</div></div></div>`,
+      `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links"><a class="map-popup-link" href="${item.url}" target="_blank" rel="noreferrer">${portal}</a>${maps}</div></div></div>`,
       { className: "map-popup", maxWidth: 280, minWidth: 240 },
     );
     hitsLayer.addLayer(marker);
@@ -202,26 +206,41 @@ function renderMap(items) {
   setTimeout(() => hitsMap.invalidateSize(), 80);
 }
 
+function portalLabel(url) {
+  return String(url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
+}
+
+function portalIcon(url) {
+  return String(url || "").includes("bezrealitky")
+    ? "/static/icons/bezrealitky.svg"
+    : "/static/icons/sreality.svg";
+}
+
 function renderMonitors(items) {
   const list = $("monitor-list");
   if (!list) return;
   list.innerHTML = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const portal = portalLabel(item.search_url);
+      return `
       <article class="monitor-card">
-        <div>
-          <strong>${escapeHtml(item.name)}</strong>
-          <p>${escapeHtml(item.search_url)}</p>
-          <p>${item.enabled ? "Zapnutý" : "Vypnutý"} · ${item.seeded ? "nasazený" : "čeká na první běh"} · ${item.tracked} ID · šablona ${escapeHtml(item.template_id || "default")}</p>
-        </div>
-        <div class="actions">
-          <button class="btn btn-ghost" type="button" data-edit-monitor="${item.id}">Upravit</button>
-          <button class="btn btn-ghost" type="button" data-check-monitor="${item.id}">Zkontrolovat</button>
-          <button class="btn btn-ghost" type="button" data-del-monitor="${item.id}">Smazat</button>
+        <div class="monitor-main">
+          <img class="monitor-logo" src="${portalIcon(item.search_url)}" alt="${escapeHtml(portal)}" />
+          <div class="monitor-copy">
+            <strong>${escapeHtml(item.name)}</strong>
+            <p>${escapeHtml(portal)} · ${escapeHtml(item.search_url)}</p>
+            <p>${item.enabled ? "Zapnutý" : "Vypnutý"} · ${item.seeded ? "nasazený" : "čeká na první běh"} · ${item.tracked} ID · šablona ${escapeHtml(item.template_id || "default")}</p>
+            <div class="actions">
+              <button class="btn btn-ghost" type="button" data-edit-monitor="${item.id}">Upravit</button>
+              <button class="btn btn-ghost" type="button" data-check-monitor="${item.id}">Zkontrolovat</button>
+              <button class="btn btn-ghost" type="button" data-mirror-monitor="${item.id}">Zkopírovat na ${portal === "Bezrealitky" ? "Sreality" : "Bezrealitky"}</button>
+              <button class="btn btn-ghost" type="button" data-del-monitor="${item.id}">Smazat</button>
+            </div>
+          </div>
         </div>
       </article>
-    `,
-    )
+    `;
+    })
     .join("");
 }
 
@@ -318,6 +337,7 @@ $("monitor-list").addEventListener("click", async (event) => {
   const edit = event.target.closest("[data-edit-monitor]");
   const del = event.target.closest("[data-del-monitor]");
   const check = event.target.closest("[data-check-monitor]");
+  const mirror = event.target.closest("[data-mirror-monitor]");
   if (edit) {
     const item = (statusCache.monitors || []).find((row) => row.id === edit.dataset.editMonitor);
     fillMonitorForm(item);
@@ -335,18 +355,25 @@ $("monitor-list").addEventListener("click", async (event) => {
     await refresh();
   }
   if (check) await post("/api/monitor/check", { monitor_id: check.dataset.checkMonitor }, "Kontrola monitoru dokončena");
+  if (mirror) {
+    location.assign(`/filtry?mirror=${encodeURIComponent(mirror.dataset.mirrorMonitor)}`);
+  }
 });
 
-function chipGroup(title, key, options) {
+function chipGroup(title, key, options, single = false) {
   const selected = new Set(filterState[key] || []);
+  const known = new Map((options || []).map(([id, label]) => [String(id), label]));
+  for (const id of selected) {
+    if (!known.has(String(id))) known.set(String(id), String(id));
+  }
   return `
     <div class="filter-group">
       <h3>${escapeHtml(title)}</h3>
       <div class="chip-row">
-        ${options
+        ${[...known.entries()]
           .map(
             ([id, label]) =>
-              `<button type="button" class="chip ${selected.has(id) ? "on" : ""}" data-filter="${key}" data-value="${id}">${escapeHtml(label)}</button>`,
+              `<button type="button" class="chip ${selected.has(id) ? "on" : ""}" data-filter="${key}" data-value="${escapeHtml(id)}" ${single ? "data-single='1'" : ""}>${escapeHtml(label)}</button>`,
           )
           .join("")}
       </div>
@@ -354,20 +381,53 @@ function chipGroup(title, key, options) {
   `;
 }
 
+function currentSource() {
+  return filterState.source === "bezrealitky" ? "bezrealitky" : "sreality";
+}
+
+function applySourceCatalog(source) {
+  const pack = filterCatalog?.sources?.[source];
+  if (!pack) return;
+  filterCatalog.catalog = pack.catalog;
+  filterCatalog.defaults = pack.defaults;
+  filterCatalog.sample = pack.sample;
+}
+
 function renderFilterGroups() {
   if (!filterCatalog) return;
+  const source = currentSource();
+  applySourceCatalog(source);
+  document.querySelectorAll("#filter-source .chip").forEach((chip) => {
+    chip.classList.toggle("on", chip.dataset.source === source);
+  });
+  document.querySelectorAll(".sreality-only").forEach((el) => {
+    el.hidden = source === "bezrealitky";
+  });
+  document.querySelectorAll(".br-only").forEach((el) => {
+    el.hidden = source !== "bezrealitky";
+  });
   const cat = filterCatalog.catalog;
-  $("filter-groups").innerHTML = [
-    chipGroup("Typ nabídky", "offers", cat.offers),
-    chipGroup("Dispozice", "sizes", cat.sizes),
-    chipGroup("Lokalita", "districts", cat.districts),
-    chipGroup("Vlastnictví", "ownership", cat.ownership),
-    chipGroup("Stav", "conditions", cat.conditions),
-    chipGroup("Příslušenství", "extras", cat.extras),
-    chipGroup("Stavba", "buildings", cat.buildings),
-    chipGroup("Energetická náročnost", "energy", cat.energy),
-    chipGroup("V okolí nemovitosti", "pois", cat.pois),
-  ].join("");
+  const singles = new Set(cat.single_keys || []);
+  const groups = [
+    ["Typ nabídky", "offers", cat.offers],
+    ["Nemovitost", "estates", cat.estates],
+    ["Dispozice", "sizes", cat.sizes],
+    ["Lokalita", "districts", cat.districts],
+    ["Typ vlastnictví", "ownership", cat.ownership],
+    ["Převod do osobního vlastnictví", "transfers", cat.transfers],
+    ["Stav budovy", "conditions", cat.conditions],
+    ["Konstrukce budovy", "buildings", cat.buildings],
+    ["Vybavenost", "equipped", cat.equipped],
+    ["Něco navíc", "extras", cat.extras],
+    ["Spolubydlení", "roommate", cat.roommate],
+    ["Další", "flags", cat.flags],
+    ["Energetická náročnost", "energy", cat.energy],
+    ["V okolí nemovitosti", "pois", cat.pois],
+  ];
+  $("filter-groups").innerHTML = groups
+    .filter(([, , options]) => options && options.length)
+    .map(([title, key, options]) => chipGroup(title, key, options, singles.has(key)))
+    .join("");
   $("f-price-from").value = filterState.price_from ?? "";
   $("f-price-to").value = filterState.price_to ?? "";
   $("f-area-from").value = filterState.area_from ?? "";
@@ -375,6 +435,25 @@ function renderFilterGroups() {
   $("f-floor-from").value = filterState.floor_from ?? "";
   $("f-floor-to").value = filterState.floor_to ?? "";
   $("f-poi-km").value = filterState.poi_distance ?? 2;
+  const setVal = (id, value) => {
+    if ($(id)) $(id).value = value ?? "";
+  };
+  setVal("f-annuity-from", filterState.annuity_from);
+  setVal("f-annuity-to", filterState.annuity_to);
+  setVal("f-balcony-from", filterState.balcony_from);
+  setVal("f-balcony-to", filterState.balcony_to);
+  setVal("f-loggia-from", filterState.loggia_from);
+  setVal("f-loggia-to", filterState.loggia_to);
+  setVal("f-cellar-from", filterState.cellar_from);
+  setVal("f-cellar-to", filterState.cellar_to);
+  setVal("f-terrace-from", filterState.terrace_from);
+  setVal("f-terrace-to", filterState.terrace_to);
+  setVal("f-garden-from", filterState.garden_from);
+  setVal("f-garden-to", filterState.garden_to);
+  setVal("f-br-currency", filterState.currency || "CZK");
+  setVal("f-br-neighborhood", filterState.neighborhood || 0);
+  setVal("f-br-available", filterState.available_from);
+  setVal("f-br-id", filterState.advert_id);
 }
 
 function readRanges() {
@@ -389,8 +468,28 @@ function readRanges() {
   filterState.floor_from = num("f-floor-from");
   filterState.floor_to = num("f-floor-to");
   filterState.poi_distance = num("f-poi-km") || 2;
-  filterState.category = "byty";
-  filterState.sort = filterState.sort || "nejlevnejsi";
+  if (currentSource() === "sreality") {
+    filterState.category = "byty";
+    filterState.sort = filterState.sort || "nejlevnejsi";
+  } else {
+    filterState.sort = filterState.sort || "TIMEORDER_DESC";
+    filterState.annuity_from = num("f-annuity-from");
+    filterState.annuity_to = num("f-annuity-to");
+    filterState.balcony_from = num("f-balcony-from");
+    filterState.balcony_to = num("f-balcony-to");
+    filterState.loggia_from = num("f-loggia-from");
+    filterState.loggia_to = num("f-loggia-to");
+    filterState.cellar_from = num("f-cellar-from");
+    filterState.cellar_to = num("f-cellar-to");
+    filterState.terrace_from = num("f-terrace-from");
+    filterState.terrace_to = num("f-terrace-to");
+    filterState.garden_from = num("f-garden-from");
+    filterState.garden_to = num("f-garden-to");
+    filterState.currency = $("f-br-currency")?.value || "CZK";
+    filterState.neighborhood = Number($("f-br-neighborhood")?.value || 0);
+    filterState.available_from = $("f-br-available")?.value || null;
+    filterState.advert_id = $("f-br-id")?.value || "";
+  }
 }
 
 async function rebuildUrl() {
@@ -409,16 +508,113 @@ $("filter-groups").addEventListener("click", async (event) => {
   if (!chip) return;
   const key = chip.dataset.filter;
   const value = chip.dataset.value;
-  const current = new Set(filterState[key] || []);
-  if (current.has(value)) current.delete(value);
-  else current.add(value);
-  filterState[key] = [...current];
-  chip.classList.toggle("on");
+  if (chip.dataset.single) {
+    filterState[key] = (filterState[key] || [])[0] === value ? [] : [value];
+    if (key === "districts") {
+      const label = chip.textContent.trim();
+      filterState.osm_value = filterState[key][0] ? label : "";
+    }
+    renderFilterGroups();
+  } else {
+    const current = new Set(filterState[key] || []);
+    if (current.has(value)) current.delete(value);
+    else current.add(value);
+    filterState[key] = [...current];
+    chip.classList.toggle("on");
+    if (key === "districts") {
+      const first = filterState.districts?.[0];
+      filterState.osm_value = first ? chip.closest(".filter-group").querySelector(".chip.on")?.textContent.trim() || first : "";
+    }
+  }
   await rebuildUrl();
 });
 
-["f-price-from", "f-price-to", "f-area-from", "f-area-to", "f-floor-from", "f-floor-to", "f-poi-km"].forEach((id) => {
-  $(id).addEventListener("change", rebuildUrl);
+const rangeIds = [
+  "f-price-from",
+  "f-price-to",
+  "f-area-from",
+  "f-area-to",
+  "f-floor-from",
+  "f-floor-to",
+  "f-poi-km",
+  "f-annuity-from",
+  "f-annuity-to",
+  "f-balcony-from",
+  "f-balcony-to",
+  "f-loggia-from",
+  "f-loggia-to",
+  "f-cellar-from",
+  "f-cellar-to",
+  "f-terrace-from",
+  "f-terrace-to",
+  "f-garden-from",
+  "f-garden-to",
+  "f-br-currency",
+  "f-br-neighborhood",
+  "f-br-available",
+  "f-br-id",
+];
+rangeIds.forEach((id) => {
+  $(id)?.addEventListener("change", rebuildUrl);
+});
+
+async function searchLocality() {
+  const q = $("f-br-locality-q")?.value.trim();
+  const host = $("f-br-locality-hits");
+  if (!q || !host) return;
+  const response = await fetch(`/api/filters/locality?q=${encodeURIComponent(q)}`);
+  const data = await response.json();
+  host.innerHTML = (data.items || [])
+    .map((item) => `<button type="button" class="chip" data-osm="${escapeHtml(item.id)}" data-label="${escapeHtml(item.label)}">${escapeHtml(item.label)}</button>`)
+    .join("") || `<p class="empty">Nic se nenašlo</p>`;
+}
+
+$("f-br-locality-btn")?.addEventListener("click", searchLocality);
+$("f-br-locality-q")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    searchLocality();
+  }
+});
+$("f-br-locality-hits")?.addEventListener("click", async (event) => {
+  const chip = event.target.closest("[data-osm]");
+  if (!chip) return;
+  const current = new Set(filterState.districts || []);
+  current.add(chip.dataset.osm);
+  filterState.districts = [...current];
+  filterState.osm_value = chip.dataset.label;
+  renderFilterGroups();
+  await rebuildUrl();
+  toast(`Přidaná lokalita ${chip.dataset.label}`, "info");
+});
+
+$("f-br-paste")?.addEventListener("change", async () => {
+  const url = $("f-br-paste").value.trim();
+  if (!url) return;
+  const response = await fetch("/api/filters/parse", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    toast(data.detail || "URL se nepodařilo načíst", "error");
+    return;
+  }
+  filterState = data.filters;
+  applySourceCatalog("bezrealitky");
+  renderFilterGroups();
+  $("generated-url").value = data.url;
+  toast("Filtry načtené z URL", "info");
+});
+
+$("filter-source").addEventListener("click", async (event) => {
+  const chip = event.target.closest("[data-source]");
+  if (!chip || chip.dataset.source === currentSource()) return;
+  applySourceCatalog(chip.dataset.source);
+  filterState = structuredClone(filterCatalog.defaults);
+  renderFilterGroups();
+  await rebuildUrl();
 });
 
 $("filters-sample").addEventListener("click", async () => {
@@ -437,8 +633,10 @@ $("filters-clear").addEventListener("click", async () => {
 
 $("filters-to-monitor").addEventListener("click", () => {
   const url = $("generated-url").value;
+  const params = new URLSearchParams({ url });
+  if (filterSuggestedName) params.set("name", filterSuggestedName);
   toast("URL přenesena do nového monitoru");
-  location.assign(`/monitory?url=${encodeURIComponent(url)}`);
+  location.assign(`/monitory?${params}`);
 });
 
 function currentTemplateConfig() {
@@ -763,15 +961,40 @@ async function boot() {
   sampleVars = tpl.sample || {};
   await refresh();
   checkUpdates();
-  const drafted = new URLSearchParams(location.search).get("url");
+  const params = new URLSearchParams(location.search);
+  const drafted = params.get("url");
+  const draftedName = params.get("name");
   if (currentPage() === "monitors" && drafted) {
     fillMonitorForm({
-      name: "Nové hledání",
+      name: draftedName || (drafted.includes("bezrealitky") ? "Bezrealitky hledání" : "Nové hledání"),
       search_url: drafted,
       template_id: "default",
       enabled: true,
     });
   }
+  const mirrorId = params.get("mirror");
+  if (currentPage() === "filters" && mirrorId) {
+    await applyMirroredFilters(mirrorId);
+  }
+}
+
+async function applyMirroredFilters(monitorId) {
+  const response = await fetch(`/api/monitors/${encodeURIComponent(monitorId)}/convert`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    toast(data.detail || "Filtry se nepodařilo převést", "error");
+    return;
+  }
+  filterState = structuredClone(data.filters || {});
+  filterState.source = data.target === "Bezrealitky" ? "bezrealitky" : "sreality";
+  applySourceCatalog(filterState.source);
+  filterSuggestedName = data.suggested_name || "";
+  renderFilterGroups();
+  $("generated-url").value = data.url || "";
+  await rebuildUrl();
+  toast(`Filtry z ${data.source} na ${data.target}. Uprav je a pak vytvoř monitor.`, "info");
+  if (data.skipped?.length) toast(`Nepřešlo: ${data.skipped.join("; ")}`, "info");
+  if (data.notes?.length) toast(`Přibližně: ${data.notes.join("; ")}`, "info");
 }
 
 boot();

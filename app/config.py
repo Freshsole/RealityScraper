@@ -35,6 +35,7 @@ DEFAULT_SEARCH_URL = (
 )
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
+BEZREALITKY_WEBHOOK_URL = os.getenv("BEZREALITKY_WEBHOOK_URL", "").strip()
 SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
 POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
 POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))

@@ -8,12 +8,51 @@ from pathlib import Path
 from typing import Any
 
 from app import config
-from app.sreality import Listing, google_maps_url
+from app.bezrealitky import default_search_url as bezrealitky_default_url
+from app.sreality import IMAGE_TRANSFORM, Listing, cdn_image_url, google_maps_url
+from app.sources import webhook_for
 from app.templates import default_template_config
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _csv(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _or_likes(where: list[str], params: list[Any], column: str, patterns: list[str]) -> None:
+    if not patterns:
+        return
+    where.append("(" + " OR ".join(f"{column} LIKE ?" for _ in patterns) + ")")
+    params.extend(patterns)
+
+
+def _tri_state(where: list[str], params: list[Any], value: str, clauses: list[str], clause_params: list[Any]) -> None:
+    if value not in {"s", "bez"} or not clauses:
+        return
+    known = "(" + " OR ".join(clauses) + ")"
+    where.append(known if value == "s" else f"NOT {known}")
+    params.extend(clause_params)
+
+
+PRAGUE_DISTRICTS = {
+    "1": ["Staré Město", "Josefov", "Malá Strana", "Hradčany", "Nové Město"],
+    "2": ["Vinohrady", "Nové Město", "Vyšehrad", "Nusle"],
+    "3": ["Žižkov", "Vinohrady"],
+    "4": ["Nusle", "Podolí", "Braník", "Hodkovičky", "Krč", "Lhotka", "Kamýk", "Kunratice"],
+    "5": ["Smíchov", "Košíře", "Motol", "Radlice", "Jinonice", "Hlubočepy"],
+    "6": ["Dejvice", "Bubeneč", "Střešovice", "Břevnov", "Veleslavín", "Vokovice", "Liboc", "Ruzyně", "Lysolaje", "Sedlec", "Suchdol", "Nebušice"],
+    "7": ["Holešovice", "Bubny", "Letná", "Troja"],
+    "8": ["Karlín", "Libeň", "Bohnice", "Kobylisy", "Čimice", "Ďáblice", "Dolní Chabry", "Troja"],
+    "9": ["Vysočany", "Prosek", "Střížkov", "Hloubětín", "Hrdlořezy", "Kbely"],
+    "10": ["Vršovice", "Strašnice", "Malešice", "Záběhlice", "Michle"],
+}
 
 
 class Store:
@@ -89,6 +128,7 @@ class Store:
             )
             self._migrate_listings(conn)
             self._migrate_events(conn)
+            self._ensure_catalog(conn)
             self._ensure_defaults(conn)
 
     def _migrate_listings(self, conn: sqlite3.Connection) -> None:
@@ -104,6 +144,8 @@ class Store:
             ("last_kind", "TEXT"),
             ("lat", "REAL"),
             ("lon", "REAL"),
+            ("description", "TEXT"),
+            ("extras", "TEXT"),
         )
         existing = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
         for column, decl in extras:
@@ -181,7 +223,7 @@ class Store:
                 "INSERT INTO templates(id, name, config, created_at) VALUES (?, ?, ?, ?)",
                 ("default", "Výchozí Discord zpráva", json.dumps(default_template_config(), ensure_ascii=False), now),
             )
-        if not conn.execute("SELECT id FROM monitors LIMIT 1").fetchone():
+        if not conn.execute("SELECT id FROM monitors WHERE id = 'default'").fetchone():
             seeded = conn.execute("SELECT value FROM meta WHERE key = 'seeded'").fetchone()
             conn.execute(
                 """
@@ -197,6 +239,27 @@ class Store:
                     1 if seeded and seeded["value"] == "1" else 0,
                     now,
                 ),
+            )
+        existing_br = conn.execute("SELECT webhook_url FROM monitors WHERE id = 'bezrealitky'").fetchone()
+        if not existing_br:
+            conn.execute(
+                """
+                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+                VALUES (?, ?, ?, ?, ?, 1, 0, ?)
+                """,
+                (
+                    "bezrealitky",
+                    "Bezrealitky Praha",
+                    bezrealitky_default_url(),
+                    config.BEZREALITKY_WEBHOOK_URL,
+                    "default",
+                    now,
+                ),
+            )
+        elif not (existing_br["webhook_url"] or "").strip() and config.BEZREALITKY_WEBHOOK_URL:
+            conn.execute(
+                "UPDATE monitors SET webhook_url = ? WHERE id = 'bezrealitky'",
+                (config.BEZREALITKY_WEBHOOK_URL,),
             )
 
     def list_templates(self) -> list[dict[str, Any]]:
@@ -250,6 +313,8 @@ class Store:
         monitor_id = payload.get("id") or uuid.uuid4().hex[:10]
         existing = self.get_monitor(monitor_id)
         now = utc_now()
+        search_url = (payload.get("search_url") or "").strip()
+        webhook = (payload.get("webhook_url") or "").strip() or webhook_for(search_url)
         with self.connect() as conn:
             conn.execute(
                 """
@@ -265,8 +330,8 @@ class Store:
                 (
                     monitor_id,
                     (payload.get("name") or "Monitor").strip(),
-                    (payload.get("search_url") or "").strip(),
-                    (payload.get("webhook_url") or "").strip(),
+                    search_url,
+                    webhook,
                     payload.get("template_id") or "default",
                     1 if payload.get("enabled", True) else 0,
                     now,
@@ -351,8 +416,9 @@ class Store:
                 INSERT INTO listings (
                     id, monitor_id, name, price_czk, price_label, disposition, area_m2,
                     locality, url, image_url, first_seen, notified,
-                    created_on, edited_on, views, old_price_czk, last_kind, lat, lon
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_on, edited_on, views, old_price_czk, last_kind, lat, lon,
+                    description, extras
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(monitor_id, id) DO UPDATE SET
                     name = excluded.name,
                     price_czk = excluded.price_czk,
@@ -369,6 +435,11 @@ class Store:
                     last_kind = excluded.last_kind,
                     lat = COALESCE(excluded.lat, listings.lat),
                     lon = COALESCE(excluded.lon, listings.lon),
+                    description = COALESCE(excluded.description, listings.description),
+                    extras = CASE
+                        WHEN excluded.extras IS NOT NULL AND excluded.extras != '' AND excluded.extras != '{}'
+                        THEN excluded.extras ELSE listings.extras
+                    END,
                     notified = CASE WHEN excluded.notified = 1 THEN 1 ELSE listings.notified END
                 """,
                 (
@@ -381,7 +452,7 @@ class Store:
                     listing.area_m2,
                     listing.locality,
                     listing.url,
-                    listing.image_url,
+                    cdn_image_url(listing.image_url),
                     now,
                     1 if notified else 0,
                     listing.created_on,
@@ -391,12 +462,16 @@ class Store:
                     event_kind,
                     listing.lat,
                     listing.lon,
+                    (listing.description or "").strip() or None,
+                    _extras_json(listing.extras),
                 ),
             )
             conn.execute(
                 "INSERT INTO events(listing_id, monitor_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
                 (listing.id, monitor_id, event_kind, now, detail),
             )
+            self._record_price(conn, monitor_id, listing, now)
+            self._save_photos(conn, monitor_id, listing)
 
     def recent_notified(self, limit: int = 12, monitor_id: str | None = None) -> list[dict[str, Any]]:
         sql = """
@@ -440,6 +515,445 @@ class Store:
                     (listing.lat, listing.lon, listing.id),
                 )
 
+    def _ensure_catalog(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS listing_photos (
+                monitor_id TEXT NOT NULL,
+                listing_id INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (monitor_id, listing_id, url)
+            );
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                monitor_id TEXT NOT NULL,
+                listing_id INTEGER NOT NULL,
+                price_czk INTEGER,
+                price_label TEXT,
+                seen_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_price_history_listing
+                ON price_history(monitor_id, listing_id, seen_at);
+            """
+        )
+        if not conn.execute("SELECT 1 FROM price_history LIMIT 1").fetchone():
+            conn.execute(
+                """
+                INSERT INTO price_history(monitor_id, listing_id, price_czk, price_label, seen_at)
+                SELECT monitor_id, id, price_czk, price_label, first_seen
+                FROM listings
+                WHERE price_czk IS NOT NULL
+                """
+            )
+        if not conn.execute("SELECT 1 FROM listing_photos LIMIT 1").fetchone():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO listing_photos(monitor_id, listing_id, url, sort_order)
+                SELECT monitor_id, id, image_url, 0 FROM listings WHERE image_url IS NOT NULL AND image_url != ''
+                """
+            )
+        self._fix_sreality_images(conn)
+
+    def _fix_sreality_images(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE listings
+            SET image_url = image_url || CASE WHEN image_url LIKE '%?%' THEN '&' ELSE '?' END || ?
+            WHERE image_url LIKE '%sdn.cz%' AND image_url NOT LIKE '%fl=%'
+            """,
+            (IMAGE_TRANSFORM,),
+        )
+        rows = conn.execute(
+            """
+            SELECT monitor_id, listing_id, url, sort_order
+            FROM listing_photos
+            WHERE url LIKE '%sdn.cz%' AND url NOT LIKE '%fl=%'
+            """
+        ).fetchall()
+        for row in rows:
+            new_url = cdn_image_url(row["url"])
+            if not new_url or new_url == row["url"]:
+                continue
+            exists = conn.execute(
+                "SELECT 1 FROM listing_photos WHERE monitor_id = ? AND listing_id = ? AND url = ?",
+                (row["monitor_id"], row["listing_id"], new_url),
+            ).fetchone()
+            if exists:
+                conn.execute(
+                    "DELETE FROM listing_photos WHERE monitor_id = ? AND listing_id = ? AND url = ?",
+                    (row["monitor_id"], row["listing_id"], row["url"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE listing_photos SET url = ? WHERE monitor_id = ? AND listing_id = ? AND url = ?",
+                    (new_url, row["monitor_id"], row["listing_id"], row["url"]),
+                )
+
+    def _record_price(self, conn: sqlite3.Connection, monitor_id: str, listing: Listing, seen_at: str) -> None:
+        if listing.price_czk is None:
+            return
+        last = conn.execute(
+            """
+            SELECT price_czk FROM price_history
+            WHERE monitor_id = ? AND listing_id = ?
+            ORDER BY seen_at DESC, id DESC LIMIT 1
+            """,
+            (monitor_id, listing.id),
+        ).fetchone()
+        if last and last["price_czk"] == listing.price_czk:
+            return
+        conn.execute(
+            """
+            INSERT INTO price_history(monitor_id, listing_id, price_czk, price_label, seen_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (monitor_id, listing.id, listing.price_czk, listing.price_label, seen_at),
+        )
+
+    def _save_photos(self, conn: sqlite3.Connection, monitor_id: str, listing: Listing) -> None:
+        photos = [cdn_image_url(url) for url in (listing.photos or []) if url] or (
+            [cdn_image_url(listing.image_url)] if listing.image_url else []
+        )
+        photos = [url for url in photos if url]
+        if not photos:
+            return
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM listing_photos WHERE monitor_id = ? AND listing_id = ?",
+            (monitor_id, listing.id),
+        ).fetchone()[0]
+        if existing >= len(photos):
+            return
+        for index, url in enumerate(photos):
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO listing_photos(monitor_id, listing_id, url, sort_order)
+                VALUES (?, ?, ?, ?)
+                """,
+                (monitor_id, listing.id, url, index),
+            )
+
+    def save_listing_photos(self, monitor_id: str, listing: Listing) -> None:
+        with self.connect() as conn:
+            self._save_photos(conn, monitor_id, listing)
+
+    def save_listing_enrichment(self, monitor_id: str, listing: Listing) -> None:
+        extras = _extras_json(listing.extras)
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE listings SET
+                    description = COALESCE(?, description),
+                    extras = CASE
+                        WHEN ? IS NOT NULL AND ? != '' AND ? != '{}' THEN ?
+                        ELSE extras
+                    END,
+                    created_on = COALESCE(?, created_on),
+                    edited_on = COALESCE(?, edited_on),
+                    views = COALESCE(?, views),
+                    old_price_czk = COALESCE(?, old_price_czk),
+                    lat = COALESCE(?, lat),
+                    lon = COALESCE(?, lon),
+                    image_url = COALESCE(?, image_url)
+                WHERE monitor_id = ? AND id = ?
+                """,
+                (
+                    (listing.description or "").strip() or None,
+                    extras,
+                    extras,
+                    extras,
+                    extras,
+                    listing.created_on,
+                    listing.edited_on,
+                    listing.views,
+                    listing.old_price_czk,
+                    listing.lat,
+                    listing.lon,
+                    cdn_image_url(listing.image_url),
+                    monitor_id,
+                    listing.id,
+                ),
+            )
+            self._save_photos(conn, monitor_id, listing)
+
+    def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
+        where = ["1=1"]
+        params: list[Any] = []
+        portal = (filters.get("portal") or "").strip()
+        if portal == "sreality":
+            where.append("listings.url LIKE '%sreality.cz%'")
+        elif portal == "bezrealitky":
+            where.append("listings.url LIKE '%bezrealitky.cz%'")
+        monitor_id = (filters.get("monitor_id") or "").strip()
+        if monitor_id:
+            where.append("listings.monitor_id = ?")
+            params.append(monitor_id)
+        query = (filters.get("q") or "").strip()
+        if query:
+            where.append(
+                "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ? OR IFNULL(listings.description, '') LIKE ?)"
+            )
+            like = f"%{query}%"
+            params.extend([like, like, like, like])
+        disposition = filters.get("disposition") or []
+        if isinstance(disposition, str):
+            disposition = [item for item in disposition.split(",") if item]
+        if disposition:
+            where.append(f"listings.disposition IN ({','.join('?' * len(disposition))})")
+            params.extend(disposition)
+        for column, key in (("price_czk", "price_from"), ("price_czk", "price_to"), ("area_m2", "area_from"), ("area_m2", "area_to")):
+            value = filters.get(key)
+            if value in (None, ""):
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            where.append(f"listings.{column} {'>=' if key.endswith('_from') else '<='} ?")
+            params.append(number)
+        amenities = filters.get("amenities") or []
+        if isinstance(amenities, str):
+            amenities = [item for item in amenities.split(",") if item]
+        amenity_set = {item for item in amenities if item}
+        roommate = (filters.get("roommate") or "").strip()
+        pets = (filters.get("pets") or "").strip()
+        short_term = (filters.get("short_term") or "").strip()
+        if not roommate and "roommate" in amenity_set:
+            roommate = "s"
+        if not pets and "pets" in amenity_set:
+            pets = "s"
+        if not short_term and "short_term" in amenity_set:
+            short_term = "s"
+        for flag in amenity_set:
+            if flag in {"pets", "roommate", "short_term"}:
+                continue
+            where.append("listings.extras LIKE ?")
+            params.append(f'%"{flag}"%')
+        _tri_state(
+            where,
+            params,
+            roommate,
+            [
+                "IFNULL(listings.extras, '') LIKE ?",
+                "IFNULL(listings.name, '') LIKE ?",
+                "IFNULL(listings.description, '') LIKE ?",
+                "lower(IFNULL(listings.disposition, '')) = 'pokoj'",
+                "IFNULL(listings.url, '') LIKE ?",
+            ],
+            ['%"roommate"%', "%spolubydl%", "%spolubydl%", "%/pokoj/%"],
+        )
+        _tri_state(
+            where,
+            params,
+            pets,
+            ["IFNULL(listings.extras, '') LIKE ?", "IFNULL(listings.extras, '') LIKE ?"],
+            ['%"pets"%', '%"Mazlíčci", "value": "povolení"%'],
+        )
+        _tri_state(where, params, short_term, ["IFNULL(listings.extras, '') LIKE ?"], ['%"short_term"%'])
+        offers = _csv(filters.get("offer"))
+        if offers:
+            offer_parts = []
+            for offer in offers:
+                if offer == "pronajem":
+                    offer_parts.append("(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label LIKE ?))")
+                    params.extend(['%"offer": "Pronájem"%', "%měsíc%"])
+                elif offer == "prodej":
+                    offer_parts.append("(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label NOT LIKE ?))")
+                    params.extend(['%"offer": "Prodej"%', "%měsíc%"])
+            if offer_parts:
+                where.append("(" + " OR ".join(offer_parts) + ")")
+        districts = _csv(filters.get("district"))
+        if districts:
+            district_parts = []
+            for district in districts:
+                number = district.replace("praha-", "")
+                if not number.isdigit():
+                    continue
+                district_parts.append(
+                    "(listings.locality GLOB ? OR listings.locality GLOB ?)"
+                )
+                params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*"])
+                for area in PRAGUE_DISTRICTS.get(number) or []:
+                    district_parts.append("listings.locality LIKE ?")
+                    params.append(f"%{area}%")
+            if district_parts:
+                where.append("(" + " OR ".join(district_parts) + ")")
+        estates = _csv(filters.get("estate"))
+        if estates:
+            estate_parts = []
+            empty_extras = "(listings.extras IS NULL OR listings.extras IN ('', '{}'))"
+            for estate in estates:
+                if estate == "byt":
+                    estate_parts.append(
+                        f"(listings.extras LIKE '%\"estate\": \"Byt%' OR ({empty_extras} AND listings.name LIKE '%byt%'))"
+                    )
+                elif estate == "dum":
+                    estate_parts.append(
+                        f"(listings.extras LIKE '%\"estate\": \"Dom%' OR listings.extras LIKE '%\"estate\": \"Dům%' "
+                        f"OR ({empty_extras} AND (listings.name LIKE '%dům%' OR listings.name LIKE '%Dům%' OR listings.name LIKE '%dum%')))"
+                    )
+            if estate_parts:
+                where.append("(" + " OR ".join(estate_parts) + ")")
+        ownership = _csv(filters.get("ownership"))
+        if ownership:
+            _or_likes(where, params, "listings.extras", [f'%"Vlastnictví", "value": "{label}"%' for label in ownership])
+        conditions = _csv(filters.get("condition"))
+        if conditions:
+            patterns = []
+            for label in conditions:
+                patterns.append(f'%"Stav", "value": "{label}"%')
+                if label == "Po rekonstrukci":
+                    patterns.append('%"Stav", "value": "Po částečné rekonstrukci"%')
+            _or_likes(where, params, "listings.extras", patterns)
+        buildings = _csv(filters.get("building"))
+        if buildings:
+            patterns = []
+            for item in buildings:
+                if item == "cihlova":
+                    patterns.append("%Cihl%")
+                elif item == "panelova":
+                    patterns.append("%Panel%")
+                elif item == "ostatni":
+                    patterns.extend(["%Smíšená%", "%Montovan%", "%Skelet%", "%Kamenn%", "%Ostatní%"])
+            _or_likes(where, params, "listings.extras", patterns)
+        equipped = _csv(filters.get("equipped"))
+        if equipped:
+            patterns = []
+            for item in equipped:
+                if item == "vybaveny":
+                    patterns.extend(
+                        [
+                            '%"Vybavení", "value": "Vybavený"%',
+                            '%"Vybavení", "value": "Vybaveno"%',
+                            '%"Vybavení", "value": "Ano"%',
+                        ]
+                    )
+                elif item == "castecne":
+                    patterns.append('%"Vybavení", "value": "Částečně"%')
+                elif item == "nevybaveny":
+                    patterns.extend(
+                        [
+                            '%"Vybavení", "value": "Nevybaven"%',
+                            '%"Vybavení", "value": "Ne"%',
+                        ]
+                    )
+            _or_likes(where, params, "listings.extras", patterns)
+        sorts = {
+            "newest": "listings.first_seen DESC",
+            "oldest": "listings.first_seen ASC",
+            "price_asc": "listings.price_czk IS NULL, listings.price_czk ASC",
+            "price_desc": "listings.price_czk IS NULL, listings.price_czk DESC",
+            "area_asc": "listings.area_m2 IS NULL, listings.area_m2 ASC",
+            "area_desc": "listings.area_m2 IS NULL, listings.area_m2 DESC",
+        }
+        order = sorts.get((filters.get("sort") or "newest").strip(), sorts["newest"])
+        limit = min(max(int(filters.get("limit") or 36), 1), 120)
+        offset = max(int(filters.get("offset") or 0), 0)
+        clause = " AND ".join(where)
+        sql = f"""
+            SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+            FROM listings
+            LEFT JOIN monitors ON monitors.id = listings.monitor_id
+            WHERE {clause}
+            AND listings.rowid IN (
+                SELECT MIN(rowid) FROM listings GROUP BY url
+            )
+            ORDER BY {order}
+            LIMIT ? OFFSET ?
+        """
+        count_sql = f"""
+            SELECT COUNT(*) FROM listings
+            WHERE {clause}
+            AND listings.rowid IN (SELECT MIN(rowid) FROM listings GROUP BY url)
+        """
+        with self.connect() as conn:
+            total = int(conn.execute(count_sql, params).fetchone()[0])
+            rows = [dict(row) for row in conn.execute(sql, (*params, limit, offset)).fetchall()]
+            keys = [(row["monitor_id"], row["id"]) for row in rows]
+            photos: dict[tuple[str, int], list[str]] = {}
+            if keys:
+                holders = " OR ".join("(monitor_id = ? AND listing_id = ?)" for _ in keys)
+                flat = [item for pair in keys for item in pair]
+                for photo in conn.execute(
+                    f"SELECT monitor_id, listing_id, url FROM listing_photos WHERE {holders} ORDER BY sort_order",
+                    flat,
+                ):
+                    photos.setdefault((photo["monitor_id"], int(photo["listing_id"])), []).append(photo["url"])
+        items = []
+        for row in rows:
+            item = public_listing(row)
+            urls = photos.get((item["monitor_id"], int(item["id"]))) or ([item["image_url"]] if item.get("image_url") else [])
+            item["photos"] = _photo_urls(urls)
+            items.append(item)
+        facets = self.catalog_facets()
+        return {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
+
+    def catalog_facets(self) -> dict[str, Any]:
+        with self.connect() as conn:
+            dispositions = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT disposition FROM listings WHERE disposition IS NOT NULL AND disposition != '' GROUP BY disposition ORDER BY COUNT(*) DESC"
+                )
+            ]
+            monitors = [
+                {"id": row["id"], "name": row["name"]}
+                for row in conn.execute(
+                    """
+                    SELECT monitors.id, monitors.name
+                    FROM monitors
+                    JOIN listings ON listings.monitor_id = monitors.id
+                    GROUP BY monitors.id
+                    ORDER BY monitors.name
+                    """
+                )
+            ]
+            portals = []
+            if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%sreality.cz%' LIMIT 1").fetchone():
+                portals.append("sreality")
+            if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bezrealitky.cz%' LIMIT 1").fetchone():
+                portals.append("bezrealitky")
+        return {"dispositions": dispositions, "portals": portals, "monitors": monitors}
+
+    def catalog_item(self, monitor_id: str, listing_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                FROM listings
+                LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                WHERE listings.monitor_id = ? AND listings.id = ?
+                """,
+                (monitor_id, listing_id),
+            ).fetchone()
+            if not row:
+                return None
+            item = public_listing(dict(row))
+            item["photos"] = _photo_urls(
+                [
+                    photo["url"]
+                    for photo in conn.execute(
+                        "SELECT url FROM listing_photos WHERE monitor_id = ? AND listing_id = ? ORDER BY sort_order",
+                        (monitor_id, listing_id),
+                    )
+                ]
+            )
+            if not item["photos"] and item.get("image_url"):
+                item["photos"] = _photo_urls([item["image_url"]])
+            item["price_history"] = [
+                dict(hist)
+                for hist in conn.execute(
+                    """
+                    SELECT price_czk, price_label, seen_at
+                    FROM price_history
+                    WHERE monitor_id = ? AND listing_id = ?
+                    ORDER BY seen_at
+                    """,
+                    (monitor_id, listing_id),
+                )
+            ]
+        return item
+
     def _template_row(self, row: sqlite3.Row) -> dict[str, Any]:
         data = dict(row)
         data["config"] = json.loads(data["config"])
@@ -456,4 +970,36 @@ class Store:
 
 def enrich_maps(row: dict[str, Any]) -> dict[str, Any]:
     row["maps_url"] = google_maps_url(row.get("lat"), row.get("lon"), row.get("locality") or "")
+    row["image_url"] = cdn_image_url(row.get("image_url"))
     return row
+
+
+def _photo_urls(urls: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for url in urls or []:
+        fixed = cdn_image_url(url)
+        if fixed and fixed not in result:
+            result.append(fixed)
+    return result
+
+
+def _extras_json(extras: Any) -> str | None:
+    if not extras:
+        return None
+    if isinstance(extras, str):
+        return extras
+    return json.dumps(extras, ensure_ascii=False)
+
+
+def public_listing(row: dict[str, Any]) -> dict[str, Any]:
+    item = enrich_maps(row)
+    item["portal"] = "Bezrealitky" if "bezrealitky" in (item.get("url") or "") else "Sreality"
+    extras = item.get("extras")
+    if isinstance(extras, str) and extras:
+        try:
+            extras = json.loads(extras)
+        except json.JSONDecodeError:
+            extras = {}
+    item["extras"] = extras or {}
+    item["flags"] = item["extras"].get("flags") or []
+    return item

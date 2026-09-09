@@ -118,6 +118,7 @@ def catalog() -> dict:
 
 def default_filters() -> dict:
     return {
+        "source": "sreality",
         "offers": ["pronajem"],
         "category": "byty",
         "sizes": ["2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1"],
@@ -141,6 +142,7 @@ def default_filters() -> dict:
 
 def sample_filters() -> dict:
     return {
+        "source": "sreality",
         "offers": ["drazby", "podily", "prodej", "pronajem"],
         "category": "byty",
         "sizes": [key for key, _ in SIZES],
