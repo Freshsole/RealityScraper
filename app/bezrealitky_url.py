@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
@@ -32,6 +33,7 @@ SIZES = [
     ("OSTATNI", "Ostatní"),
 ]
 DISTRICTS = [
+    ("R51684", "Česko"),
     ("R435514", "Praha"),
     ("R15107966", "Praha 1"),
     ("R19999122", "Praha 2"),
@@ -300,7 +302,10 @@ def build_url(filters: dict) -> str:
     if advert_id:
         params.append(("id", advert_id))
     if filters.get("boundary_points"):
-        params.append(("boundaryPoints", str(filters["boundary_points"])))
+        raw = filters["boundary_points"]
+        if not isinstance(raw, str):
+            raw = json.dumps(raw, separators=(",", ":"), ensure_ascii=True)
+        params.append(("boundaryPoints", raw))
     params.append(("order", "TIMEORDER_DESC"))
     return "https://www.bezrealitky.cz/vyhledat?" + urlencode(params, doseq=False)
 

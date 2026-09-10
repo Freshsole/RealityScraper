@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>REALITIFY — Nejlepší byty zmizí za minuty</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css" />
+  </head>
+  <body>
+    <header class="navbar">
+      <a class="brand" href="/">
+        <span class="icon" style="width:20px;height:32px"><img src="/static/site/assets/logo.svg" width="20" height="32" alt="" /></span>
+        REALITIFY
+      </a>
+      <nav class="menu">
+        <a href="#jak-to-funguje">Jak to funguje</a>
+        <a href="#databaze">Databáze bytů</a>
+        <a href="#srovnani">Srovnání</a>
+        <a href="#cenik">Ceník</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="nav-login" href="/prihlaseni">Přihlásit se</a>
+        <a class="pill pill-nav" href="/registrace">Vyzkoušet zdarma</a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-left">
+        <h1 class="display">NEJLEPŠÍ BYTY ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</h1>
+        <p class="hero-copy">BytAlert monitoruje všechny hlavní české realitní portály (Sreality, Bezrealitky, Reality.cz a další) 24/7 v reálném čase. Jakmile se objeví byt odpovídající vašim kritériím, dostanete okamžité upozornění na mobil či e-mail dřív než ostatní.</p>
+        <div class="hero-actions">
+          <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
+          <a class="link-row" href="#jak-to-funguje">
+            Jak to funguje?
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/arrow-right.svg" width="16" height="16" alt="" /></span>
+          </a>
+        </div>
+        <div class="hero-trust">
+          <span class="icon" style="width:88px;height:36px"><img src="/static/site/assets/avatars.svg" width="88" height="36" alt="" /></span>
+          <p>Přes <strong>4 800+ aktivních uživatelů</strong> v Praze, Brně a celé ČR</p>
+        </div>
+      </div>
+      <div class="hero-right">
+        <article class="alert-card">
+          <div class="notif-header">
+            <div>
+              <h2>BytAlert • OKAMŽITÉ UPOZORNĚNÍ</h2>
+              <p>před 35 sekundami • z portálu Bezrealitky</p>
+            </div>
+            <span class="badge-mint">AKTIVNÍ</span>
+          </div>
+          <div class="apart-photo">
+            <img src="/static/site/assets/hero-apart.png" width="432" height="220" alt="Byt v Praze 3" />
+          </div>
+          <div class="listing-details">
+            <div class="price-row">
+              <strong>16 500 Kč / měsíc</strong>
+              <span class="chip-dark">2+kk • 54 m²</span>
+            </div>
+            <div class="loc-row">
+              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/map-pin.svg" width="16" height="16" alt="" /></span>
+              Praha 3 - Žižkov, ulice Bořivojova
+            </div>
+            <p class="blurb">Nově zrekonstruovaný, zařízený byt ve 3. patře cihlového domu. K nastěhování ihned. Žádaná lokalita s výbornou dostupností...</p>
+          </div>
+          <div class="card-actions">
+            <a class="btn-open" href="/registrace">Otevřít nabídku</a>
+            <span class="btn-save">
+              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/bookmark.svg" width="16" height="16" alt="" /></span>
+            </span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <div class="urgency">
+      <div class="urg-item">
+        <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/trending-up.svg" width="20" height="20" alt="" /></span>
+        <span><strong>3 247 </strong>bytů přidáno dnes</span>
+      </div>
+      <span class="urg-div" aria-hidden="true"><img src="/static/site/assets/line.svg" width="24" height="2" alt="" /></span>
+      <div class="urg-item">
+        <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/clock.svg" width="20" height="20" alt="" /></span>
+        <span><strong>4,2 dne </strong>je průměrná doba bytu na trhu</span>
+      </div>
+      <span class="urg-div" aria-hidden="true"><img src="/static/site/assets/line.svg" width="24" height="2" alt="" /></span>
+      <div class="urg-item">
+        <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/alert-triangle.svg" width="20" height="20" alt="" /></span>
+        <span><strong>89 % </strong>nejlepších nabídek zmizí do 48 hodin</span>
+      </div>
+    </div>
+
+    <section class="sold-section">
+      <div class="section-head">
+        <p class="eyebrow">PŘÍKLADY Z TRHU</p>
+        <h2 class="display">TYTO BYTY BYLY PRYČ ZA PÁR HODIN</h2>
+        <p class="lead" style="max-width:720px">Bez automatického hlídání byste je nikdy neviděli.</p>
+      </div>
+      <div class="sold-cards">
+        <article class="sold-card">
+          <div class="sold-img">
+            <img src="/static/site/assets/sold-1.png" width="300" height="220" alt="" />
+            <span class="sold-badge">PRONAJATO ZA 3 h</span>
+          </div>
+          <div class="sold-meta">
+            <div class="sold-top"><span>Praha 3 – Žižkov</span><span>18 500 Kč/měs.</span></div>
+            <p class="spec">2+kk • 58 m²</p>
+            <p class="when">Přidáno 12. 8. 2026 v 09:14 · Pronajato 12. 8. 2026 v 12:31</p>
+          </div>
+        </article>
+        <article class="sold-card">
+          <div class="sold-img">
+            <img src="/static/site/assets/sold-2.png" width="300" height="220" alt="" />
+            <span class="sold-badge">PRONAJATO ZA 45 min</span>
+          </div>
+          <div class="sold-meta">
+            <div class="sold-top"><span>Brno – Královo Pole</span><span>14 200 Kč/měs.</span></div>
+            <p class="spec">3+1 • 74 m²</p>
+            <p class="when">Přidáno 12. 8. 2026 v 10:05 · Pronajato 12. 8. 2026 v 10:50</p>
+          </div>
+        </article>
+        <article class="sold-card">
+          <div class="sold-img">
+            <img src="/static/site/assets/sold-3.png" width="300" height="220" alt="" />
+            <span class="sold-badge">PRONAJATO ZA 6 h</span>
+          </div>
+          <div class="sold-meta">
+            <div class="sold-top"><span>Praha 5 – Smíchov</span><span>22 000 Kč/měs.</span></div>
+            <p class="spec">1+kk • 32 m²</p>
+            <p class="when">Přidáno 12. 8. 2026 v 08:22 · Pronajato 12. 8. 2026 v 14:15</p>
+          </div>
+        </article>
+        <article class="sold-card">
+          <div class="sold-img">
+            <img src="/static/site/assets/sold-4.png" width="300" height="220" alt="" />
+            <span class="sold-badge">PRONAJATO ZA 1,5 h</span>
+          </div>
+          <div class="sold-meta">
+            <div class="sold-top"><span>Plzeň – centrum</span><span>12 500 Kč/měs.</span></div>
+            <p class="spec">2+1 • 65 m²</p>
+            <p class="when">Přidáno 12. 8. 2026 v 11:40 · Pronajato 12. 8. 2026 v 13:10</p>
+          </div>
+        </article>
+      </div>
+      <div class="cta-row">
+        <a class="pill pill-lg" href="/registrace">Nechci přijít o další</a>
+        <p>Aktivujte si hlídání a buďte u toho jako první.</p>
+      </div>
+    </section>
+
+    <section class="how-section" id="jak-to-funguje">
+      <div class="section-head">
+        <p class="eyebrow">JAK BYTALERT FUNGUJE</p>
+        <h2 class="display">ZÍSKEJTE UNIKÁTNÍ NÁSKOK PŘED OSTATNÍMI ZÁJEMCI</h2>
+      </div>
+      <div class="steps">
+        <article class="step-card">
+          <div class="step-top">
+            <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/sliders.svg" width="22" height="22" alt="" /></span></span>
+            <p class="step-num">01</p>
+          </div>
+          <div>
+            <h3>Nastavte si kritéria</h3>
+            <p>Zvolte lokalitu, cenu, velikost v m² či dispozici (např. 2+kk). BytAlert si nastavení okamžitě uloží.</p>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="step-top">
+            <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/globe.svg" width="22" height="22" alt="" /></span></span>
+            <p class="step-num">02</p>
+          </div>
+          <div>
+            <h3>Hlídáme 12+ portálů</h3>
+            <p>Náš systém nepřetržitě skenuje Sreality, Bezrealitky, Reality.cz a další servery každých 60 sekund.</p>
+          </div>
+        </article>
+        <article class="step-card">
+          <div class="step-top">
+            <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/zap.svg" width="22" height="22" alt="" /></span></span>
+            <p class="step-num">03</p>
+          </div>
+          <div>
+            <h3>Okamžitá notifikace</h3>
+            <p>Jakmile se byt objeví, odešleme vám upozornění s přímým odkazem. Voláte majiteli jako první.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="fomo">
+      <div class="fomo-copy">
+        <p class="eyebrow">ČAS HRAJE PROTI VÁM</p>
+        <h2 class="display">ZATÍMCO VY RUČNĚ HLEDÁTE, NĚKDO JINÝ UŽ KUPUJE.</h2>
+        <p class="lead">Nejlepší byty v Praze a krajských městech jsou často zarezervované do několika hodin. Spoléhat na ruční prohledávání portálů jednou denně znamená sbírat zbytky. BytAlert vám dává technologický náskok, který rozhoduje o vašem budoucím bydlení.</p>
+      </div>
+      <div class="fomo-actions">
+        <a class="pill pill-lg" href="/registrace">Začít hlídat teď hned</a>
+        <a class="link-row is-light" href="#cenik">
+          Chci ušetřit drahocenný čas
+          <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/arrow-right-white.svg" width="16" height="16" alt="" /></span>
+        </a>
+      </div>
+    </section>
+
+    <section class="db-section" id="databaze">
+      <div class="section-head">
+        <p class="eyebrow">KOMPLETNÍ TRH NA JEDNOM MÍSTĚ</p>
+        <h2 class="display">VŠECHNY BYTY V ČR ZDARMA K PROHLÍŽENÍ</h2>
+        <p class="lead" style="max-width:680px">Nepotřebujete žádné placené účty jen pro vyhledávání. Naše sjednocená vyhledávací databáze agreguje tisíce nabídek napříč republikou a je plně přístupná zcela zdarma.</p>
+      </div>
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="icon" style="width:52px;height:12px"><img src="/static/site/assets/browser-dots.svg" width="52" height="12" alt="" /></span>
+          <div class="url-bar">
+            <span class="icon" style="width:12px;height:12px"><img src="/static/site/assets/lock.svg" width="12" height="12" alt="" /></span>
+            bytalert.cz/databaze-vsech-bytu
+          </div>
+        </div>
+        <div class="filter-row">
+          <div class="filter-field">
+            <label>Město / Lokalita</label>
+            <div class="select-mock">
+              Brno - město
+              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
+            </div>
+          </div>
+          <div class="filter-field">
+            <label>Dispozice</label>
+            <div class="select-mock">
+              2+kk, 3+kk
+              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
+            </div>
+          </div>
+          <div class="filter-field">
+            <label>Maximální cena</label>
+            <div class="select-mock">
+              22 000 Kč / měsíc
+              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
+            </div>
+          </div>
+          <div class="filter-search">
+            <span class="ghost">Spacer</span>
+            <a class="search-btn" href="/nabidka">
+              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/search.svg" width="14" height="14" alt="" /></span>
+              Vyhledat
+            </a>
+          </div>
+        </div>
+        <div class="results">
+          <article class="mock-card">
+            <div class="thumb"><img src="/static/site/assets/db-1.png" width="380" height="150" alt="" /></div>
+            <div class="mock-body">
+              <div class="mock-top"><span class="source">Bezrealitky</span><strong>15 900 Kč</strong></div>
+              <div>
+                <h3>Světlý byt 2+kk po rekonstrukci</h3>
+                <p>Brno, Královo Pole • 48 m²</p>
+              </div>
+            </div>
+          </article>
+          <article class="mock-card">
+            <div class="thumb"><img src="/static/site/assets/db-2.png" width="380" height="150" alt="" /></div>
+            <div class="mock-body">
+              <div class="mock-top"><span class="source">Sreality</span><strong>20 500 Kč</strong></div>
+              <div>
+                <h3>Moderní 3+kk s balkónem</h3>
+                <p>Brno, Bystrc • 72 m²</p>
+              </div>
+            </div>
+          </article>
+          <article class="mock-card">
+            <div class="thumb"><img src="/static/site/assets/db-3.png" width="380" height="150" alt="" /></div>
+            <div class="mock-body">
+              <div class="mock-top"><span class="source">Reality.cz</span><strong>12 000 Kč</strong></div>
+              <div>
+                <h3>Útulné 1+kk v centru města</h3>
+                <p>Brno, Staré Brno • 31 m²</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="compare-section" id="srovnani">
+      <div class="section-head">
+        <p class="eyebrow">UŠETŘETE ČAS I PENÍZE</p>
+        <h2 class="display">JEDNA SLUŽBA MÍSTO PĚTI HLÍDACÍCH PSŮ</h2>
+        <p class="lead" style="max-width:680px">Už nemusíte platit prémiové hlídače na každém webu samostatně. BytAlert vše sjednocuje pod jedno přehledné rozhraní s bezkonkurenční rychlostí.</p>
+      </div>
+      <div class="table-wrap">
+        <div class="cmp">
+          <div class="cmp-row cmp-head">
+            <div class="feat">Funkce</div>
+            <div class="col">Sreality hlídací pes</div>
+            <div class="col">Bezrealitky notifikace</div>
+            <div class="col">Reality.cz upozornění</div>
+            <div class="col"><span class="ba-pill">BytAlert</span></div>
+          </div>
+          <div class="cmp-row">
+            <div class="feat">Měsíční cena</div>
+            <div class="col">Základní zdarma / SMS placené</div>
+            <div class="col">79 Kč / profil</div>
+            <div class="col">Zdarma (e-mail)</div>
+            <p class="flex-[1_0_0] font-['Inter:Bold'] font-bold min-w-px relative text-[#163300] text-center" data-node-id="6:218">
+              Od 149 Kč (všechny portály)
+            </p>
+          </div>
+          <div class="cmp-row">
+            <div class="feat">Sledované portály</div>
+            <div class="col">Pouze Sreality.cz (1)</div>
+            <div class="col">Pouze Bezrealitky (1)</div>
+            <div class="col">Pouze Reality.cz (1)</div>
+            <div class="col is-us">Všech 12+ portálů v ČR</div>
+          </div>
+          <div class="cmp-row hi">
+            <div class="feat">Rychlost notifikace</div>
+            <div class="col">15 minut až hodiny</div>
+            <div class="col">Často s velkým zpožděním</div>
+            <div class="col">Několikrát denně (e-mail)</div>
+            <div class="col is-us xl">Start do 60 s · PRO do 30 s</div>
+          </div>
+          <div class="cmp-row">
+            <div class="feat">Vlastní filtry</div>
+            <div class="col">Základní</div>
+            <div class="col">Základní</div>
+            <div class="col">Žádné</div>
+            <div class="col is-us">Pokročilé (vyloučení RK, klíčová slova)</div>
+          </div>
+          <div class="cmp-row">
+            <div class="feat">Sjednocená databáze</div>
+            <div class="col">Ne</div>
+            <div class="col">Ne</div>
+            <div class="col">Ne</div>
+            <div class="col is-us">Ano — kompletně zdarma</div>
+          </div>
+          <div class="cmp-row">
+            <div class="feat">Mobilní SMS / Push notifikace</div>
+            <div class="col">Jen placené SMS</div>
+            <div class="col">Pouze v appce</div>
+            <div class="col">Pouze e-mail</div>
+            <div class="col"><span class="icon" style="width:20px;height:20px;margin:0 auto"><img src="/static/site/assets/check-green.svg" width="20" height="20" alt="" /></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="table-summary">
+        <span class="icon" style="width:24px;height:24px"><img src="/static/site/assets/zap-dark.svg" width="24" height="24" alt="" /></span>
+        <p>Ušetříte až 350 Kč měsíčně za různé hlídače a získáte 10× rychlejší notifikace.</p>
+      </div>
+    </section>
+
+    <section class="pricing-section" id="cenik">
+      <div class="section-head">
+        <p class="eyebrow">CENOVÉ PLÁNY</p>
+        <h2 class="display">FLEXIBILNÍ TARIFY PRO KAŽDÉHO</h2>
+      </div>
+      <div class="pricing-grid">
+        <article class="tier">
+          <div>
+            <p class="tier-name">Zdarma</p>
+            <p class="tier-price">0 Kč<span>/měsíc</span></p>
+            <p class="tier-desc">1 hlídací pes na 4 hlavních portálech, bez zkušební doby.</p>
+          </div>
+          <div class="hr"><img src="/static/site/assets/line-gray.svg" width="280" height="2" alt="" /></div>
+          <div class="feats">
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> 1 hlídací pes</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> Sreality, Bezrealitky, iDNES, Bazoš</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> Notifikace do 5 minut</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> Historie cen 30 dní, základní filtry</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> Podpora e-mailem</div>
+          </div>
+          <div class="tier-cta"><a class="btn-outline" href="/registrace">Vyzkoušet zdarma</a></div>
+        </article>
+        <article class="tier tier-pro">
+          <span class="pop">PRO NÁROČNÉ</span>
+          <div>
+            <p class="tier-name">PRO</p>
+            <p class="tier-price">349 Kč<span>/měsíc</span></p>
+            <p class="tier-desc">Neomezené hlídání, AI filtry a MCP. 3 dny zdarma.</p>
+          </div>
+          <div class="hr"><img src="/static/site/assets/line-dark.svg" width="280" height="2" alt="" /></div>
+          <div class="feats">
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-white.svg" width="16" height="16" alt="" /></span> Neomezeně hlídacích psů</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-white.svg" width="16" height="16" alt="" /></span> 20+ portálů + dražby, notifikace do 30 s</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-white.svg" width="16" height="16" alt="" /></span> Email + Push + Discord (10 SMS/měs)</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-white.svg" width="16" height="16" alt="" /></span> AI filtry a MCP (ChatGPT, Claude, Grok)</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-white.svg" width="16" height="16" alt="" /></span> Telefon + chat, Excel/CSV neomezeně</div>
+          </div>
+          <div class="tier-cta"><a class="btn-fill" href="/nastaveni/predplatne?checkout=pro">Aktivovat PRO</a></div>
+        </article>
+        <article class="tier">
+          <span class="pop">NEJLEPŠÍ POMĚR</span>
+          <div>
+            <p class="tier-name">Start</p>
+            <p class="tier-price">149 Kč<span>/měsíc</span></p>
+            <p class="tier-desc">10 psů na 12+ portálech. 3 dny zdarma.</p>
+          </div>
+          <div class="hr"><img src="/static/site/assets/line-light.svg" width="280" height="2" alt="" /></div>
+          <div class="feats">
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> 10 hlídacích psů</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> 12+ portálů, notifikace do 60 s</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> E-mail, historie 1 rok, CSV 1× měsíčně</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> Pokročilé filtry (RK, klíčová slova)</div>
+            <div class="feat-row"><span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check.svg" width="16" height="16" alt="" /></span> 3 dny zdarma, prioritní e-mail</div>
+          </div>
+          <div class="tier-cta"><a class="btn-outline" href="/nastaveni/predplatne?checkout=start">Aktivovat Start</a></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="quotes-section">
+      <div class="section-head">
+        <p class="eyebrow">ZKUŠENOSTI NAŠICH UŽIVATELŮ</p>
+        <h2 class="display">NAŠLI SVÉ BYDLENÍ DÍKY RYCHLOSTI</h2>
+      </div>
+      <div class="quotes">
+        <article class="quote">
+          <div class="stars">
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+          </div>
+          <blockquote>„Dva měsíce jsem marně hledal byt v Brně. Sreality hlídač mi poslal upozornění vždy až hodinu po zveřejnění, kdy už bylo obsazeno. S BytAlertem jsem volal majiteli 30 sekund po podání inzerátu a hned druhý den podepsal smlouvu.“</blockquote>
+          <div>
+            <strong>Martin K.</strong>
+            <p class="who">pronájem 2+kk, Brno-Královo Pole</p>
+          </div>
+        </article>
+        <article class="quote">
+          <div class="stars">
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+          </div>
+          <blockquote>„Díky SMS notifikaci mě BytAlert upozornil na skvělý byt bez provize na Bezrealitky během mé polední pauzy. Okamžitě jsem zareagovala a stala se první zájemkyní. Bez této služby bych neměla šanci.“</blockquote>
+          <div>
+            <strong>Lenka Š.</strong>
+            <p class="who">pronájem 1+kk, Praha-Žižkov</p>
+          </div>
+        </article>
+        <article class="quote">
+          <div class="stars">
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star.svg" width="16" height="16" alt="" /></span>
+          </div>
+          <blockquote>„BytAlert nám zachránil krk. Hledali jsme větší rodinný byt v Praze 5 a díky okamžité notifikaci z reality.cz jsme byli na prohlídce jako první z padesáti zájemců. Skvělá investice!“</blockquote>
+          <div>
+            <strong>Tomáš a Klára</strong>
+            <p class="who">koupě 4+kk, Praha 5</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="faq-section" id="faq">
+      <div class="section-head">
+        <p class="eyebrow">MÁTE OTÁZKY?</p>
+        <h2 class="display">ČASTO KLADENÉ DOTAZY</h2>
+      </div>
+      <div class="faq-list">
+        <div class="faq-item open">
+          <button class="faq-q" type="button">
+            <span>Jak rychle dostanu notifikaci o novém bytu?</span>
+            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
+          </button>
+          <p class="faq-a">U tarifu Start odesíláme upozornění do 60 sekund od zveřejnění inzerátu. PRO má prioritu a stihne to do 30 sekund. Tarif Zdarma hlídá do 5 minut na 4 hlavních portálech.</p>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button">
+            <span>Které české portály systém aktuálně hlídá?</span>
+            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
+          </button>
+          <p class="faq-a">Sledujeme Sreality, Bezrealitky, Reality.cz, Idnes Reality, UlovDomov, Reality.iDNES, a řadu dalších menších regionálních serverů včetně inzerátů na sociálních sítích.</p>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button">
+            <span>Můžu předplatné kdykoliv zrušit?</span>
+            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
+          </button>
+          <p class="faq-a">Ano, předplatné je zcela bez závazků. Můžete ho kdykoliv zrušit v nastavení svého profilu jedním kliknutím. Žádné skryté poplatky.</p>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button">
+            <span>Je prohlížení sjednocené databáze opravdu zdarma?</span>
+            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
+          </button>
+          <p class="faq-a">Ano. Prohlížení a ruční vyhledávání všech aktivních inzerátů v ČR je pro všechny uživatele zcela zdarma. Platíte pouze za automatické real-time hlídání a rychlé notifikace.</p>
+        </div>
+        <div class="faq-item">
+          <button class="faq-q" type="button">
+            <span>V čem se BytAlert liší od klasického hlídacího psa na Sreality?</span>
+            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
+          </button>
+          <p class="faq-a">Sreality vám hlídají pouze své vlastní stránky. BytAlert hlídá přes 12 různých portálů najednou, filtruje duplicity, odstraňuje RK a doručuje notifikace okamžitě, zatímco standardní hlídací psi mívají zpoždění 15 minut až několik hodin.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="final-cta">
+      <div class="final-copy">
+        <h2 class="display">PŘESTAŇTE PŘICHÁZET O NEJLEPŠÍ BYTY.</h2>
+        <p class="lead">Založte si bezplatný účet a začněte sledovat kompletní český realitní trh na jednom místě ještě dnes. První notifikaci můžete dostat už za minutu.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:16px">
+        <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
+        <p class="final-note">Registrace trvá 30 sekund • Bez platební karty</p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <div class="footer-mark">
+            <span class="bell-box"><span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/bell-ring.svg" width="18" height="18" alt="" /></span></span>
+            <span>BYT<span class="alert-green">ALERT</span></span>
+          </div>
+          <p>Jedinečný real-time monitoring českého realitního trhu. Agregujeme inzeráty a doručujeme okamžitá upozornění přímo do vašeho mobilu.</p>
+        </div>
+        <div class="footer-cols">
+          <div class="footer-col">
+            <h3>Služba</h3>
+            <a href="#jak-to-funguje">Jak to funguje</a>
+            <a href="#srovnani">Srovnání hlídačů</a>
+            <a href="#cenik">Ceník a tarify</a>
+            <a href="#jak-to-funguje">Podporované weby</a>
+          </div>
+          <div class="footer-col">
+            <h3>Zdroje</h3>
+            <a href="#databaze">Vyhledávací databáze</a>
+            <a href="#faq">Časté dotazy</a>
+            <a href="/kontakt">Blog o bydlení</a>
+            <a href="/kontakt">Kontakt</a>
+          </div>
+          <div class="footer-col">
+            <h3>Právní</h3>
+            <a href="/kontakt">Obchodní podmínky</a>
+            <a href="/kontakt">Ochrana soukromí</a>
+            <a href="/kontakt">Nastavení cookies</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bot">
+        <p>© 2026 BytAlert. Všechna práva vyhrazena. Služba není nijak oficiálně spojena s portály Sreality.cz nebo Bezrealitky.cz.</p>
+        <div class="soc">
+          <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/facebook.svg" width="18" height="18" alt="" /></span>
+          <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/twitter.svg" width="18" height="18" alt="" /></span>
+          <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/instagram.svg" width="18" height="18" alt="" /></span>
+        </div>
+      </div>
+    </footer>
+    <script src="/static/site/site.js"></script>
+  </body>
+</html>

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import bezrealitky_url, url_builder
+from app import bezrealitky_url, localities, url_builder
 from app.sources import is_bezrealitky, source_name
 
 SR_OFFERS = {"pronajem": "PRONAJEM", "prodej": "PRODEJ"}
@@ -75,10 +75,14 @@ BR_EXTRA_LABELS = {key: label for key, label in bezrealitky_url.EXTRAS}
 def convert_search_url(url: str) -> dict[str, Any]:
     if is_bezrealitky(url):
         filters, skipped, notes = br_to_sr(bezrealitky_url.parse_url(url))
+        filters["source"] = "sreality"
+        filters = localities.normalize_filters(filters)
         target_url = url_builder.build_url(filters)
         target = "Sreality"
     else:
         filters, skipped, notes = sr_to_br(url_builder.parse_url(url))
+        filters["source"] = "bezrealitky"
+        filters = localities.normalize_filters(filters)
         target_url = bezrealitky_url.build_url(filters)
         target = "Bezrealitky"
     return {
@@ -114,12 +118,23 @@ def sr_to_br(src: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]
         elif size:
             skipped.append(f"Dispozice {SR_SIZE_LABELS.get(size, size)}")
     dst["sizes"] = list(dict.fromkeys(sizes))
-    districts = [SR_DISTRICTS[item] for item in src.get("districts") or [] if item in SR_DISTRICTS]
-    for item in src.get("districts") or []:
-        if item not in SR_DISTRICTS:
-            skipped.append(f"Lokalita {item}")
-    dst["districts"] = districts
-    dst["osm_value"] = ", ".join(BR_DISTRICT_LABELS.get(item, item) for item in districts)
+    districts = []
+    src_districts = [str(item) for item in (src.get("districts") or [])]
+    if set(src_districts) >= set(localities.SREALITY_CZECH_REGIONS) or any(
+        localities.is_czech_country(item, item) for item in src_districts
+    ):
+        districts = [localities.CZECH_OSM]
+        dst["osm_value"] = "Česko"
+        dst["boundary_points"] = localities.CZ_BOUNDARY_POINTS
+    else:
+        for item in src_districts:
+            osm = localities.SREALITY_TO_OSM.get(item) or SR_DISTRICTS.get(item)
+            if osm:
+                districts.append(osm)
+            elif item:
+                skipped.append(f"Lokalita {item}")
+        dst["osm_value"] = ", ".join(BR_DISTRICT_LABELS.get(item, item) for item in districts)
+    dst["districts"] = list(dict.fromkeys(districts))
     dst["ownership"] = _map_list(src.get("ownership"), SR_OWNERSHIP, SR_OWNERSHIP_LABELS, skipped)
     dst["conditions"] = _map_list(src.get("conditions"), SR_CONDITIONS, SR_CONDITION_LABELS, skipped)
     buildings: list[str] = []
@@ -183,13 +198,20 @@ def br_to_sr(src: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]
     dst["sizes"] = list(dict.fromkeys(sizes))
     districts: list[str] = []
     for item in src.get("districts") or []:
-        if item == "R435514":
-            districts.extend(f"praha-{i}" for i in range(1, 11))
-            notes.append("Celá Praha → Praha 1–10")
-        elif item in BR_DISTRICTS:
-            districts.append(BR_DISTRICTS[item])
-        elif item:
-            skipped.append(f"Lokalita {BR_DISTRICT_LABELS.get(item, item)}")
+        if item == localities.CZECH_OSM or localities.is_czech_country(item, BR_DISTRICT_LABELS.get(item, item)):
+            districts.extend(localities.SREALITY_CZECH_REGIONS)
+        else:
+            slug = localities.OSM_TO_SREALITY.get(item) or BR_DISTRICTS.get(item)
+            if slug and "," not in slug:
+                districts.append(slug)
+            elif item:
+                guess = localities.sreality_slug(item, BR_DISTRICT_LABELS.get(item, item))
+                if guess and "," not in guess:
+                    districts.append(guess)
+                elif "," in str(guess):
+                    districts.extend(part for part in guess.split(",") if part)
+                else:
+                    skipped.append(f"Lokalita {BR_DISTRICT_LABELS.get(item, item)}")
     dst["districts"] = list(dict.fromkeys(districts))
     reverse_own = {value: key for key, value in SR_OWNERSHIP.items()}
     dst["ownership"] = _map_list(src.get("ownership"), reverse_own, BR_OWNERSHIP_LABELS, skipped)

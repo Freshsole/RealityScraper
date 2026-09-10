@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
@@ -54,16 +55,67 @@ class Listing:
     def maps_url(self) -> str | None:
         return google_maps_url(self.lat, self.lon, self.locality)
 
+    def get(self, key: str, default: Any = None) -> Any:
+        if key == "maps_url":
+            value = self.maps_url()
+            return default if value is None else value
+        if key not in self.__dataclass_fields__:
+            return default
+        value = getattr(self, key)
+        return default if value is None else value
+
+    def keys(self):
+        return list(self.__dataclass_fields__) + ["maps_url"]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self.__dataclass_fields__ or key == "maps_url"
+
+    def __getitem__(self, key: str) -> Any:
+        if key not in self:
+            raise KeyError(key)
+        return self.get(key)
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["maps_url"] = self.maps_url()
         return data
 
 
+def listing_from_dict(data: dict[str, Any] | Listing | None) -> Listing:
+    if isinstance(data, Listing):
+        return data
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        if hasattr(data, "to_dict"):
+            data = data.to_dict()
+        else:
+            try:
+                data = dict(data)
+            except (TypeError, ValueError):
+                data = {}
+    allowed = {key: data[key] for key in Listing.__dataclass_fields__ if key in data}
+    changes = allowed.get("changes") or []
+    allowed["changes"] = [tuple(item) for item in changes]
+    extras = allowed.get("extras")
+    if extras is None:
+        allowed["extras"] = {}
+    elif isinstance(extras, str):
+        try:
+            allowed["extras"] = json.loads(extras) if extras else {}
+        except json.JSONDecodeError:
+            allowed["extras"] = {}
+    elif not isinstance(extras, dict):
+        allowed["extras"] = {}
+    return Listing(**allowed)
+
+
+_SHARED_BUILD_ID: str | None = None
+
+
 class SrealityClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
-        self._build_id: str | None = None
         self._client = httpx.AsyncClient(
             headers=BROWSER_HEADERS,
             follow_redirects=True,
@@ -89,11 +141,14 @@ class SrealityClient:
                     listings.append(item)
         return listings, total
 
-    async def fetch_all(self, newest: bool = True, max_pages: int = 40) -> tuple[list[Listing], int]:
+    async def fetch_all(self, newest: bool = True, max_pages: int | None = None) -> tuple[list[Listing], int]:
         listings: list[Listing] = []
         seen: set[int] = set()
         total = 0
-        for page in range(1, max_pages + 1):
+        page = 1
+        while True:
+            if max_pages is not None and page > max_pages:
+                break
             batch, page_total = await self.fetch_page(page, newest=newest)
             total = page_total
             ids = [item.id for item in batch]
@@ -105,7 +160,8 @@ class SrealityClient:
                     listings.append(item)
             if total and len(listings) >= total:
                 break
-            await asyncio.sleep(0.2)
+            page += 1
+            await asyncio.sleep(0.15)
         return listings, total
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
@@ -126,7 +182,7 @@ class SrealityClient:
             headers={"Accept": "application/json", "x-nextjs-data": "1"},
         )
         if response.status_code == 404:
-            self._build_id = None
+            self._clear_build_id()
             build_id = await self._resolve_build_id()
             data_path = f"/_next/data/{build_id}/cs/hledani/{path}.json"
             url = urljoin("https://www.sreality.cz", data_path) + "?" + urlencode(query, doseq=True)
@@ -153,19 +209,26 @@ class SrealityClient:
         data = json.loads(match.group(1))
         build_id = data.get("buildId")
         if build_id:
-            self._build_id = str(build_id)
+            self._set_build_id(str(build_id))
         return parse_search_payload(data.get("props", {}).get("pageProps", {}))
 
+    def _set_build_id(self, value: str | None) -> None:
+        global _SHARED_BUILD_ID
+        _SHARED_BUILD_ID = value
+
+    def _clear_build_id(self) -> None:
+        self._set_build_id(None)
+
     async def _resolve_build_id(self) -> str:
-        if self._build_id:
-            return self._build_id
+        if _SHARED_BUILD_ID:
+            return _SHARED_BUILD_ID
         response = await self._client.get(self._html_url(1, True), headers={"Accept": "text/html"})
         response.raise_for_status()
         match = re.search(r'"buildId":"([^"]+)"', response.text)
         if not match:
             raise RuntimeError("Could not resolve Sreality buildId")
-        self._build_id = match.group(1)
-        return self._build_id
+        self._set_build_id(match.group(1))
+        return match.group(1)
 
     def _search_parts(self, newest: bool) -> tuple[str, dict[str, str]]:
         split = urlsplit(self.search_url)
@@ -207,7 +270,7 @@ class SrealityClient:
             headers={"Accept": "application/json", "x-nextjs-data": "1"},
         )
         if response.status_code == 404:
-            self._build_id = None
+            self._clear_build_id()
             build_id = await self._resolve_build_id()
             url = f"https://www.sreality.cz/_next/data/{build_id}/cs{path}.json"
             response = await self._client.get(
@@ -250,7 +313,7 @@ def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
         listing.lon = lon
     extra = image_urls(estate.get("images") or params.get("images") or [])
     if extra:
-        listing.photos = list(dict.fromkeys([*(listing.photos or []), *extra]))
+        listing.photos = extra
         listing.image_url = listing.photos[0]
     text = (estate.get("description") or "").replace("\xa0", " ").strip()
     if text:
@@ -539,10 +602,32 @@ def first_image_url(images: list[dict[str, Any]]) -> str | None:
     return urls[0] if urls else None
 
 
-def image_urls(images: list[dict[str, Any]], limit: int = 16) -> list[str]:
+def _image_src(item: Any) -> str | None:
+    if isinstance(item, str):
+        return cdn_image_url(item)
+    if not isinstance(item, dict):
+        return None
+    for key in ("url", "href", "src"):
+        raw = item.get(key)
+        if raw:
+            return cdn_image_url(raw)
+    links = item.get("_links") or {}
+    if isinstance(links, dict):
+        for name in ("gallery", "self", "dynamic", "image", "view"):
+            node = links.get(name)
+            href = node.get("href") if isinstance(node, dict) else None
+            if href:
+                return cdn_image_url(href)
+    return None
+
+
+def image_urls(images: list[dict[str, Any]], limit: int = 80) -> list[str]:
+    rows = list(images or [])
+    if rows and all(isinstance(item, dict) and item.get("order") is not None for item in rows):
+        rows = sorted(rows, key=lambda item: item.get("order") or 0)
     result: list[str] = []
-    for item in images:
-        raw = cdn_image_url(item.get("url") if isinstance(item, dict) else item)
+    for item in rows:
+        raw = _image_src(item)
         if raw and raw not in result:
             result.append(raw)
         if len(result) >= limit:

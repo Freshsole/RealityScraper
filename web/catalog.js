@@ -17,6 +17,7 @@
   let hoverMarker = null;
   let hoverKey = null;
   let lastItems = [];
+  let lastCatalogQuery = location.search;
   let total = 0;
   let offset = 0;
   let loaded = false;
@@ -41,6 +42,7 @@
     sort: "newest",
     status: "",
     discounted: false,
+    hits: "",
   };
   let focusedIndex = -1;
   let compareUrls = [];
@@ -52,6 +54,16 @@
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
+  }
+
+  function uniqueOffers(items) {
+    const seen = new Set();
+    return (items || []).filter((item) => {
+      const key = item.listing_key || item.url || `${item.monitor_id}:${item.id}`;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   function formatTime(iso) {
@@ -127,6 +139,7 @@
       sort: selected.sort,
       status: selected.status,
       discounted: selected.discounted ? "1" : "",
+      hits: selected.hits,
     };
   }
 
@@ -145,6 +158,7 @@
     selected.portal = params.get("portal") || "";
     selected.status = params.get("status") || "";
     selected.discounted = params.get("discounted") === "1";
+    selected.hits = params.get("hits") || "";
     selected.monitor = params.get("monitor_id") || "";
     selected.sort = params.get("sort") || "newest";
     selected.dispositions = new Set((params.get("disposition") || "").split(",").filter(Boolean));
@@ -184,6 +198,15 @@
       chip.classList.toggle("on", active);
     });
     $("cat-status")?.querySelector("[data-discounted]")?.classList.toggle("on", selected.discounted);
+    $("cat-hits")?.querySelectorAll("[data-hits]").forEach((chip) => {
+      chip.classList.toggle("on", (chip.dataset.hits || "") === selected.hits);
+    });
+    const kicker = document.querySelector("#view-catalog .kicker");
+    if (kicker) {
+      if (selected.hits === "today") kicker.textContent = "Zásahy z dneška · můžeš vybrat monitor a přidat další filtry";
+      else if (selected.hits === "notified") kicker.textContent = "Všechny zásahy z monitorů · můžeš filtrovat dál";
+      else kicker.textContent = "Uložené inzeráty z hlídaných hledání";
+    }
   }
 
   function savedViews() {
@@ -795,7 +818,7 @@
   async function loadPins() {
     const response = await fetch(`/api/catalog/pins?${queryString()}`);
     const data = await response.json();
-    renderMapPins(data.items || []);
+    renderMapPins(uniqueOffers(data.items || []));
   }
 
   function historyChart(history) {
@@ -918,10 +941,16 @@
     modal.hidden = false;
     document.body.classList.add("catalog-modal-open");
     host.innerHTML = `<p class="empty">Načítám detail…</p>`;
-    const response = await fetch(`/api/catalog/item?monitor_id=${encodeURIComponent(monitorId)}&id=${listingId}`);
-    const item = await response.json();
-    if (!response.ok) {
-      host.innerHTML = `<p class="empty">${escapeHtml(item.detail || "Detail se nepodařilo načíst")}</p>`;
+    let item;
+    try {
+      const response = await fetch(`/api/catalog/item?monitor_id=${encodeURIComponent(monitorId)}&id=${listingId}`);
+      item = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        host.innerHTML = `<p class="empty">${escapeHtml(item.detail || "Detail se nepodařilo načíst")}</p>`;
+        return;
+      }
+    } catch {
+      host.innerHTML = `<p class="empty">Detail se nepodařilo načíst</p>`;
       return;
     }
     const photos = item.photos?.length ? item.photos : item.image_url ? [item.image_url] : [];
@@ -1203,10 +1232,10 @@
     if (!append) offset = 0;
     const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`);
     const data = await response.json();
-    const items = data.items || [];
+    const items = uniqueOffers(data.items || []);
     total = data.total || 0;
     renderFacets(data.facets);
-    if (append) lastItems = lastItems.concat(items);
+    if (append) lastItems = uniqueOffers(lastItems.concat(items));
     else lastItems = items;
     $("catalog-count").textContent = `${total} nemovitostí`;
     const empty = $("catalog-empty");
@@ -1428,6 +1457,14 @@
     syncStatusChips();
     loadCatalog();
   });
+  $("cat-hits")?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-hits]");
+    if (!chip) return;
+    const next = chip.dataset.hits || "";
+    selected.hits = selected.hits === next ? "" : next;
+    syncStatusChips();
+    loadCatalog();
+  });
   $("catalog-views")?.addEventListener("click", (event) => {
     if (event.target.id === "view-save") {
       const name = prompt("Název pohledu");
@@ -1496,8 +1533,11 @@
   });
 
   window.addEventListener("catalog-show", () => {
-    if (!loaded) {
+    const query = location.search;
+    if (!loaded || query !== lastCatalogQuery) {
       loaded = true;
+      lastCatalogQuery = query;
+      readUrlState();
       loadCatalog();
     } else if (catalogMap) {
       setTimeout(() => catalogMap.invalidateSize(), 80);
@@ -1521,6 +1561,25 @@
     .then((res) => res.json())
     .then((data) => {
       appSettings = data || appSettings;
+      const prefs = data?.watch_prefs;
+      if (location.search || !prefs) return;
+      if (Array.isArray(prefs.sizes) && prefs.sizes.length) {
+        selected.dispositions = new Set(prefs.sizes);
+      }
+      if (prefs.offer) selected.offers = new Set([prefs.offer]);
+      if (prefs.price_from != null && $("cat-price-from")) $("cat-price-from").value = String(prefs.price_from);
+      if (prefs.price_to != null && $("cat-price-to")) $("cat-price-to").value = String(prefs.price_to);
+      if (prefs.area_from != null && $("cat-area-from")) $("cat-area-from").value = String(prefs.area_from);
+      const districts = [];
+      for (const loc of prefs.localities || []) {
+        const name = String(loc.label || "").split(",")[0].trim();
+        const numbered = /^Praha\s+(\d+)$/i.exec(name);
+        if (numbered) districts.push(`praha-${numbered[1]}`);
+        else if (name) districts.push(name);
+      }
+      if (districts.length) selected.districts = new Set(districts);
+      syncFilterUi();
+      if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
     })
     .catch(() => {});
   window.addEventListener("app-settings", (event) => {

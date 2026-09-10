@@ -120,7 +120,7 @@ LIST_FIELDS = """
       address(locale: CS)
       gps { lat lng }
       mainImage { url(filter: RECORD_MAIN) }
-      publicImages(limit: 12) { url(filter: RECORD_MAIN) }
+      publicImages(limit: 50) { url(filter: RECORD_MAIN) }
       balcony
       loggia
       cellar
@@ -326,11 +326,14 @@ class BezrealitkyClient:
         listings = [self._parse(item) for item in block.get("list") or [] if item]
         return [item for item in listings if item], int(block.get("totalCount") or 0)
 
-    async def fetch_pages(self, pages: int, newest: bool = True) -> tuple[list[Listing], int]:
+    async def fetch_pages(self, pages: int | None, newest: bool = True) -> tuple[list[Listing], int]:
         listings: list[Listing] = []
         seen: set[int] = set()
         total = 0
-        for page in range(1, pages + 1):
+        page = 1
+        while True:
+            if pages is not None and page > pages:
+                break
             batch, total = await self.fetch_page(page, newest=newest)
             if not batch:
                 break
@@ -340,10 +343,11 @@ class BezrealitkyClient:
                     listings.append(item)
             if total and len(listings) >= total:
                 break
+            page += 1
             await asyncio.sleep(0.12)
         return listings, total
 
-    async def fetch_all(self, newest: bool = True, max_pages: int = 80) -> tuple[list[Listing], int]:
+    async def fetch_all(self, newest: bool = True, max_pages: int | None = None) -> tuple[list[Listing], int]:
         listings, total = await self.fetch_pages(max_pages, newest=newest)
         return listings, total
 

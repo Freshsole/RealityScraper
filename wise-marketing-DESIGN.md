@@ -81,7 +81,9 @@ Patterns: the display is the whole identity — huge, uppercase, weight 900, and
 ## 5. Layout Principles
 
 - Two-column hero: left the huge display block + lead + green CTA, right the converter card.
-- Max content ~1240px, generous margins.
+- **Max content width 1280px** (`--page`). Side gutter `--pad` 80px desktop / 40px below 1200px. On viewports wider than 1280px the column stays centered: `--gutter: max(var(--pad), calc((100% - var(--page)) / 2))`.
+- Section **backgrounds are full-bleed**; only the inner column is capped. Never stretch nav, hero, cards, tables or copy across the whole ultrawide canvas.
+- Figma desktop frame is 1440px with 80px inset → 1280px inner. Do not use a looser ~1240px guess.
 - Rating badges (App Store / Google Play with stars) sit above the headline.
 - Sections alternate white with `#e8ebe6` gray-green and forest-green blocks.
 
@@ -108,6 +110,7 @@ Patterns: the display is the whole identity — huge, uppercase, weight 900, and
 - Use Inter at 400–600 for all body, UI and button copy.
 - Build the signature converter card: big tabular numerals, flag currency pills, mint info banner, full-width green CTA.
 - Use fully-rounded pills for buttons and chips.
+- Cap marketing content at **1280px** and keep 80px side padding (40px on smaller screens); let colour blocks go edge-to-edge.
 
 ### Don't
 - Don't set body copy in Wise Sans 900 — the heavy display is reserved for headlines.
@@ -115,10 +118,12 @@ Patterns: the display is the whole identity — huge, uppercase, weight 900, and
 - Don't square off buttons; they are full pills.
 - Don't add gradients or decorative effects — surfaces are flat colour blocks.
 - Don't give the display normal/positive leading; the tight negative leading is the signature.
+- Don't let the layout go full-bleed as a column — no max-width, or a wider max than 1280px, stretches type and cards on large monitors.
 
 ## 10. Responsive Behavior
 
 - Two-column hero collapses to stacked on mobile (markup present); display scales fluidly. Mobile rendering not verified — captured at desktop 1512px only.
+- Below the 1280px content cap, gutters stay at least `--pad` (80px / 40px); the column shrinks inside those paddings. Above 1280px the column does not grow.
 
 ## 11. Agent Prompt Guide
 
@@ -126,8 +131,9 @@ Quick token reference:
 
 - Canvas `#ffffff` · Ink `#163300` / `#0e0f0c` · Body gray `#454745` · Surface `#e8ebe6` · Mint `#e2f6d5` · Accent bright-green `#9fe870`
 - Fonts: Wise Sans 900 UPPERCASE (display, negative leading) / Inter 400–600 (UI+body) · Body 16px · Radius full-pill button / 24px card · Button height 40–48px
+- Layout: max content **1280px** · side pad 80px (40px below 1200px) · full-bleed section fills · centered gutters on wide screens
 - Focus: not captured · Hover: slightly deeper green on pills
 
 <wise_design_language>
-Use the Wise design language: a bold consumer-fintech brand on a white canvas whose entire identity is an enormous UPPERCASE Wise Sans headline at weight 900 set with NEGATIVE leading (90px type on 76.6px line-height) so the lines stack into a solid typographic block, in near-black-green ink #0e0f0c over forest green #163300. The signature pairing is bright acid green #9fe870 against that forest green: the green fills every fully-rounded pill button (9999px, 40-48px tall) with forest-green label text, and never appears as body copy. All body, UI and button text drops to calm Inter at 400-600, keeping the shouting to the display. Surfaces are flat colour blocks — white, gray-green #e8ebe6, pale mint #e2f6d5 banners and deep forest blocks — with no gradients or effects; the one floating element is the signature currency-converter card (radius ~24px, soft shadow) holding very large tabular numerals, flag-avatar currency pills, a mint info banner, hairline-separated icon info rows and a full-width green pill CTA. Semantic colours are blue #00a2dd, positive #008026, negative #cf2929, warning #9a6500. Feels: bold, direct, optimistic, trustworthy. Avoid: setting body copy in Wise Sans 900, using the bright green as text, squared-off buttons, gradients, or giving the display normal positive leading.
+Use the Wise design language: a bold consumer-fintech brand on a white canvas whose entire identity is an enormous UPPERCASE Wise Sans headline at weight 900 set with NEGATIVE leading (90px type on 76.6px line-height) so the lines stack into a solid typographic block, in near-black-green ink #0e0f0c over forest green #163300. The signature pairing is bright acid green #9fe870 against that forest green: the green fills every fully-rounded pill button (9999px, 40-48px tall) with forest-green label text, and never appears as body copy. All body, UI and button text drops to calm Inter at 400-600, keeping the shouting to the display. Surfaces are flat colour blocks — white, gray-green #e8ebe6, pale mint #e2f6d5 banners and deep forest blocks — with no gradients or effects; the one floating element is the signature currency-converter card (radius ~24px, soft shadow) holding very large tabular numerals, flag-avatar currency pills, a mint info banner, hairline-separated icon info rows and a full-width green pill CTA. Layout: marketing content is capped at 1280px and centered with 80px side padding (40px on smaller viewports); section backgrounds stay full-bleed and must not stretch the column on ultrawide screens. Semantic colours are blue #00a2dd, positive #008026, negative #cf2929, warning #9a6500. Feels: bold, direct, optimistic, trustworthy. Avoid: setting body copy in Wise Sans 900, using the bright green as text, squared-off buttons, gradients, giving the display normal positive leading, or letting page content grow beyond 1280px.
 </wise_design_language>

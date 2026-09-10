@@ -6,10 +6,11 @@ import json
 import sys
 import zipfile
 from contextlib import asynccontextmanager
+import time
 from typing import Any
 
-from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi import Body, Cookie, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 
@@ -18,9 +19,14 @@ from app.backup import export_config, export_pack, export_sqlite, import_config,
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
-from app import bezrealitky_url, url_builder
+from app import bezrealitky_url, localities, url_builder
 from app.filter_bridge import convert_search_url
 from app.commute import route_times
+from app import billing as stripe_billing
+from app import account as user_account
+from app import push as web_push
+from app.sreality import ListingGone
+from app.store import _listing_from_catalog_dict
 
 hub = Hub()
 monitor = hub
@@ -54,27 +60,205 @@ app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 
 
+def _agent_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    # #region agent log
+    try:
+        with open("/Users/jirka/Desktop/Folders/RealityScraper/.cursor/debug-c31723.log", "a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "sessionId": "c31723",
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                        "runId": "post-fix",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+    except Exception:
+        pass
+    # #endregion
+
+
 @app.middleware("http")
 async def no_store_ui(request: Request, call_next):
+    started = time.perf_counter()
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/static/") or path in {"/", "/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"}:
+    # #region agent log
+    if path.startswith("/api/"):
+        _agent_log(
+            "E",
+            "main.py:middleware",
+            "api request",
+            {"path": path, "ms": round((time.perf_counter() - started) * 1000, 1), "status": response.status_code},
+        )
+    # #endregion
+    if (
+        path.startswith("/static/")
+        or path.startswith("/nastaveni")
+        or path in {
+        "/",
+        "/kontakt",
+        "/prihlaseni",
+        "/registrace",
+        "/heslo",
+        "/prehled",
+        "/nabidka",
+        "/monitory",
+        "/filtry",
+        "/zprava",
+        "/nastaveni",
+        "/sw.js",
+        "/manifest.webmanifest",
+    }
+    ):
         response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
+
+
+def _is_app_page(path: str) -> bool:
+    return path in {"/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"} or path.startswith("/nastaveni/")
+
+
+@app.middleware("http")
+async def require_account(request: Request, call_next):
+    if request.method == "GET" and _is_app_page(request.url.path):
+        user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+        if not user:
+            return RedirectResponse("/prihlaseni", status_code=303)
+    return await call_next(request)
 
 
 def page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
-app.add_api_route("/", page, methods=["GET"], include_in_schema=False)
+def landing() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def contact() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def auth_login() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def auth_register() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def auth_forgot() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
+app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
+app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
+app.add_api_route("/registrace", auth_register, methods=["GET"], include_in_schema=False)
+app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=False)
 for _path in ("/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"):
     app.add_api_route(_path, page, methods=["GET"], include_in_schema=False)
+app.add_api_route("/nastaveni/{rest:path}", page, methods=["GET"], include_in_schema=False)
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        user_account.SESSION_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
+        path="/",
+    )
+
+
+def _current_user(session: str | None) -> dict[str, Any]:
+    user = user_account.user_from_session(hub.store, session)
+    if not user:
+        raise HTTPException(401, "Nejste přihlášeni")
+    return user
+
+
+@app.post("/api/auth/register")
+async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        user, token = user_account.register(
+            hub.store,
+            str(body.get("name") or ""),
+            str(body.get("email") or ""),
+            str(body.get("password") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response = JSONResponse(user)
+    _set_session_cookie(response, token)
+    return response
+
+
+@app.post("/api/auth/login")
+async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        user, token = user_account.login(hub.store, str(body.get("email") or ""), str(body.get("password") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response = JSONResponse(user)
+    _set_session_cookie(response, token)
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout_api() -> dict:
+    user_account.clear_session(hub.store)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(user_account.SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/auth/me")
+async def auth_me(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    return _current_user(realitify_session)
+
+
+@app.post("/api/auth/profile")
+async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    body = payload or {}
+    try:
+        return user_account.update_profile(
+            hub.store,
+            str(body.get("first") or ""),
+            str(body.get("last") or ""),
+            str(body.get("phone") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/auth/password")
+async def auth_password(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    body = payload or {}
+    try:
+        token = user_account.change_password(hub.store, str(body.get("current") or ""), str(body.get("new") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response = JSONResponse({"ok": True})
+    _set_session_cookie(response, token)
+    return response
 
 
 @app.get("/api/status")
 async def status() -> dict:
-    return hub.status()
+    return await asyncio.to_thread(hub.status)
 
 
 @app.get("/api/version")
@@ -101,20 +285,25 @@ async def install_update() -> dict:
 @app.post("/api/monitor/start")
 async def start_monitor() -> dict:
     await hub.start()
-    return hub.status()
+    return hub.status(fresh=True)
 
 
 @app.post("/api/monitor/stop")
 async def stop_monitor() -> dict:
     await hub.stop()
-    return hub.status()
+    return hub.status(fresh=True)
 
 
 @app.post("/api/monitor/check")
 async def check_now(payload: dict[str, Any] | None = Body(None)) -> dict:
     monitor_id = (payload or {}).get("monitor_id")
     result = await hub.check_once(monitor_id)
-    return {"result": result, "status": hub.status()}
+    return {"result": result, "status": hub.status(fresh=True)}
+
+
+@app.post("/api/catalog/sync")
+async def catalog_sync_now() -> dict:
+    return {"result": hub.start_catalog_sync(), "status": hub.status(fresh=True)}
 
 
 @app.post("/api/discord/test")
@@ -131,6 +320,61 @@ async def digest_test(payload: dict[str, Any] | None = Body(None)) -> dict:
         return await hub.send_digest_test((payload or {}).get("webhook_url"))
     except Exception as exc:
         raise HTTPException(502, f"Test digestu selhal: {exc}") from exc
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-store, max-age=0", "Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+def web_manifest() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "manifest.webmanifest",
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
+@app.get("/api/push/vapid")
+def push_vapid() -> dict:
+    return {
+        "publicKey": web_push.public_key(),
+        "supported": True,
+        "devices": hub.store.push_subscription_count(),
+        "enabled": bool(hub.store.notify_prefs().get("push")),
+    }
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        hub.store.save_push_subscription(body, request.headers.get("user-agent") or "")
+        prefs = hub.store.notify_prefs()
+        prefs["push"] = True
+        hub.store.save_notify_prefs(prefs)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"ok": True, "devices": hub.store.push_subscription_count(), "notify": hub.store.notify_prefs()}
+
+
+@app.post("/api/push/unsubscribe")
+async def push_unsubscribe(payload: dict[str, Any] | None = Body(None)) -> dict:
+    hub.store.delete_push_subscription(str((payload or {}).get("endpoint") or ""))
+    return {"ok": True, "devices": hub.store.push_subscription_count()}
+
+
+@app.post("/api/push/test")
+async def push_test() -> dict:
+    sent = await asyncio.to_thread(web_push.notify_test, hub.store)
+    if not sent:
+        raise HTTPException(400, "Na tomto zařízení ještě není aktivní odběr push notifikací")
+    return {"ok": True, "sent": sent}
 
 
 @app.get("/api/listings")
@@ -164,11 +408,13 @@ async def catalog(
     radius_m: str = "",
     status: str = "",
     discounted: str = "",
+    hits: str = "",
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
 ) -> dict:
-    return hub.store.catalog(
+    return await asyncio.to_thread(
+        hub.store.catalog,
         {
             "portal": portal,
             "q": q,
@@ -194,10 +440,11 @@ async def catalog(
             "radius_m": radius_m,
             "status": status,
             "discounted": discounted,
+            "hits": hits,
             "sort": sort,
             "limit": limit,
             "offset": offset,
-        }
+        },
     )
 
 
@@ -227,8 +474,10 @@ async def catalog_pins(
     radius_m: str = "",
     status: str = "",
     discounted: str = "",
+    hits: str = "",
 ) -> dict:
-    return hub.store.catalog(
+    return await asyncio.to_thread(
+        hub.store.catalog,
         {
             "portal": portal,
             "q": q,
@@ -254,8 +503,9 @@ async def catalog_pins(
             "radius_m": radius_m,
             "status": status,
             "discounted": discounted,
+            "hits": hits,
             "pins_only": True,
-        }
+        },
     )
 
 
@@ -264,25 +514,10 @@ async def catalog_item(monitor_id: str, id: int) -> dict:
     item = hub.store.catalog_item(monitor_id, id)
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
-    needs_detail = (not (item.get("description") or "").strip()) or len(item.get("photos") or []) < 2
-    if needs_detail and item.get("search_url"):
-        listing = Listing(
-            id=int(item["id"]),
-            name=item.get("name") or "",
-            price_czk=item.get("price_czk"),
-            price_label=item.get("price_label") or "",
-            disposition=item.get("disposition") or "",
-            area_m2=item.get("area_m2"),
-            locality=item.get("locality") or "",
-            url=item.get("url") or "",
-            image_url=item.get("image_url"),
-            photos=item.get("photos") or [],
-            lat=item.get("lat"),
-            lon=item.get("lon"),
-            description=item.get("description"),
-            extras=item.get("extras") or {},
-        )
+    if item.get("search_url"):
         try:
+            listing = _listing_from_catalog_dict(item)
+            listing.photos = []
             listing = await hub.client_for(item["search_url"]).fetch_detail(listing)
             hub.store.save_listing_enrichment(monitor_id, listing)
             item = hub.store.catalog_item(monitor_id, id) or item
@@ -324,7 +559,10 @@ async def list_monitors() -> dict:
 async def save_monitor(payload: dict[str, Any]) -> dict:
     if not (payload.get("search_url") or "").strip():
         raise HTTPException(400, "Chybí search_url")
-    return hub.store.save_monitor(payload)
+    try:
+        return hub.store.save_monitor(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/monitors/{monitor_id}/preview")
@@ -354,7 +592,7 @@ async def delete_monitor(monitor_id: str) -> dict:
         hub.store.delete_monitor(monitor_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "status": hub.status()}
+    return {"ok": True, "status": hub.status(fresh=True)}
 
 
 @app.get("/api/templates")
@@ -387,7 +625,9 @@ def _filter_mod(source: str | None = None, url: str = ""):
 
 @app.get("/api/filters/catalog")
 async def filter_catalog() -> dict:
-    return {
+    started = time.perf_counter()
+    payload = {
+        "locality_map": localities.catalog_map(),
         "catalog": url_builder.catalog(),
         "defaults": url_builder.default_filters(),
         "sample": url_builder.sample_filters(),
@@ -404,12 +644,19 @@ async def filter_catalog() -> dict:
             },
         },
     }
+    # #region agent log
+    _agent_log("C", "main.py:filter_catalog", "catalog built", {"ms": round((time.perf_counter() - started) * 1000, 1)})
+    # #endregion
+    return payload
 
 
 @app.post("/api/filters/build")
 async def filter_build(payload: dict[str, Any]) -> dict:
     filters = payload.get("filters") or {}
     mod = _filter_mod(filters.get("source"))
+    if not filters.get("source"):
+        filters = {**filters, "source": "bezrealitky" if mod is bezrealitky_url else "sreality"}
+    filters = localities.normalize_filters(filters)
     built = mod.build_url(filters or mod.default_filters())
     return {"url": built, "filters": mod.parse_url(built)}
 
@@ -430,6 +677,14 @@ async def filter_locality(q: str = Query("", min_length=2)) -> dict:
     query = q.strip()
     if len(query) < 2:
         return {"items": []}
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    needle = query.casefold()
+    for ident, label in bezrealitky_url.DISTRICTS:
+        if needle not in label.casefold():
+            continue
+        seen.add(ident)
+        items.append(localities.locality_item(ident, label))
     try:
         async with httpx.AsyncClient(timeout=12.0, headers={"User-Agent": "RealityScraper/1.2"}) as client:
             response = await client.get(
@@ -444,10 +699,8 @@ async def filter_locality(q: str = Query("", min_length=2)) -> dict:
             )
             response.raise_for_status()
             rows = response.json()
-    except Exception as exc:
-        raise HTTPException(502, f"Hledání lokality selhalo: {exc}") from exc
-    items = []
-    seen: set[str] = set()
+    except Exception:
+        return {"items": items}
     for row in rows:
         osm_type = row.get("osm_type")
         osm_id = row.get("osm_id")
@@ -457,7 +710,13 @@ async def filter_locality(q: str = Query("", min_length=2)) -> dict:
         if ident in seen:
             continue
         seen.add(ident)
-        items.append({"id": ident, "label": row.get("display_name") or ident})
+        items.append(
+            localities.locality_item(
+                ident,
+                row.get("display_name") or ident,
+                row.get("address") if isinstance(row.get("address"), dict) else None,
+            )
+        )
     return {"items": items}
 
 
@@ -636,4 +895,85 @@ async def backup_import(file: UploadFile = File(...)) -> dict:
     finally:
         if was_running:
             await hub.start()
-    return {"ok": True, "status": hub.status()}
+    return {"ok": True, "status": hub.status(fresh=True)}
+
+
+@app.get("/api/billing")
+async def billing_status() -> dict:
+    try:
+        stripe_billing.settle_pending_if_due(hub.store)
+        state = stripe_billing.billing_state(hub.store)
+        record = hub.store.billing_record() or {}
+        if record.get("customer_id") and config.STRIPE_SECRET_KEY and (
+            state.get("plan") == "free" or record.get("pending_plan") or record.get("cancel_at_period_end")
+        ):
+            state = stripe_billing.recover_from_stripe(hub.store)
+            stripe_billing.apply_watch_limit(hub.store)
+            hub._status_cache = None
+            state = stripe_billing.billing_state(hub.store)
+        return {**state, "invoices": stripe_billing.list_invoices(hub.store)}
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/checkout")
+async def billing_checkout(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        result = stripe_billing.create_checkout(
+            hub.store,
+            str(body.get("plan") or ""),
+            user_account.public_account(hub.store).get("email") or str(body.get("email") or ""),
+        )
+        hub._status_cache = None
+        return result
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/portal")
+async def billing_portal() -> dict:
+    try:
+        return {"url": stripe_billing.create_portal(hub.store)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/cancel")
+async def billing_cancel() -> dict:
+    try:
+        result = stripe_billing.cancel_subscription(hub.store)
+        hub._status_cache = None
+        return result
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/sync")
+async def billing_sync(payload: dict[str, Any] | None = Body(None)) -> dict:
+    session_id = str((payload or {}).get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(400, "Chybí session_id")
+    try:
+        result = stripe_billing.sync_checkout_session(hub.store, session_id)
+        hub._status_cache = None
+        return result
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(request: Request) -> dict:
+    payload = await request.body()
+    try:
+        result = stripe_billing.handle_webhook(hub.store, payload, request.headers.get("stripe-signature"))
+        hub._status_cache = None
+        return result
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc

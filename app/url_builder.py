@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 BASE = "https://www.sreality.cz/hledani"
@@ -122,7 +123,7 @@ def default_filters() -> dict:
         "offers": ["pronajem"],
         "category": "byty",
         "sizes": ["2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1"],
-        "districts": ["praha-1", "praha-2", "praha-3", "praha-4", "praha-6", "praha-7", "praha-8", "praha-9"],
+        "districts": ["praha"],
         "ownership": [],
         "conditions": [],
         "extras": [],
@@ -167,7 +168,7 @@ def sample_filters() -> dict:
 def build_url(filters: dict) -> str:
     offers = _selected(filters.get("offers"), [k for k, _ in OFFERS]) or ["pronajem"]
     category = filters.get("category") or "byty"
-    districts = sorted(_selected(filters.get("districts"), [k for k, _ in DISTRICTS]))
+    districts = _district_slugs(filters.get("districts"))
     path = "/".join(
         part
         for part in (
@@ -238,6 +239,20 @@ def parse_url(url: str) -> dict:
     filters["floor_to"] = _int_or_none(query.get("patro-do", [None])[0])
     filters["poi_distance"] = _int_or_none(query.get("pois_in_place_distance", ["2"])[0]) or 2
     return filters
+
+
+def _district_slugs(values: list | None) -> list[str]:
+    slugs: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        slug = str(value or "").strip().strip("/")
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+            continue
+        if slug in seen:
+            continue
+        seen.add(slug)
+        slugs.append(slug)
+    return slugs
 
 
 def _selected(values: list | None, allowed: list[str]) -> list[str]:

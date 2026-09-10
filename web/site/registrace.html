@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Registrace — REALITIFY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css" />
+    <link rel="stylesheet" href="/static/site/auth.css?v=1.2.0-n3" />
+  </head>
+  <body class="auth-page">
+    <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
+    <div class="auth-glow auth-glow-2"><img src="/static/site/assets/auth-glow-2.svg" width="500" height="500" alt="" /></div>
+    <div class="auth-stack" id="register-flow">
+      <a class="auth-logo" href="/">
+        <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/auth-logo.svg" width="20" height="20" alt="" /></span>
+        REALITIFY
+      </a>
+
+      <div class="step-panel">
+      <form class="auth-card tight" id="reg-step1">
+        <div class="auth-head">
+          <div class="step-ind">
+            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 1 z 3</span></div>
+            <div class="step-bar"><span class="on"></span><span></span><span></span></div>
+          </div>
+          <h1 class="auth-h">VYTVOŘTE SI ÚČET</h1>
+          <p class="auth-lead">Dostávejte upozornění dřív než ostatní zájemci.</p>
+        </div>
+        <div class="auth-fields compact">
+          <div class="field">
+            <label for="name">Jméno a příjmení</label>
+            <div class="field-input"><input id="name" name="name" type="text" placeholder="např. Jan Novák" required /></div>
+          </div>
+          <div class="field">
+            <label for="email">E-mail</label>
+            <div class="field-input"><input id="email" name="email" type="email" placeholder="např. jan.novak@email.cz" required /></div>
+          </div>
+          <div class="field">
+            <label for="reg-password">Heslo</label>
+            <div class="field-input">
+              <input id="reg-password" name="password" type="password" autocomplete="new-password" required />
+              <button class="pw-toggle" type="button">
+                <span class="icon" style="width:16px;height:16px">
+                  <img class="eye-open" src="/static/site/assets/eye.svg" width="16" height="16" alt="" />
+                  <img class="eye-closed" src="/static/site/assets/eye-closed.svg" width="16" height="16" alt="" />
+                </span>
+                <span class="txt">Skrýt</span>
+              </button>
+            </div>
+            <div class="strength" data-level="2">
+              <div class="strength-bars" data-level="2"><span></span><span></span><span></span></div>
+              <p class="strength-label">Střední síla hesla</p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="reg-password2">Heslo znovu</label>
+            <div class="field-input"><input id="reg-password2" name="password2" type="password" placeholder="Zadejte heslo pro ověření" required /></div>
+          </div>
+        </div>
+        <label class="check-row">
+          <input id="reg-agree" type="checkbox" checked required />
+          <span class="check-box"><span class="icon" style="width:12px;height:12px"><img src="/static/site/assets/check-circle.svg" width="12" height="12" alt="" /></span></span>
+          <span>Souhlasím s <a href="/kontakt">obchodními podmínkami</a> a <a href="/kontakt">zpracováním osobních údajů</a>.</span>
+        </label>
+        <button class="auth-btn" type="submit">
+          Pokračovat
+          <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/auth-arrow-right.svg" width="16" height="16" alt="" /></span>
+        </button>
+        <div class="socials">
+          <a class="social" href="/prihlaseni">
+            <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/google.svg" width="18" height="18" alt="" /></span>
+            Google
+          </a>
+          <a class="social" href="/prihlaseni">
+            <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/apple.svg" width="18" height="18" alt="" /></span>
+            Apple
+          </a>
+        </div>
+        <p class="auth-foot"><span>Už máte účet?</span> <a href="/prihlaseni">Přihlaste se</a></p>
+      </form>
+      <p class="auth-hint">Blesková aktivace do 30 sekund.</p>
+      </div>
+
+      <div class="step-panel" hidden>
+      <div class="auth-card">
+        <div class="auth-head">
+          <div class="step-ind">
+            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 2 z 3</span></div>
+            <div class="step-bar"><span class="on"></span><span class="on"></span><span></span></div>
+          </div>
+          <h1 class="auth-h">CO HLEDÁTE?</h1>
+          <p class="auth-lead">Nastavte si preferovaná kritéria vyhledávání.</p>
+        </div>
+        <div class="pref-form">
+          <div class="field">
+            <label>Typ nabídky</label>
+            <div class="seg" id="offer-seg">
+              <button class="on" type="button" data-offer="pronajem">Byt k pronájmu</button>
+              <button type="button" data-offer="prodej">Byt k prodeji</button>
+            </div>
+          </div>
+          <div class="field city-field">
+            <label for="city">Město / lokalita</label>
+            <div class="field-input">
+              <input id="city" type="text" placeholder="Začněte psát město nebo městskou část" autocomplete="off" />
+            </div>
+            <div id="city-suggest" class="suggest" hidden></div>
+            <div id="city-chips" class="chips"></div>
+          </div>
+          <div class="field">
+            <label>Dispozice bytu</label>
+            <div id="size-chips" class="chips"></div>
+          </div>
+          <div class="price-row">
+            <div class="field">
+              <label for="price-min">Minimální cena (Kč)</label>
+              <div class="field-input"><input id="price-min" type="text" inputmode="numeric" placeholder="Bez omezení" /></div>
+            </div>
+            <div class="field">
+              <label for="price-max">Maximální cena (Kč)</label>
+              <div class="field-input"><input id="price-max" type="text" inputmode="numeric" value="22 000" /></div>
+            </div>
+          </div>
+          <div class="field">
+            <label for="area">Minimální plocha (m²)</label>
+            <div class="field-input"><input id="area" type="text" inputmode="numeric" value="45" /></div>
+          </div>
+          <p id="pref-error" class="pref-error" hidden></p>
+        </div>
+        <div class="auth-actions">
+          <button class="auth-btn" id="to-step3" type="button">
+            Uložit a pokračovat
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/auth-arrow-right.svg" width="16" height="16" alt="" /></span>
+          </button>
+          <button class="skip" id="skip-prefs" type="button">Přeskočit, nastavit později</button>
+        </div>
+      </div>
+      <p class="auth-hint">Nastavení můžete kdykoliv změnit ve svém profilu.</p>
+      </div>
+
+      <div class="step-panel" hidden>
+      <div class="auth-card">
+        <div class="auth-head">
+          <div class="step-ind">
+            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 3 z 3</span></div>
+            <div class="step-bar"><span class="on"></span><span class="on"></span><span class="on"></span></div>
+          </div>
+          <h1 class="auth-h">NASTAVTE NOTIFIKACE</h1>
+          <p class="auth-lead">Jak se k vám informace o bytech dostane nejrychleji?</p>
+        </div>
+        <div class="toggles">
+          <div class="toggle-row">
+            <div class="toggle-copy">
+              <strong>E-mailová upozornění</strong>
+              <p>Okamžitý e-mail s odkazem na detail nabídky.</p>
+            </div>
+            <button class="switch on" data-toggle type="button" aria-label="E-mail"><i></i></button>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-copy">
+              <strong>Push notifikace v prohlížeči</strong>
+              <p>Rychlé upozornění na ploše vašeho počítače.</p>
+            </div>
+            <button class="switch" data-toggle type="button" aria-label="Push"><i></i></button>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-copy">
+              <strong>SMS notifikace <span class="tag-pro">PRO VERZE</span></strong>
+              <p>Bleskové zprávy přímo na váš mobilní telefon. V PRO 10 SMS / měsíc + Discord.</p>
+            </div>
+            <button class="switch" data-toggle type="button" aria-label="SMS"><i></i></button>
+          </div>
+          <div class="toggle-row">
+            <div class="toggle-copy">
+              <strong>Denní shrnutí e-mailem</strong>
+              <p>Přehledný souhrn všech nových bytů jednou denně.</p>
+            </div>
+            <button class="switch on" data-toggle type="button" aria-label="Shrnutí"><i></i></button>
+          </div>
+        </div>
+        <div class="freq">
+          <label>Jak často chcete notifikace posílat?</label>
+          <div class="freq-row">
+            <button class="on" type="button">Okamžitě</button>
+            <button type="button">Každou hodinu</button>
+            <button type="button">2× denně</button>
+          </div>
+        </div>
+        <button class="auth-btn" id="finish-reg" type="button">
+          Dokončit registraci
+          <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-circle.svg" width="16" height="16" alt="" /></span>
+        </button>
+      </div>
+      <p class="auth-hint">Notifikace běží nepřetržitě na pozadí 24/7.</p>
+      </div>
+    </div>
+    <script src="/static/site/auth.js?v=1.2.0-n2"></script>
+  </body>
+</html>
