@@ -859,7 +859,11 @@ async def places_search(q: str = Query("", min_length=2)) -> dict:
 @app.get("/api/places/geometry")
 async def places_geometry(ids: str = "") -> dict:
     ident = [item.strip() for item in ids.split(",") if item.strip()]
-    return {"items": await places.geometries(ident)}
+    try:
+        items = await asyncio.wait_for(places.geometries(ident), 8.0)
+    except Exception:
+        items = await places.geometries(ident, network=False)
+    return {"items": places.public_geoms(items)}
 
 
 @app.get("/api/filters/locality")

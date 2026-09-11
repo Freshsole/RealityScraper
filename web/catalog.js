@@ -277,19 +277,11 @@
   async function ensurePlaceGeoms() {
     const missing = selectedPlaces.filter((row) => !row.geojson);
     if (!missing.length) return;
-    const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map((row) => row.id).join(","))}`);
+    const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map((row) => row.id).join(","))}`, {
+      signal: AbortSignal.timeout(8000),
+    });
     const data = await response.json().catch(() => ({ items: [] }));
-    for (const item of data.items || []) {
-      const row = selectedPlaces.find((place) => place.id === item.id);
-      if (!row) continue;
-      row.geojson = item.geojson;
-      row.kind = item.kind || row.kind;
-      if (item.label) row.label = item.label;
-      row.lat = item.lat;
-      row.lon = item.lon;
-      row.buffer_m = item.buffer_m;
-    }
-    renderPlaceChips();
+    applyPlaceGeoms(data.items);
   }
 
   async function addPlace(item) {
@@ -490,11 +482,13 @@
       .join("");
     const monitor = $("cat-monitor");
     const previous = selected.monitor;
-    monitor.innerHTML = ['<option value="">Všechny monitory</option>']
-      .concat((facets?.monitors || []).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`))
-      .join("");
-    selected.monitor = previous;
-    monitor.value = previous;
+    if (monitor) {
+      monitor.innerHTML = ['<option value="">Všechny monitory</option>']
+        .concat((facets?.monitors || []).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`))
+        .join("");
+      selected.monitor = previous;
+      monitor.value = previous;
+    }
   }
 
   function formatKc(value) {
@@ -706,35 +700,51 @@
     }
   }
 
+  function applyPlaceGeoms(items) {
+    for (const item of items || []) {
+      const row = selectedPlaces.find((place) => place.id === item.id);
+      if (!row) continue;
+      row.geojson = item.geojson;
+      row.kind = item.kind || row.kind;
+      if (item.label) row.label = item.label;
+      row.lat = item.lat;
+      row.lon = item.lon;
+      row.buffer_m = item.buffer_m;
+    }
+    renderPlaceChips();
+  }
+
   function drawPlaceLayer(fit) {
     ensureMap();
     if (!catalogMap) return;
-    if (!placeLayer) placeLayer = L.layerGroup().addTo(catalogMap);
+    if (!placeLayer) {
+      placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
+    }
     placeLayer.clearLayers();
     for (const place of selectedPlaces) {
       if (!place.geojson) continue;
       const street = place.kind === "street" || /LineString/i.test(place.geojson.type || "");
-      if (street) {
-        L.geoJSON(place.geojson, {
-          style: {
+      const style = street
+        ? {
             color: "#4a90c4",
             weight: 78,
-            opacity: 0.28,
+            opacity: 0.35,
             lineCap: "round",
             lineJoin: "round",
-          },
-        }).addTo(placeLayer);
-        L.geoJSON(place.geojson, {
-          style: { color: "#2b6a96", weight: 3, opacity: 0.9 },
-        }).addTo(placeLayer);
-      } else {
-        L.geoJSON(place.geojson, {
-          style: {
+            pane: "placePane",
+          }
+        : {
             color: "#3d7ea6",
             weight: 2,
             fillColor: "#5ba3d0",
-            fillOpacity: 0.22,
-          },
+            fillOpacity: 0.28,
+            pane: "placePane",
+          };
+      L.geoJSON(place.geojson, { style, pane: "placePane" }).addTo(placeLayer);
+      if (street) {
+        L.geoJSON(place.geojson, {
+          style: { color: "#2b6a96", weight: 3, opacity: 0.9, pane: "placePane" },
+          pane: "placePane",
         }).addTo(placeLayer);
       }
     }
@@ -847,10 +857,13 @@
   function ensureMap() {
     if (catalogMap || typeof L === "undefined") return;
     catalogMap = L.map("catalog-map", { scrollWheelZoom: true, attributionControl: false }).setView([50.08, 14.44], 12);
+    catalogMap.createPane("placePane");
+    catalogMap.getPane("placePane").style.zIndex = 450;
+    catalogMap.getPane("placePane").style.pointerEvents = "none";
     L.maplibreGL({
       style: "https://tiles.openfreemap.org/styles/liberty",
     }).addTo(catalogMap);
-    placeLayer = L.layerGroup().addTo(catalogMap);
+    placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
     catalogLayer = L.layerGroup().addTo(catalogMap);
     hoverLayer = L.layerGroup().addTo(catalogMap);
     catalogMap.on("click", (event) => {
@@ -1413,10 +1426,19 @@
 
   async function loadCatalog(append = false) {
     if (!append) offset = 0;
-    const geoTask = ensurePlaceGeoms();
-    const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`);
-    const data = await response.json();
-    await geoTask.catch(() => {});
+    ensureMap();
+    let data;
+    try {
+      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`, {
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!response.ok) throw new Error("catalog");
+      data = await response.json();
+    } catch {
+      $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
+      return;
+    }
+    applyPlaceGeoms(data.places);
     const items = uniqueOffers(data.items || []);
     total = data.total || 0;
     renderFacets(data.facets);
@@ -1435,6 +1457,7 @@
     if (!append) {
       drawPlaceLayer(Boolean(selectedPlaces.length));
       loadPins();
+      ensurePlaceGeoms().then(() => drawPlaceLayer(Boolean(selectedPlaces.length)));
     }
     offset = lastItems.length;
     $("catalog-more").hidden = lastItems.length >= total;
@@ -1836,6 +1859,7 @@
 
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {
     loaded = true;
+    ensureMap();
     loadCatalog();
   }
 })();

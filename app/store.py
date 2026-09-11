@@ -2138,7 +2138,10 @@ class Store:
             items.append(item)
         self._attach_catalog_extras(items, twins=False)
         facets = self.catalog_facets()
-        return {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
+        payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
+        if place_geoms:
+            payload["places"] = places.public_geoms(place_geoms)
+        return payload
 
     def _catalog_pins(self, where: list[str], params: list[Any], place_geoms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         clause = " AND ".join(where)

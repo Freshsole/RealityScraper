@@ -451,7 +451,8 @@ a { color: var(--forest); }
 #hits-map .leaflet-popup-pane,
 #catalog-map .leaflet-marker-pane,
 #catalog-map .leaflet-popup-pane,
-#catalog-map .leaflet-overlay-pane {
+#catalog-map .leaflet-overlay-pane,
+#catalog-map .leaflet-place-pane {
   z-index: 650;
 }
 

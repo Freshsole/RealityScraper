@@ -4,6 +4,8 @@ import asyncio
 import json
 import math
 import time
+from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -23,6 +25,48 @@ _OVERPASS_URLS = [
 _lock = asyncio.Lock()
 _last_nominatim = 0.0
 _memory: dict[str, dict[str, Any]] = {}
+_BUNDLED: dict[str, dict[str, Any]] | None = None
+_SHAPES_PATH = Path(__file__).resolve().parent / "place_shapes.json"
+
+
+def bundled_shapes() -> dict[str, dict[str, Any]]:
+    global _BUNDLED
+    if _BUNDLED is None:
+        if _SHAPES_PATH.exists():
+            try:
+                _BUNDLED = json.loads(_SHAPES_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                _BUNDLED = {}
+        else:
+            _BUNDLED = {}
+    return _BUNDLED
+
+
+def cached_item(ident: str) -> dict[str, Any] | None:
+    ident = normalize_osm_id(ident)
+    raw = bundled_shapes().get(ident) or _memory.get(ident)
+    if not isinstance(raw, dict) or not raw.get("geojson"):
+        return None
+    return prepare_item(deepcopy(raw))
+
+
+def public_geoms(geoms: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    items = []
+    for geom in geoms or []:
+        if not geom.get("geojson"):
+            continue
+        items.append(
+            {
+                "id": geom.get("id"),
+                "label": geom.get("label"),
+                "kind": geom.get("kind") or "area",
+                "geojson": geom.get("geojson"),
+                "buffer_m": geom.get("buffer_m") or 0,
+                "lat": geom.get("lat"),
+                "lon": geom.get("lon"),
+            }
+        )
+    return items
 
 
 def normalize_osm_id(value: str | None) -> str:
@@ -762,24 +806,31 @@ def _from_nominatim_row(row: dict[str, Any]) -> dict[str, Any] | None:
     return item
 
 
-async def geometries(ids: list[str]) -> list[dict[str, Any]]:
+async def geometries(ids: list[str], *, network: bool = True) -> list[dict[str, Any]]:
     _load_disk_cache()
     wanted = [normalize_osm_id(item) for item in ids if normalize_osm_id(item)]
     found: list[dict[str, Any]] = []
     missing: list[str] = []
     way_missing: list[str] = []
+    seen: set[str] = set()
     for ident in wanted:
-        cached = _memory.get(ident)
-        if cached and cached.get("geojson") and cached.get("v") == CACHE_VERSION:
+        cached = cached_item(ident)
+        if cached:
             found.append(cached)
+            seen.add(ident)
         elif ident.startswith("W"):
             way_missing.append(ident)
         else:
             missing.append(ident)
+    if not network:
+        order = {ident: index for index, ident in enumerate(wanted)}
+        found.sort(key=lambda item: order.get(item.get("id"), 999))
+        return found
     for ident in way_missing:
         extra = await _overpass_way(ident)
         if extra:
             found.append(extra)
+            seen.add(ident)
         else:
             missing.append(ident)
     if missing:
@@ -829,5 +880,17 @@ async def geometries(ids: list[str]) -> list[dict[str, Any]]:
 
 async def attach_geoms(filters: dict[str, Any]) -> dict[str, Any]:
     ids = ids_from_filters(str(filters.get("places") or ""), str(filters.get("district") or ""))
-    filters["place_geoms"] = await geometries(ids) if ids else []
+    if not ids:
+        filters["place_geoms"] = []
+        return filters
+    geoms = await geometries(ids, network=False)
+    have = {str(item.get("id") or "") for item in geoms}
+    missing = [ident for ident in ids if ident not in have]
+    if missing:
+        try:
+            extra = await asyncio.wait_for(geometries(missing, network=True), 2.5)
+            geoms.extend(extra)
+        except Exception:
+            pass
+    filters["place_geoms"] = geoms
     return filters
