@@ -142,6 +142,7 @@ def billing_state(store: Store) -> dict[str, Any]:
     data["publishable_key"] = config.STRIPE_PUBLISHABLE_KEY
     data["configured"] = bool(config.STRIPE_SECRET_KEY)
     data["plan_rank"] = PLAN_RANK
+    data["whatsapp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
     data["downgrade_losses"] = {f"{src}_{dst}": rows for (src, dst), rows in DOWNGRADE_LOSSES.items()}
     pending = data.get("pending_plan") if data.get("pending_plan") in PLANS and data.get("pending_plan") != plan else ""
     data["pending_plan"] = pending

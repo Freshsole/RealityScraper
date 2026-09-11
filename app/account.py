@@ -4,10 +4,14 @@ import hashlib
 import hmac
 import json
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any
 
+from app import config
 from app.store import Store
+
+LINK_TTL_SEC = 20 * 60
 
 SESSION_COOKIE = "realitify_session"
 _ITERATIONS = 200_000
@@ -149,6 +153,16 @@ def update_profile(store: Store, first: str, last: str, phone: str) -> dict[str,
     return save_account(store, data)
 
 
+def save_whatsapp_phone(store: Store, digits: str) -> dict[str, Any]:
+    data = account_record(store)
+    if not data.get("email"):
+        raise ValueError("Účet není založený")
+    data["whatsapp_phone"] = (digits or "").strip()
+    if not data.get("phone"):
+        data["phone"] = data["whatsapp_phone"]
+    return save_account(store, data)
+
+
 def change_password(store: Store, current: str, new: str) -> str:
     data = account_record(store)
     if not data.get("email"):
@@ -162,3 +176,109 @@ def change_password(store: Store, current: str, new: str) -> str:
     data["password_salt"] = salt
     save_account(store, data)
     return _new_session(store)
+
+
+def discord_webhook_url(store: Store) -> str:
+    return (account_record(store).get("discord_webhook_url") or "").strip()
+
+
+def _link_payload(store: Store) -> dict[str, Any] | None:
+    raw = store.get_meta("discord_link_code") or ""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not data.get("code"):
+        return None
+    try:
+        expires_at = float(data.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return None
+    if expires_at <= time.time():
+        store.set_meta("discord_link_code", None)
+        return None
+    data["expires_at"] = expires_at
+    return data
+
+
+def discord_status(store: Store) -> dict[str, Any]:
+    data = account_record(store)
+    linked = bool(discord_webhook_url(store) and data.get("discord_channel_id"))
+    pending = _link_payload(store)
+    return {
+        "bot_ready": bool(config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID),
+        "linked": linked,
+        "channel_name": (data.get("discord_channel_name") or "").strip(),
+        "discord_username": (data.get("discord_username") or "").strip(),
+        "server_invite": config.DISCORD_SERVER_INVITE,
+        "pending_code": (pending or {}).get("code") or "",
+        "pending_expires_in": max(0, int((pending or {}).get("expires_at", 0) - time.time())) if pending else 0,
+    }
+
+
+def create_discord_link_code(store: Store) -> dict[str, Any]:
+    if not account_record(store).get("email"):
+        raise ValueError("Nejste přihlášeni")
+    if not config.DISCORD_BOT_TOKEN or not config.DISCORD_GUILD_ID:
+        raise ValueError("Discord bot není nastavený (DISCORD_BOT_TOKEN a DISCORD_GUILD_ID)")
+    code = secrets.token_hex(3).upper()
+    store.set_meta(
+        "discord_link_code",
+        json.dumps({"code": code, "expires_at": time.time() + LINK_TTL_SEC}),
+    )
+    return {
+        "code": code,
+        "command": f"/link {code}",
+        "expires_in": LINK_TTL_SEC,
+        **discord_status(store),
+        "pending_code": code,
+        "pending_expires_in": LINK_TTL_SEC,
+    }
+
+
+def match_discord_link_code(store: Store, code: str) -> bool:
+    pending = _link_payload(store)
+    if not pending:
+        return False
+    given = (code or "").strip().upper()
+    expected = str(pending.get("code") or "").upper()
+    if not given or len(given) != len(expected):
+        return False
+    return secrets.compare_digest(given, expected)
+
+
+def clear_discord_link_code(store: Store) -> None:
+    store.set_meta("discord_link_code", None)
+
+
+def save_discord_connection(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
+    data = account_record(store)
+    for key, value in payload.items():
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+    store.set_meta("account", json.dumps(data, ensure_ascii=False))
+    webhook = (data.get("discord_webhook_url") or "").strip()
+    if webhook:
+        store.apply_discord_webhook(webhook)
+    return discord_status(store)
+
+
+def unlink_discord(store: Store) -> dict[str, Any]:
+    data = account_record(store)
+    for key in (
+        "discord_user_id",
+        "discord_username",
+        "discord_channel_id",
+        "discord_channel_name",
+        "discord_webhook_url",
+        "discord_webhook_id",
+        "discord_linked_at",
+    ):
+        data.pop(key, None)
+    store.set_meta("account", json.dumps(data, ensure_ascii=False))
+    clear_discord_link_code(store)
+    return discord_status(store)

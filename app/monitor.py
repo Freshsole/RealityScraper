@@ -9,9 +9,10 @@ from typing import Any
 
 from app import config
 from app import push as web_push
+from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
-from app.sources import client_for, source_name, webhook_for
+from app.sources import client_for, source_name
 from app.catalog_sync import daily_shards, listing_is_new_for_monitor
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
@@ -28,6 +29,7 @@ class Hub:
         self._sold_task: asyncio.Task[None] | None = None
         self._ping_task: asyncio.Task[None] | None = None
         self._catalog_task: asyncio.Task[None] | None = None
+        self._discord_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.last_error: str | None = None
         self._portal_gate = asyncio.Semaphore(2)
@@ -50,11 +52,15 @@ class Hub:
         self._sold_task = asyncio.create_task(self._sold_loop(), name="sreality-sold")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
         self._catalog_task = asyncio.create_task(self._catalog_loop(), name="sreality-catalog")
+        if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
+            from app.discord_bot import run_discord_bot
+
+            self._discord_task = asyncio.create_task(run_discord_bot(self.store), name="discord-bot")
         asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
 
     async def stop(self) -> None:
         self.running = False
-        for task in (self._task, self._sold_task, self._ping_task, self._catalog_task):
+        for task in (self._task, self._sold_task, self._ping_task, self._catalog_task, self._discord_task):
             if not task:
                 continue
             task.cancel()
@@ -66,6 +72,7 @@ class Hub:
         self._sold_task = None
         self._ping_task = None
         self._catalog_task = None
+        self._discord_task = None
 
     async def close(self) -> None:
         await self.stop()
@@ -191,7 +198,7 @@ class Hub:
                         if kind == "changed" and not prefs.get("ntPrice", True):
                             self.store.upsert_seen(monitor["id"], alert, notified=False)
                             continue
-                        webhook = webhook_for(monitor.get("search_url") or "", monitor.get("webhook_url"))
+                        webhook = self.store.notify_webhook(monitor.get("search_url") or "", monitor.get("webhook_url"))
                         template = self.store.get_template(monitor.get("template_id") or "default")
                         template_config = (template or {}).get("config")
                         queued = False
@@ -207,8 +214,9 @@ class Hub:
                                     monitor_name=monitor.get("name") or "",
                                 )
                         pushed = await self._notify_push(alert, kind, monitor.get("name") or "")
-                        self.store.upsert_seen(monitor["id"], alert, notified=bool(queued or pushed))
-                        if queued or pushed:
+                        mailed = await self._notify_email(alert, kind, monitor.get("name") or "")
+                        self.store.upsert_seen(monitor["id"], alert, notified=bool(queued or pushed or mailed))
+                        if queued or pushed or mailed:
                             notified.append(alert)
                 except ListingGone:
                     for monitor in monitors:
@@ -281,6 +289,19 @@ class Hub:
         except Exception:
             return 0
 
+    async def _notify_email(self, listing: Any, kind: str, monitor_name: str = "", *, ignore_quiet: bool = False, prefix: str = "") -> bool:
+        try:
+            return await mail_notify.notify_listing(
+                self.store,
+                listing,
+                kind,
+                monitor_name,
+                ignore_quiet=ignore_quiet,
+                prefix=prefix,
+            )
+        except Exception:
+            return False
+
     async def notify_sold(self, monitor: dict[str, Any] | None, listing_id: int, monitor_id: str | None = None) -> None:
         mid = (monitor or {}).get("id") or monitor_id
         if not mid:
@@ -296,7 +317,7 @@ class Hub:
         if not self._should_ping_sold(row):
             self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
             return
-        webhook = config.SOLD_WEBHOOK_URL
+        webhook = self.store.notify_webhook(sold=True)
         prefs = self.store.notify_prefs()
         pushed = 0
         if prefs.get("ntExpire", True):
@@ -304,7 +325,9 @@ class Hub:
         queued = False
         if webhook and prefs.get("discord") is not False:
             queued = bool(self.store.enqueue_sold_ping(row, webhook, monitor_name=monitor_name))
-        if queued or pushed:
+        wa = False
+        mailed = await self._notify_email(row, "sold", monitor_name)
+        if queued or pushed or mailed:
             self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
 
     def _should_ping_sold(self, row: dict[str, Any]) -> bool:
@@ -585,25 +608,34 @@ class Hub:
             await send_digest(webhook, items)
         if items:
             await asyncio.to_thread(web_push.notify_digest, self.store, items)
+            try:
+                await mail_notify.notify_digest(self.store, items)
+            except Exception:
+                pass
         self.store.set_meta("digest_last", utc_now())
 
     async def send_digest_test(self, webhook_url: str | None = None) -> dict[str, Any]:
-        if webhook_url is not None:
+        if webhook_url and not self.store.discord_webhook_url():
             self.store.save_app_settings({"digest_webhook": str(webhook_url).strip()})
         settings = self.store.app_settings()
         last = settings.get("digest_last") or ""
         since = last or datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         items = self.store.digest_items(since)
-        webhook = (settings.get("digest_webhook") or "").strip() or self.store.digest_webhook()
+        webhook = self.store.digest_webhook()
         prefs = self.store.notify_prefs()
         sent_discord = False
         if webhook and prefs.get("discord") is not False:
             await send_digest(webhook, items, test=True)
             sent_discord = True
         sent_push = await asyncio.to_thread(web_push.notify_test, self.store)
-        if not sent_discord and not sent_push:
-            raise RuntimeError("Zapněte Discord webhook nebo Push notifikace na tomto zařízení")
-        return {"ok": True, "count": len(items), "push": bool(sent_push), "discord": sent_discord}
+        sent_mail = False
+        try:
+            sent_mail = await mail_notify.notify_digest(self.store, items, test=True)
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        if not sent_discord and not sent_push and not sent_mail:
+            raise RuntimeError("Zapněte Discord, Push nebo e-mailové notifikace")
+        return {"ok": True, "count": len(items), "push": bool(sent_push), "discord": sent_discord, "email": sent_mail}
 
     async def send_test(self, monitor_id: str | None = None) -> dict[str, Any]:
         monitors = self.store.list_monitors()
@@ -613,7 +645,7 @@ class Hub:
             raise RuntimeError("Žádný monitor")
         client = self.client_for(monitor["search_url"])
         listings, _ = await client.fetch_pages(1, newest=True)
-        webhook = webhook_for(monitor.get("search_url") or "", monitor.get("webhook_url"))
+        webhook = self.store.notify_webhook(monitor.get("search_url") or "", monitor.get("webhook_url"))
         template = self.store.get_template(monitor.get("template_id") or "default")
         prefs = self.store.notify_prefs()
         sent_discord = False
@@ -623,9 +655,14 @@ class Hub:
                 await send_text(webhook, f"Test monitoru: {source_name(monitor.get('search_url') or '')} teď nevrátilo žádný listing.")
                 sent_discord = True
             sent_push = await asyncio.to_thread(web_push.notify_test, self.store)
-            if not sent_discord and not sent_push:
-                raise RuntimeError("Zapněte Discord webhook nebo Push notifikace")
-            return {"ok": True, "listing": None, "discord": sent_discord, "push": bool(sent_push)}
+            sent_mail = False
+            try:
+                sent_mail = await self._notify_email({}, "test", monitor.get("name") or "", ignore_quiet=True, prefix="Test monitoru")
+            except Exception:
+                sent_mail = False
+            if not sent_discord and not sent_push and not sent_mail:
+                raise RuntimeError("Zapněte Discord, Push nebo e-mailové notifikace")
+            return {"ok": True, "listing": None, "discord": sent_discord, "push": bool(sent_push), "email": sent_mail}
         listing = listings[0]
         if webhook and prefs.get("discord") is not False:
             await send_listing(
@@ -639,9 +676,21 @@ class Hub:
         sent_push = await self._notify_push(listing, "test", monitor.get("name") or "", ignore_quiet=True)
         if not sent_push and prefs.get("push"):
             sent_push = await asyncio.to_thread(web_push.notify_test, self.store)
-        if not sent_discord and not sent_push:
-            raise RuntimeError("Zapněte Discord webhook nebo Push notifikace")
-        return {"ok": True, "listing": listing.to_dict(), "monitor_id": monitor["id"], "discord": sent_discord, "push": bool(sent_push)}
+        sent_mail = False
+        try:
+            sent_mail = await mail_notify.notify_listing(
+                self.store,
+                listing,
+                "test",
+                monitor.get("name") or "",
+                ignore_quiet=True,
+                prefix="TEST — ukázka formátu, toto není nový zásah.",
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        if not sent_discord and not sent_push and not sent_mail:
+            raise RuntimeError("Zapněte Discord, Push nebo e-mailové notifikace")
+        return {"ok": True, "listing": listing.to_dict(), "monitor_id": monitor["id"], "discord": sent_discord, "push": bool(sent_push), "email": sent_mail}
 
     async def backfill_missing_coords(self) -> None:
         rows = self.store.missing_coords(notified_only=True)
@@ -733,7 +782,8 @@ class Hub:
             "tracked": tracked,
             "new_today": new_today,
             "search_total": catalog.get("listings") or 0,
-            "webhook_ready": any(webhook_for(item.get("search_url") or "", item.get("webhook_url")) for item in monitors)
+            "webhook_ready": bool(self.store.discord_webhook_url())
+            or any(self.store.notify_webhook(item.get("search_url") or "", item.get("webhook_url")) for item in monitors)
             or bool(config.DISCORD_WEBHOOK_URL or config.BEZREALITKY_WEBHOOK_URL),
             "recent": recent,
             "recent_today": recent_today,

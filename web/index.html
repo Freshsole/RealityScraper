@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n54" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n57" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -284,7 +284,6 @@
                 <h2>PROFIL A ODESÍLÁNÍ</h2>
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <label>URL hledání<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/… nebo https://www.bezrealitky.cz/vyhledat?…"></textarea></label>
-                <label>Discord webhook<input id="monitor-webhook" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
                 <label>Šablona zprávy<select id="monitor-template"></select></label>
                 <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
                 <label class="switch-field">
@@ -428,11 +427,37 @@
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Discord notifikace</p>
-                  <p class="set-row-sub">Okamžité zásahy z hlídacích profilů do kanálu</p>
-                  <label class="set-webhook">Webhook<input id="digest-webhook" type="url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" /></label>
+                  <p class="set-row-sub">Soukromý kanál jen pro vás. Všechny hlídací profily chodí na jeden webhook.</p>
+                  <div id="discord-link-box" class="discord-link">
+                    <p id="discord-link-hint" class="set-row-sub">Načítám stav propojení…</p>
+                    <div id="discord-link-setup" hidden>
+                      <p class="set-row-sub">Na Realitify Discord serveru napište tento příkaz:</p>
+                      <code id="discord-link-cmd">/link …</code>
+                      <div class="discord-link-actions">
+                        <button class="btn btn-ghost" id="discord-link-copy" type="button">Kopírovat příkaz</button>
+                        <button class="btn btn-ghost" id="discord-link-refresh" type="button">Nový kód</button>
+                        <a class="set-link" id="discord-invite" href="#" target="_blank" rel="noopener" hidden>Otevřít Discord server</a>
+                      </div>
+                    </div>
+                    <div id="discord-link-ok" hidden>
+                      <p class="set-row-sub">Kanál <strong id="discord-channel-name"></strong> je propojený. Všechny monitory chodí sem.</p>
+                      <button class="btn btn-ghost" id="discord-unlink" type="button">Odpojit Discord</button>
+                    </div>
+                  </div>
                 </div>
                 <label class="switch-field set-switch">
                   <input type="checkbox" id="notify-discord" checked />
+                  <span class="switch-ui" aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="set-row">
+                <div>
+                  <p class="set-row-title">E-mailové notifikace</p>
+                  <p class="set-row-sub">Zásahy na e-mail z registrace. Funguje ve všech tarifech.</p>
+                  <p class="set-row-sub" id="email-hint"></p>
+                </div>
+                <label class="switch-field set-switch">
+                  <input type="checkbox" id="notify-email" checked />
                   <span class="switch-ui" aria-hidden="true"></span>
                 </label>
               </div>
@@ -867,7 +892,7 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n64"></script>
+    <script src="/static/app.js?v=1.2.0-n67"></script>
     <script src="/static/catalog.js?v=1.2.0-n43"></script>
   </body>
 </html>

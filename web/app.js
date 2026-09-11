@@ -29,6 +29,7 @@ let templateState = null;
 let variables = [];
 let sampleVars = {};
 let lastInserted = null;
+let discordPoll = null;
 
 function formatTime(iso) {
   if (!iso) return "ještě ne";
@@ -380,6 +381,14 @@ function applySettingsPanel() {
   const meta = SETTINGS_PANELS[panel];
   document.title = `${meta?.title || "Nastavení"} · Sreality monitor`;
   if (panel === "billing") loadBillingInvoices();
+  if (panel === "notify") {
+    loadDiscordLink().then((data) => {
+      if (data?.bot_ready && !data.linked) startDiscordPoll();
+    });
+    updateEmailHint();
+  } else {
+    stopDiscordPoll();
+  }
 }
 
 function isAppPath(path) {
@@ -1268,7 +1277,7 @@ function fillMonitorForm(item) {
   $("monitor-id").value = item?.id || "";
   $("monitor-name").value = item?.name || "";
   $("monitor-url").value = item?.search_url || "";
-  $("monitor-webhook").value = item?.webhook_url || "";
+  if ($("monitor-webhook")) $("monitor-webhook").value = item?.webhook_url || "";
   $("monitor-template").value = item?.template_id || "default";
   $("monitor-enabled").checked = item ? Boolean(item.enabled) : true;
   if ($("monitor-interval")) $("monitor-interval").value = item?.interval_sec || "";
@@ -1281,7 +1290,6 @@ $("monitor-form").addEventListener("submit", async (event) => {
     {
       name: $("monitor-name").value,
       search_url: $("monitor-url").value,
-      webhook_url: $("monitor-webhook").value,
       template_id: $("monitor-template").value,
       enabled: $("monitor-enabled").checked,
       interval_sec: $("monitor-interval")?.value || "",
@@ -2086,7 +2094,11 @@ checkBtn.addEventListener("click", () => post("/api/monitor/check", undefined, "
 testBtn.addEventListener("click", async () => {
   const data = await post("/api/discord/test");
   if (!data) return;
-  if (data.push && data.discord) toast("Test odeslán na Discord i do push notifikací");
+  if (data.push && data.discord && data.email) toast("Test odeslán na Discord, e-mail i push");
+  else if (data.email && data.discord) toast("Test odeslán na Discord i e-mail");
+  else if (data.email && data.push) toast("Test odeslán na e-mail i do push notifikací");
+  else if (data.push && data.discord) toast("Test odeslán na Discord i do push notifikací");
+  else if (data.email) toast("Test odeslán na e-mail");
   else if (data.push) toast("Test odeslán do push notifikací");
   else if ($("notify-push")?.checked) toast("Discord prošel, push se neodeslal. Zkontrolujte oprávnění oznámení v macOS.", "error");
   else toast("Test odeslán na Discord");
@@ -2307,6 +2319,7 @@ function applyProfile(profile) {
   if ($("nav-avatar")) $("nav-avatar").textContent = initials;
   if ($("nav-user-name")) $("nav-user-name").textContent = shortProfileName(profile);
   if ($("profile-verified")) $("profile-verified").hidden = !profile.email_verified;
+  updateEmailHint();
 }
 
 async function loadAccountProfile() {
@@ -2326,6 +2339,7 @@ function applyNotifyPrefs(prefs) {
     if ($(id)) $(id).checked = Boolean(value);
   };
   set("notify-discord", prefs.discord !== false);
+  set("notify-email", prefs.email !== false);
   set("notify-push", prefs.push);
   set("notify-instant", prefs.instant !== false);
   set("notify-quiet", prefs.quiet);
@@ -2337,11 +2351,13 @@ function applyNotifyPrefs(prefs) {
   if ($("quiet-from")) $("quiet-from").value = prefs.quietFrom || "22:00";
   if ($("quiet-to")) $("quiet-to").value = prefs.quietTo || "07:00";
   updatePushHint();
+  updateEmailHint();
 }
 
 function collectNotifyPrefs() {
   return {
     discord: $("notify-discord")?.checked !== false,
+    email: $("notify-email")?.checked !== false,
     push: Boolean($("notify-push")?.checked),
     instant: $("notify-instant")?.checked !== false,
     quiet: Boolean($("notify-quiet")?.checked),
@@ -2353,6 +2369,15 @@ function collectNotifyPrefs() {
     ntDigest: $("nt-digest")?.checked !== false,
     ntTips: Boolean($("nt-tips")?.checked),
   };
+}
+
+function updateEmailHint() {
+  const hint = $("email-hint");
+  if (!hint) return;
+  const mail = $("profile-email")?.value.trim() || $("set-user-mail")?.textContent.trim() || "";
+  hint.textContent = mail
+    ? `Zprávy půjdou na ${mail}.`
+    : "E-mail bereme z registrace. Doplňte ho v profilu.";
 }
 
 function pushSupported() {
@@ -2441,6 +2466,93 @@ async function disablePush() {
   }
 }
 
+function stopDiscordPoll() {
+  if (!discordPoll) return;
+  clearInterval(discordPoll);
+  discordPoll = null;
+}
+
+function renderDiscordLink(data) {
+  const hint = $("discord-link-hint");
+  const setup = $("discord-link-setup");
+  const ok = $("discord-link-ok");
+  if (!hint || !setup || !ok) return;
+  if (!data?.bot_ready) {
+    hint.hidden = false;
+    hint.textContent = "Doplňte DISCORD_BOT_TOKEN a DISCORD_GUILD_ID v .env, pozvěte bota na server a restartujte appku.";
+    setup.hidden = true;
+    ok.hidden = true;
+    return;
+  }
+  if (data.linked) {
+    hint.hidden = true;
+    setup.hidden = true;
+    ok.hidden = false;
+    if ($("discord-channel-name")) {
+      $("discord-channel-name").textContent = data.channel_name ? `#${data.channel_name}` : "Discord";
+    }
+    stopDiscordPoll();
+    return;
+  }
+  hint.hidden = false;
+  const minutes = Math.max(1, Math.ceil((data.pending_expires_in || 0) / 60));
+  hint.textContent = data.pending_code
+    ? `Kód platí ještě cca ${minutes} min. Na serveru musíte být přihlášení stejným Discord účtem.`
+    : "Vygenerujte kód a na Discord serveru zadejte /link.";
+  setup.hidden = false;
+  ok.hidden = true;
+  if ($("discord-link-cmd")) {
+    $("discord-link-cmd").textContent = data.pending_code ? `/link ${data.pending_code}` : "/link …";
+  }
+  const invite = $("discord-invite");
+  if (invite) {
+    invite.hidden = !data.server_invite;
+    if (data.server_invite) invite.href = data.server_invite;
+  }
+}
+
+async function loadDiscordLink() {
+  const data = await fetch("/api/discord/status").then((res) => (res.ok ? res.json() : null)).catch(() => null);
+  if (data) renderDiscordLink(data);
+  return data;
+}
+
+function startDiscordPoll() {
+  stopDiscordPoll();
+  discordPoll = setInterval(async () => {
+    if (typeof settingsPanel === "function" && settingsPanel() !== "notify") {
+      stopDiscordPoll();
+      return;
+    }
+    const data = await loadDiscordLink();
+    if (data?.linked) stopDiscordPoll();
+  }, 3000);
+}
+
+$("discord-link-copy")?.addEventListener("click", async () => {
+  const text = $("discord-link-cmd")?.textContent?.trim() || "";
+  if (!text || text.endsWith("…")) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Příkaz zkopírován");
+  } catch {
+    toast("Kopírování selhalo", "error");
+  }
+});
+
+$("discord-link-refresh")?.addEventListener("click", async () => {
+  const data = await post("/api/discord/link-code", {}, "Kód je připravený");
+  if (data) {
+    renderDiscordLink(data);
+    startDiscordPoll();
+  }
+});
+
+$("discord-unlink")?.addEventListener("click", async () => {
+  const data = await post("/api/discord/unlink", {}, "Discord odpojen");
+  if (data) renderDiscordLink(data);
+});
+
 async function loadAppSettings() {
   await loadAccountProfile();
   const localNotify = readStored(NOTIFY_KEY, {});
@@ -2461,7 +2573,6 @@ async function loadAppSettings() {
     if (![...sel.options].some((opt) => opt.value === hour)) sel.append(new Option(`${hour}:00`, hour));
     sel.value = hour;
   }
-  if ($("digest-webhook")) $("digest-webhook").value = data.digest_webhook || "";
   renderCommutePoints(data.commute_points || []);
   if (data.notify?.push && Notification.permission === "granted") {
     enablePush().catch(() => {});
@@ -2476,7 +2587,7 @@ $("catalog-sync-now")?.addEventListener("click", () =>
 $("digest-test")?.addEventListener("click", async () => {
   const data = await post(
     "/api/digest/test",
-    { webhook_url: $("digest-webhook")?.value.trim() || "" },
+    {},
     $("notify-push")?.checked ? "Test odeslán (Discord i Push, pokud jsou zapnuté)" : "Test ranního souhrnu odeslán",
   );
   if (data?.push) toast("Zkontrolujte push oznámení v prohlížeči", "info");
@@ -2498,7 +2609,6 @@ $("settings-save")?.addEventListener("click", async () => {
     "/api/settings",
     {
       digest_hour: $("digest-hour")?.value || 8,
-      digest_webhook: $("digest-webhook")?.value.trim() || "",
       commute_points: readCommutePoints(),
       notify,
     },
@@ -2509,6 +2619,7 @@ $("settings-save")?.addEventListener("click", async () => {
     if (saved.notify) applyNotifyPrefs(saved.notify);
   }
   updatePushHint();
+  updateEmailHint();
 });
 
 $("notify-push")?.addEventListener("change", async () => {
@@ -2528,6 +2639,26 @@ $("notify-push")?.addEventListener("change", async () => {
     toast(err.message, "error");
   }
   updatePushHint();
+});
+
+$("notify-email")?.addEventListener("change", async () => {
+  const on = Boolean($("notify-email")?.checked);
+  try {
+    localStorage.setItem(NOTIFY_KEY, JSON.stringify(collectNotifyPrefs()));
+    await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notify: collectNotifyPrefs() }),
+    });
+    if (on) {
+      const sent = await post("/api/email/test", {}, "Test šel na e-mail");
+      if (!sent) toast("E-mail je zapnutý. Test se neodeslal — nastavte SMTP v .env.", "info");
+    } else {
+      toast("E-mailové notifikace jsou vypnuté");
+    }
+  } catch (err) {
+    toast(err.message, "error");
+  }
 });
 
 $("commute-add")?.addEventListener("click", () => {

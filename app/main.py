@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from fastapi import Body, Cookie, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 
@@ -25,6 +25,8 @@ from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
 from app import push as web_push
+from app import email_notify as mail_notify
+from app import whatsapp as wa_notify
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict
 
@@ -46,9 +48,9 @@ async def maybe_auto_update() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    if not config.DISCORD_WEBHOOK_URL:
-        hub.last_error = "Chybí DISCORD_WEBHOOK_URL v .env"
     await hub.start()
+    if not config.DISCORD_BOT_TOKEN and not config.DISCORD_WEBHOOK_URL:
+        hub.last_error = "Chybí Discord bot (DISCORD_BOT_TOKEN, DISCORD_GUILD_ID) nebo DISCORD_WEBHOOK_URL"
     asyncio.create_task(maybe_auto_update())
     try:
         yield
@@ -314,6 +316,99 @@ async def discord_test(payload: dict[str, Any] | None = Body(None)) -> dict:
         raise HTTPException(502, f"Discord test selhal: {exc}") from exc
 
 
+@app.get("/api/discord/status")
+async def discord_link_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    return user_account.discord_status(hub.store)
+
+
+@app.post("/api/discord/link-code")
+async def discord_link_code(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    try:
+        return user_account.create_discord_link_code(hub.store)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/discord/unlink")
+async def discord_unlink(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    return user_account.unlink_discord(hub.store)
+
+
+@app.post("/api/email/test")
+async def email_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    try:
+        sent = await mail_notify.notify_listing(
+            hub.store,
+            {"name": "Testovací zpráva z Realitify"},
+            "test",
+            ignore_quiet=True,
+        )
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if not sent:
+        raise HTTPException(400, "Zapněte e-mail a na serveru nastavte SMTP_HOST a SMTP_FROM")
+    return {"ok": True, "email": mail_notify.account_email(hub.store)}
+
+
+@app.get("/api/whatsapp/status")
+async def whatsapp_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    return wa_notify.status(hub.store)
+
+
+@app.post("/api/whatsapp/phone")
+async def whatsapp_phone(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _current_user(realitify_session)
+    if not wa_notify.plan_allows(hub.store):
+        raise HTTPException(403, "WhatsApp notifikace jsou jen v tarifu PRO")
+    try:
+        wa_notify.save_phone(hub.store, str((payload or {}).get("phone") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return wa_notify.status(hub.store)
+
+
+@app.post("/api/whatsapp/test")
+async def whatsapp_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _current_user(realitify_session)
+    if not wa_notify.plan_allows(hub.store):
+        raise HTTPException(403, "WhatsApp notifikace jsou jen v tarifu PRO")
+    try:
+        sent = await wa_notify.notify_listing(
+            hub.store,
+            {"name": "Testovací zpráva z Realitify"},
+            "test",
+            ignore_quiet=True,
+        )
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+    if not sent:
+        raise HTTPException(400, "Zapněte WhatsApp, vyplňte číslo a na serveru nastavte WHATSAPP_TOKEN")
+    return {"ok": True, **wa_notify.status(hub.store)}
+
+
+@app.get("/api/whatsapp/webhook")
+async def whatsapp_webhook_verify(request: Request) -> Response:
+    mode = request.query_params.get("hub.mode") or ""
+    token = request.query_params.get("hub.verify_token") or ""
+    challenge = request.query_params.get("hub.challenge") or ""
+    if mode == "subscribe" and config.WHATSAPP_VERIFY_TOKEN and token == config.WHATSAPP_VERIFY_TOKEN:
+        return PlainTextResponse(challenge)
+    raise HTTPException(403, "WhatsApp verify selhal")
+
+
+@app.post("/api/whatsapp/webhook")
+async def whatsapp_webhook_event(payload: dict[str, Any] | None = Body(None)) -> dict:
+    return {"ok": True}
+
+
 @app.post("/api/digest/test")
 async def digest_test(payload: dict[str, Any] | None = Body(None)) -> dict:
     try:
@@ -375,6 +470,11 @@ async def push_test() -> dict:
     if not sent:
         raise HTTPException(400, "Na tomto zařízení ještě není aktivní odběr push notifikací")
     return {"ok": True, "sent": sent}
+
+
+@app.get("/api/public/gone-fast")
+async def public_gone_fast() -> dict:
+    return {"items": hub.store.public_gone_fast_rentals(days=3, limit=4)}
 
 
 @app.get("/api/listings")

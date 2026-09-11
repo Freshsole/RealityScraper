@@ -2402,6 +2402,24 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .set-switch { margin: 0 !important; }
 .set-switch input:checked + .switch-ui { background: #163300; }
 .set-webhook { margin-top: 10px; max-width: 420px; }
+.discord-link { margin-top: 10px; max-width: 480px; }
+.discord-link code {
+  display: block;
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: #f4f6f2;
+  border: 1px solid #dfe4d9;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.discord-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
 .set-chip-pro {
   display: inline-block;
   background: var(--mint);

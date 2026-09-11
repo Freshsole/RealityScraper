@@ -4,7 +4,7 @@ import json
 import sqlite3
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -24,6 +24,99 @@ def local_day_start() -> str:
     now = datetime.now().astimezone()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return start.astimezone(timezone.utc).isoformat()
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_cs_datetime(value: datetime, *, time: bool = True) -> str:
+    stamp = f"{value.day}. {value.month}. {value.year}"
+    if time and not (value.hour == 0 and value.minute == 0 and value.second == 0):
+        stamp += f" v {value.strftime('%H:%M')}"
+    return stamp
+
+
+def _format_cs_duration(seconds: float) -> str:
+    minutes = max(1, int(round(seconds / 60)))
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = seconds / 3600
+    rounded = round(hours * 2) / 2
+    if abs(rounded - round(rounded)) < 0.05:
+        return f"{int(round(rounded))} h"
+    text = f"{rounded:.1f}".replace(".", ",")
+    return f"{text} h"
+
+
+def _is_rental_row(row: dict[str, Any]) -> bool:
+    extras = row.get("extras") or {}
+    if isinstance(extras, str):
+        try:
+            extras = json.loads(extras) if extras else {}
+        except json.JSONDecodeError:
+            extras = {}
+    if not isinstance(extras, dict):
+        extras = {}
+    url = (row.get("url") or "").lower()
+    label = (row.get("price_label") or "").lower()
+    offer = str(extras.get("offer") or "")
+    sale = offer == "Prodej" or "/prodej/" in url or "nemovitost" in label or "kč/ks" in label
+    rent = offer == "Pronájem" or "/pronajem/" in url or "měsíc" in label or "mesic" in label
+    return rent and not sale
+
+
+def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
+    if not _is_rental_row(row):
+        return None
+    try:
+        price = int(row["price_czk"]) if row.get("price_czk") is not None else 0
+    except (TypeError, ValueError):
+        price = 0
+    if price < 4000 or price > 120000:
+        return None
+    disposition = (row.get("disposition") or "").strip()
+    if "+" not in disposition:
+        return None
+    added = _parse_iso(row.get("created_on")) or _parse_iso(row.get("first_seen"))
+    gone = _parse_iso(row.get("last_seen"))
+    first = _parse_iso(row.get("first_seen"))
+    if added and added.hour == 0 and added.minute == 0 and added.second == 0 and first:
+        added = first
+    if not added or not gone:
+        return None
+    seconds = (gone - added).total_seconds()
+    if seconds < 30 * 60 or seconds > 72 * 3600:
+        return None
+    locality = (row.get("locality") or "").strip()
+    place = locality.split("–")[-1].split("-")[-1].strip().lower() if locality else ""
+    area = row.get("area_m2")
+    spec = disposition if not area else f"{disposition} • {int(area)} m²"
+    label = (row.get("price_label") or "").replace("měsíc", "měs.").replace("mesic", "měs.")
+    if not label and price:
+        label = f"{price:,} Kč/měs.".replace(",", " ")
+    image = cdn_image_url(row.get("image_url")) or row.get("image_url")
+    return {
+        "locality": locality,
+        "price": label,
+        "spec": spec,
+        "badge": f"PRONAJATO ZA {_format_cs_duration(seconds)}",
+        "when": f"Přidáno {_format_cs_datetime(added)} · Pronajato {_format_cs_datetime(gone)}",
+        "image": image,
+        "_hours": seconds / 3600,
+        "_url": (row.get("url") or "").strip(),
+        "_place": place or locality.lower(),
+        "_gone": gone.strftime("%Y-%m-%d %H:%M"),
+    }
 
 
 def _is_discord_webhook(url: str) -> bool:
@@ -592,7 +685,7 @@ class Store:
                 raise ValueError("Limit tarifu je naplněný. Upgradujte plán, abyste tohoto hlídacího psa znovu aktivovali.")
         now = utc_now()
         search_url = (payload.get("search_url") or "").strip()
-        webhook = (payload.get("webhook_url") or "").strip() or webhook_for(search_url)
+        webhook = self.discord_webhook_url() or (payload.get("webhook_url") or "").strip() or webhook_for(search_url)
         interval = payload.get("interval_sec")
         try:
             interval_sec = max(20, int(interval)) if interval not in (None, "") else None
@@ -694,7 +787,7 @@ class Store:
             watch_prefs = {}
         return {
             "digest_hour": max(0, min(23, hour)),
-            "digest_webhook": (self.get_meta("digest_webhook") or "").strip(),
+            "digest_webhook": "" if self.discord_webhook_url() else (self.get_meta("digest_webhook") or "").strip(),
             "digest_last": self.get_meta("digest_last"),
             "commute_points": points[:2],
             "watch_prefs": watch_prefs,
@@ -706,6 +799,8 @@ class Store:
         defaults = {
             "discord": True,
             "push": False,
+            "email": True,
+            "whatsapp": False,
             "instant": True,
             "quiet": False,
             "quietFrom": "22:00",
@@ -726,6 +821,8 @@ class Store:
         out = {**defaults, **data}
         out["discord"] = bool(out.get("discord"))
         out["push"] = bool(out.get("push"))
+        out["email"] = bool(out.get("email"))
+        out["whatsapp"] = False
         out["instant"] = bool(out.get("instant"))
         out["quiet"] = bool(out.get("quiet"))
         for key in ("ntNew", "ntPrice", "ntExpire", "ntDigest", "ntTips"):
@@ -740,6 +837,8 @@ class Store:
             for key in current:
                 if key in payload:
                     current[key] = payload[key]
+        current["whatsapp"] = False
+        current["email"] = bool(current.get("email"))
         self.set_meta("notify_prefs", json.dumps(current, ensure_ascii=False))
         return current
 
@@ -792,8 +891,34 @@ class Store:
         self.set_meta("billing", json.dumps(data, ensure_ascii=False))
         return self.billing_record()
 
+    def discord_webhook_url(self) -> str:
+        raw = self.get_meta("account") or "{}"
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            return ""
+        return (data.get("discord_webhook_url") or "").strip()
+
+    def notify_webhook(self, search_url: str = "", monitor_webhook: str | None = None, *, sold: bool = False) -> str:
+        linked = self.discord_webhook_url()
+        if linked:
+            return linked
+        if sold:
+            return config.SOLD_WEBHOOK_URL
+        return webhook_for(search_url, monitor_webhook)
+
+    def apply_discord_webhook(self, url: str) -> None:
+        hooked = (url or "").strip()
+        if not hooked:
+            return
+        with self.connect() as conn:
+            conn.execute("UPDATE monitors SET webhook_url = ?", (hooked,))
+        self.set_meta("digest_webhook", hooked)
+
     def digest_webhook(self) -> str:
-        return (self.get_meta("digest_webhook") or "").strip() or config.DISCORD_WEBHOOK_URL
+        return self.discord_webhook_url() or (self.get_meta("digest_webhook") or "").strip() or config.DISCORD_WEBHOOK_URL
 
     def save_app_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "digest_hour" in payload:
@@ -802,7 +927,7 @@ class Store:
             except (TypeError, ValueError):
                 hour = 8
             self.set_meta("digest_hour", str(hour))
-        if "digest_webhook" in payload:
+        if "digest_webhook" in payload and not self.discord_webhook_url():
             url = str(payload.get("digest_webhook") or "").strip()
             if url and not _is_discord_webhook(url):
                 raise ValueError("Webhook musí být Discord URL")
@@ -2257,6 +2382,50 @@ class Store:
             data["gone_at"] = now
             data["last_kind"] = "sold"
             return data
+
+    def public_gone_fast_rentals(self, *, days: int = 3, limit: int = 4) -> list[dict[str, Any]]:
+        since = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT locality, disposition, area_m2, price_czk, price_label, first_seen, last_seen,
+                       created_on, image_url, extras, url
+                FROM listings
+                WHERE IFNULL(gone, 0) = 1
+                  AND IFNULL(image_url, '') != ''
+                  AND last_seen IS NOT NULL
+                  AND last_seen >= ?
+                ORDER BY last_seen DESC
+                """,
+                (since,),
+            ).fetchall()
+        ranked: list[tuple[float, dict[str, Any], str, str, str]] = []
+        seen_url: set[str] = set()
+        for row in rows:
+            item = _gone_rental_card(dict(row))
+            if not item:
+                continue
+            url = item.pop("_url", "")
+            place = item.pop("_place", "")
+            gone_key = item.pop("_gone", "")
+            if not url or url in seen_url:
+                continue
+            seen_url.add(url)
+            ranked.append((float(item.pop("_hours")), item, url, place, gone_key))
+        ranked.sort(key=lambda row: row[0])
+        picked: list[dict[str, Any]] = []
+        seen_place: set[str] = set()
+        seen_gone: set[str] = set()
+        for _hours, item, _url, place, gone_key in ranked:
+            if place in seen_place or (gone_key and gone_key in seen_gone):
+                continue
+            seen_place.add(place)
+            if gone_key:
+                seen_gone.add(gone_key)
+            picked.append(item)
+            if len(picked) >= limit:
+                break
+        return picked
 
     def mark_sold_notified(self, monitor_id: str, listing_id: int) -> None:
         with self.connect() as conn:
