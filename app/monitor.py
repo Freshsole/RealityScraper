@@ -174,16 +174,24 @@ class Hub:
         errors: list[str] = []
         try:
             async with self._portal_gate:
-                listings, total = await client.fetch_pages(config.POLL_PAGES, newest=True)
-            for listing in listings:
+                if (job.get("kind") or "") == "monitor_live":
+                    listings, total = await client.fetch_all(newest=True, max_pages=40)
+                    notify_limit = max(config.POLL_PAGES * 20, 30)
+                else:
+                    listings, total = await client.fetch_pages(config.POLL_PAGES, newest=True)
+                    notify_limit = len(listings)
+            for index, listing in enumerate(listings):
                 try:
                     result = self.store.upsert_catalog_listing(listing, kind="refresh")
                     targets = self.store.matching_monitors(listing, job["id"])
                     if not targets:
                         targets = monitors
-                    alert = await self._classify(client, listing, result.get("prev"))
                     for monitor in targets:
                         self.store.add_monitor_hit(monitor["id"], result["listing_key"])
+                    if index >= notify_limit:
+                        continue
+                    alert = await self._classify(client, listing, result.get("prev"))
+                    for monitor in targets:
                         if alert is None:
                             continue
                         if alert.kind == "refresh" and not config.NOTIFY_REFRESHES:
@@ -226,12 +234,24 @@ class Hub:
                     errors.append(f"{listing.id}: {exc}")
             for monitor in monitors:
                 await self._probe_sold(monitor, client, self.store.stale_listings(monitor["id"], days=1, limit=5))
+                current = self.store.get_monitor(monitor["id"]) or monitor
+                try:
+                    inventory = json.loads(current.get("last_inventory") or "{}")
+                except json.JSONDecodeError:
+                    inventory = {}
+                if not isinstance(inventory, dict):
+                    inventory = {}
+                portal = str(job.get("portal") or "sreality")
+                inventory[portal] = {"total": int(total or 0), "found": len(listings)}
+                last_total = sum(int((row or {}).get("total") or 0) for row in inventory.values() if isinstance(row, dict))
+                last_found = sum(int((row or {}).get("found") or 0) for row in inventory.values() if isinstance(row, dict))
                 self.store.update_monitor_stats(
                     monitor["id"],
                     last_check=utc_now(),
                     last_error="; ".join(errors) if errors else None,
-                    last_total=total,
-                    last_found=len(listings),
+                    last_total=last_total,
+                    last_found=last_found,
+                    last_inventory=json.dumps(inventory, ensure_ascii=False),
                 )
             return {
                 "job_id": job["id"],

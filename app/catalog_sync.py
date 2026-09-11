@@ -25,6 +25,19 @@ KRAJ_HINTS = {
     "zlinsky-kraj": ["zlín", "zlin", "uherské hradiště", "vsetín", "kroměříž"],
 }
 
+PRAGUE_DISTRICTS = {
+    "1": ["stare mesto", "josefov", "mala strana", "hradcany", "nove mesto"],
+    "2": ["vinohrady", "nove mesto", "vysehrad", "nusle"],
+    "3": ["zizkov", "vinohrady"],
+    "4": ["nusle", "podoli", "branik", "hodkovicky", "krc", "lhotka", "kamyk", "kunratice"],
+    "5": ["smichov", "kosire", "motol", "radlice", "jinonice", "hlubocepy"],
+    "6": ["dejvice", "bubenec", "stresovice", "brevnov", "veleslavin", "vokovice", "liboc", "ruzyne", "lysolaje", "sedlec", "suchdol", "nebusice"],
+    "7": ["holesovice", "bubny", "letna", "troja"],
+    "8": ["karlin", "liben", "bohnice", "kobylisy", "cimice", "dablice", "dolni chabry", "troja"],
+    "9": ["vysocany", "prosek", "strizkov", "hloubetin", "hrdlorezy", "kbely"],
+    "10": ["vrsovice", "strasnice", "malesice", "zabehlice", "michle"],
+}
+
 
 def fold(value: str) -> str:
     return (
@@ -203,17 +216,8 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
             return False
     sizes = [str(item).casefold() for item in (data.get("sizes") or []) if item]
     if sizes:
-        disp = disposition.casefold().replace(" ", "")
-        ok = False
-        for size in sizes:
-            label = size.replace("disp_", "").replace("_kk", "+kk").replace("_", "+").casefold()
-            if label in disp or size.casefold() in disp:
-                ok = True
-                break
-            if "garson" in size and "garson" in disp:
-                ok = True
-                break
-        if not ok:
+        disp = fold(disposition).replace(" ", "")
+        if disp and not _disposition_matches(disp, sizes):
             return False
     districts = [str(item) for item in (data.get("districts") or []) if item]
     if districts and not _locality_matches(locality, districts):
@@ -272,6 +276,36 @@ def monitor_search_targets(monitor: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
+def _disposition_matches(disp: str, sizes: list[str]) -> bool:
+    compact = disp.replace("pokoj", "").replace("bytu", "")
+    for size in sizes:
+        raw = size.replace("disp_", "")
+        if "6-a-vice" in raw or raw in {"disp_6_1", "disp_6_kk", "disp_7_1", "disp_7_kk"}:
+            if any(token in compact for token in ("6+", "7+", "8+", "9+", "6kk", "7kk")):
+                return True
+            continue
+        if "atyp" in raw or raw in {"ostatni", "disp_ostatni"}:
+            if "atyp" in compact:
+                return True
+            continue
+        if "garson" in raw or raw == "pokoj":
+            if "garson" in compact or "pokoj" in fold(disp):
+                return True
+            continue
+        label = raw.replace("_kk", "+kk").replace("_", "+")
+        if label in compact or raw.replace("_", "") in compact.replace("+", ""):
+            return True
+    return False
+
+
+def _prague_district_number(district: str) -> str | None:
+    raw = str(district)
+    slug = localities.OSM_TO_SREALITY.get(raw) or raw
+    if slug.startswith("praha-") and slug.split("-")[-1].isdigit():
+        return slug.split("-")[-1]
+    return None
+
+
 def _locality_matches(locality: str, districts: list[str]) -> bool:
     text = fold(locality)
     if not text:
@@ -282,9 +316,11 @@ def _locality_matches(locality: str, districts: list[str]) -> bool:
         return True
     for district in districts:
         raw = str(district)
-        if raw.startswith("praha-") and raw.split("-")[-1].isdigit():
-            number = raw.split("-")[-1]
-            if f"praha {number}" in fold(locality) or f"praha-{number}" in text:
+        number = _prague_district_number(raw)
+        if number:
+            if f"praha {number}" in text or f"praha-{number}" in text or f"praha{number}" in text.replace(" ", ""):
+                return True
+            if any(fold(part) in text for part in PRAGUE_DISTRICTS.get(number, [])):
                 return True
             continue
         if raw in KRAJ_HINTS:
