@@ -795,6 +795,10 @@ class Hub:
             "catalog_sync": catalog,
             "catalog_running": self.catalog_running,
             "billing": billing_state(self.store),
+            "storage": {
+                "path": str(config.DB_PATH),
+                "persistent": config.PERSISTENT_STORAGE,
+            },
         }
         # #region agent log
         try:

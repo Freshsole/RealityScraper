@@ -48,8 +48,14 @@ async def maybe_auto_update() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    print(f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE}", flush=True)
     await hub.start()
-    if not config.DISCORD_BOT_TOKEN and not config.DISCORD_WEBHOOK_URL:
+    if config.ON_RAILWAY and not config.PERSISTENT_STORAGE:
+        hub.last_error = (
+            "Databáze není na Railway Volume. Po každém deployi se smaže účet. "
+            "V Railway → Volume přidej disk a připoj ho na /data."
+        )
+    elif not config.DISCORD_BOT_TOKEN and not config.DISCORD_WEBHOOK_URL:
         hub.last_error = "Chybí Discord bot (DISCORD_BOT_TOKEN, DISCORD_GUILD_ID) nebo DISCORD_WEBHOOK_URL"
     asyncio.create_task(maybe_auto_update())
     try:

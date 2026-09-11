@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -83,6 +84,52 @@ WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
 WHATSAPP_TEMPLATE = os.getenv("WHATSAPP_TEMPLATE", "").strip()
 WHATSAPP_TEMPLATE_LANG = os.getenv("WHATSAPP_TEMPLATE_LANG", "cs").strip() or "cs"
 WHATSAPP_BUSINESS_NUMBER = os.getenv("WHATSAPP_BUSINESS_NUMBER", "").strip()
-DATA_DIR = ROOT / "data"
+
+
+def _on_railway() -> bool:
+    return bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+
+
+def _resolve_data_dir() -> Path:
+    explicit = os.getenv("DATA_DIR", "").strip()
+    if explicit:
+        return Path(explicit)
+    mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    if mount:
+        return Path(mount)
+    if _on_railway():
+        for candidate in (Path("/data"), Path("/mnt/data")):
+            try:
+                if candidate.is_dir() and candidate.is_mount():
+                    return candidate
+            except OSError:
+                continue
+    return ROOT / "data"
+
+
+def _migrate_legacy_data(dest: Path) -> None:
+    src = ROOT / "data"
+    try:
+        if not src.is_dir() or src.resolve() == dest.resolve():
+            return
+    except OSError:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("monitor.sqlite", "monitor.sqlite-wal", "monitor.sqlite-shm", "vapid.json", "vapid-private.pem"):
+        from_path = src / name
+        to_path = dest / name
+        if from_path.exists() and not to_path.exists():
+            shutil.copy2(from_path, to_path)
+
+
+DATA_DIR = _resolve_data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+_migrate_legacy_data(DATA_DIR)
 DB_PATH = DATA_DIR / "monitor.sqlite"
+ON_RAILWAY = _on_railway()
+try:
+    _data_is_mount = DATA_DIR.is_mount()
+except OSError:
+    _data_is_mount = False
+PERSISTENT_STORAGE = (not ON_RAILWAY) or bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()) or _data_is_mount
 WEB_DIR = resource_root() / "web"
