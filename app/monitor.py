@@ -123,9 +123,9 @@ class Hub:
                 if not monitor.get("seeded"):
                     self.store.seed_monitor_from_catalog(monitor)
                     self.store.set_monitor_seeded(monitor["id"], True)
-                job = self.store.attach_monitor_live_job(monitor)
-                bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
-                bucket["monitors"].append(monitor)
+                for job in self.store.attach_monitor_live_jobs(monitor):
+                    bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
+                    bucket["monitors"].append(monitor)
             results = []
             for bucket in groups.values():
                 if not any(self._monitor_due(item) for item in bucket["monitors"]):
@@ -150,9 +150,9 @@ class Hub:
                 if not monitor.get("seeded"):
                     self.store.seed_monitor_from_catalog(monitor)
                     self.store.set_monitor_seeded(monitor["id"], True)
-                job = self.store.attach_monitor_live_job(monitor)
-                bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
-                bucket["monitors"].append(monitor)
+                for job in self.store.attach_monitor_live_jobs(monitor):
+                    bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
+                    bucket["monitors"].append(monitor)
             results = []
             for bucket in groups.values():
                 results.append(await self.check_live_job(bucket["job"], bucket["monitors"]))
@@ -164,8 +164,9 @@ class Hub:
         if not monitor.get("seeded"):
             self.store.seed_monitor_from_catalog(monitor)
             self.store.set_monitor_seeded(monitor["id"], True)
-        job = self.store.attach_monitor_live_job(monitor)
-        return await self.check_live_job(job, [monitor])
+        jobs = self.store.attach_monitor_live_jobs(monitor)
+        results = [await self.check_live_job(job, [monitor]) for job in jobs]
+        return results[0] if results else {"ok": True, "scanned": 0}
 
     async def check_live_job(self, job: dict[str, Any], monitors: list[dict[str, Any]]) -> dict[str, Any]:
         client = self.client_for(job["search_url"])

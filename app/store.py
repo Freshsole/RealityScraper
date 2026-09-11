@@ -10,9 +10,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app import config
-from app.bezrealitky import default_search_url as bezrealitky_default_url
 from app.sreality import IMAGE_TRANSFORM, Listing, cdn_image_url, google_maps_url, listing_from_dict
-from app.sources import webhook_for
+from app.sources import is_discord_webhook, usable_discord_webhook, webhook_for
 from app.templates import default_template_config
 
 
@@ -120,13 +119,7 @@ def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _is_discord_webhook(url: str) -> bool:
-    parsed = urlparse(url)
-    host = (parsed.hostname or "").lower()
-    return (
-        parsed.scheme == "https"
-        and "/api/webhooks/" in (parsed.path or "")
-        and (host == "discord.com" or host == "discordapp.com" or host.endswith(".discord.com"))
-    )
+    return is_discord_webhook(url)
 
 
 def listing_key(url: str) -> str:
@@ -428,27 +421,29 @@ class Store:
                     now,
                 ),
             )
-        existing_br = conn.execute("SELECT webhook_url FROM monitors WHERE id = 'bezrealitky'").fetchone()
-        if not existing_br:
-            conn.execute(
-                """
-                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
-                VALUES (?, ?, ?, ?, ?, 1, 0, ?)
-                """,
-                (
-                    "bezrealitky",
-                    "Bezrealitky Praha",
-                    bezrealitky_default_url(),
-                    config.BEZREALITKY_WEBHOOK_URL,
-                    "default",
-                    now,
-                ),
-            )
-        elif not (existing_br["webhook_url"] or "").strip() and config.BEZREALITKY_WEBHOOK_URL:
-            conn.execute(
-                "UPDATE monitors SET webhook_url = ? WHERE id = 'bezrealitky'",
-                (config.BEZREALITKY_WEBHOOK_URL,),
-            )
+        migrated = conn.execute("SELECT value FROM meta WHERE key = 'monitor_portals_v1'").fetchone()
+        if not migrated:
+            conn.execute("UPDATE monitors SET portals = 'all', seeded = 0 WHERE id = 'default'")
+            conn.execute("UPDATE monitors SET enabled = 0 WHERE id = 'bezrealitky'")
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitor_portals_v1', '1')")
+        crossed = conn.execute("SELECT value FROM meta WHERE key = 'monitor_portals_v2'").fetchone()
+        if not crossed:
+            conn.execute("UPDATE monitors SET portals = 'all', seeded = 0 WHERE id = 'default'")
+            conn.execute("UPDATE monitors SET enabled = 0 WHERE id = 'bezrealitky'")
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitor_portals_v2', '1')")
+        unified = conn.execute("SELECT value FROM meta WHERE key = 'monitor_portals_v3'").fetchone()
+        if not unified:
+            conn.execute("UPDATE monitors SET portals = 'all', seeded = 0 WHERE id = 'default'")
+            enabled = conn.execute("SELECT COUNT(*) AS n FROM monitors WHERE enabled = 1").fetchone()["n"]
+            if enabled and enabled > 1:
+                conn.execute(
+                    """
+                    UPDATE monitors SET enabled = 0
+                    WHERE id = 'bezrealitky'
+                       OR lower(name) IN ('bezrealitky praha', 'bezrealitky')
+                    """
+                )
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitor_portals_v3', '1')")
 
     def _ensure_ping_queue(self, conn: sqlite3.Connection) -> None:
         conn.executescript(
@@ -488,6 +483,14 @@ class Store:
             """
         )
         conn.execute("UPDATE ping_queue SET status = 'queued' WHERE status = 'sending'")
+        conn.execute(
+            """
+            UPDATE ping_queue
+            SET status = 'failed', error = 'Ukázkový Discord webhook ID/TOKEN. Propoj Discord přes /link nebo nastav skutečnou DISCORD_WEBHOOK_URL.'
+            WHERE status IN ('queued', 'sending')
+              AND (webhook_url LIKE '%webhooks/ID/TOKEN%' OR webhook_url LIKE '%webhooks/id/token%')
+            """
+        )
         self._backfill_channel_sent(conn)
 
     def _ensure_push(self, conn: sqlite3.Connection) -> None:
@@ -685,6 +688,12 @@ class Store:
                 raise ValueError("Limit tarifu je naplněný. Upgradujte plán, abyste tohoto hlídacího psa znovu aktivovali.")
         now = utc_now()
         search_url = (payload.get("search_url") or "").strip()
+        from app.catalog_sync import normalize_portals
+
+        if "portals" in payload:
+            portals = normalize_portals(payload.get("portals"))
+        else:
+            portals = normalize_portals((existing or {}).get("portals"))
         webhook = self.discord_webhook_url() or (payload.get("webhook_url") or "").strip() or webhook_for(search_url)
         interval = payload.get("interval_sec")
         try:
@@ -694,15 +703,16 @@ class Store:
         with self.connect() as conn:
             conn.execute(
                 """
-                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, interval_sec, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, interval_sec, portals, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name = excluded.name,
                     search_url = excluded.search_url,
                     webhook_url = excluded.webhook_url,
                     template_id = excluded.template_id,
                     enabled = excluded.enabled,
-                    interval_sec = excluded.interval_sec
+                    interval_sec = excluded.interval_sec,
+                    portals = excluded.portals
                 """,
                 (
                     monitor_id,
@@ -712,13 +722,14 @@ class Store:
                     payload.get("template_id") or "default",
                     1 if payload.get("enabled", True) else 0,
                     interval_sec,
+                    portals,
                     now,
                 ),
             )
-        url_changed = (existing is None) or existing.get("search_url") != search_url
+        url_changed = (existing is None) or existing.get("search_url") != search_url or existing.get("portals") != portals
         saved = self.get_monitor(monitor_id)
         assert saved
-        self.attach_monitor_live_job(saved)
+        self.attach_monitor_live_jobs(saved)
         if url_changed:
             self.seed_monitor_from_catalog(saved)
         self.set_monitor_seeded(monitor_id, True)
@@ -899,15 +910,15 @@ class Store:
             data = {}
         if not isinstance(data, dict):
             return ""
-        return (data.get("discord_webhook_url") or "").strip()
+        return usable_discord_webhook(data.get("discord_webhook_url") or "")
 
     def notify_webhook(self, search_url: str = "", monitor_webhook: str | None = None, *, sold: bool = False) -> str:
         linked = self.discord_webhook_url()
         if linked:
             return linked
         if sold:
-            return config.SOLD_WEBHOOK_URL
-        return webhook_for(search_url, monitor_webhook)
+            return usable_discord_webhook(config.SOLD_WEBHOOK_URL)
+        return usable_discord_webhook(webhook_for(search_url, monitor_webhook))
 
     def apply_discord_webhook(self, url: str) -> None:
         hooked = (url or "").strip()
@@ -918,7 +929,11 @@ class Store:
         self.set_meta("digest_webhook", hooked)
 
     def digest_webhook(self) -> str:
-        return self.discord_webhook_url() or (self.get_meta("digest_webhook") or "").strip() or config.DISCORD_WEBHOOK_URL
+        return (
+            self.discord_webhook_url()
+            or usable_discord_webhook(self.get_meta("digest_webhook") or "")
+            or usable_discord_webhook(config.DISCORD_WEBHOOK_URL)
+        )
 
     def save_app_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         if "digest_hour" in payload:
@@ -1137,24 +1152,36 @@ class Store:
             conn.execute(f"UPDATE scrape_jobs SET {assignments} WHERE id = ?", (*fields.values(), job_id))
 
     def attach_monitor_live_job(self, monitor: dict[str, Any]) -> dict[str, Any]:
+        jobs = self.attach_monitor_live_jobs(monitor)
+        if jobs:
+            return jobs[0]
         from app.catalog_sync import normalize_search_url
         from app.sources import is_bezrealitky
 
         url = normalize_search_url(monitor.get("search_url") or "")
         portal = "bezrealitky" if is_bezrealitky(url) else "sreality"
-        job = self.ensure_scrape_job(
-            kind="monitor_live",
-            portal=portal,
-            shard_key=f"live:{url}",
-            search_url=url,
-        )
+        return self.ensure_scrape_job(kind="monitor_live", portal=portal, shard_key=f"live:{url}", search_url=url)
+
+    def attach_monitor_live_jobs(self, monitor: dict[str, Any]) -> list[dict[str, Any]]:
+        from app.catalog_sync import monitor_search_targets
+
+        jobs = [
+            self.ensure_scrape_job(
+                kind="monitor_live",
+                portal=target["portal"],
+                shard_key=f"live:{target['search_url']}",
+                search_url=target["search_url"],
+            )
+            for target in monitor_search_targets(monitor)
+        ]
         with self.connect() as conn:
             conn.execute("DELETE FROM monitor_jobs WHERE monitor_id = ?", (monitor["id"],))
-            conn.execute(
-                "INSERT OR IGNORE INTO monitor_jobs(monitor_id, job_id) VALUES (?, ?)",
-                (monitor["id"], job["id"]),
-            )
-        return job
+            for job in jobs:
+                conn.execute(
+                    "INSERT OR IGNORE INTO monitor_jobs(monitor_id, job_id) VALUES (?, ?)",
+                    (monitor["id"], job["id"]),
+                )
+        return jobs
 
     def monitors_for_job(self, job_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -1169,20 +1196,19 @@ class Store:
         return [self._monitor_row(row) for row in rows]
 
     def seed_monitor_from_catalog(self, monitor: dict[str, Any]) -> int:
-        from app.catalog_sync import listing_matches_search
+        from app.catalog_sync import listing_matches_monitor
 
-        url = monitor.get("search_url") or ""
         matched = 0
         with self.connect() as conn:
             rows = conn.execute("SELECT listing_key, url, price_czk, price_label, area_m2, locality, disposition, extras, created_on FROM catalog_listings WHERE IFNULL(gone, 0) = 0").fetchall()
         for row in rows:
-            if listing_matches_search(dict(row), url):
+            if listing_matches_monitor(dict(row), monitor):
                 self.add_monitor_hit(monitor["id"], row["listing_key"])
                 matched += 1
         return matched
 
     def matching_monitors(self, listing: Listing, job_id: str | None = None) -> list[dict[str, Any]]:
-        from app.catalog_sync import listing_matches_search
+        from app.catalog_sync import listing_matches_monitor
 
         found: dict[str, dict[str, Any]] = {}
         if job_id:
@@ -1193,7 +1219,7 @@ class Store:
             if not item.get("enabled") or item["id"] in found:
                 continue
             try:
-                matched = listing_matches_search(listing, item.get("search_url") or "")
+                matched = listing_matches_monitor(listing, item)
             except Exception:
                 continue
             if matched:
@@ -1616,6 +1642,9 @@ class Store:
             conn.execute("ALTER TABLE monitors ADD COLUMN interval_sec INTEGER")
         if "last_inventory" not in cols:
             conn.execute("ALTER TABLE monitors ADD COLUMN last_inventory TEXT")
+        if "portals" not in cols:
+            conn.execute("ALTER TABLE monitors ADD COLUMN portals TEXT NOT NULL DEFAULT 'all'")
+            conn.execute("UPDATE monitors SET portals = 'all' WHERE IFNULL(portals, '') = ''")
 
     def _fix_sreality_images(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -2237,7 +2266,7 @@ class Store:
         webhook_url: str,
         payload: dict[str, Any],
     ) -> bool:
-        webhook_url = (webhook_url or "").strip()
+        webhook_url = usable_discord_webhook(webhook_url)
         listing_url = (listing_url or "").strip()
         if not webhook_url or not listing_url:
             return False
@@ -2705,6 +2734,9 @@ class Store:
         data["enabled"] = bool(data["enabled"])
         data["seeded"] = bool(data["seeded"])
         data["interval_sec"] = data.get("interval_sec")
+        data["portals"] = (data.get("portals") or "all") or "all"
+        if data["portals"] not in {"all", "sreality", "bezrealitky"}:
+            data["portals"] = "all"
         data["tracked"] = self.count(data["id"]) if tracked is None else int(tracked)
         data["new_today"] = self.new_today_count(data["id"]) if new_today is None else int(new_today)
         return data

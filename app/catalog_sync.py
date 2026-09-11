@@ -164,7 +164,7 @@ def listing_offer(listing: Any) -> str:
     return "prodej"
 
 
-def listing_matches_filters(listing: Any, filters: dict[str, Any] | None) -> bool:
+def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ignore_source: bool = False) -> bool:
     data = filters or {}
     price = _field(listing, "price_czk")
     area = _field(listing, "area_m2")
@@ -172,10 +172,11 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None) -> boo
     disposition = str(_field(listing, "disposition") or "")
     url = str(_field(listing, "url") or "")
     source = str(data.get("source") or "")
-    if source == "bezrealitky" and "bezrealitky" not in url:
-        return False
-    if source == "sreality" and "sreality" not in url and "bezrealitky" in url:
-        return False
+    if not ignore_source:
+        if source == "bezrealitky" and "bezrealitky" not in url:
+            return False
+        if source == "sreality" and "sreality" not in url and "bezrealitky" in url:
+            return False
     low = data.get("price_from")
     high = data.get("price_to")
     if low not in (None, "") and price is not None and int(price) < int(low):
@@ -220,13 +221,55 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None) -> boo
     return True
 
 
-def listing_matches_search(listing: Any, search_url: str) -> bool:
+def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool = False) -> bool:
     url = (search_url or "").strip()
     if not url:
         return False
     if is_bezrealitky(url):
-        return listing_matches_filters(listing, bezrealitky_url.parse_url(url))
-    return listing_matches_filters(listing, url_builder.parse_url(url))
+        return listing_matches_filters(listing, bezrealitky_url.parse_url(url), ignore_source=ignore_source)
+    return listing_matches_filters(listing, url_builder.parse_url(url), ignore_source=ignore_source)
+
+
+def normalize_portals(value: str | None) -> str:
+    raw = (value or "all").strip().lower()
+    if raw in {"sreality", "bezrealitky"}:
+        return raw
+    return "all"
+
+
+def listing_matches_monitor(listing: Any, monitor: dict[str, Any]) -> bool:
+    listing_url = str(_field(listing, "url") or "").lower()
+    listing_portal = "bezrealitky" if "bezrealitky" in listing_url else "sreality"
+    for target in monitor_search_targets(monitor):
+        if target["portal"] != listing_portal:
+            continue
+        if listing_matches_search(listing, target["search_url"], ignore_source=True):
+            return True
+    return False
+
+
+def monitor_search_targets(monitor: dict[str, Any]) -> list[dict[str, str]]:
+    from app.filter_bridge import convert_search_url
+
+    url = normalize_search_url(monitor.get("search_url") or "")
+    if not url:
+        return []
+    portals = normalize_portals(monitor.get("portals"))
+    primary = "bezrealitky" if is_bezrealitky(url) else "sreality"
+    urls = {primary: url}
+    if portals == "all" or portals != primary:
+        try:
+            converted = convert_search_url(url).get("url") or ""
+            other = "bezrealitky" if primary == "sreality" else "sreality"
+            if converted:
+                urls[other] = normalize_search_url(converted)
+        except Exception:
+            pass
+    return [
+        {"portal": portal, "search_url": search}
+        for portal, search in urls.items()
+        if search and portals in {"all", portal}
+    ]
 
 
 def _locality_matches(locality: str, districts: list[str]) -> bool:

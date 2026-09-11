@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from app import config
 from app.bezrealitky import BezrealitkyClient
 from app.sreality import SrealityClient
@@ -19,9 +21,38 @@ def source_name(url: str) -> str:
     return "Bezrealitky" if is_bezrealitky(url) else "Sreality"
 
 
+def is_discord_webhook(url: str) -> bool:
+    parsed = urlparse((url or "").strip())
+    host = (parsed.hostname or "").lower()
+    return (
+        parsed.scheme == "https"
+        and "/api/webhooks/" in (parsed.path or "")
+        and (host == "discord.com" or host == "discordapp.com" or host.endswith(".discord.com"))
+    )
+
+
+def usable_discord_webhook(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw or not is_discord_webhook(raw):
+        return ""
+    lowered = raw.lower()
+    if "webhooks/id/token" in lowered or "/webhooks/id/" in lowered:
+        return ""
+    parts = [part for part in urlparse(raw).path.split("/") if part]
+    try:
+        index = parts.index("webhooks")
+        hook_id = parts[index + 1]
+        token = parts[index + 2]
+    except (ValueError, IndexError):
+        return ""
+    if not hook_id.isdigit() or token.lower() in {"token", "id"} or len(token) < 20:
+        return ""
+    return raw
+
+
 def webhook_for(search_url: str, monitor_webhook: str | None = None) -> str:
     if (monitor_webhook or "").strip():
-        return monitor_webhook.strip()
+        return usable_discord_webhook(monitor_webhook)
     if is_bezrealitky(search_url):
-        return config.BEZREALITKY_WEBHOOK_URL
-    return config.DISCORD_WEBHOOK_URL
+        return usable_discord_webhook(config.BEZREALITKY_WEBHOOK_URL)
+    return usable_discord_webhook(config.DISCORD_WEBHOOK_URL)

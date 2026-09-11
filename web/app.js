@@ -636,6 +636,29 @@ function templateName(id) {
   return (statusCache.templates || []).find((row) => row.id === key)?.name || key;
 }
 
+function normalizeMonitorPortals(value) {
+  const raw = String(value || "all").toLowerCase();
+  return raw === "sreality" || raw === "bezrealitky" ? raw : "all";
+}
+
+function portalsSummary(value) {
+  const portals = normalizeMonitorPortals(value);
+  if (portals === "sreality") return "Jen Sreality";
+  if (portals === "bezrealitky") return "Jen Bezrealitky";
+  return "Všechny (Sreality i Bezrealitky)";
+}
+
+function selectedMonitorPortals() {
+  return normalizeMonitorPortals($("monitor-portals")?.querySelector(".chip.on")?.dataset.portals);
+}
+
+function setMonitorPortals(value) {
+  const portals = normalizeMonitorPortals(value);
+  $("monitor-portals")?.querySelectorAll(".chip").forEach((chip) => {
+    chip.classList.toggle("on", chip.dataset.portals === portals);
+  });
+}
+
 function readMonitorDraft(form) {
   return {
     name: form.querySelector("[name='name']")?.value || "",
@@ -644,6 +667,7 @@ function readMonitorDraft(form) {
     template_id: form.querySelector("[name='template_id']")?.value || "default",
     enabled: Boolean(form.querySelector("[name='enabled']")?.checked),
     interval_sec: form.querySelector("[name='interval_sec']")?.value || "",
+    portals: normalizeMonitorPortals(form.querySelector("[name='portals']")?.value || form.querySelector(".chip.on[data-portals]")?.dataset.portals),
   };
 }
 
@@ -655,11 +679,21 @@ function monitorEditorHtml(item, draft) {
     template_id: draft?.template_id ?? item.template_id ?? "default",
     enabled: draft?.enabled ?? Boolean(item.enabled),
     interval_sec: draft?.interval_sec ?? item.interval_sec ?? "",
+    portals: normalizeMonitorPortals(draft?.portals ?? item.portals),
   };
   return `
     <form class="form-card" data-monitor-edit="${escapeHtml(item.id)}">
       <label>Název<input name="name" value="${escapeHtml(data.name)}" /></label>
       <label>URL hledání<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
+      <input type="hidden" name="portals" value="${escapeHtml(data.portals)}" />
+      <div class="filter-group">
+        <h3>Hlídané portály</h3>
+        <div class="chip-row" data-modal-portals>
+          <button type="button" class="chip${data.portals === "all" ? " on" : ""}" data-portals="all">Všechny</button>
+          <button type="button" class="chip${data.portals === "sreality" ? " on" : ""}" data-portals="sreality">Jen Sreality</button>
+          <button type="button" class="chip${data.portals === "bezrealitky" ? " on" : ""}" data-portals="bezrealitky">Jen Bezrealitky</button>
+        </div>
+      </div>
       <label>Discord webhook<input name="webhook_url" value="${escapeHtml(data.webhook_url)}" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
       <label>Šablona zprávy<select name="template_id">${templateOptions(data.template_id)}</select></label>
       <label>Interval (s)<input name="interval_sec" type="number" min="20" value="${escapeHtml(data.interval_sec || "")}" placeholder="výchozí 60" /></label>
@@ -821,14 +855,13 @@ function watchFieldsHtml(item, filters) {
   const source = (item.search_url || "").includes("bezrealitky") ? "bezrealitky" : "sreality";
   const catalog = filterCatalog?.sources?.[source]?.catalog || {};
   const area = filters.area_from ? `${filters.area_from} m²` : "Bez minima";
-  const portals = source === "bezrealitky" ? "Bezrealitky" : "Sreality";
   const rows = [
     ["Typ nabídky", offerSummary(catalog, filters, item.search_url)],
     ["Preferované lokality", localitySummary(filters)],
     ["Dispozice bytu", labelFromCatalog(catalog, "sizes", filters.sizes)],
     ["Cenový rozsah", formatMoneyRange(filters.price_from, filters.price_to, " Kč/měs.")],
     ["Minimální plocha", area],
-    ["Portály", portals],
+    ["Portály", portalsSummary(item.portals)],
   ];
   return rows
     .map(
@@ -1281,6 +1314,7 @@ function fillMonitorForm(item) {
   $("monitor-template").value = item?.template_id || "default";
   $("monitor-enabled").checked = item ? Boolean(item.enabled) : true;
   if ($("monitor-interval")) $("monitor-interval").value = item?.interval_sec || "";
+  setMonitorPortals(item?.portals || "all");
 }
 
 $("monitor-form").addEventListener("submit", async (event) => {
@@ -1288,11 +1322,13 @@ $("monitor-form").addEventListener("submit", async (event) => {
   const saved = await post(
     "/api/monitors",
     {
+      id: $("monitor-id").value || undefined,
       name: $("monitor-name").value,
-      search_url: $("monitor-url").value,
+      search_url: $("generated-url")?.value || $("monitor-url").value,
       template_id: $("monitor-template").value,
       enabled: $("monitor-enabled").checked,
       interval_sec: $("monitor-interval")?.value || "",
+      portals: selectedMonitorPortals(),
     },
     "Monitor uložen",
   );
@@ -1321,6 +1357,7 @@ $("monitor-list").addEventListener("change", async (event) => {
       webhook_url: item.webhook_url,
       template_id: item.template_id,
       interval_sec: item.interval_sec || "",
+      portals: item.portals || "all",
       enabled: toggle.checked,
     },
     toggle.checked ? "Monitor zapnutý" : "Monitor vypnutý",
@@ -1340,6 +1377,14 @@ $("monitor-modal").addEventListener("submit", async (event) => {
 });
 
 $("monitor-modal").addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-modal-portals] [data-portals]");
+  if (chip) {
+    const row = chip.closest("[data-modal-portals]");
+    row?.querySelectorAll(".chip").forEach((item) => item.classList.toggle("on", item === chip));
+    const hidden = chip.closest("form")?.querySelector("[name='portals']");
+    if (hidden) hidden.value = chip.dataset.portals;
+    return;
+  }
   if (event.target.id === "monitor-modal" || event.target.closest("[data-cancel-edit]")) {
     closeMonitorEditor();
     renderMonitors(statusCache.monitors || []);
@@ -1389,6 +1434,7 @@ $("monitor-list").addEventListener("click", async (event) => {
         webhook_url: item.webhook_url,
         template_id: item.template_id,
         interval_sec: item.interval_sec || "",
+        portals: item.portals || "all",
         enabled: !item.enabled,
       },
       item.enabled ? "Hlídání pozastaveno" : "Hlídání obnoveno",
@@ -1804,6 +1850,12 @@ $("f-br-paste")?.addEventListener("change", async () => {
   renderFilterGroups();
   $("generated-url").value = data.url;
   toast("Filtry načtené z URL", "info");
+});
+
+$("monitor-portals")?.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-portals]");
+  if (!chip) return;
+  setMonitorPortals(chip.dataset.portals);
 });
 
 $("filter-source").addEventListener("click", async (event) => {

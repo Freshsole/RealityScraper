@@ -5,6 +5,7 @@ import html
 import smtplib
 import ssl
 from email.message import EmailMessage
+from email.utils import formataddr, parseaddr
 from typing import Any
 
 from app import config
@@ -92,7 +93,8 @@ def _send_sync(to: str, subject: str, body: str) -> None:
         raise RuntimeError("E-mail není nastavený (SMTP_HOST a SMTP_FROM)")
     msg = EmailMessage()
     msg["Subject"] = subject
-    msg["From"] = sender
+    name, addr = parseaddr(sender)
+    msg["From"] = formataddr((name or "Realitify", addr or sender))
     msg["To"] = to
     msg.set_content(body)
     html_body = "".join(

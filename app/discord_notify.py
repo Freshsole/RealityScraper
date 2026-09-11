@@ -2,13 +2,35 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
 from app.sreality import Listing, download_image, format_cz_date, format_price
+from app.sources import usable_discord_webhook
 from app.templates import listing_vars, render_payload
+
+
+PLACEHOLDER_WEBHOOK_ERROR = (
+    "Discord webhook je jen ukázka ID/TOKEN. V Discordu použij /link, nebo do Railway vlož skutečnou DISCORD_WEBHOOK_URL."
+)
+
+
+def _require_webhook(webhook_url: str) -> str:
+    usable = usable_discord_webhook(webhook_url)
+    if not usable:
+        raise RuntimeError(PLACEHOLDER_WEBHOOK_ERROR if "ID/TOKEN" in (webhook_url or "") else "Chybí platný Discord webhook")
+    return usable
+
+
+def _raise_for_discord(response: httpx.Response, webhook_url: str) -> None:
+    if not response.is_error:
+        return
+    safe = re.sub(r"(webhooks/)[^/]+/[^/?]+", r"\1…", webhook_url or "")
+    detail = (response.text or response.reason_phrase or "")[:240]
+    raise RuntimeError(f"Discord {response.status_code} ({safe}): {detail}")
 
 
 def _parse_when(value: str | None) -> datetime | None:
@@ -63,6 +85,7 @@ def format_listed_duration(row: dict[str, Any], ended_at: datetime | None = None
 async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "") -> None:
     if not webhook_url:
         raise RuntimeError("SOLD_WEBHOOK_URL is empty")
+    webhook_url = _require_webhook(webhook_url)
     duration, started, ended = format_listed_duration(row)
     name = row.get("name") or row.get("locality") or "Inzerát"
     price = row.get("price_label") or format_price(row.get("price_czk"), "měsíc")
@@ -77,7 +100,6 @@ async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "
         "embeds": [
             {
                 "title": name,
-                "url": url or None,
                 "color": 0xC45C26,
                 "fields": [
                     {"name": "Jak dlouho", "value": duration, "inline": True},
@@ -93,6 +115,8 @@ async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "
     }
     fields = payload["embeds"][0]["fields"]
     payload["embeds"][0]["fields"] = [field for field in fields if field["value"] and field["value"] != "—"]
+    if url.startswith("http://") or url.startswith("https://"):
+        payload["embeds"][0]["url"] = url
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         image = None
@@ -109,7 +133,7 @@ async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "
             )
         else:
             response = await client.post(webhook_url, json=payload)
-        response.raise_for_status()
+        _raise_for_discord(response, webhook_url)
 
 
 async def send_listing(
@@ -121,6 +145,7 @@ async def send_listing(
 ) -> None:
     if not webhook_url:
         raise RuntimeError("DISCORD_WEBHOOK_URL is empty")
+    webhook_url = _require_webhook(webhook_url)
     from app.templates import default_template_config
 
     config = template_config or default_template_config()
@@ -144,7 +169,7 @@ async def send_listing(
             )
         else:
             response = await client.post(webhook_url, json=payload)
-        response.raise_for_status()
+        _raise_for_discord(response, webhook_url)
 
 
 DISCORD_CONTENT_LIMIT = 1900
@@ -193,6 +218,7 @@ async def send_digest(webhook_url: str, items: list[dict[str, Any]], *, test: bo
 async def send_text(webhook_url: str, content: str) -> None:
     if not webhook_url:
         raise RuntimeError("DISCORD_WEBHOOK_URL is empty")
+    webhook_url = _require_webhook(webhook_url)
     chunks = _split_discord(content)
     if not chunks:
         raise RuntimeError("Prázdná Discord zpráva")
@@ -202,8 +228,6 @@ async def send_text(webhook_url: str, content: str) -> None:
                 webhook_url,
                 json={"username": "Sreality Monitor", "content": chunk},
             )
-            if response.is_error:
-                detail = (response.text or response.reason_phrase or "")[:240]
-                raise RuntimeError(f"Discord {response.status_code}: {detail}")
+            _raise_for_discord(response, webhook_url)
             if len(chunks) > 1:
                 await asyncio.sleep(0.35)

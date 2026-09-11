@@ -34,9 +34,19 @@ DEFAULT_SEARCH_URL = (
     "&razeni=nejlevnejsi&cena-do=25759&plocha-od=45"
 )
 
-DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
-BEZREALITKY_WEBHOOK_URL = os.getenv("BEZREALITKY_WEBHOOK_URL", "").strip()
-SOLD_WEBHOOK_URL = os.getenv("SOLD_WEBHOOK_URL", "").strip()
+def _webhook_env(name: str) -> str:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if "webhooks/id/token" in lowered or "/webhooks/id/" in lowered:
+        return ""
+    return raw
+
+
+DISCORD_WEBHOOK_URL = _webhook_env("DISCORD_WEBHOOK_URL")
+BEZREALITKY_WEBHOOK_URL = _webhook_env("BEZREALITKY_WEBHOOK_URL")
+SOLD_WEBHOOK_URL = _webhook_env("SOLD_WEBHOOK_URL")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
 DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID", "").strip()
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()

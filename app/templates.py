@@ -143,11 +143,13 @@ def render_payload(config: dict[str, Any], variables: dict[str, str], prefix: st
         fields.append({"name": name, "value": value, "inline": bool(field.get("inline"))})
     embed = {
         "title": render_text(embed_cfg.get("title") or "{{name}}", variables) or "Inzerát",
-        "url": render_text(embed_cfg.get("url") or "{{url}}", variables),
         "color": hex_color(embed_cfg.get("color")),
         "fields": fields,
         "footer": {"text": render_text(embed_cfg.get("footer") or "Sreality monitor", variables) or "Sreality monitor"},
     }
+    embed_url = render_text(embed_cfg.get("url") or "{{url}}", variables).strip()
+    if embed_url.startswith("http://") or embed_url.startswith("https://"):
+        embed["url"] = embed_url
     image = variables.get("image_url") or ""
     if embed_cfg.get("show_image", True) and image:
         embed["image"] = {"url": image}

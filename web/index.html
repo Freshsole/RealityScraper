@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n57" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n58" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -277,7 +277,7 @@
               <header class="set-head">
                 <button class="set-back" id="watch-back" type="button">← Zpět na profily</button>
                 <h1 id="watch-editor-title">NOVÝ HLÍDACÍ PROFIL</h1>
-                <p>V jednom místě nastavíte filtry, Discord zprávu i odesílání.</p>
+                <p>Jeden hlídací pes může sledovat všechny portály. Filtry nastavíte jednou; omezení na jeden portál je volitelné.</p>
               </header>
               <form id="monitor-form" class="set-card form-card">
                 <input type="hidden" id="monitor-id" />
@@ -301,9 +301,18 @@
               </form>
               <article class="set-card" id="view-filters">
                 <h2>KRITÉRIA HLEDÁNÍ</h2>
-                <p class="set-copy">Filtry pro Sreality i Bezrealitky. Z výsledné adresy se vyplní URL profilu.</p>
+                <p class="set-copy">Filtry zadáte jednou. Výchozí je hlídání napříč portály; tady můžete omezit jen na jeden.</p>
                 <div class="filter-group">
-                  <h3>Portál</h3>
+                  <h3>Hlídané portály</h3>
+                  <div class="chip-row" id="monitor-portals">
+                    <button type="button" class="chip on" data-portals="all" data-icon="grid">Všechny</button>
+                    <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Jen Sreality</button>
+                    <button type="button" class="chip" data-portals="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Jen Bezrealitky</button>
+                  </div>
+                </div>
+                <div class="filter-group">
+                  <h3>Jazyk filtrů</h3>
+                  <p class="set-copy">Určuje podobu vygenerované URL, ne to, kde pes hlídá.</p>
                   <div class="chip-row" id="filter-source">
                     <button type="button" class="chip on" data-source="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
                     <button type="button" class="chip" data-source="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
@@ -892,7 +901,7 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n67"></script>
+    <script src="/static/app.js?v=1.2.0-n69"></script>
     <script src="/static/catalog.js?v=1.2.0-n43"></script>
   </body>
 </html>
