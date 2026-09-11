@@ -404,7 +404,9 @@ class Store:
                 "INSERT INTO templates(id, name, config, created_at) VALUES (?, ?, ?, ?)",
                 ("default", "Výchozí Discord zpráva", json.dumps(default_template_config(), ensure_ascii=False), now),
             )
-        if not conn.execute("SELECT id FROM monitors WHERE id = 'default'").fetchone():
+        if conn.execute("SELECT id FROM monitors LIMIT 1").fetchone():
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitors_initialized', '1')")
+        elif not conn.execute("SELECT value FROM meta WHERE key = 'monitors_initialized'").fetchone():
             seeded = conn.execute("SELECT value FROM meta WHERE key = 'seeded'").fetchone()
             conn.execute(
                 """
@@ -421,6 +423,7 @@ class Store:
                     now,
                 ),
             )
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitors_initialized', '1')")
         migrated = conn.execute("SELECT value FROM meta WHERE key = 'monitor_portals_v1'").fetchone()
         if not migrated:
             conn.execute("UPDATE monitors SET portals = 'all', seeded = 0 WHERE id = 'default'")
@@ -739,14 +742,12 @@ class Store:
 
     def delete_monitor(self, monitor_id: str) -> None:
         with self.connect() as conn:
-            count = conn.execute("SELECT COUNT(*) FROM monitors").fetchone()[0]
-            if count <= 1:
-                raise ValueError("Poslední monitor nelze smazat")
             conn.execute("DELETE FROM monitors WHERE id = ?", (monitor_id,))
             conn.execute("DELETE FROM listings WHERE monitor_id = ?", (monitor_id,))
             conn.execute("DELETE FROM events WHERE monitor_id = ?", (monitor_id,))
             conn.execute("DELETE FROM monitor_jobs WHERE monitor_id = ?", (monitor_id,))
             conn.execute("DELETE FROM monitor_hits WHERE monitor_id = ?", (monitor_id,))
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitors_initialized', '1')")
 
     def set_monitor_seeded(self, monitor_id: str, seeded: bool) -> None:
         with self.connect() as conn:
