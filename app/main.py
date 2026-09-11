@@ -19,7 +19,7 @@ from app.backup import export_config, export_pack, export_sqlite, import_config,
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
-from app import bezrealitky_url, localities, url_builder
+from app import bezrealitky_url, localities, places, url_builder
 from app.filter_bridge import convert_search_url
 from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
@@ -489,6 +489,74 @@ async def listings() -> dict:
     return {"items": hub.store.recent_notified(24)}
 
 
+def _catalog_filters(
+    portal: str = "",
+    q: str = "",
+    disposition: str = "",
+    price_from: str = "",
+    price_to: str = "",
+    area_from: str = "",
+    area_to: str = "",
+    monitor_id: str = "",
+    amenities: str = "",
+    offer: str = "",
+    district: str = "",
+    estate: str = "",
+    ownership: str = "",
+    condition: str = "",
+    building: str = "",
+    equipped: str = "",
+    roommate: str = "",
+    pets: str = "",
+    short_term: str = "",
+    lat: str = "",
+    lon: str = "",
+    radius_m: str = "",
+    status: str = "",
+    discounted: str = "",
+    hits: str = "",
+    places: str = "",
+    sort: str = "newest",
+    limit: int = 36,
+    offset: int = 0,
+    pins_only: bool = False,
+) -> dict[str, Any]:
+    payload = {
+        "portal": portal,
+        "q": q,
+        "disposition": disposition,
+        "price_from": price_from,
+        "price_to": price_to,
+        "area_from": area_from,
+        "area_to": area_to,
+        "monitor_id": monitor_id,
+        "amenities": amenities,
+        "offer": offer,
+        "district": district,
+        "estate": estate,
+        "ownership": ownership,
+        "condition": condition,
+        "building": building,
+        "equipped": equipped,
+        "roommate": roommate,
+        "pets": pets,
+        "short_term": short_term,
+        "lat": lat,
+        "lon": lon,
+        "radius_m": radius_m,
+        "status": status,
+        "discounted": discounted,
+        "hits": hits,
+        "places": places,
+        "sort": sort,
+        "limit": limit,
+        "offset": offset,
+    }
+    if pins_only:
+        payload["pins_only"] = True
+    return payload
+
+
 @app.get("/api/catalog")
 async def catalog(
     portal: str = "",
@@ -516,43 +584,45 @@ async def catalog(
     status: str = "",
     discounted: str = "",
     hits: str = "",
+    places: str = "",
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
 ) -> dict:
-    return await asyncio.to_thread(
-        hub.store.catalog,
-        {
-            "portal": portal,
-            "q": q,
-            "disposition": disposition,
-            "price_from": price_from,
-            "price_to": price_to,
-            "area_from": area_from,
-            "area_to": area_to,
-            "monitor_id": monitor_id,
-            "amenities": amenities,
-            "offer": offer,
-            "district": district,
-            "estate": estate,
-            "ownership": ownership,
-            "condition": condition,
-            "building": building,
-            "equipped": equipped,
-            "roommate": roommate,
-            "pets": pets,
-            "short_term": short_term,
-            "lat": lat,
-            "lon": lon,
-            "radius_m": radius_m,
-            "status": status,
-            "discounted": discounted,
-            "hits": hits,
-            "sort": sort,
-            "limit": limit,
-            "offset": offset,
-        },
+    payload = await places.attach_geoms(
+        _catalog_filters(
+            portal=portal,
+            q=q,
+            disposition=disposition,
+            price_from=price_from,
+            price_to=price_to,
+            area_from=area_from,
+            area_to=area_to,
+            monitor_id=monitor_id,
+            amenities=amenities,
+            offer=offer,
+            district=district,
+            estate=estate,
+            ownership=ownership,
+            condition=condition,
+            building=building,
+            equipped=equipped,
+            roommate=roommate,
+            pets=pets,
+            short_term=short_term,
+            lat=lat,
+            lon=lon,
+            radius_m=radius_m,
+            status=status,
+            discounted=discounted,
+            hits=hits,
+            places=places,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
     )
+    return await asyncio.to_thread(hub.store.catalog, payload)
 
 
 @app.get("/api/catalog/pins")
@@ -582,38 +652,40 @@ async def catalog_pins(
     status: str = "",
     discounted: str = "",
     hits: str = "",
+    places: str = "",
 ) -> dict:
-    return await asyncio.to_thread(
-        hub.store.catalog,
-        {
-            "portal": portal,
-            "q": q,
-            "disposition": disposition,
-            "price_from": price_from,
-            "price_to": price_to,
-            "area_from": area_from,
-            "area_to": area_to,
-            "monitor_id": monitor_id,
-            "amenities": amenities,
-            "offer": offer,
-            "district": district,
-            "estate": estate,
-            "ownership": ownership,
-            "condition": condition,
-            "building": building,
-            "equipped": equipped,
-            "roommate": roommate,
-            "pets": pets,
-            "short_term": short_term,
-            "lat": lat,
-            "lon": lon,
-            "radius_m": radius_m,
-            "status": status,
-            "discounted": discounted,
-            "hits": hits,
-            "pins_only": True,
-        },
+    payload = await places.attach_geoms(
+        _catalog_filters(
+            portal=portal,
+            q=q,
+            disposition=disposition,
+            price_from=price_from,
+            price_to=price_to,
+            area_from=area_from,
+            area_to=area_to,
+            monitor_id=monitor_id,
+            amenities=amenities,
+            offer=offer,
+            district=district,
+            estate=estate,
+            ownership=ownership,
+            condition=condition,
+            building=building,
+            equipped=equipped,
+            roommate=roommate,
+            pets=pets,
+            short_term=short_term,
+            lat=lat,
+            lon=lon,
+            radius_m=radius_m,
+            status=status,
+            discounted=discounted,
+            hits=hits,
+            places=places,
+            pins_only=True,
+        )
     )
+    return await asyncio.to_thread(hub.store.catalog, payload)
 
 
 @app.get("/api/catalog/item")
@@ -777,6 +849,17 @@ async def filter_parse(payload: dict[str, Any]) -> dict:
         raise HTTPException(400, "Chybí url")
     mod = _filter_mod(url=url)
     return {"url": url, "filters": mod.parse_url(url)}
+
+
+@app.get("/api/places/search")
+async def places_search(q: str = Query("", min_length=2)) -> dict:
+    return {"items": await places.search_places(q)}
+
+
+@app.get("/api/places/geometry")
+async def places_geometry(ids: str = "") -> dict:
+    ident = [item.strip() for item in ids.split(",") if item.strip()]
+    return {"items": await places.geometries(ident)}
 
 
 @app.get("/api/filters/locality")

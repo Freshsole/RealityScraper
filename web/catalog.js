@@ -8,9 +8,26 @@
   let catalogLayer = null;
   let pinItems = [];
   let circleLayer = null;
+  let placeLayer = null;
   let drawingCircle = false;
   let circleFilter = null;
+  let selectedPlaces = [];
+  let watchProfiles = [];
+  let placeSuggestItems = [];
+  let placeSuggestTimer = 0;
   let radiusTimer = null;
+  const DISTRICT_OSM = {
+    "praha-1": { id: "R15107966", label: "Praha 1" },
+    "praha-2": { id: "R19999122", label: "Praha 2" },
+    "praha-3": { id: "R19999121", label: "Praha 3" },
+    "praha-4": { id: "R19999068", label: "Praha 4" },
+    "praha-5": { id: "R19999086", label: "Praha 5" },
+    "praha-6": { id: "R19999115", label: "Praha 6" },
+    "praha-7": { id: "R19999114", label: "Praha 7" },
+    "praha-8": { id: "R19999109", label: "Praha 8" },
+    "praha-9": { id: "R19999082", label: "Praha 9" },
+    "praha-10": { id: "R19999075", label: "Praha 10" },
+  };
   let markerByKey = new Map();
   let clusterByKey = new Map();
   let hoverLayer = null;
@@ -115,7 +132,6 @@
   function filters() {
     return {
       portal: selected.portal,
-      q: $("cat-q").value.trim(),
       disposition: [...selected.dispositions].join(","),
       price_from: $("cat-price-from").value,
       price_to: $("cat-price-to").value,
@@ -126,6 +142,7 @@
       offer: [...selected.offers].join(","),
       estate: [...selected.estates].join(","),
       district: [...selected.districts].join(","),
+      places: selectedPlaces.map((item) => item.id).join(","),
       ownership: [...selected.ownership].join(","),
       condition: [...selected.conditions].join(","),
       building: [...selected.buildings].join(","),
@@ -173,11 +190,22 @@
     selected.roommate = params.get("roommate") || "";
     selected.pets = params.get("pets") || "";
     selected.short_term = params.get("short_term") || "";
-    if ($("cat-q")) $("cat-q").value = params.get("q") || "";
+    if ($("cat-q")) $("cat-q").value = "";
     if ($("cat-price-from")) $("cat-price-from").value = params.get("price_from") || "";
     if ($("cat-price-to")) $("cat-price-to").value = params.get("price_to") || "";
     if ($("cat-area-from")) $("cat-area-from").value = params.get("area_from") || "";
     if ($("cat-area-to")) $("cat-area-to").value = params.get("area_to") || "";
+    selectedPlaces = (params.get("places") || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean)
+      .map((id) => ({ id, label: id, kind: id.startsWith("W") ? "street" : "area" }));
+    for (const place of selectedPlaces) {
+      const slug = slugForPlace(place.id);
+      if (slug) selected.districts.add(slug);
+    }
+    syncPlacesFromDistricts();
+    renderPlaceChips();
     if (params.get("lat") && params.get("lon") && params.get("radius_m")) {
       circleFilter = {
         lat: Number(params.get("lat")),
@@ -217,11 +245,126 @@
     }
   }
 
+  function slugForPlace(id) {
+    return Object.keys(DISTRICT_OSM).find((slug) => DISTRICT_OSM[slug].id === id) || "";
+  }
+
+  function syncPlacesFromDistricts() {
+    for (const slug of selected.districts) {
+      const mapped = DISTRICT_OSM[slug];
+      if (mapped && !selectedPlaces.some((row) => row.id === mapped.id)) {
+        selectedPlaces.push({ id: mapped.id, label: mapped.label, kind: "area" });
+      }
+    }
+    selectedPlaces = selectedPlaces.filter((place) => {
+      const slug = slugForPlace(place.id);
+      return !slug || selected.districts.has(slug);
+    });
+    renderPlaceChips();
+  }
+
+  function renderPlaceChips() {
+    const host = $("cat-place-chips");
+    if (!host) return;
+    host.innerHTML = selectedPlaces
+      .map(
+        (place) =>
+          `<span class="chip on">${escapeHtml(place.label || place.id)}<button type="button" class="chip-x" data-del-place="${escapeHtml(place.id)}" aria-label="Odebrat místo">×</button></span>`,
+      )
+      .join("");
+  }
+
+  async function ensurePlaceGeoms() {
+    const missing = selectedPlaces.filter((row) => !row.geojson);
+    if (!missing.length) {
+      drawPlaceLayer(false);
+      return;
+    }
+    const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map((row) => row.id).join(","))}`);
+    const data = await response.json().catch(() => ({ items: [] }));
+    for (const item of data.items || []) {
+      const row = selectedPlaces.find((place) => place.id === item.id);
+      if (!row) continue;
+      row.geojson = item.geojson;
+      row.kind = item.kind || row.kind;
+      if (item.label) row.label = item.label;
+      row.lat = item.lat;
+      row.lon = item.lon;
+      row.buffer_m = item.buffer_m;
+    }
+    renderPlaceChips();
+    drawPlaceLayer(true);
+  }
+
+  async function addPlace(item) {
+    if (!item?.id || selectedPlaces.some((row) => row.id === item.id)) return;
+    selectedPlaces.push({
+      id: item.id,
+      label: item.label || item.id,
+      kind: item.kind || (String(item.id).startsWith("W") ? "street" : "area"),
+    });
+    const slug = slugForPlace(item.id);
+    if (slug) selected.districts.add(slug);
+    renderPlaceChips();
+    syncFilterUi();
+    hidePlaceSuggest();
+    if ($("cat-q")) $("cat-q").value = "";
+    await ensurePlaceGeoms();
+    loadCatalog();
+  }
+
+  function removePlace(id) {
+    selectedPlaces = selectedPlaces.filter((row) => row.id !== id);
+    const slug = slugForPlace(id);
+    if (slug) selected.districts.delete(slug);
+    renderPlaceChips();
+    syncFilterUi();
+    drawPlaceLayer(true);
+    loadCatalog();
+  }
+
+  function hidePlaceSuggest() {
+    const box = $("cat-place-suggest");
+    if (!box) return;
+    box.hidden = true;
+    box.innerHTML = "";
+  }
+
+  async function searchPlaces(q) {
+    const box = $("cat-place-suggest");
+    if (!box) return;
+    if (q.length < 2) {
+      hidePlaceSuggest();
+      return;
+    }
+    const response = await fetch(`/api/places/search?q=${encodeURIComponent(q)}`);
+    const data = await response.json().catch(() => ({ items: [] }));
+    placeSuggestItems = data.items || [];
+    box.hidden = false;
+    if (!placeSuggestItems.length) {
+      box.innerHTML = `<button type="button" disabled>Nic se nenašlo</button>`;
+      return;
+    }
+    box.innerHTML = placeSuggestItems
+      .map((item, index) => {
+        const kind = item.kind === "street" ? "ulice" : "oblast";
+        return `<button type="button" data-place-suggest="${index}"><span>${escapeHtml(item.label)}</span><small>${kind}</small></button>`;
+      })
+      .join("");
+  }
+
   function renderViews() {
     const host = $("catalog-views");
     if (!host) return;
     const views = savedViews();
+    const watches = watchProfiles
+      .map(
+        (item) =>
+          `<button type="button" class="chip${selected.monitor === item.id ? " on" : ""}${item.enabled === false ? " is-off" : ""}" data-watch="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`,
+      )
+      .join("");
     host.innerHTML = `
+      ${watches}
       ${views
         .map(
           (view) =>
@@ -249,6 +392,7 @@
       (selected.pets ? 1 : 0) +
       (selected.short_term ? 1 : 0) +
       (circleFilter ? 1 : 0) +
+      selectedPlaces.length +
       (selected.monitor ? 1 : 0) +
       (selected.sort && selected.sort !== "newest" ? 1 : 0)
     );
@@ -354,8 +498,8 @@
     monitor.innerHTML = ['<option value="">Všechny monitory</option>']
       .concat((facets?.monitors || []).map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`))
       .join("");
-    selected.monitor = [...monitor.options].some((option) => option.value === previous) ? previous : "";
-    monitor.value = selected.monitor;
+    selected.monitor = previous;
+    monitor.value = previous;
   }
 
   function formatKc(value) {
@@ -567,6 +711,46 @@
     }
   }
 
+  function drawPlaceLayer(fit) {
+    ensureMap();
+    if (!catalogMap) return;
+    if (!placeLayer) placeLayer = L.layerGroup().addTo(catalogMap);
+    placeLayer.clearLayers();
+    for (const place of selectedPlaces) {
+      if (!place.geojson) continue;
+      const street = place.kind === "street" || /LineString/i.test(place.geojson.type || "");
+      if (street) {
+        L.geoJSON(place.geojson, {
+          style: {
+            color: "#4a90c4",
+            weight: 42,
+            opacity: 0.32,
+            lineCap: "round",
+            lineJoin: "round",
+          },
+        }).addTo(placeLayer);
+        L.geoJSON(place.geojson, {
+          style: { color: "#2b6a96", weight: 3, opacity: 0.9 },
+        }).addTo(placeLayer);
+      } else {
+        L.geoJSON(place.geojson, {
+          style: {
+            color: "#3d7ea6",
+            weight: 2,
+            fillColor: "#5ba3d0",
+            fillOpacity: 0.22,
+          },
+        }).addTo(placeLayer);
+      }
+    }
+    const streetOnly =
+      selectedPlaces.length > 0 &&
+      selectedPlaces.every((row) => row.kind === "street" || /LineString/i.test(row.geojson?.type || ""));
+    if (fit && placeLayer.getLayers().length) {
+      catalogMap.fitBounds(placeLayer.getBounds(), { padding: [28, 28], maxZoom: streetOnly ? 16 : 13 });
+    }
+  }
+
   function drawCircleLayer() {
     if (!catalogMap || !circleFilter) return;
     const latlng = [circleFilter.lat, circleFilter.lon];
@@ -671,6 +855,7 @@
     L.maplibreGL({
       style: "https://tiles.openfreemap.org/styles/liberty",
     }).addTo(catalogMap);
+    placeLayer = L.layerGroup().addTo(catalogMap);
     catalogLayer = L.layerGroup().addTo(catalogMap);
     hoverLayer = L.layerGroup().addTo(catalogMap);
     catalogMap.on("click", (event) => {
@@ -800,9 +985,12 @@
       points.push([group.lat, group.lon]);
     }
     if (fit) {
-      if (circleFilter) drawCircleLayer();
+      if (selectedPlaces.length) drawPlaceLayer(true);
+      else if (circleFilter) drawCircleLayer();
       else if (points.length === 1) catalogMap.setView(points[0], 14);
       else if (points.length > 1) catalogMap.fitBounds(points, { padding: [40, 40], maxZoom: 14 });
+    } else {
+      drawPlaceLayer(false);
     }
     if (keepHover) highlightListing(keepHover);
     setTimeout(() => catalogMap.invalidateSize(), 80);
@@ -1230,6 +1418,7 @@
 
   async function loadCatalog(append = false) {
     if (!append) offset = 0;
+    await ensurePlaceGeoms();
     const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`);
     const data = await response.json();
     const items = uniqueOffers(data.items || []);
@@ -1362,6 +1551,7 @@
   $("filters-reset")?.addEventListener("click", clearFilterUi);
   $("filters-apply")?.addEventListener("click", () => {
     readFilterUi();
+    syncPlacesFromDistricts();
     closeFilters();
     loadCatalog();
   });
@@ -1436,10 +1626,47 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => loadCatalog(), 300);
   };
-  $("cat-search")?.addEventListener("click", () => loadCatalog());
+  $("cat-search")?.addEventListener("click", async () => {
+    const q = $("cat-q")?.value.trim() || "";
+    if (q.length >= 2 && !selectedPlaces.length) {
+      await searchPlaces(q);
+      if (placeSuggestItems[0]) {
+        await addPlace(placeSuggestItems[0]);
+        return;
+      }
+    }
+    loadCatalog();
+  });
   $("catalog-more")?.addEventListener("click", () => loadCatalog(true));
-  ["cat-q", "cat-price-from", "cat-price-to", "cat-area-from", "cat-area-to"].forEach((id) => {
+  ["cat-price-from", "cat-price-to", "cat-area-from", "cat-area-to"].forEach((id) => {
     $(id)?.addEventListener("input", scheduleSearch);
+  });
+  $("cat-q")?.addEventListener("input", () => {
+    clearTimeout(placeSuggestTimer);
+    const q = $("cat-q").value.trim();
+    placeSuggestTimer = window.setTimeout(() => searchPlaces(q), 220);
+  });
+  $("cat-q")?.addEventListener("keydown", async (event) => {
+    if (event.key === "Escape") hidePlaceSuggest();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const q = $("cat-q").value.trim();
+      if (!placeSuggestItems.length && q.length >= 2) await searchPlaces(q);
+      if (placeSuggestItems[0]) await addPlace(placeSuggestItems[0]);
+    }
+  });
+  $("cat-place-suggest")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-place-suggest]");
+    if (!btn) return;
+    const item = placeSuggestItems[Number(btn.dataset.placeSuggest)];
+    if (item) addPlace(item);
+  });
+  $("cat-place-chips")?.addEventListener("click", (event) => {
+    const del = event.target.closest("[data-del-place]");
+    if (del) removePlace(del.dataset.delPlace);
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".catalog-search-wrap")) hidePlaceSuggest();
   });
   $("cat-status")?.addEventListener("click", (event) => {
     const discount = event.target.closest("[data-discounted]");
@@ -1470,9 +1697,17 @@
       const name = prompt("Název pohledu");
       if (!name) return;
       const views = savedViews();
-      views.push({ id: String(Date.now()), name: name.trim(), filters: filters(), circle: circleFilter });
+      views.push({ id: String(Date.now()), name: name.trim(), filters: filters(), circle: circleFilter, places: selectedPlaces });
       localStorage.setItem("nabidka-views", JSON.stringify(views));
       renderViews();
+      return;
+    }
+    const watch = event.target.closest("[data-watch]");
+    if (watch) {
+      selected.monitor = selected.monitor === watch.dataset.watch ? "" : watch.dataset.watch;
+      if ($("cat-monitor")) $("cat-monitor").value = selected.monitor;
+      renderViews();
+      loadCatalog();
       return;
     }
     const del = event.target.closest("[data-del-view]");
@@ -1492,6 +1727,8 @@
     history.replaceState(null, "", `/nabidka?${params}`);
     readUrlState();
     if (view.circle) circleFilter = view.circle;
+    if (Array.isArray(view.places)) selectedPlaces = view.places;
+    syncPlacesFromDistricts();
     syncCircleUi();
     loadCatalog();
   });
@@ -1577,7 +1814,10 @@
         if (numbered) districts.push(`praha-${numbered[1]}`);
         else if (name) districts.push(name);
       }
-      if (districts.length) selected.districts = new Set(districts);
+      if (districts.length) {
+        selected.districts = new Set(districts);
+        syncPlacesFromDistricts();
+      }
       syncFilterUi();
       if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
     })
@@ -1585,6 +1825,13 @@
   window.addEventListener("app-settings", (event) => {
     if (event.detail) appSettings = event.detail;
   });
+  fetch("/api/monitors")
+    .then((res) => res.json())
+    .then((data) => {
+      watchProfiles = data.items || [];
+      renderViews();
+    })
+    .catch(() => {});
   syncCircleUi();
   renderViews();
 

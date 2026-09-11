@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n59" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n60" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -163,10 +163,12 @@
               <button type="button" class="chip" data-hits="notified" data-icon="radar">Zásahy</button>
             </div>
             <div class="catalog-views" id="catalog-views"></div>
-            <div class="catalog-search-wrap">
+            <div class="catalog-search-wrap locality-picker">
               <span data-icon="search" aria-hidden="true"></span>
-              <input id="cat-q" class="catalog-search" placeholder="Lokalita, název, ulice, popis" />
+              <input id="cat-q" class="catalog-search" placeholder="Město, městská část nebo ulice" autocomplete="off" />
+              <div id="cat-place-suggest" class="commute-suggest locality-suggest" hidden></div>
             </div>
+            <div id="cat-place-chips" class="catalog-place-chips"></div>
             <div class="catalog-row">
               <input id="cat-price-from" type="number" placeholder="Cena od" />
               <input id="cat-price-to" type="number" placeholder="Cena do" />
@@ -905,6 +907,6 @@
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
     <script src="/static/app.js?v=1.2.0-n70"></script>
-    <script src="/static/catalog.js?v=1.2.0-n43"></script>
+    <script src="/static/catalog.js?v=1.2.0-n44"></script>
   </body>
 </html>

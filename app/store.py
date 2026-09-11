@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app import config
+from app import config, localities, places
 from app.sreality import IMAGE_TRANSFORM, Listing, cdn_image_url, google_maps_url, listing_from_dict
 from app.sources import is_discord_webhook, usable_discord_webhook, webhook_for
 from app.templates import default_template_config
@@ -1819,7 +1819,8 @@ class Store:
             )
             params.append(monitor_id)
         query = (filters.get("q") or "").strip()
-        if query:
+        place_geoms = [item for item in (filters.get("place_geoms") or []) if isinstance(item, dict)]
+        if query and not place_geoms:
             where.append(
                 "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ? OR IFNULL(listings.description, '') LIKE ?)"
             )
@@ -1893,7 +1894,8 @@ class Store:
             if offer_parts:
                 where.append("(" + " OR ".join(offer_parts) + ")")
         districts = _csv(filters.get("district"))
-        if districts:
+        geo_ids = {str(item.get("id") or "") for item in place_geoms}
+        if districts and not place_geoms:
             district_parts = []
             for district in districts:
                 number = district.replace("praha-", "")
@@ -1913,6 +1915,25 @@ class Store:
                 params.append(f"%{label}%")
             if district_parts:
                 where.append("(" + " OR ".join(district_parts) + ")")
+        elif districts:
+            leftover = []
+            for district in districts:
+                osm = localities.SREALITY_TO_OSM.get(district.casefold())
+                if osm and osm in geo_ids:
+                    continue
+                if district.startswith("R") and district[1:].isdigit():
+                    continue
+                label = district.strip()
+                if label:
+                    leftover.append(label)
+            if leftover and not place_geoms:
+                _or_likes(where, params, "listings.locality", [f"%{label}%" for label in leftover])
+        if place_geoms:
+            box = places.bbox_of(place_geoms)
+            where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
+            if box:
+                where.append("listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?")
+                params.extend([box[0], box[1], box[2], box[3]])
         estates = _csv(filters.get("estate"))
         if estates:
             estate_parts = []
@@ -2015,7 +2036,7 @@ class Store:
                 """
             )
         if filters.get("pins_only"):
-            return self._catalog_pins(where, params)
+            return self._catalog_pins(where, params, place_geoms)
         sorts = {
             "newest": "listings.first_seen DESC",
             "oldest": "listings.first_seen ASC",
@@ -2030,7 +2051,7 @@ class Store:
         offset = max(int(filters.get("offset") or 0), 0)
         clause = " AND ".join(where)
         identity = listing_identity_sql()
-        fetch_limit = min((offset + limit) * 4, 2000)
+        fetch_limit = 8000 if place_geoms else min((offset + limit) * 4, 2000)
         sql = f"""
             SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
             FROM listings
@@ -2047,7 +2068,7 @@ class Store:
             )
         """
         with self.connect() as conn:
-            total = int(conn.execute(count_sql, params).fetchone()[0])
+            total = 0 if place_geoms else int(conn.execute(count_sql, params).fetchone()[0])
             fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
         seen_keys: set[str] = set()
         rows: list[dict[str, Any]] = []
@@ -2056,7 +2077,11 @@ class Store:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
+            if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
+                continue
             rows.append(row)
+        if place_geoms:
+            total = len(rows)
         rows = rows[offset : offset + limit]
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
@@ -2079,7 +2104,7 @@ class Store:
         facets = self.catalog_facets()
         return {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
 
-    def _catalog_pins(self, where: list[str], params: list[Any]) -> dict[str, Any]:
+    def _catalog_pins(self, where: list[str], params: list[Any], place_geoms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         clause = " AND ".join(where)
         sql = f"""
             SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
@@ -2099,6 +2124,8 @@ class Store:
             key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
             if key in seen:
                 continue
+            if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
+                continue
             seen.add(key)
             items.append(row)
             if len(items) >= 2500:
@@ -2117,16 +2144,8 @@ class Store:
                 )
             ]
             monitors = [
-                {"id": row["id"], "name": row["name"]}
-                for row in conn.execute(
-                    """
-                    SELECT monitors.id, monitors.name
-                    FROM monitors
-                    JOIN listings ON listings.monitor_id = monitors.id
-                    GROUP BY monitors.id
-                    ORDER BY monitors.name
-                    """
-                )
+                {"id": row["id"], "name": row["name"], "enabled": bool(row["enabled"])}
+                for row in conn.execute("SELECT id, name, enabled FROM monitors ORDER BY name")
             ]
             portals = []
             if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%sreality.cz%' LIMIT 1").fetchone():

@@ -1151,9 +1151,12 @@ label.sreality-only[hidden],
   color: var(--gray-2);
   flex-shrink: 0;
 }
-.locality-suggest button:disabled {
+.locality-suggest button small {
+  margin-left: auto;
   color: var(--gray-2);
-  cursor: default;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 .locality-hint {
   margin: 10px 0 0;
@@ -1448,7 +1451,12 @@ body:has(#view-catalog:not([hidden])) .footer { display: none; }
 .offer-badge-sale { background: var(--mint); }
 .offer-badge-gone { background: #f3d6d6; color: var(--negative); }
 .offer-twin { margin: 4px 0 0; color: var(--gray-2); font-size: 12px; font-weight: 600; }
-.catalog-views { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.catalog-views { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; align-items: center; }
+.catalog-views .chip[data-watch].is-off { opacity: 0.55; }
+.catalog-place-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.catalog-place-chips:empty { display: none; }
+.catalog-place-chips .chip { display: inline-flex; align-items: center; gap: 6px; }
+.catalog-place-chips .chip-x { width: 22px; height: 22px; font-size: 14px; }
 .chip-x {
   width: 28px;
   height: 28px;
