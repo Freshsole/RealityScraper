@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n62" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n63" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -580,6 +580,15 @@
                   <ul class="set-checks" id="billing-features"></ul>
                 </div>
               </div>
+              <div class="bill-promo" id="billing-promo-wrap">
+                <label for="billing-promo">Slevový kód</label>
+                <div class="bill-promo-row">
+                  <input id="billing-promo" type="text" placeholder="např. TEST20" autocomplete="off" />
+                  <button class="btn btn-ghost" type="button" id="billing-promo-apply">Použít</button>
+                </div>
+                <p class="bill-promo-hint">Platí jen na první objednávku. Při kódu se neuplatní 3denní zkušební doba — sleva jde na první platbu.</p>
+                <p class="bill-promo-status" id="billing-promo-status" hidden></p>
+              </div>
               <div class="bill-tiers">
                 <article class="bill-tier" data-plan="free">
                   <p class="bill-tier-name">Zdarma</p>
@@ -598,7 +607,7 @@
                 <article class="bill-tier bill-tier-pro" data-plan="pro">
                   <span class="bill-pop">PRO NÁROČNÉ</span>
                   <p class="bill-tier-name">PRO</p>
-                  <p class="bill-tier-price">349 Kč<span>/měsíc</span></p>
+                  <p class="bill-tier-price" data-price="349">349 Kč<span>/měsíc</span></p>
                   <p class="bill-tier-desc">Neomezené hlídání, AI filtry a MCP. 3 dny zdarma.</p>
                   <div class="bill-hr"><img src="/static/site/assets/line-dark.svg" width="280" height="2" alt="" /></div>
                   <div class="bill-feats">
@@ -613,7 +622,7 @@
                 <article class="bill-tier" data-plan="start">
                   <span class="bill-pop">NEJLEPŠÍ POMĚR</span>
                   <p class="bill-tier-name">Start</p>
-                  <p class="bill-tier-price">149 Kč<span>/měsíc</span></p>
+                  <p class="bill-tier-price" data-price="149">149 Kč<span>/měsíc</span></p>
                   <p class="bill-tier-desc">10 psů na 12+ portálech. 3 dny zdarma.</p>
                   <div class="bill-hr"><img src="/static/site/assets/line-light.svg" width="280" height="2" alt="" /></div>
                   <div class="bill-feats">
@@ -772,7 +781,7 @@
           <h2>Všechny filtry</h2>
           <p class="catalog-label">Typ nabídky</p>
           <div class="chip-row" data-filter="offer">
-            <button type="button" class="chip" data-value="pronajem">Pronájem</button>
+            <button type="button" class="chip on" data-value="pronajem">Pronájem</button>
             <button type="button" class="chip" data-value="prodej">Prodej</button>
           </div>
           <p class="catalog-label">Typ nemovitosti</p>
@@ -906,7 +915,8 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n70"></script>
-    <script src="/static/catalog.js?v=1.2.0-n46"></script>
+    <script src="/static/app.js?v=1.2.0-n72"></script>
+    <script src="/static/catalog.js?v=1.2.0-n68"></script>
+    <script src="/static/t.js?v=2"></script>
   </body>
 </html>

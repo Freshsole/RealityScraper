@@ -64,7 +64,32 @@ def public_account(store: Store) -> dict[str, Any]:
         "phone": (data.get("phone") or "").strip(),
         "email_verified": bool(data.get("email_verified")),
         "authenticated": bool(data.get("email")),
+        "role": account_role_from_data(data),
     }
+
+
+def account_role_from_data(data: dict[str, Any]) -> str:
+    role = str(data.get("role") or "").strip().lower()
+    if role in {"admin", "user"}:
+        return role
+    email = (data.get("email") or "").strip().lower()
+    if email and email == config.ADMIN_EMAIL:
+        return "admin"
+    return "user"
+
+
+def account_role(store: Store) -> str:
+    return account_role_from_data(account_record(store))
+
+
+def set_account_role(store: Store, role: str) -> str:
+    role = (role or "").strip().lower()
+    if role not in {"admin", "user"}:
+        raise ValueError("Role je admin nebo běžný uživatel")
+    data = account_record(store)
+    data["role"] = role
+    save_account(store, data)
+    return role
 
 
 def save_account(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
@@ -95,36 +120,62 @@ def user_from_session(store: Store, token: str | None) -> dict[str, Any] | None:
     return public
 
 
-def register(store: Store, name: str, email: str, password: str) -> tuple[dict[str, Any], str]:
+def register(store: Store, name: str, email: str, password: str, promo_code: str = "") -> tuple[dict[str, Any], str]:
     email_norm = (email or "").strip().lower()
     if not email_norm or "@" not in email_norm:
         raise ValueError("Zadej platný e-mail")
     if len(password or "") < 8:
         raise ValueError("Heslo musí mít alespoň 8 znaků")
     existing = account_record(store)
-    if existing.get("email"):
-        if existing.get("email") == email_norm:
+    existing_email = (existing.get("email") or "").strip().lower()
+    if existing_email:
+        if _verify_password(password, existing.get("password_hash") or "", existing.get("password_salt") or ""):
+            first, last = split_name(name)
+            if first:
+                existing["first"] = first
+                existing["last"] = last
+            if existing_email != email_norm:
+                existing["email"] = email_norm
+            promo = (promo_code or "").strip().upper().replace(" ", "")
+            if promo:
+                from app import billing as stripe_billing
+                promo = stripe_billing.lookup_promotion_code(promo)["code"]
+                existing["pending_promo_code"] = promo
+            save_account(store, existing)
+            billing = store.billing_record() or {}
+            billing["email"] = existing["email"]
+            if promo:
+                billing["pending_promo_code"] = promo
+            store.save_billing_record(billing)
+            return public_account(store), _new_session(store)
+        if existing_email == email_norm:
             raise ValueError("Tento účet už existuje, přihlaste se")
         raise ValueError("Účet už je založený. Přihlaste se e-mailem z registrace.")
     first, last = split_name(name)
     if not first:
         raise ValueError("Zadej jméno a příjmení")
+    promo = (promo_code or "").strip().upper().replace(" ", "")
+    if promo:
+        from app import billing as stripe_billing
+        promo = stripe_billing.lookup_promotion_code(promo)["code"]
     hashed, salt = _hash_password(password)
-    save_account(
-        store,
-        {
-            "first": first,
-            "last": last,
-            "email": email_norm,
-            "phone": "",
-            "password_hash": hashed,
-            "password_salt": salt,
-            "email_verified": True,
-            "created_at": _now(),
-        },
-    )
+    payload = {
+        "first": first,
+        "last": last,
+        "email": email_norm,
+        "phone": "",
+        "password_hash": hashed,
+        "password_salt": salt,
+        "email_verified": True,
+        "created_at": _now(),
+    }
+    if promo:
+        payload["pending_promo_code"] = promo
+    save_account(store, payload)
     billing = store.billing_record() or {}
     billing["email"] = email_norm
+    if promo:
+        billing["pending_promo_code"] = promo
     store.save_billing_record(billing)
     return public_account(store), _new_session(store)
 
@@ -134,7 +185,8 @@ def login(store: Store, email: str, password: str) -> tuple[dict[str, Any], str]
     data = account_record(store)
     if not data.get("email"):
         raise ValueError("Účet ještě není založený. Nejdřív se zaregistrujte.")
-    if data.get("email") != email_norm or not _verify_password(password, data.get("password_hash") or "", data.get("password_salt") or ""):
+    stored_email = (data.get("email") or "").strip().lower()
+    if stored_email != email_norm or not _verify_password(password, data.get("password_hash") or "", data.get("password_salt") or ""):
         raise ValueError("E-mail nebo heslo nesedí")
     return public_account(store), _new_session(store)
 
@@ -264,6 +316,12 @@ def save_discord_connection(store: Store, payload: dict[str, Any]) -> dict[str, 
     webhook = (data.get("discord_webhook_url") or "").strip()
     if webhook:
         store.apply_discord_webhook(webhook)
+        try:
+            from app import analytics as site_stats
+
+            site_stats.track(store, site_stats.KIND_DISCORD, path="/nastaveni")
+        except Exception:
+            pass
     return discord_status(store)
 
 

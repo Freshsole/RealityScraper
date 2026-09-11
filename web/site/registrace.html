@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/site/site.css" />
-    <link rel="stylesheet" href="/static/site/auth.css?v=1.2.0-n3" />
+    <link rel="stylesheet" href="/static/site/auth.css?v=1.2.0-n4" />
   </head>
   <body class="auth-page">
     <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
@@ -189,6 +189,11 @@
             <button type="button">2× denně</button>
           </div>
         </div>
+        <div class="field">
+          <label for="reg-promo">Slevový kód <span class="optional">(volitelné)</span></label>
+          <div class="field-input"><input id="reg-promo" name="promo" type="text" placeholder="např. TEST20" autocomplete="off" /></div>
+          <p class="field-hint">Platí jen na první objednávku tarifu Start nebo PRO.</p>
+        </div>
         <button class="auth-btn" id="finish-reg" type="button">
           Dokončit registraci
           <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-circle.svg" width="16" height="16" alt="" /></span>
@@ -197,6 +202,7 @@
       <p class="auth-hint">Notifikace běží nepřetržitě na pozadí 24/7.</p>
       </div>
     </div>
-    <script src="/static/site/auth.js?v=1.2.0-n3"></script>
+    <script src="/static/site/auth.js?v=1.2.0-n6"></script>
+    <script src="/static/t.js?v=2"></script>
   </body>
 </html>

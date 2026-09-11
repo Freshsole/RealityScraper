@@ -1,15 +1,5 @@
 const $ = (id) => document.getElementById(id);
 
-function dbg(hypothesisId, location, message, data) {
-  // #region agent log
-  fetch("http://127.0.0.1:7916/ingest/9c91a5b2-77cd-4844-bfa2-c3efbfb401ba", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "c31723" },
-    body: JSON.stringify({ sessionId: "c31723", hypothesisId, location, message, data, timestamp: Date.now(), runId: "post-fix" }),
-  }).catch(() => {});
-  // #endregion
-}
-
 const livePill = $("live-pill");
 const liveLabel = $("live-label");
 const toggleBtn = $("toggle");
@@ -454,7 +444,6 @@ document.addEventListener("click", (event) => {
 window.addEventListener("popstate", () => applyRoute());
 
 function renderStatus(status) {
-  const started = performance.now();
   statusCache = status;
   const running = Boolean(status.running);
   livePill.dataset.state = status.last_error ? "error" : running ? "on" : "off";
@@ -487,14 +476,6 @@ function renderStatus(status) {
   renderBilling(status.billing);
   renderCatalogSync(status.catalog_sync, status.catalog_running);
   fillTemplateSelects(status.templates || []);
-  // #region agent log
-  dbg("D", "app.js:renderStatus", "renderStatus done", {
-    ms: Math.round(performance.now() - started),
-    monitors: (status.monitors || []).length,
-    recent: (status.recent || []).length,
-    page: location.pathname,
-  });
-  // #endregion
 }
 
 function pinPrice(item) {
@@ -970,12 +951,115 @@ function formatBillingDate(value) {
   return date.toLocaleDateString("cs-CZ");
 }
 
+let billingPromo = { code: "", percent: 0, amount_czk: 0 };
+
+function currentPromo() {
+  return billingPromo;
+}
+
+function discountedPrice(base, promo) {
+  const n = Number(base);
+  if (!n || !promo?.percent) return n;
+  return Math.round((n * (100 - Number(promo.percent))) / 100);
+}
+
+function paintBillingPrices(promo) {
+  document.querySelectorAll(".bill-tier-price[data-price]").forEach((el) => {
+    const base = Number(el.dataset.price);
+    const span = "<span>/měsíc</span>";
+    if (promo?.percent && currentBilling().first_order !== false) {
+      el.innerHTML = `${discountedPrice(base, promo)} Kč${span}`;
+    } else {
+      el.innerHTML = `${base} Kč${span}`;
+    }
+  });
+  const status = $("billing-promo-status");
+  if (!status) return;
+  if (promo?.code && promo.percent) {
+    status.hidden = false;
+    status.classList.remove("is-error");
+    status.textContent = `Kód ${promo.code}: −${promo.percent} % na první platbu.`;
+  }
+}
+
+async function applyBillingPromo(persist) {
+  const input = $("billing-promo");
+  const status = $("billing-promo-status");
+  const code = (input?.value || "").trim();
+  if (!code) {
+    billingPromo = { code: "", percent: 0, amount_czk: 0 };
+    paintBillingPrices(billingPromo);
+    if (status) {
+      status.hidden = true;
+      status.textContent = "";
+      status.classList.remove("is-error");
+    }
+    if (persist) {
+      await fetch("/api/billing/promo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: "" }),
+      });
+    }
+    return;
+  }
+  const response = await fetch(`/api/billing/promo?code=${encodeURIComponent(code)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    billingPromo = { code: "", percent: 0, amount_czk: 0 };
+    paintBillingPrices(billingPromo);
+    if (status) {
+      status.hidden = false;
+      status.classList.add("is-error");
+      status.textContent = data.detail || "Slevový kód nelze použít";
+    }
+    if (persist) toast(data.detail || "Slevový kód nelze použít", "error");
+    return;
+  }
+  billingPromo = {
+    code: data.code || code.toUpperCase(),
+    percent: Number(data.percent || 0),
+    amount_czk: Number(data.amount_czk || 0),
+  };
+  try {
+    sessionStorage.setItem("realitify_promo", billingPromo.code);
+  } catch {
+    /* ignore */
+  }
+  paintBillingPrices(billingPromo);
+  if (persist) {
+    await fetch("/api/billing/promo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: billingPromo.code }),
+    });
+    toast(`Slevový kód ${billingPromo.code} je připravený na první objednávku`);
+  }
+}
+
 function renderBilling(billing) {
   if (!billing) return;
   statusCache.billing = billing;
   if ($("billing-plan-pill")) $("billing-plan-pill").textContent = `Aktivní plán: ${billing.label || "Zdarma"}`;
   const price = billing.price_czk;
   if ($("billing-price")) $("billing-price").textContent = price == null ? "Dohodou" : `${price} Kč`;
+  const promoWrap = $("billing-promo-wrap");
+  if (promoWrap) promoWrap.hidden = billing.first_order === false;
+  const promoInput = $("billing-promo");
+  if (promoInput && !promoInput.dataset.filled) {
+    const fromUrl = new URLSearchParams(location.search).get("promo") || "";
+    const stored = (() => {
+      try {
+        return sessionStorage.getItem("realitify_promo") || "";
+      } catch {
+        return "";
+      }
+    })();
+    promoInput.value = fromUrl || billing.pending_promo_code || stored || promoInput.value;
+    promoInput.dataset.filled = "1";
+    if (promoInput.value.trim()) applyBillingPromo(false);
+  }
+  paintBillingPrices(currentPromo());
   if ($("billing-features")) {
     $("billing-features").innerHTML = (billing.features || [])
       .map((row) => `<li><img src="/static/assets/settings/icon-plan-check.svg" alt="" />${escapeHtml(row)}</li>`)
@@ -1046,7 +1130,7 @@ async function startCheckout(plan) {
   const response = await fetch("/api/billing/checkout", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, promo: ($("billing-promo")?.value || "").trim() }),
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -2110,23 +2194,12 @@ let refreshBusy = false;
 
 async function refresh() {
   if (refreshBusy) {
-    // #region agent log
-    dbg("B", "app.js:refresh", "skipped overlapping", { path: location.pathname });
-    // #endregion
     return statusCache;
   }
   refreshBusy = true;
-  const started = performance.now();
   try {
     const response = await fetch("/api/status");
     const status = await response.json();
-    // #region agent log
-    dbg("A", "app.js:refresh", "status fetched", {
-      fetchMs: Math.round(performance.now() - started),
-      bytes: JSON.stringify(status).length,
-      checking: status.checking,
-    });
-    // #endregion
     renderStatus(status);
     if (!templateState) startNewTemplate();
     return status;
@@ -2949,27 +3022,25 @@ $("pw-save")?.addEventListener("click", async () => {
 document.querySelectorAll("[data-billing]").forEach((btn) => {
   btn.addEventListener("click", () => pickBillingPlan(btn.dataset.billing));
 });
+$("billing-promo-apply")?.addEventListener("click", () => applyBillingPromo(true));
+$("billing-promo")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    applyBillingPromo(true);
+  }
+});
 $("billing-cancel")?.addEventListener("click", () => pickBillingPlan("free"));
 $("billing-change")?.addEventListener("click", () => openBillingPortal());
 
 async function boot() {
-  const started = performance.now();
   applyRoute();
-  const catalogStarted = performance.now();
   const catalogRes = await fetch("/api/filters/catalog");
   filterCatalog = await catalogRes.json();
-  // #region agent log
-  dbg("C", "app.js:boot", "filters catalog", { ms: Math.round(performance.now() - catalogStarted), bytes: JSON.stringify(filterCatalog).length });
-  // #endregion
   filterState = structuredClone(filterCatalog.defaults);
   renderFilterGroups();
-  const buildStarted = performance.now();
   if (settingsPanel() === "watch") {
     await rebuildUrl();
   }
-  // #region agent log
-  dbg("C", "app.js:boot", "rebuildUrl", { ms: Math.round(performance.now() - buildStarted), ran: settingsPanel() === "watch" });
-  // #endregion
   const tpl = await fetch("/api/templates").then((res) => res.json());
   variables = tpl.variables || [];
   sampleVars = tpl.sample || {};
@@ -3006,9 +3077,6 @@ async function boot() {
     if (wantedPlan !== (currentBilling().plan || "free")) await pickBillingPlan(wantedPlan);
   }
   checkUpdates();
-  // #region agent log
-  dbg("C", "app.js:boot", "boot done", { ms: Math.round(performance.now() - started), path: location.pathname });
-  // #endregion
   const params = new URLSearchParams(location.search);
   const drafted = params.get("url");
   const draftedName = params.get("name");

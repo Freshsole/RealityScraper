@@ -13,9 +13,19 @@
   let circleFilter = null;
   let selectedPlaces = [];
   let watchProfiles = [];
+  let facetMonitors = [];
   let placeSuggestItems = [];
   let placeSuggestTimer = 0;
+  let placeSuggestFocus = -1;
+  let placeSearchAbort = null;
+  let placeSearchSeq = 0;
+  let catalogAbort = null;
+  let catalogSeq = 0;
   let radiusTimer = null;
+  let mapReloadTimer = 0;
+  let ignoreMapMove = 0;
+  let needPlaceFit = false;
+  const PRAHA_BOUNDS = { south: "49.94", north: "50.177", west: "14.22", east: "14.71" };
   const DISTRICT_OSM = {
     "praha-1": { id: "R15107966", label: "Praha 1" },
     "praha-2": { id: "R19999122", label: "Praha 2" },
@@ -45,7 +55,7 @@
     portal: "",
     dispositions: new Set(),
     amenities: new Set(),
-    offers: new Set(),
+    offers: new Set(["pronajem"]),
     estates: new Set(),
     districts: new Set(),
     ownership: new Set(),
@@ -129,6 +139,21 @@
     btn.classList.toggle("on", Boolean(on));
   }
 
+  function mapBoundsParams() {
+    if (selectedPlaces.length || circleFilter || selected.monitor) return {};
+    ensureMap();
+    const bounds = catalogMap?.getBounds?.();
+    if (!bounds || !bounds.isValid?.()) return { ...PRAHA_BOUNDS };
+    const latPad = Math.max(0.002, (bounds.getNorth() - bounds.getSouth()) * 0.02);
+    const lonPad = Math.max(0.002, (bounds.getEast() - bounds.getWest()) * 0.02);
+    return {
+      south: String(bounds.getSouth() - latPad),
+      north: String(bounds.getNorth() + latPad),
+      west: String(bounds.getWest() - lonPad),
+      east: String(bounds.getEast() + lonPad),
+    };
+  }
+
   function filters() {
     return {
       portal: selected.portal,
@@ -142,7 +167,7 @@
       offer: [...selected.offers].join(","),
       estate: [...selected.estates].join(","),
       district: [...selected.districts].join(","),
-      places: selectedPlaces.map((item) => item.id).join(","),
+      places: selectedPlaces.map(placeQueryToken).join(","),
       ownership: [...selected.ownership].join(","),
       condition: [...selected.conditions].join(","),
       building: [...selected.buildings].join(","),
@@ -157,14 +182,16 @@
       status: selected.status,
       discounted: selected.discounted ? "1" : "",
       hits: selected.hits,
+      ...mapBoundsParams(),
     };
   }
 
   function writeUrlState() {
     if (location.pathname.replace(/\/$/, "") !== "/nabidka") return;
     const params = new URLSearchParams();
+    const skipUrl = new Set(["south", "north", "west", "east"]);
     for (const [key, value] of Object.entries(filters())) {
-      if (value) params.set(key, String(value));
+      if (value && !skipUrl.has(key)) params.set(key, String(value));
     }
     const query = params.toString();
     history.replaceState(null, "", query ? `/nabidka?${query}` : "/nabidka");
@@ -180,7 +207,9 @@
     selected.sort = params.get("sort") || "newest";
     selected.dispositions = new Set((params.get("disposition") || "").split(",").filter(Boolean));
     selected.amenities = new Set((params.get("amenities") || "").split(",").filter(Boolean));
-    selected.offers = new Set((params.get("offer") || "").split(",").filter(Boolean));
+    selected.offers = new Set(
+      (params.get("offer") || (params.get("monitor_id") ? "" : "pronajem")).split(",").filter(Boolean),
+    );
     selected.estates = new Set((params.get("estate") || "").split(",").filter(Boolean));
     selected.districts = new Set((params.get("district") || "").split(",").filter(Boolean));
     selected.ownership = new Set((params.get("ownership") || "").split(",").filter(Boolean));
@@ -197,9 +226,9 @@
     if ($("cat-area-to")) $("cat-area-to").value = params.get("area_to") || "";
     selectedPlaces = (params.get("places") || "")
       .split(",")
-      .map((id) => id.trim())
+      .map((token) => token.trim())
       .filter(Boolean)
-      .map((id) => ({ id, label: id, kind: id.startsWith("W") ? "street" : "area" }));
+      .map(placeFromToken);
     for (const place of selectedPlaces) {
       const slug = slugForPlace(place.id);
       if (slug) selected.districts.add(slug);
@@ -249,6 +278,49 @@
     return Object.keys(DISTRICT_OSM).find((slug) => DISTRICT_OSM[slug].id === id) || "";
   }
 
+  function placeQueryToken(place) {
+    const lat = Number(place.lat);
+    const lon = Number(place.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return `${place.id}~${lat}~${lon}`;
+    return place.id;
+  }
+
+  function placeFromToken(token) {
+    const parts = String(token || "").split("~");
+    const id = parts[0];
+    const lat = parts.length >= 3 ? Number(parts[1]) : NaN;
+    const lon = parts.length >= 3 ? Number(parts[2]) : NaN;
+    const mapped = Object.values(DISTRICT_OSM).find((row) => row.id === id);
+    const kind = mapped ? "area" : id.startsWith("W") ? "street" : "area";
+    let label = mapped?.label || id;
+    if (parts.length >= 4) {
+      try {
+        const decoded = decodeURIComponent(parts.slice(3).join("~"));
+        if (decoded) label = decoded;
+      } catch {
+        /* keep label */
+      }
+    }
+    const place = { id, label, kind };
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      place.lat = lat;
+      place.lon = lon;
+      place.buffer_m = kind === "street" ? 45 : 0;
+    }
+    return place;
+  }
+
+  function placeLatLon(place) {
+    const lat = Number(place.lat);
+    const lon = Number(place.lon);
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon };
+    const coords = place.geojson?.coordinates;
+    if (place.geojson?.type === "Point" && Array.isArray(coords) && coords.length >= 2) {
+      return { lat: Number(coords[1]), lon: Number(coords[0]) };
+    }
+    return null;
+  }
+
   function syncPlacesFromDistricts() {
     for (const slug of selected.districts) {
       const mapped = DISTRICT_OSM[slug];
@@ -261,6 +333,7 @@
       return !slug || selected.districts.has(slug);
     });
     renderPlaceChips();
+    if (selectedPlaces.length) needPlaceFit = true;
   }
 
   function renderPlaceChips() {
@@ -275,28 +348,48 @@
   }
 
   async function ensurePlaceGeoms() {
-    const missing = selectedPlaces.filter((row) => !row.geojson);
+    const missing = selectedPlaces.filter((row) => !row.geojson || row.geojson.type === "Point");
     if (!missing.length) return;
-    const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map((row) => row.id).join(","))}`, {
-      signal: AbortSignal.timeout(8000),
+    const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map(placeQueryToken).join(","))}`, {
+      signal: AbortSignal.timeout(20000),
     });
     const data = await response.json().catch(() => ({ items: [] }));
     applyPlaceGeoms(data.items);
   }
 
   async function addPlace(item) {
-    if (!item?.id || selectedPlaces.some((row) => row.id === item.id)) return;
-    selectedPlaces.push({
+    if (!item?.id) return;
+    if (selectedPlaces.some((row) => row.id === item.id)) {
+      hidePlaceSuggest();
+      if ($("cat-q")) $("cat-q").value = "";
+      drawPlaceLayer(false);
+      goToSelection();
+      return;
+    }
+    const kind = item.kind || (String(item.id).startsWith("W") ? "street" : "area");
+    const place = {
       id: item.id,
       label: item.label || item.id,
-      kind: item.kind || (String(item.id).startsWith("W") ? "street" : "area"),
-    });
+      kind,
+      lat: item.lat,
+      lon: item.lon,
+      buffer_m: item.buffer_m || (kind === "street" ? 45 : 0),
+    };
+    if (Array.isArray(item.extent) && item.extent.length >= 4) place.extent = item.extent;
+    if (item.geojson && item.geojson.type !== "Point") place.geojson = item.geojson;
+    selectedPlaces.push(place);
     const slug = slugForPlace(item.id);
     if (slug) selected.districts.add(slug);
     renderPlaceChips();
     syncFilterUi();
     hidePlaceSuggest();
     if ($("cat-q")) $("cat-q").value = "";
+    needPlaceFit = true;
+    renderMapPins([]);
+    drawPlaceLayer(false);
+    goToSelection();
+    const count = $("catalog-count");
+    if (count) count.textContent = "Načítám…";
     loadCatalog();
   }
 
@@ -306,7 +399,9 @@
     if (slug) selected.districts.delete(slug);
     renderPlaceChips();
     syncFilterUi();
-    drawPlaceLayer(true);
+    needPlaceFit = Boolean(selectedPlaces.length);
+    renderMapPins([]);
+    drawPlaceLayer(needPlaceFit);
     loadCatalog();
   }
 
@@ -315,6 +410,16 @@
     if (!box) return;
     box.hidden = true;
     box.innerHTML = "";
+    placeSuggestFocus = -1;
+  }
+
+  function paintPlaceSuggest() {
+    const box = $("cat-place-suggest");
+    if (!box) return;
+    box.querySelectorAll("[data-place-suggest]").forEach((btn, index) => {
+      btn.classList.toggle("is-active", index === placeSuggestFocus);
+      btn.setAttribute("aria-selected", index === placeSuggestFocus ? "true" : "false");
+    });
   }
 
   async function searchPlaces(q) {
@@ -324,9 +429,20 @@
       hidePlaceSuggest();
       return;
     }
-    const response = await fetch(`/api/places/search?q=${encodeURIComponent(q)}`);
-    const data = await response.json().catch(() => ({ items: [] }));
+    const seq = ++placeSearchSeq;
+    placeSearchAbort?.abort();
+    const ac = new AbortController();
+    placeSearchAbort = ac;
+    let data = { items: [] };
+    try {
+      const response = await fetch(`/api/places/search?q=${encodeURIComponent(q)}`, { signal: ac.signal });
+      data = await response.json().catch(() => ({ items: [] }));
+    } catch (err) {
+      if (err?.name === "AbortError") return;
+    }
+    if (seq !== placeSearchSeq) return;
     placeSuggestItems = data.items || [];
+    placeSuggestFocus = -1;
     box.hidden = false;
     if (!placeSuggestItems.length) {
       box.innerHTML = `<button type="button" disabled>Nic se nenašlo</button>`;
@@ -340,11 +456,20 @@
       .join("");
   }
 
+  function watchChipItems() {
+    const items = [...watchProfiles];
+    if (selected.monitor && !items.some((item) => item.id === selected.monitor)) {
+      const extra = facetMonitors.find((item) => item.id === selected.monitor);
+      items.push(extra || { id: selected.monitor, name: "Monitor" });
+    }
+    return items;
+  }
+
   function renderViews() {
     const host = $("catalog-views");
     if (!host) return;
     const views = savedViews();
-    const watches = watchProfiles
+    const watches = watchChipItems()
       .map(
         (item) =>
           `<button type="button" class="chip${selected.monitor === item.id ? " on" : ""}${item.enabled === false ? " is-off" : ""}" data-watch="${escapeHtml(item.id)}">${escapeHtml(item.name)}</button>`,
@@ -368,7 +493,7 @@
     return (
       selected.dispositions.size +
       selected.amenities.size +
-      selected.offers.size +
+      selected.offers.size === 1 && selected.offers.has("pronajem") ? 0 : selected.offers.size +
       selected.estates.size +
       selected.districts.size +
       selected.ownership.size +
@@ -451,6 +576,7 @@
 
   function clearFilterUi() {
     $("filters-modal")?.querySelectorAll(".chip.on").forEach((chip) => chip.classList.remove("on"));
+    document.querySelector('[data-filter="offer"] [data-value="pronajem"]')?.classList.add("on");
     if ($("cat-monitor")) $("cat-monitor").value = "";
     if ($("cat-sort")) $("cat-sort").value = "newest";
   }
@@ -475,6 +601,7 @@
   }
 
   function renderFacets(facets) {
+    facetMonitors = facets?.monitors || [];
     const host = $("cat-dispositions");
     const current = selected.dispositions;
     host.innerHTML = (facets?.dispositions || [])
@@ -489,6 +616,7 @@
       selected.monitor = previous;
       monitor.value = previous;
     }
+    renderViews();
   }
 
   function formatKc(value) {
@@ -704,56 +832,155 @@
     for (const item of items || []) {
       const row = selectedPlaces.find((place) => place.id === item.id);
       if (!row) continue;
-      row.geojson = item.geojson;
+      const next = item.geojson;
+      if (next?.type === "Point") {
+        row.lat = item.lat ?? row.lat;
+        row.lon = item.lon ?? row.lon;
+        continue;
+      }
+      if (row.geojson && /LineString|Polygon/i.test(row.geojson.type || "") && next?.type === "Point") continue;
+      if (next) row.geojson = next;
       row.kind = item.kind || row.kind;
-      if (item.label) row.label = item.label;
-      row.lat = item.lat;
-      row.lon = item.lon;
-      row.buffer_m = item.buffer_m;
+      if (item.label && !/^[RWN]\d+$/i.test(item.label)) row.label = item.label;
+      row.lat = item.lat ?? row.lat;
+      row.lon = item.lon ?? row.lon;
+      row.buffer_m = item.buffer_m || row.buffer_m;
     }
     renderPlaceChips();
+  }
+
+  function lineLatLngs(geojson) {
+    if (!geojson) return [];
+    if (geojson.type === "LineString") {
+      return [geojson.coordinates.map(([lon, lat]) => [lat, lon])];
+    }
+    if (geojson.type === "MultiLineString") {
+      return geojson.coordinates.map((line) => line.map(([lon, lat]) => [lat, lon]));
+    }
+    return [];
+  }
+
+  function metersToStrokePx(meters, lat) {
+    const zoom = catalogMap?.getZoom?.() || 16;
+    const mpp = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
+    return Math.max(10, (Number(meters) * 2) / mpp);
+  }
+
+  function padBoundsMeters(bounds, meters) {
+    const lat = bounds.getCenter().lat;
+    const dLat = meters / 111320;
+    const dLon = meters / (111320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+    return L.latLngBounds(
+      [bounds.getSouth() - dLat, bounds.getWest() - dLon],
+      [bounds.getNorth() + dLat, bounds.getEast() + dLon],
+    );
+  }
+
+  function extentBounds(place) {
+    const extent = place?.extent;
+    if (!Array.isArray(extent) || extent.length < 4) return null;
+    const west = Number(extent[0]);
+    const north = Number(extent[1]);
+    const east = Number(extent[2]);
+    const south = Number(extent[3]);
+    if (![south, north, west, east].every(Number.isFinite)) return null;
+    return L.latLngBounds([south, west], [north, east]);
+  }
+
+  function selectionBounds() {
+    if (placeLayer?.getLayers?.().length) {
+      const drawn = placeLayer.getBounds();
+      if (drawn?.isValid?.()) return drawn;
+    }
+    let bounds = null;
+    for (const place of selectedPlaces) {
+      const fromExtent = extentBounds(place);
+      if (fromExtent) {
+        bounds = bounds ? bounds.extend(fromExtent) : fromExtent;
+        continue;
+      }
+      const lat = Number(place.lat);
+      const lon = Number(place.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const pad = place.kind === "street" ? 0.004 : 0.03;
+      const part = L.latLngBounds([lat - pad, lon - pad * 1.4], [lat + pad, lon + pad * 1.4]);
+      bounds = bounds ? bounds.extend(part) : part;
+    }
+    return bounds;
+  }
+
+  function goToSelection() {
+    ensureMap();
+    if (!catalogMap || !selectedPlaces.length) return;
+    let bounds = selectionBounds();
+    if (!bounds?.isValid?.()) return;
+    ignoreMapMove += 1;
+    const streetOnly =
+      selectedPlaces.length > 0 &&
+      selectedPlaces.every((row) => row.kind === "street" || /LineString/i.test(row.geojson?.type || ""));
+    if (streetOnly) {
+      const meters = Number(selectedPlaces[0]?.buffer_m) || 45;
+      bounds = padBoundsMeters(bounds, meters);
+    }
+    try {
+      catalogMap.invalidateSize();
+      catalogMap.fitBounds(bounds, {
+        padding: [40, 40],
+        maxZoom: streetOnly ? 16 : 14,
+        animate: false,
+      });
+    } catch {
+      const center = bounds.getCenter();
+      catalogMap.setView(center, streetOnly ? 15 : 12, { animate: false });
+    }
+    window.setTimeout(() => {
+      ignoreMapMove = Math.max(0, ignoreMapMove - 1);
+    }, 400);
   }
 
   function drawPlaceLayer(fit) {
     ensureMap();
     if (!catalogMap) return;
     if (!placeLayer) {
-      placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
+      placeLayer = L.layerGroup().addTo(catalogMap);
     }
     placeLayer.clearLayers();
     for (const place of selectedPlaces) {
-      if (!place.geojson) continue;
-      const street = place.kind === "street" || /LineString/i.test(place.geojson.type || "");
-      const style = street
-        ? {
-            color: "#4a90c4",
-            weight: 78,
+      const street = place.kind === "street" || /LineString/i.test(place.geojson?.type || "");
+      if (street) {
+        const lines = lineLatLngs(place.geojson);
+        if (!lines.length) continue;
+        const meters = Number(place.buffer_m) || 45;
+        for (const latlngs of lines) {
+          const lat = latlngs[0][0];
+          L.polyline(latlngs, {
+            color: "#5ba3d0",
+            weight: metersToStrokePx(meters, lat),
             opacity: 0.35,
             lineCap: "round",
             lineJoin: "round",
-            pane: "placePane",
-          }
-        : {
-            color: "#3d7ea6",
-            weight: 2,
-            fillColor: "#5ba3d0",
-            fillOpacity: 0.28,
-            pane: "placePane",
-          };
-      L.geoJSON(place.geojson, { style, pane: "placePane" }).addTo(placeLayer);
-      if (street) {
-        L.geoJSON(place.geojson, {
-          style: { color: "#2b6a96", weight: 3, opacity: 0.9, pane: "placePane" },
-          pane: "placePane",
-        }).addTo(placeLayer);
+          }).addTo(placeLayer);
+          L.polyline(latlngs, {
+            color: "#2b6a96",
+            weight: 3,
+            opacity: 0.95,
+            lineCap: "round",
+            lineJoin: "round",
+          }).addTo(placeLayer);
+        }
+        continue;
       }
+      if (!place.geojson || place.geojson.type === "Point") continue;
+      L.geoJSON(place.geojson, {
+        style: {
+          color: "#3d7ea6",
+          weight: 2,
+          fillColor: "#5ba3d0",
+          fillOpacity: 0.28,
+        },
+      }).addTo(placeLayer);
     }
-    const streetOnly =
-      selectedPlaces.length > 0 &&
-      selectedPlaces.every((row) => row.kind === "street" || /LineString/i.test(row.geojson?.type || ""));
-    if (fit && placeLayer.getLayers().length) {
-      catalogMap.fitBounds(placeLayer.getBounds(), { padding: [28, 28], maxZoom: streetOnly ? 16 : 13 });
-    }
+    if (fit) goToSelection();
   }
 
   function drawCircleLayer() {
@@ -771,7 +998,11 @@
         fillOpacity: 0.16,
       }).addTo(catalogMap);
     }
+    ignoreMapMove += 1;
     catalogMap.fitBounds(circleLayer.getBounds(), { padding: [28, 28], maxZoom: 15 });
+    window.setTimeout(() => {
+      ignoreMapMove = Math.max(0, ignoreMapMove - 1);
+    }, 400);
   }
 
   function placeCircle(lat, lon, radiusM) {
@@ -840,7 +1071,7 @@
       iconAnchor: [44, 16],
       popupAnchor: [0, -18],
     });
-    const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true });
+    const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true, pane: "pinPane" });
     marker.bindPopup(`<strong>${escapeHtml(pinPrice(item))}</strong><br />${escapeHtml(item.locality || item.name)}`);
     marker.on("click", () => {
       if (drawingCircle) {
@@ -860,17 +1091,26 @@
     catalogMap.createPane("placePane");
     catalogMap.getPane("placePane").style.zIndex = 450;
     catalogMap.getPane("placePane").style.pointerEvents = "none";
+    catalogMap.createPane("pinPane");
+    catalogMap.getPane("pinPane").style.zIndex = 650;
     L.maplibreGL({
       style: "https://tiles.openfreemap.org/styles/liberty",
     }).addTo(catalogMap);
-    placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
-    catalogLayer = L.layerGroup().addTo(catalogMap);
-    hoverLayer = L.layerGroup().addTo(catalogMap);
+    placeLayer = L.layerGroup().addTo(catalogMap);
+    catalogLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
+    hoverLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
     catalogMap.on("click", (event) => {
       if (!drawingCircle) return;
       placeCircle(event.latlng.lat, event.latlng.lng);
     });
-    catalogMap.on("zoomend", () => drawPinLayer(false));
+    catalogMap.on("zoom zoomend moveend", () => {
+      drawPinLayer();
+    });
+    catalogMap.on("moveend", () => {
+      if (ignoreMapMove || drawingCircle || selectedPlaces.length || circleFilter) return;
+      window.clearTimeout(mapReloadTimer);
+      mapReloadTimer = window.setTimeout(() => loadCatalog(), 280);
+    });
   }
 
   function listingKey(item) {
@@ -897,6 +1137,7 @@
     group.items.forEach((item, index) => {
       const angle = (2 * Math.PI * index) / count - Math.PI / 2;
       const marker = L.marker([group.lat + radius * Math.cos(angle), group.lon + radius * Math.sin(angle)], {
+        pane: "pinPane",
         icon: L.divIcon({
           className: "price-pin-wrap",
           html: `<div class="price-pin">${escapeHtml(pinPrice(item))}</div>`,
@@ -945,7 +1186,7 @@
     });
   }
 
-  function drawPinLayer(fit) {
+  function drawPinLayer() {
     if (!catalogMap || !catalogLayer) return;
     const keepHover = hoverKey;
     const items = pinItems.filter((row) => row.lat != null && row.lon != null);
@@ -955,7 +1196,6 @@
     hoverLayer?.clearLayers();
     hoverMarker = null;
     const groups = groupedPins(items, catalogMap.getZoom());
-    const points = [];
     for (const group of groups) {
       if (group.items.length === 1) {
         const item = group.items[0];
@@ -965,6 +1205,7 @@
       } else {
         const size = group.items.length > 99 ? 48 : group.items.length > 9 ? 42 : 36;
         const marker = L.marker([group.lat, group.lon], {
+          pane: "pinPane",
           icon: L.divIcon({
             className: "price-cluster-wrap",
             html: `<div class="price-cluster">${group.items.length}</div>`,
@@ -990,31 +1231,15 @@
         catalogLayer.addLayer(marker);
         for (const item of group.items) clusterByKey.set(listingKey(item), { marker, item });
       }
-      points.push([group.lat, group.lon]);
-    }
-    if (fit) {
-      if (selectedPlaces.length) drawPlaceLayer(true);
-      else if (circleFilter) drawCircleLayer();
-      else if (points.length === 1) catalogMap.setView(points[0], 14);
-      else if (points.length > 1) catalogMap.fitBounds(points, { padding: [40, 40], maxZoom: 14 });
-    } else {
-      drawPlaceLayer(false);
     }
     if (keepHover) highlightListing(keepHover);
-    setTimeout(() => catalogMap.invalidateSize(), 80);
   }
 
   function renderMapPins(items) {
     pinItems = items || [];
     ensureMap();
     if (!catalogMap || !catalogLayer) return;
-    drawPinLayer(true);
-  }
-
-  async function loadPins() {
-    const response = await fetch(`/api/catalog/pins?${queryString()}`);
-    const data = await response.json();
-    renderMapPins(uniqueOffers(data.items || []));
+    drawPinLayer();
   }
 
   function historyChart(history) {
@@ -1427,19 +1652,35 @@
   async function loadCatalog(append = false) {
     if (!append) offset = 0;
     ensureMap();
+    catalogAbort?.abort();
+    const ac = new AbortController();
+    catalogAbort = ac;
+    const seq = ++catalogSeq;
+    const timer = window.setTimeout(() => ac.abort(), 20000);
     let data;
     try {
       const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`, {
-        signal: AbortSignal.timeout(20000),
+        signal: ac.signal,
       });
       if (!response.ok) throw new Error("catalog");
       data = await response.json();
     } catch {
+      if (seq !== catalogSeq) return;
+      if (selectedPlaces.length && !append) {
+        lastItems = [];
+        total = 0;
+        renderList([], false);
+        renderMapPins([]);
+      }
       $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
       return;
+    } finally {
+      window.clearTimeout(timer);
     }
+    if (seq !== catalogSeq) return;
     applyPlaceGeoms(data.places);
     const items = uniqueOffers(data.items || []);
+    const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
     total = data.total || 0;
     renderFacets(data.facets);
     if (append) lastItems = uniqueOffers(lastItems.concat(items));
@@ -1455,9 +1696,10 @@
     }
     renderList(items, append);
     if (!append) {
-      drawPlaceLayer(Boolean(selectedPlaces.length));
-      loadPins();
-      ensurePlaceGeoms().then(() => drawPlaceLayer(Boolean(selectedPlaces.length)));
+      renderMapPins(incomingPins);
+      drawPlaceLayer(false);
+      if (needPlaceFit && selectedPlaces.length) goToSelection();
+      needPlaceFit = false;
     }
     offset = lastItems.length;
     $("catalog-more").hidden = lastItems.length >= total;
@@ -1648,17 +1890,7 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => loadCatalog(), 300);
   };
-  $("cat-search")?.addEventListener("click", async () => {
-    const q = $("cat-q")?.value.trim() || "";
-    if (q.length >= 2 && !selectedPlaces.length) {
-      await searchPlaces(q);
-      if (placeSuggestItems[0]) {
-        await addPlace(placeSuggestItems[0]);
-        return;
-      }
-    }
-    loadCatalog();
-  });
+  $("cat-search")?.addEventListener("click", () => loadCatalog());
   $("catalog-more")?.addEventListener("click", () => loadCatalog(true));
   ["cat-price-from", "cat-price-to", "cat-area-from", "cat-area-to"].forEach((id) => {
     $(id)?.addEventListener("input", scheduleSearch);
@@ -1666,20 +1898,37 @@
   $("cat-q")?.addEventListener("input", () => {
     clearTimeout(placeSuggestTimer);
     const q = $("cat-q").value.trim();
-    placeSuggestTimer = window.setTimeout(() => searchPlaces(q), 220);
+    placeSuggestTimer = window.setTimeout(() => searchPlaces(q), 180);
   });
-  $("cat-q")?.addEventListener("keydown", async (event) => {
-    if (event.key === "Escape") hidePlaceSuggest();
+  $("cat-q")?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hidePlaceSuggest();
+      return;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (!$("cat-place-suggest") || $("cat-place-suggest").hidden || !placeSuggestItems.length) return;
+      event.preventDefault();
+      const last = placeSuggestItems.length - 1;
+      if (event.key === "ArrowDown") {
+        placeSuggestFocus = placeSuggestFocus < last ? placeSuggestFocus + 1 : 0;
+      } else {
+        placeSuggestFocus = placeSuggestFocus > 0 ? placeSuggestFocus - 1 : last;
+      }
+      paintPlaceSuggest();
+      return;
+    }
     if (event.key === "Enter") {
       event.preventDefault();
-      const q = $("cat-q").value.trim();
-      if (!placeSuggestItems.length && q.length >= 2) await searchPlaces(q);
-      if (placeSuggestItems[0]) await addPlace(placeSuggestItems[0]);
+      if (placeSuggestFocus >= 0 && placeSuggestItems[placeSuggestFocus]) {
+        addPlace(placeSuggestItems[placeSuggestFocus]);
+      }
     }
   });
-  $("cat-place-suggest")?.addEventListener("click", (event) => {
+  $("cat-place-suggest")?.addEventListener("pointerdown", (event) => {
     const btn = event.target.closest("[data-place-suggest]");
     if (!btn) return;
+    event.preventDefault();
+    event.stopPropagation();
     const item = placeSuggestItems[Number(btn.dataset.placeSuggest)];
     if (item) addPlace(item);
   });
@@ -1825,7 +2074,6 @@
       if (Array.isArray(prefs.sizes) && prefs.sizes.length) {
         selected.dispositions = new Set(prefs.sizes);
       }
-      if (prefs.offer) selected.offers = new Set([prefs.offer]);
       if (prefs.price_from != null && $("cat-price-from")) $("cat-price-from").value = String(prefs.price_from);
       if (prefs.price_to != null && $("cat-price-to")) $("cat-price-to").value = String(prefs.price_to);
       if (prefs.area_from != null && $("cat-area-from")) $("cat-area-from").value = String(prefs.area_from);
@@ -1856,6 +2104,7 @@
     .catch(() => {});
   syncCircleUi();
   renderViews();
+  syncFilterUi();
 
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {
     loaded = true;

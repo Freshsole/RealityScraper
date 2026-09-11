@@ -68,6 +68,45 @@ document.querySelectorAll(".pw-toggle").forEach((btn) => {
 
 bindStrength(document.querySelector("#reg-password"));
 
+const PROMO_STORE = "realitify_promo";
+
+function promoFromUrl() {
+  try {
+    return new URLSearchParams(location.search).get("promo") || "";
+  } catch {
+    return "";
+  }
+}
+
+function readStoredPromo() {
+  try {
+    return sessionStorage.getItem(PROMO_STORE) || "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredPromo(code) {
+  try {
+    const value = String(code || "").trim().toUpperCase();
+    if (value) sessionStorage.setItem(PROMO_STORE, value);
+    else sessionStorage.removeItem(PROMO_STORE);
+  } catch {
+    /* ignore */
+  }
+}
+
+function fillPromoInput(input) {
+  if (!input) return;
+  const fromUrl = promoFromUrl().trim().toUpperCase();
+  if (fromUrl) {
+    input.value = fromUrl;
+    writeStoredPromo(fromUrl);
+    return;
+  }
+  if (!input.value) input.value = readStoredPromo();
+}
+
 const MISMATCH = "Hesla se neshodují.";
 
 function toast(message, kind = "error") {
@@ -224,6 +263,7 @@ if (forgotForm) {
 
 const register = document.querySelector("#register-flow");
 if (register) {
+  fillPromoInput(register.querySelector("#reg-promo"));
   bindPasswordPair(register.querySelector("#reg-password"), register.querySelector("#reg-password2"));
   const panels = [...register.querySelectorAll(".step-panel")];
   const show = (n) => {
@@ -454,6 +494,8 @@ if (register) {
     }
   }
 
+  let pendingAccount = null;
+
   register.querySelector("#reg-step1").addEventListener("submit", async (e) => {
     e.preventDefault();
     const pw = register.querySelector("#reg-password");
@@ -463,16 +505,12 @@ if (register) {
       return;
     }
     if (!register.querySelector("#reg-agree").checked) return;
-    try {
-      await postJson("/api/auth/register", {
-        name: register.querySelector("#name")?.value.trim() || "",
-        email: register.querySelector("#email")?.value.trim() || "",
-        password: pw.value,
-      });
-      show(1);
-    } catch (err) {
-      toast(err.message || "Registrace se nepovedla");
-    }
+    pendingAccount = {
+      name: register.querySelector("#name")?.value.trim() || "",
+      email: register.querySelector("#email")?.value.trim() || "",
+      password: pw.value,
+    };
+    show(1);
   });
   register.querySelector("#to-step3").addEventListener("click", async () => {
     try {
@@ -482,8 +520,37 @@ if (register) {
     }
   });
   register.querySelector("#skip-prefs").addEventListener("click", () => show(2));
-  register.querySelector("#finish-reg").addEventListener("click", () => {
-    location.href = "/nabidka";
+  register.querySelector("#finish-reg").addEventListener("click", async () => {
+    const promo = register.querySelector("#reg-promo")?.value.trim() || "";
+    if (!pendingAccount?.email || !pendingAccount?.password) {
+      toast("Nejdřív vyplňte jméno, e-mail a heslo v prvním kroku.");
+      show(0);
+      return;
+    }
+    try {
+      const me = await fetch("/api/auth/me");
+      if (me.ok) {
+        if (promo) await postJson("/api/billing/promo", { code: promo });
+      } else {
+        try {
+          await postJson("/api/auth/register", { ...pendingAccount, promo });
+        } catch (err) {
+          try {
+            await postJson("/api/auth/login", {
+              email: pendingAccount.email,
+              password: pendingAccount.password,
+            });
+            if (promo) await postJson("/api/billing/promo", { code: promo });
+          } catch {
+            throw err;
+          }
+        }
+      }
+      writeStoredPromo(promo);
+      location.href = "/nabidka";
+    } catch (err) {
+      toast(err.message || "Registrace se nepovedla");
+    }
   });
   bindChoices(register, "#offer-seg button", false);
   bindChoices(register, ".freq-row button", false);

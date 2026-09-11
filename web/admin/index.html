@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin — REALITIFY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/admin/admin.css?v=21" />
+  </head>
+  <body>
+    <header class="ad-nav">
+      <a class="ad-brand" href="/admin/prehled">
+        <span class="ad-ico ad-ico-logo"><img src="/static/admin/assets/logo.svg" width="20" height="20" alt="" /></span>
+        <span class="ad-wordmark">REALITIFY</span>
+        <span class="ad-tag">ADMIN</span>
+      </a>
+      <nav class="ad-menu">
+        <a href="/#jak-to-funguje">Jak to funguje</a>
+        <a href="/nabidka">Databáze bytů</a>
+        <a href="/#srovnani">Srovnání</a>
+        <a href="/#cenik">Ceník</a>
+      </nav>
+      <div class="ad-nav-cta">
+        <button type="button" id="ad-logout-top">Odhlásit se</button>
+        <div class="ad-avatar" id="ad-avatar">AD</div>
+      </div>
+    </header>
+    <div id="ad-login" class="ad-login ad-hidden">
+      <form id="ad-login-form">
+        <h1>ADMIN PŘIHLÁŠENÍ</h1>
+        <p>Přístup má jen e-mail admin@realitify.cz. Heslo je buď <code>ADMIN_PASSWORD</code> z .env, nebo heslo tvého Realitify účtu.</p>
+        <div class="ad-field">
+          <label for="ad-email">E-mail</label>
+          <input id="ad-email" type="email" autocomplete="username" value="admin@realitify.cz" required />
+        </div>
+        <div class="ad-field">
+          <label for="ad-password">Heslo</label>
+          <input id="ad-password" type="password" autocomplete="current-password" required />
+        </div>
+        <p class="ad-err" id="ad-login-err"></p>
+        <button class="ad-btn" type="submit">Přihlásit se</button>
+      </form>
+    </div>
+    <div id="ad-app" class="ad-shell ad-hidden">
+      <aside class="ad-side">
+        <div class="ad-side-top">
+          <div class="ad-who">
+            <div class="ad-avatar-lg" id="ad-side-av">AD</div>
+            <div>
+              <strong id="ad-side-name">Admin</strong>
+              <span>Admin účet</span>
+            </div>
+          </div>
+          <nav class="ad-links" id="ad-links">
+            <a href="/admin/prehled" data-route="prehled"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/home.svg" width="18" height="18" alt="" /></span><span>Přehled</span></a>
+            <a href="/admin/uzivatele" data-route="uzivatele"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/users.svg" width="18" height="18" alt="" /></span><span>Uživatelé</span></a>
+            <a href="/admin/monitory" data-route="monitory"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/activity.svg" width="18" height="18" alt="" /></span><span>Monitory</span></a>
+            <a href="/admin/notifikace" data-route="notifikace"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/bell.svg" width="18" height="18" alt="" /></span><span>Notifikace</span></a>
+            <a href="/admin/provoz" data-route="provoz"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/server.svg" width="18" height="18" alt="" /></span><span>Provoz</span></a>
+            <a href="/admin/fakturace" data-route="fakturace"><span class="ad-ico ad-ico-18"><img src="/static/admin/assets/card.svg" width="18" height="18" alt="" /></span><span>Fakturace</span></a>
+            <a href="/admin/promo" data-route="promo"><span class="ad-ico ad-ico-tag"><img src="/static/admin/assets/tag.svg" width="13.5" height="13.5" alt="" /></span><span>Promo & influenceři</span></a>
+          </nav>
+        </div>
+        <button class="ad-out" type="button" id="ad-logout">
+          <span class="ad-ico ad-ico-18"><img src="/static/admin/assets/logout.svg" width="18" height="18" alt="" /></span>
+          <span>Odhlásit se</span>
+        </button>
+      </aside>
+      <main class="ad-main" id="ad-main"></main>
+    </div>
+    <script src="/static/admin/admin.js?v=21"></script>
+  </body>
+</html>

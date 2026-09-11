@@ -66,7 +66,7 @@ class Hub:
             task.cancel()
             try:
                 await task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, Exception):
                 pass
         self._task = None
         self._sold_task = None
@@ -227,6 +227,19 @@ class Hub:
                         self.store.upsert_seen(monitor["id"], alert, notified=bool(queued or pushed or mailed))
                         if queued or pushed or mailed:
                             notified.append(alert)
+                            try:
+                                from app import analytics as site_stats
+
+                                site_stats.track(self.store, site_stats.KIND_NOTIFY, path="/zprava")
+                            except Exception:
+                                pass
+                        elif prefs.get("discord") is not False and not webhook:
+                            try:
+                                from app import analytics as site_stats
+
+                                site_stats.track(self.store, site_stats.KIND_NOTIFY_FAIL, path="/zprava")
+                            except Exception:
+                                pass
                 except ListingGone:
                     for monitor in monitors:
                         await self.notify_sold(monitor, listing.id)
@@ -737,60 +750,19 @@ class Hub:
             await asyncio.sleep(0.2)
 
     def status(self, *, fresh: bool = False) -> dict[str, Any]:
-        started = time.perf_counter()
         now = time.monotonic()
         if not fresh and self._status_cache is not None and now - self._status_cache_at < 1.5:
-            # #region agent log
-            try:
-                with open("/Users/jirka/Desktop/Folders/RealityScraper/.cursor/debug-c31723.log", "a", encoding="utf-8") as handle:
-                    handle.write(
-                        json.dumps(
-                            {
-                                "sessionId": "c31723",
-                                "hypothesisId": "A",
-                                "location": "monitor.py:status",
-                                "message": "status cache hit",
-                                "data": {"age_ms": round((now - self._status_cache_at) * 1000, 1)},
-                                "timestamp": int(time.time() * 1000),
-                                "runId": "post-fix",
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass
-            # #endregion
             return self._status_cache
-        parts: dict[str, float] = {}
-
-        def _mark(name: str, begin: float) -> None:
-            parts[name] = round((time.perf_counter() - begin) * 1000, 1)
-
-        tick = time.perf_counter()
         monitors = self.store.list_monitors()
-        _mark("list_monitors", tick)
         errors = [item.get("last_error") for item in monitors if item.get("last_error")]
         last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
-        tick = time.perf_counter()
         catalog = self.store.catalog_sync_status()
-        _mark("catalog_sync", tick)
-        tick = time.perf_counter()
         tracked = self.store.count()
-        _mark("count", tick)
-        tick = time.perf_counter()
         new_today = self.store.new_today_count()
-        _mark("new_today", tick)
-        tick = time.perf_counter()
         recent = self.store.recent_notified(limit=36, twins=False)
-        _mark("recent", tick)
-        tick = time.perf_counter()
         recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
-        _mark("recent_today", tick)
-        tick = time.perf_counter()
         templates = self.store.list_templates()
         settings = self.store.app_settings()
-        _mark("templates_settings", tick)
         settle_pending_if_due(self.store)
         payload = {
             "running": self.running,
@@ -820,34 +792,6 @@ class Hub:
                 "persistent": config.PERSISTENT_STORAGE,
             },
         }
-        # #region agent log
-        try:
-            with open("/Users/jirka/Desktop/Folders/RealityScraper/.cursor/debug-c31723.log", "a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps(
-                        {
-                            "sessionId": "c31723",
-                            "hypothesisId": "A",
-                            "location": "monitor.py:status",
-                            "message": "status parts",
-                            "data": {
-                                "ms": round((time.perf_counter() - started) * 1000, 1),
-                                "parts": parts,
-                                "checking": self.checking,
-                                "n_monitors": len(monitors),
-                                "n_recent": len(recent),
-                                "tracked": tracked,
-                            },
-                            "timestamp": int(time.time() * 1000),
-                            "runId": "post-fix",
-                        },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
-        except Exception:
-            pass
-        # #endregion
         self._status_cache = payload
         self._status_cache_at = time.monotonic()
         return payload

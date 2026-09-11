@@ -19,12 +19,15 @@ from app.backup import export_config, export_pack, export_sqlite, import_config,
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
-from app import bezrealitky_url, localities, places, url_builder
+from app import bezrealitky_url, localities, url_builder
+from app import places as place_geo
 from app.filter_bridge import convert_search_url
 from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
+from app import admin as admin_panel
+from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
 from app import whatsapp as wa_notify
@@ -69,47 +72,30 @@ app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 
 
-def _agent_log(hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    # #region agent log
+@app.middleware("http")
+async def record_ops_timing(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/static/"):
+        return await call_next(request)
+    started = time.perf_counter()
     try:
-        with open("/Users/jirka/Desktop/Folders/RealityScraper/.cursor/debug-c31723.log", "a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "sessionId": "c31723",
-                        "hypothesisId": hypothesis_id,
-                        "location": location,
-                        "message": message,
-                        "data": data,
-                        "timestamp": int(time.time() * 1000),
-                        "runId": "post-fix",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
+        response = await call_next(request)
     except Exception:
-        pass
-    # #endregion
+        admin_panel.record_api_sample((time.perf_counter() - started) * 1000, False)
+        raise
+    admin_panel.record_api_sample((time.perf_counter() - started) * 1000, response.status_code < 500)
+    return response
 
 
 @app.middleware("http")
 async def no_store_ui(request: Request, call_next):
-    started = time.perf_counter()
     response = await call_next(request)
     path = request.url.path
-    # #region agent log
-    if path.startswith("/api/"):
-        _agent_log(
-            "E",
-            "main.py:middleware",
-            "api request",
-            {"path": path, "ms": round((time.perf_counter() - started) * 1000, 1), "status": response.status_code},
-        )
-    # #endregion
     if (
         path.startswith("/static/")
         or path.startswith("/nastaveni")
+        or path.startswith("/admin")
+        or path.startswith("/uspechy")
         or path in {
         "/",
         "/kontakt",
@@ -122,6 +108,7 @@ async def no_store_ui(request: Request, call_next):
         "/filtry",
         "/zprava",
         "/nastaveni",
+        "/admin",
         "/sw.js",
         "/manifest.webmanifest",
     }
@@ -155,6 +142,14 @@ def contact() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+def stories() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def story_article() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
 def auth_login() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -167,14 +162,22 @@ def auth_forgot() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+def admin_page() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
+app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
+app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
 app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
 app.add_api_route("/registrace", auth_register, methods=["GET"], include_in_schema=False)
 app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=False)
 for _path in ("/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"):
     app.add_api_route(_path, page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni/{rest:path}", page, methods=["GET"], include_in_schema=False)
+app.add_api_route("/admin", admin_page, methods=["GET"], include_in_schema=False)
+app.add_api_route("/admin/{rest:path}", admin_page, methods=["GET"], include_in_schema=False)
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -195,6 +198,14 @@ def _current_user(session: str | None) -> dict[str, Any]:
     return user
 
 
+@app.post("/api/t")
+async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    visitor = await asyncio.to_thread(site_stats.ingest, hub.store, request, payload or {})
+    response = JSONResponse({"ok": True})
+    site_stats.attach_cookie(response, visitor)
+    return response
+
+
 @app.post("/api/auth/register")
 async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
@@ -204,11 +215,16 @@ async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict
             str(body.get("name") or ""),
             str(body.get("email") or ""),
             str(body.get("password") or ""),
+            str(body.get("promo") or body.get("promo_code") or ""),
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     response = JSONResponse(user)
     _set_session_cookie(response, token)
+    try:
+        site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
+    except Exception:
+        pass
     return response
 
 
@@ -263,6 +279,177 @@ async def auth_password(payload: dict[str, Any] | None = Body(None), realitify_s
     response = JSONResponse({"ok": True})
     _set_session_cookie(response, token)
     return response
+
+
+def _admin_user(token: str | None) -> dict[str, Any]:
+    user = admin_panel.admin_from_cookie(hub.store, token)
+    if not user:
+        raise HTTPException(401, "Nejste přihlášeni do administrace")
+    return user
+
+
+@app.post("/api/admin/login")
+async def admin_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        token = admin_panel.login_admin(hub.store, str(body.get("email") or ""), str(body.get("password") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    user = admin_panel.admin_from_cookie(hub.store, token) or {}
+    response = JSONResponse(user)
+    response.set_cookie(
+        admin_panel.ADMIN_COOKIE,
+        token,
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+    )
+    return response
+
+
+@app.post("/api/admin/logout")
+async def admin_logout_api() -> dict:
+    admin_panel.clear_admin_session(hub.store)
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(admin_panel.ADMIN_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/admin/me")
+async def admin_me(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    return _admin_user(realitify_admin)
+
+
+@app.get("/api/admin/overview")
+async def admin_overview(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.overview_payload, hub.store, hub)
+
+
+@app.get("/api/admin/users")
+async def admin_users(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.users_payload, hub.store)
+
+
+@app.get("/api/admin/users/{user_id}")
+async def admin_user_detail(
+    user_id: str,
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    if user_id not in {"local", "USR-LOCAL"}:
+        raise HTTPException(404, "Uživatel neexistuje")
+    try:
+        return await asyncio.to_thread(admin_panel.user_detail_payload, hub.store)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/admin/monitors")
+async def admin_monitors(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.monitors_payload, hub.store)
+
+
+@app.get("/api/admin/notifications")
+async def admin_notifications(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.notifications_payload, hub.store)
+
+
+@app.post("/api/admin/broadcast")
+async def admin_broadcast(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    return await admin_panel.send_broadcast(hub.store, payload or {}, user.get("name") or "Admin")
+
+
+@app.get("/api/admin/ops")
+async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+
+
+@app.get("/api/admin/billing")
+async def admin_billing(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.billing_payload, hub.store)
+
+
+@app.get("/api/admin/promo")
+async def admin_promo(
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+    month: str | None = Query(default=None),
+) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.promo_payload, hub.store, month or "")
+
+
+@app.post("/api/admin/promo/toggle")
+async def admin_promo_toggle(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    body = payload or {}
+    try:
+        return await asyncio.to_thread(admin_panel.toggle_promo_code, hub.store, str(body.get("code") or ""), bool(body.get("on")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/admin/promo/create")
+async def admin_promo_create(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(admin_panel.create_promo_code, hub.store, payload or {}, user.get("name") or "Admin")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/admin/promo/payout")
+async def admin_promo_payout(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    body = payload or {}
+    try:
+        return await asyncio.to_thread(
+            admin_panel.mark_promo_payout,
+            hub.store,
+            str(body.get("code") or ""),
+            str(body.get("month") or ""),
+            bool(body.get("paid")),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/admin/action")
+async def admin_action(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    body = payload or {}
+    try:
+        return await asyncio.to_thread(
+            admin_panel.apply_action,
+            hub.store,
+            str(body.get("action") or ""),
+            body,
+            user.get("name") or "Admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/status")
@@ -516,6 +703,10 @@ def _catalog_filters(
     discounted: str = "",
     hits: str = "",
     places: str = "",
+    south: str = "",
+    north: str = "",
+    west: str = "",
+    east: str = "",
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
@@ -548,6 +739,10 @@ def _catalog_filters(
         "discounted": discounted,
         "hits": hits,
         "places": places,
+        "south": south,
+        "north": north,
+        "west": west,
+        "east": east,
         "sort": sort,
         "limit": limit,
         "offset": offset,
@@ -585,11 +780,15 @@ async def catalog(
     discounted: str = "",
     hits: str = "",
     places: str = "",
+    south: str = "",
+    north: str = "",
+    west: str = "",
+    east: str = "",
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
 ) -> dict:
-    payload = await places.attach_geoms(
+    payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
             q=q,
@@ -617,6 +816,10 @@ async def catalog(
             discounted=discounted,
             hits=hits,
             places=places,
+            south=south,
+            north=north,
+            west=west,
+            east=east,
             sort=sort,
             limit=limit,
             offset=offset,
@@ -653,8 +856,12 @@ async def catalog_pins(
     discounted: str = "",
     hits: str = "",
     places: str = "",
+    south: str = "",
+    north: str = "",
+    west: str = "",
+    east: str = "",
 ) -> dict:
-    payload = await places.attach_geoms(
+    payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
             q=q,
@@ -682,6 +889,10 @@ async def catalog_pins(
             discounted=discounted,
             hits=hits,
             places=places,
+            south=south,
+            north=north,
+            west=west,
+            east=east,
             pins_only=True,
         )
     )
@@ -738,10 +949,17 @@ async def list_monitors() -> dict:
 async def save_monitor(payload: dict[str, Any]) -> dict:
     if not (payload.get("search_url") or "").strip():
         raise HTTPException(400, "Chybí search_url")
+    existing = hub.store.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
     try:
-        return hub.store.save_monitor(payload)
+        saved = hub.store.save_monitor(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if existing is None:
+        try:
+            site_stats.track(hub.store, site_stats.KIND_MONITOR, path="/monitory")
+        except Exception:
+            pass
+    return saved
 
 
 @app.get("/api/monitors/{monitor_id}/preview")
@@ -804,7 +1022,6 @@ def _filter_mod(source: str | None = None, url: str = ""):
 
 @app.get("/api/filters/catalog")
 async def filter_catalog() -> dict:
-    started = time.perf_counter()
     payload = {
         "locality_map": localities.catalog_map(),
         "catalog": url_builder.catalog(),
@@ -823,9 +1040,6 @@ async def filter_catalog() -> dict:
             },
         },
     }
-    # #region agent log
-    _agent_log("C", "main.py:filter_catalog", "catalog built", {"ms": round((time.perf_counter() - started) * 1000, 1)})
-    # #endregion
     return payload
 
 
@@ -853,17 +1067,19 @@ async def filter_parse(payload: dict[str, Any]) -> dict:
 
 @app.get("/api/places/search")
 async def places_search(q: str = Query("", min_length=2)) -> dict:
-    return {"items": await places.search_places(q)}
+    return {"items": await place_geo.search_places(q)}
 
 
 @app.get("/api/places/geometry")
 async def places_geometry(ids: str = "") -> dict:
     ident = [item.strip() for item in ids.split(",") if item.strip()]
     try:
-        items = await asyncio.wait_for(places.geometries(ident), 8.0)
+        items = await asyncio.wait_for(place_geo.geometries(ident), 20.0)
     except Exception:
-        items = await places.geometries(ident, network=False)
-    return {"items": places.public_geoms(items)}
+        items = await place_geo.geometries(ident, network=False)
+    if ident and not items:
+        items = await place_geo.geometries(ident, network=False)
+    return {"items": place_geo.public_geoms(items)}
 
 
 @app.get("/api/filters/locality")
@@ -1120,9 +1336,37 @@ async def billing_checkout(payload: dict[str, Any] | None = Body(None)) -> dict:
             hub.store,
             str(body.get("plan") or ""),
             user_account.public_account(hub.store).get("email") or str(body.get("email") or ""),
+            str(body.get("promo") or body.get("promo_code") or ""),
         )
         hub._status_cache = None
         return result
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.get("/api/billing/promo")
+async def billing_promo_lookup(code: str = Query("")) -> dict:
+    try:
+        raw = (code or "").strip()
+        if not raw:
+            pending = (hub.store.billing_record() or {}).get("pending_promo_code") or ""
+            if not pending:
+                return {"ok": True, "code": "", "percent": 0, "amount_czk": 0, "first_order": True}
+            raw = str(pending)
+        return stripe_billing.lookup_promotion_code(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Stripe: {exc}") from exc
+
+
+@app.post("/api/billing/promo")
+async def billing_promo_save(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        return stripe_billing.save_pending_promo(hub.store, str(body.get("code") or body.get("promo") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:

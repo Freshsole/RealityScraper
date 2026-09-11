@@ -208,6 +208,18 @@
   color: #cf2929;
 }
 
+.field-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #555b54;
+}
+
+label .optional {
+  font-weight: 400;
+  color: #555b54;
+}
+
 .auth-toasts {
   position: fixed;
   top: 24px;

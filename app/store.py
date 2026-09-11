@@ -129,6 +129,21 @@ def listing_key(url: str) -> str:
     return f"{host}{path}"
 
 
+def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "monitor_id": row.get("monitor_id"),
+        "lat": row.get("lat"),
+        "lon": row.get("lon"),
+        "price_czk": row.get("price_czk"),
+        "price_label": row.get("price_label"),
+        "name": row.get("name"),
+        "locality": row.get("locality"),
+        "listing_key": row.get("listing_key") or listing_key(row.get("url") or ""),
+        "url": row.get("url") or "",
+    }
+
+
 CATALOG_MONITOR_ID = "__catalog__"
 
 
@@ -172,6 +187,21 @@ def _tri_state(where: list[str], params: list[Any], value: str, clauses: list[st
     known = "(" + " OR ".join(clauses) + ")"
     where.append(known if value == "s" else f"NOT {known}")
     params.extend(clause_params)
+
+
+def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
+    try:
+        south = float(filters.get("south"))
+        north = float(filters.get("north"))
+        west = float(filters.get("west"))
+        east = float(filters.get("east"))
+    except (TypeError, ValueError):
+        return
+    if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+        return
+    where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
+    where.append("listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?")
+    params.extend([south, north, west, east])
 
 
 def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
@@ -293,6 +323,46 @@ class Store:
             self._ensure_defaults(conn)
             self._ensure_ping_queue(conn)
             self._ensure_push(conn)
+            self._ensure_analytics(conn)
+
+    def _ensure_analytics(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                visitor_id TEXT,
+                path TEXT,
+                device TEXT,
+                country TEXT,
+                country_name TEXT,
+                city TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_kind_at ON analytics_events(kind, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_vid ON analytics_events(visitor_id, created_at)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analytics_presence (
+                visitor_id TEXT PRIMARY KEY,
+                last_seen TEXT NOT NULL,
+                path TEXT,
+                device TEXT,
+                country TEXT,
+                country_name TEXT,
+                city TEXT,
+                email TEXT,
+                name TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_presence_seen ON analytics_presence(last_seen)")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(analytics_presence)")}
+        if "ip" not in cols:
+            conn.execute("ALTER TABLE analytics_presence ADD COLUMN ip TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_presence_ip ON analytics_presence(ip)")
 
     def _migrate_listings(self, conn: sqlite3.Connection) -> None:
         cols = {row[1]: row for row in conn.execute("PRAGMA table_info(listings)")}
@@ -1631,6 +1701,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_monitor_hits_key ON monitor_hits(listing_key);
             CREATE INDEX IF NOT EXISTS idx_scrape_jobs_kind ON scrape_jobs(kind, status);
             CREATE INDEX IF NOT EXISTS idx_listings_notified_seen ON listings(notified, first_seen);
+            CREATE INDEX IF NOT EXISTS idx_listings_lat_lon ON listings(lat, lon);
             CREATE INDEX IF NOT EXISTS idx_events_kind_created ON events(kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_monitor_kind ON events(monitor_id, kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_monitor_hits_monitor ON monitor_hits(monitor_id);
@@ -1820,6 +1891,12 @@ class Store:
             params.append(monitor_id)
         query = (filters.get("q") or "").strip()
         place_geoms = [item for item in (filters.get("place_geoms") or []) if isinstance(item, dict)]
+        if filters.get("place_empty") and not place_geoms:
+            if filters.get("pins_only"):
+                return {"items": []}
+            limit = min(max(int(filters.get("limit") or 36), 1), 120)
+            offset = max(int(filters.get("offset") or 0), 0)
+            return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets()}
         if query and not place_geoms:
             where.append(
                 "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ? OR IFNULL(listings.description, '') LIKE ?)"
@@ -1994,6 +2071,17 @@ class Store:
                         ]
                     )
             _or_likes(where, params, "listings.extras", patterns)
+        circle_active = False
+        try:
+            circle_active = (
+                -90 <= float(filters.get("lat") or "") <= 90
+                and -180 <= float(filters.get("lon") or "") <= 180
+                and 50 <= float(filters.get("radius_m") or "") <= 50_000
+            )
+        except (TypeError, ValueError):
+            circle_active = False
+        if not place_geoms and not circle_active:
+            _apply_map_bbox(where, params, filters)
         _apply_circle(where, params, filters)
         status = (filters.get("status") or "").strip()
         if status == "saved":
@@ -2036,6 +2124,8 @@ class Store:
                 """
             )
         if filters.get("pins_only"):
+            if str(filters.get("places") or "").strip() and not place_geoms:
+                return {"items": []}
             return self._catalog_pins(where, params, place_geoms)
         sorts = {
             "newest": "listings.first_seen DESC",
@@ -2054,6 +2144,7 @@ class Store:
         if place_geoms:
             light_sql = f"""
                 SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
+                       listings.price_czk, listings.price_label, listings.name, listings.locality,
                        listings.listing_key, listings.url
                 FROM listings
                 WHERE {clause}
@@ -2141,10 +2232,14 @@ class Store:
         payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
         if place_geoms:
             payload["places"] = places.public_geoms(place_geoms)
+            payload["pins"] = [_pin_item(row) for row in matched if row.get("lat") is not None and row.get("lon") is not None]
+        else:
+            payload["pins"] = self._catalog_pins(where, params, None)["items"]
         return payload
 
     def _catalog_pins(self, where: list[str], params: list[Any], place_geoms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         clause = " AND ".join(where)
+        pin_limit = 8000 if place_geoms else 800
         sql = f"""
             SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
                    listings.price_czk, listings.price_label, listings.name, listings.locality,
@@ -2153,7 +2248,7 @@ class Store:
             WHERE {clause}
               AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
             ORDER BY listings.notified DESC, listings.rowid ASC
-            LIMIT 4000
+            LIMIT {int(pin_limit)}
         """
         with self.connect() as conn:
             fetched = [dict(row) for row in conn.execute(sql, params).fetchall()]
@@ -2166,8 +2261,8 @@ class Store:
             if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
                 continue
             seen.add(key)
-            items.append(row)
-            if len(items) >= 2500:
+            items.append(_pin_item(row))
+            if len(items) >= pin_limit:
                 break
         return {"items": items}
 

@@ -1146,6 +1146,10 @@ label.sreality-only[hidden],
   padding: 10px 12px;
   font-size: 14px;
 }
+.locality-suggest button.is-active,
+.locality-suggest button[aria-selected="true"] {
+  background: var(--gray-6, #f3f4f6);
+}
 .locality-suggest button .icon {
   width: 16px;
   height: 16px;
@@ -2730,6 +2734,51 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   color: #fff;
 }
 .bill-individual {
+  margin: 16px 0 0;
+  font-size: 13px;
+  color: #555b54;
+}
+.bill-promo {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 480px;
+}
+.bill-promo label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--forest);
+}
+.bill-promo-row {
+  display: flex;
+  gap: 8px;
+}
+.bill-promo-row input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: 1px solid var(--line, #d8ddd4);
+  border-radius: 12px;
+  padding: 0 14px;
+  font: inherit;
+  text-transform: uppercase;
+}
+.bill-promo-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #555b54;
+}
+.bill-promo-status {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--forest);
+}
+.bill-promo-status.is-error {
+  color: #cf2929;
+}
   margin: 20px 0 0;
   font-size: 13px;
   color: #555b54;
