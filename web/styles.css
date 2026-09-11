@@ -788,6 +788,20 @@ a { color: var(--forest); }
   font: 400 15px Inter, sans-serif;
   padding: 12px 14px;
 }
+.url-stack {
+  display: grid;
+  gap: 12px;
+  margin: 8px 0 4px;
+}
+.url-stack label {
+  margin-top: 0;
+}
+.url-stack textarea {
+  min-height: 88px;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-all;
+}
 
 .check { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
 .check input { width: auto !important; }

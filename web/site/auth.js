@@ -383,10 +383,7 @@ if (register) {
       .filter(Boolean);
     const brOffer = payload.offer === "prodej" ? "PRODEJ" : "PRONAJEM";
     const labels = payload.localities.map((item) => shortLabel(item.label));
-    const name = `Hlídání · ${labels.join(", ") || "ČR"}`;
     await postJson("/api/settings", { watch_prefs: payload });
-    const existing = await fetch("/api/monitors").then((res) => res.json());
-    const known = new Set((existing.items || []).map((item) => item.search_url));
     const brFilters = {
       source: "bezrealitky",
       offers: [brOffer],
@@ -404,14 +401,11 @@ if (register) {
       location: "exact",
       sort: "TIMEORDER_DESC",
     };
-    const brBuilt = await postJson("/api/filters/build", { filters: brFilters });
-    if (brBuilt.url && !known.has(brBuilt.url)) {
-      await postJson("/api/monitors", { name: `${name} · Bezrealitky`, search_url: brBuilt.url, enabled: true });
-      known.add(brBuilt.url);
-    }
+    const brBuilt = await postJson("/api/filters/build", { filters: brFilters, portals: "all" });
+    let srBuilt = { url: "" };
     const srDistricts = srealityDistricts(payload.localities);
     if (srDistricts.length) {
-      const srBuilt = await postJson("/api/filters/build", {
+      srBuilt = await postJson("/api/filters/build", {
         filters: {
           source: "sreality",
           offers: [payload.offer],
@@ -424,11 +418,25 @@ if (register) {
           area_from: payload.area_from,
           sort: "nejnovejsi",
         },
+        portals: "all",
       });
-      if (srBuilt.url && !known.has(srBuilt.url)) {
-        await postJson("/api/monitors", { name: `${name} · Sreality`, search_url: srBuilt.url, enabled: true });
-      }
     }
+    const searchUrl = srBuilt.url || brBuilt.url;
+    if (!searchUrl) {
+      showError("Filtry se nepodařilo převést na hledání.");
+      return false;
+    }
+    const existing = await fetch("/api/monitors").then((res) => res.json());
+    const items = existing.items || [];
+    const current = items.find((item) => item.id === "default") || items.find((item) => item.enabled) || items[0];
+    const kind = payload.offer === "prodej" ? "prodeje" : "pronájmy";
+    await postJson("/api/monitors", {
+      id: current?.id || "default",
+      name: `${labels.join(", ") || "Česko"} ${kind}`,
+      search_url: searchUrl,
+      portals: "all",
+      enabled: true,
+    });
     return true;
   }
 

@@ -641,6 +641,29 @@ function normalizeMonitorPortals(value) {
   return raw === "sreality" || raw === "bezrealitky" ? raw : "all";
 }
 
+function portalTitle(portal) {
+  return portal === "bezrealitky" ? "Bezrealitky" : "Sreality";
+}
+
+function renderPortalUrlStack(host, targets, primary) {
+  if (!host) return;
+  const rows = (targets || [])
+    .map((item) => ({ portal: item.portal, url: item.search_url || item.url || "" }))
+    .filter((item) => item.url);
+  if (!rows.length && primary) {
+    rows.push({
+      portal: String(primary).includes("bezrealitky") ? "bezrealitky" : "sreality",
+      url: primary,
+    });
+  }
+  host.innerHTML = rows
+    .map(
+      (item) =>
+        `<label>${escapeHtml(portalTitle(item.portal))}<textarea rows="3" readonly>${escapeHtml(item.url)}</textarea></label>`,
+    )
+    .join("");
+}
+
 function portalsSummary(value) {
   const portals = normalizeMonitorPortals(value);
   if (portals === "sreality") return "Jen Sreality";
@@ -684,7 +707,9 @@ function monitorEditorHtml(item, draft) {
   return `
     <form class="form-card" data-monitor-edit="${escapeHtml(item.id)}">
       <label>Název<input name="name" value="${escapeHtml(data.name)}" /></label>
-      <label>URL hledání<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
+      <label>URL hledání</label>
+      <div class="url-stack">${(item.search_targets || []).map((row) => `<label>${escapeHtml(portalTitle(row.portal))}<textarea rows="3" readonly name="search_url_${escapeHtml(row.portal)}">${escapeHtml(row.search_url || "")}</textarea></label>`).join("")}</div>
+      <label>Primární URL<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
       <input type="hidden" name="portals" value="${escapeHtml(data.portals)}" />
       <div class="filter-group">
         <h3>Hlídané portály</h3>
@@ -1187,7 +1212,7 @@ function renderMonitors(items) {
   if (!list) return;
   const form = editForm();
   if (form && editingMonitorId && !$("monitor-modal").hidden) editingDraft = readMonitorDraft(form);
-  const renderKey = JSON.stringify(items.map((item) => [item.id, item.name, item.enabled, item.search_url, item.template_id]));
+  const renderKey = JSON.stringify(items.map((item) => [item.id, item.name, item.enabled, item.search_url, item.portals, item.template_id]));
   if (renderKey === lastMonitorRenderKey && list.children.length) {
     const count = items.length;
     if ($("watch-limit-copy")) $("watch-limit-copy").textContent = watchLimitCopy(count);
@@ -1315,6 +1340,7 @@ function fillMonitorForm(item) {
   $("monitor-enabled").checked = item ? Boolean(item.enabled) : true;
   if ($("monitor-interval")) $("monitor-interval").value = item?.interval_sec || "";
   setMonitorPortals(item?.portals || "all");
+  renderPortalUrlStack($("monitor-urls"), item?.search_targets, item?.search_url);
 }
 
 $("monitor-form").addEventListener("submit", async (event) => {
@@ -1710,10 +1736,11 @@ async function rebuildUrl() {
   const response = await fetch("/api/filters/build", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filters: filterState }),
+    body: JSON.stringify({ filters: filterState, portals: selectedMonitorPortals() }),
   });
   const data = await response.json();
   $("generated-url").value = data.url;
+  renderPortalUrlStack($("generated-urls"), data.targets, data.url);
 }
 
 $("filter-groups").addEventListener("click", async (event) => {
@@ -1852,10 +1879,11 @@ $("f-br-paste")?.addEventListener("change", async () => {
   toast("Filtry načtené z URL", "info");
 });
 
-$("monitor-portals")?.addEventListener("click", (event) => {
+$("monitor-portals")?.addEventListener("click", async (event) => {
   const chip = event.target.closest("[data-portals]");
   if (!chip) return;
   setMonitorPortals(chip.dataset.portals);
+  await rebuildUrl();
 });
 
 $("filter-source").addEventListener("click", async (event) => {

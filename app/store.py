@@ -2739,6 +2739,9 @@ class Store:
             data["portals"] = "all"
         data["tracked"] = self.count(data["id"]) if tracked is None else int(tracked)
         data["new_today"] = self.new_today_count(data["id"]) if new_today is None else int(new_today)
+        from app.catalog_sync import monitor_search_targets
+
+        data["search_targets"] = monitor_search_targets(data)
         return data
 
 

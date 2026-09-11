@@ -21,6 +21,7 @@ from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
 from app import bezrealitky_url, localities, url_builder
 from app.filter_bridge import convert_search_url
+from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
@@ -764,7 +765,9 @@ async def filter_build(payload: dict[str, Any]) -> dict:
         filters = {**filters, "source": "bezrealitky" if mod is bezrealitky_url else "sreality"}
     filters = localities.normalize_filters(filters)
     built = mod.build_url(filters or mod.default_filters())
-    return {"url": built, "filters": mod.parse_url(built)}
+    portals = str(payload.get("portals") or "all")
+    targets = monitor_search_targets({"search_url": built, "portals": portals})
+    return {"url": built, "filters": mod.parse_url(built), "targets": targets}
 
 
 @app.post("/api/filters/parse")

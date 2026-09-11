@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n58" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n59" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -283,7 +283,9 @@
                 <input type="hidden" id="monitor-id" />
                 <h2>PROFIL A ODESÍLÁNÍ</h2>
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
-                <label>URL hledání<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/… nebo https://www.bezrealitky.cz/vyhledat?…"></textarea></label>
+                <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
+                <div class="url-stack" id="monitor-urls"></div>
+                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/… nebo https://www.bezrealitky.cz/vyhledat?…"></textarea></label>
                 <label>Šablona zprávy<select id="monitor-template"></select></label>
                 <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
                 <label class="switch-field">
@@ -333,8 +335,9 @@
                 </div>
                 <div id="filter-groups"></div>
                 <div class="form-card">
-                  <p class="card-label">Vygenerovaná URL</p>
-                  <textarea id="generated-url" rows="4" readonly></textarea>
+                  <p class="card-label">Vygenerované URL</p>
+                  <div class="url-stack" id="generated-urls"></div>
+                  <textarea id="generated-url" rows="4" readonly hidden></textarea>
                   <div class="range-grid">
                     <label>Cena od<input id="f-price-from" type="number" /></label>
                     <label>Cena do<input id="f-price-to" type="number" /></label>
@@ -901,7 +904,7 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n69"></script>
+    <script src="/static/app.js?v=1.2.0-n70"></script>
     <script src="/static/catalog.js?v=1.2.0-n43"></script>
   </body>
 </html>
