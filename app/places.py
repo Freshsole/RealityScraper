@@ -11,11 +11,15 @@ import httpx
 from app import bezrealitky_url, config, localities
 
 HEADERS = {"User-Agent": "RealityScraper/1.2"}
-STREET_BUFFER_M = 140
-POINT_BUFFER_M = 180
+STREET_BUFFER_M = 360
+POINT_BUFFER_M = 220
+CACHE_VERSION = 6
 CACHE_PATH = config.DATA_DIR / "place_geo_cache.json"
 _NOMINATIM = "https://nominatim.openstreetmap.org"
 _OVERPASS = "https://overpass-api.de/api/interpreter"
+_OVERPASS_URLS = [
+    "https://overpass.kumi.systems/api/interpreter",
+]
 _lock = asyncio.Lock()
 _last_nominatim = 0.0
 _memory: dict[str, dict[str, Any]] = {}
@@ -64,7 +68,7 @@ def _load_disk_cache() -> None:
         return
     if isinstance(payload, dict):
         for key, value in payload.items():
-            if isinstance(value, dict) and value.get("geojson"):
+            if isinstance(value, dict) and value.get("geojson") and value.get("v") == CACHE_VERSION:
                 _memory[str(key)] = value
 
 
@@ -136,6 +140,35 @@ async def _nominatim_get(client: httpx.AsyncClient, path: str, params: dict[str,
     response.raise_for_status()
     data = response.json()
     return data if isinstance(data, list) else []
+
+
+async def _nominatim_lookup(ids: list[str]) -> list[dict[str, Any]]:
+    wanted = [normalize_osm_id(item) for item in ids if normalize_osm_id(item)]
+    if not wanted:
+        return []
+    async with httpx.AsyncClient(timeout=16.0, headers=HEADERS) as client:
+        return await _nominatim_get(
+            client,
+            "/lookup",
+            {
+                "osm_ids": ",".join(wanted),
+                "format": "json",
+                "addressdetails": 1,
+                "polygon_geojson": 1,
+            },
+        )
+
+
+def _lines_from_geo(geo: dict[str, Any] | None) -> list[list[list[float]]]:
+    if not geo:
+        return []
+    kind = geo.get("type")
+    coords = geo.get("coordinates")
+    if kind == "LineString" and isinstance(coords, list) and len(coords) >= 2:
+        return [coords]
+    if kind == "MultiLineString":
+        return [line for line in coords or [] if isinstance(line, list) and len(line) >= 2]
+    return []
 
 
 def _item_from_row(row: dict[str, Any], kind: str) -> dict[str, Any]:
@@ -304,8 +337,93 @@ def bbox_of(geoms: list[dict[str, Any]]) -> tuple[float, float, float, float] | 
         return None
     lats = [p[0] for p in points]
     lons = [p[1] for p in points]
-    pad_deg = max(0.002, pad_m / 100000)
-    return (min(lats) - pad_deg, max(lats) + pad_deg, min(lons) - pad_deg, max(lons) + pad_deg)
+    mid_lat = (min(lats) + max(lats)) / 2
+    pad_lat = max(0.003, pad_m / 111000.0)
+    pad_lon = max(0.003, pad_m / max(30000.0, 111000.0 * math.cos(math.radians(mid_lat))))
+    return (min(lats) - pad_lat, max(lats) + pad_lat, min(lons) - pad_lon, max(lons) + pad_lon)
+
+
+def _perp_dist(point: list[float], start: list[float], end: list[float]) -> float:
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    if dx == 0 and dy == 0:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    return math.hypot(point[0] - (start[0] + t * dx), point[1] - (start[1] + t * dy))
+
+
+def _rdp(points: list[Any], epsilon: float) -> list[Any]:
+    cleaned = [pt for pt in points if isinstance(pt, (list, tuple)) and len(pt) >= 2]
+    if len(cleaned) < 3:
+        return cleaned
+    dmax = 0.0
+    idx = 0
+    start, end = cleaned[0], cleaned[-1]
+    for i in range(1, len(cleaned) - 1):
+        dist = _perp_dist(cleaned[i], start, end)
+        if dist > dmax:
+            idx = i
+            dmax = dist
+    if dmax > epsilon:
+        left = _rdp(cleaned[: idx + 1], epsilon)
+        right = _rdp(cleaned[idx:], epsilon)
+        return left[:-1] + right
+    return [cleaned[0], cleaned[-1]]
+
+
+def _simplify_geo(geojson: dict[str, Any] | None, epsilon: float = 0.00025) -> dict[str, Any] | None:
+    if not geojson:
+        return geojson
+    kind = geojson.get("type")
+    coords = geojson.get("coordinates")
+    if kind == "LineString":
+        pts = _rdp(coords or [], epsilon)
+        return {"type": "LineString", "coordinates": pts if len(pts) >= 2 else coords}
+    if kind == "MultiLineString":
+        lines = []
+        for line in coords or []:
+            pts = _rdp(line, epsilon)
+            if len(pts) >= 2:
+                lines.append(pts)
+        return {"type": "MultiLineString", "coordinates": lines or coords}
+    if kind == "Polygon":
+        rings = []
+        for i, ring in enumerate(coords or []):
+            pts = _rdp(ring, epsilon if i == 0 else epsilon * 0.6)
+            if len(pts) >= 3:
+                if pts[0] != pts[-1]:
+                    pts = pts + [pts[0]]
+                rings.append(pts)
+        return {"type": "Polygon", "coordinates": rings or coords}
+    if kind == "MultiPolygon":
+        polys = []
+        for poly in coords or []:
+            simplified = _simplify_geo({"type": "Polygon", "coordinates": poly}, epsilon)
+            if simplified and simplified.get("coordinates"):
+                polys.append(simplified["coordinates"])
+        return {"type": "MultiPolygon", "coordinates": polys or coords}
+    if kind == "GeometryCollection":
+        geoms = [_simplify_geo(item, epsilon) for item in geojson.get("geometries") or [] if isinstance(item, dict)]
+        return {"type": "GeometryCollection", "geometries": [item for item in geoms if item]}
+    return geojson
+
+
+def _in_bbox(lat: float, lon: float, box: tuple[float, float, float, float] | None) -> bool:
+    if not box:
+        return True
+    return box[0] <= lat <= box[1] and box[2] <= lon <= box[3]
+
+
+def prepare_item(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("kind") == "street":
+        item["buffer_m"] = STREET_BUFFER_M
+    geo = item.get("geojson") if isinstance(item.get("geojson"), dict) else None
+    if geo:
+        item["geojson"] = _simplify_geo(geo) or geo
+    item["bbox"] = bbox_of([item])
+    item["v"] = CACHE_VERSION
+    return item
 
 
 def _ring_contains(lat: float, lon: float, ring: list[Any]) -> bool:
@@ -415,6 +533,10 @@ def point_matches(lat: Any, lon: Any, geoms: list[dict[str, Any]]) -> bool:
     except (TypeError, ValueError):
         return False
     for geom in geoms:
+        box = geom.get("bbox")
+        if isinstance(box, (list, tuple)) and len(box) == 4:
+            if not _in_bbox(plat, plon, (float(box[0]), float(box[1]), float(box[2]), float(box[3]))):
+                continue
         geo = geom.get("geojson") if isinstance(geom.get("geojson"), dict) else {}
         kind = geom.get("kind") or classify_row({"geojson": geo, "class": ""}) or "area"
         buffer_m = float(geom.get("buffer_m") or (STREET_BUFFER_M if kind == "street" else POINT_BUFFER_M if kind == "point" else 0))
@@ -442,15 +564,166 @@ def _way_geojson(element: dict[str, Any]) -> dict[str, Any] | None:
     return {"type": "LineString", "coordinates": coords}
 
 
+def _overpass_escape(value: str) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
+async def _overpass_json(query: str) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for url in _OVERPASS_URLS:
+        try:
+            async with httpx.AsyncClient(timeout=8.0, headers=HEADERS) as client:
+                response = await client.post(url, data={"data": query})
+                response.raise_for_status()
+                payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:
+            last_error = exc
+            continue
+    if last_error:
+        raise last_error
+    return {}
+
+
+def _midpoint(geojson: dict[str, Any] | None, lat: Any = None, lon: Any = None) -> tuple[float | None, float | None]:
+    try:
+        if lat is not None and lon is not None:
+            return float(lat), float(lon)
+    except (TypeError, ValueError):
+        pass
+    pts: list[tuple[float, float]] = []
+    if geojson:
+        _walk_coords(geojson.get("coordinates"), pts)
+    if not pts:
+        return None, None
+    mid = pts[len(pts) // 2]
+    return mid[0], mid[1]
+
+
+async def _photon_street_ids(name: str, lat: float, lon: float) -> list[int]:
+    ids: list[int] = []
+    terms = [name]
+    folded = name.casefold()
+    if "praha" not in folded and "prague" not in folded:
+        terms.append(f"{name} Praha")
+        terms.append(f"{name} Praha 7")
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers=HEADERS) as client:
+            for term in terms:
+                response = await client.get(
+                    "https://photon.komoot.io/api/",
+                    params={"q": term, "limit": 12, "lat": lat, "lon": lon},
+                )
+                response.raise_for_status()
+                for feature in (response.json() or {}).get("features") or []:
+                    props = feature.get("properties") or {}
+                    if str(props.get("osm_key") or "") != "highway":
+                        continue
+                    osm_type = str(props.get("osm_type") or "").upper()[:1]
+                    osm_id = props.get("osm_id")
+                    if osm_type != "W" or not osm_id:
+                        continue
+                    coords = (feature.get("geometry") or {}).get("coordinates") or []
+                    if len(coords) >= 2 and isinstance(coords[0], (int, float)):
+                        if _haversine_m(lat, lon, float(coords[1]), float(coords[0])) > 4000:
+                            continue
+                    street_name = str(props.get("name") or props.get("street") or "").strip()
+                    if street_name and street_name.casefold() != name.casefold():
+                        continue
+                    ids.append(int(osm_id))
+    except Exception:
+        return list(dict.fromkeys(ids))
+    return list(dict.fromkeys(ids))
+
+
+async def _expand_street(item: dict[str, Any]) -> dict[str, Any]:
+    ident = str(item.get("id") or "")
+    if item.get("street_checked") and item.get("v") == CACHE_VERSION and item.get("geojson"):
+        item["buffer_m"] = STREET_BUFFER_M
+        return prepare_item(item)
+    lat, lon = _midpoint(item.get("geojson") if isinstance(item.get("geojson"), dict) else None, item.get("lat"), item.get("lon"))
+    name = str(item.get("label") or "").split(",")[0].strip()
+    way_ids: list[int] = []
+    if ident.startswith("W") and ident[1:].isdigit():
+        way_ids.append(int(ident[1:]))
+    lines: list[list[list[float]]] = []
+    try:
+        if ident.startswith("W"):
+            for row in await _nominatim_lookup([ident]):
+                parsed = _from_nominatim_row(row)
+                if not parsed:
+                    continue
+                name = str(parsed.get("label") or name).split(",")[0].strip() or name
+                lat = parsed.get("lat") if parsed.get("lat") is not None else lat
+                lon = parsed.get("lon") if parsed.get("lon") is not None else lon
+                lines.extend(_lines_from_geo(parsed.get("geojson") if isinstance(parsed.get("geojson"), dict) else None))
+        if name and lat is not None and lon is not None:
+            way_ids.extend(await _photon_street_ids(name, float(lat), float(lon)))
+        way_ids = list(dict.fromkeys(way_ids))
+        if way_ids:
+            merged: list[list[list[float]]] = []
+            for row in await _nominatim_lookup([f"W{item_id}" for item_id in way_ids]):
+                parsed = _from_nominatim_row(row)
+                if parsed:
+                    merged.extend(_lines_from_geo(parsed.get("geojson") if isinstance(parsed.get("geojson"), dict) else None))
+            if merged:
+                lines = merged
+        if name and lat is not None and lon is not None:
+            try:
+                payload = await _overpass_json(
+                    "[out:json][timeout:12];"
+                    f'way["name"="{_overpass_escape(name)}"]["highway"](around:2500,{lat},{lon});'
+                    "out geom;"
+                )
+                seen: set[tuple[float, float, float, float]] = {
+                    (round(line[0][0], 5), round(line[0][1], 5), round(line[-1][0], 5), round(line[-1][1], 5))
+                    for line in lines
+                    if line
+                }
+                for element in payload.get("elements") or []:
+                    geo = _way_geojson(element)
+                    if not geo:
+                        continue
+                    coords = geo["coordinates"]
+                    key = (round(coords[0][0], 5), round(coords[0][1], 5), round(coords[-1][0], 5), round(coords[-1][1], 5))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    lines.append(coords)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if not lines and isinstance(item.get("geojson"), dict):
+        geo = item["geojson"]
+        if geo.get("type") == "LineString":
+            lines = [geo.get("coordinates") or []]
+        elif geo.get("type") == "MultiLineString":
+            lines = list(geo.get("coordinates") or [])
+    lines = [line for line in lines if isinstance(line, list) and len(line) >= 2]
+    if lines:
+        item["geojson"] = (
+            {"type": "LineString", "coordinates": lines[0]}
+            if len(lines) == 1
+            else {"type": "MultiLineString", "coordinates": lines}
+        )
+        lat, lon = _midpoint(item["geojson"], lat, lon)
+        item["lat"] = lat
+        item["lon"] = lon
+    item["kind"] = "street"
+    item["buffer_m"] = STREET_BUFFER_M
+    item["street_full"] = True
+    item["street_checked"] = True
+    if name and not str(item.get("label") or "").lower().startswith(name.lower()):
+        item["label"] = name
+    return prepare_item(item)
+
+
 async def _overpass_way(osm_id: str) -> dict[str, Any] | None:
     if not osm_id.startswith("W"):
         return None
-    query = f"[out:json][timeout:20];way({osm_id[1:]});out geom;"
     try:
-        async with httpx.AsyncClient(timeout=22.0, headers=HEADERS) as client:
-            response = await client.post(_OVERPASS, data={"data": query})
-            response.raise_for_status()
-            payload = response.json()
+        payload = await _overpass_json(f"[out:json][timeout:20];way({osm_id[1:]});out geom;")
     except Exception:
         return None
     for element in payload.get("elements") or []:
@@ -458,15 +731,17 @@ async def _overpass_way(osm_id: str) -> dict[str, Any] | None:
         if geo:
             lat = geo["coordinates"][len(geo["coordinates"]) // 2][1]
             lon = geo["coordinates"][len(geo["coordinates"]) // 2][0]
-            return {
-                "id": osm_id,
-                "kind": "street",
-                "label": osm_id,
-                "lat": lat,
-                "lon": lon,
-                "geojson": geo,
-                "buffer_m": STREET_BUFFER_M,
-            }
+            return await _expand_street(
+                {
+                    "id": osm_id,
+                    "kind": "street",
+                    "label": osm_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "geojson": geo,
+                    "buffer_m": STREET_BUFFER_M,
+                }
+            )
     return None
 
 
@@ -492,10 +767,19 @@ async def geometries(ids: list[str]) -> list[dict[str, Any]]:
     wanted = [normalize_osm_id(item) for item in ids if normalize_osm_id(item)]
     found: list[dict[str, Any]] = []
     missing: list[str] = []
+    way_missing: list[str] = []
     for ident in wanted:
         cached = _memory.get(ident)
-        if cached and cached.get("geojson"):
+        if cached and cached.get("geojson") and cached.get("v") == CACHE_VERSION:
             found.append(cached)
+        elif ident.startswith("W"):
+            way_missing.append(ident)
+        else:
+            missing.append(ident)
+    for ident in way_missing:
+        extra = await _overpass_way(ident)
+        if extra:
+            found.append(extra)
         else:
             missing.append(ident)
     if missing:
@@ -509,6 +793,7 @@ async def geometries(ids: list[str]) -> list[dict[str, Any]]:
                         "format": "json",
                         "addressdetails": 1,
                         "polygon_geojson": 1,
+                        "polygon_threshold": 0.002,
                     },
                 )
         except Exception:
@@ -518,7 +803,6 @@ async def geometries(ids: list[str]) -> list[dict[str, Any]]:
             item = _from_nominatim_row(row)
             if not item or not item.get("geojson"):
                 continue
-            _memory[item["id"]] = item
             got.add(item["id"])
             found.append(item)
         for ident in missing:
@@ -526,12 +810,21 @@ async def geometries(ids: list[str]) -> list[dict[str, Any]]:
                 continue
             extra = await _overpass_way(ident)
             if extra:
-                _memory[ident] = extra
                 found.append(extra)
+                got.add(ident)
+    prepared: list[dict[str, Any]] = []
+    for item in found:
+        if item.get("kind") == "street" and not item.get("street_full"):
+            item = await _expand_street(item)
+        else:
+            item = prepare_item(item)
+        _memory[item["id"]] = item
+        prepared.append(item)
+    if missing or any(item.get("kind") == "street" for item in prepared):
         _save_disk_cache()
     order = {ident: index for index, ident in enumerate(wanted)}
-    found.sort(key=lambda item: order.get(item["id"], 999))
-    return found
+    prepared.sort(key=lambda item: order.get(item["id"], 999))
+    return prepared
 
 
 async def attach_geoms(filters: dict[str, Any]) -> dict[str, Any]:

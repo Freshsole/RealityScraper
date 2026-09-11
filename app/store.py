@@ -2051,38 +2051,74 @@ class Store:
         offset = max(int(filters.get("offset") or 0), 0)
         clause = " AND ".join(where)
         identity = listing_identity_sql()
-        fetch_limit = 8000 if place_geoms else min((offset + limit) * 4, 2000)
-        sql = f"""
-            SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-            FROM listings
-            LEFT JOIN monitors ON monitors.id = listings.monitor_id
-            WHERE {clause}
-            ORDER BY {order}
-            LIMIT ?
-        """
-        count_sql = f"""
-            SELECT COUNT(*) FROM (
-                SELECT 1 FROM listings
-                WHERE {clause}
-                GROUP BY {identity}
-            )
-        """
-        with self.connect() as conn:
-            total = 0 if place_geoms else int(conn.execute(count_sql, params).fetchone()[0])
-            fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
-        seen_keys: set[str] = set()
-        rows: list[dict[str, Any]] = []
-        for row in fetched:
-            key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
-            if key in seen_keys:
-                continue
-            seen_keys.add(key)
-            if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
-                continue
-            rows.append(row)
         if place_geoms:
-            total = len(rows)
-        rows = rows[offset : offset + limit]
+            light_sql = f"""
+                SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
+                       listings.listing_key, listings.url
+                FROM listings
+                WHERE {clause}
+                ORDER BY {order}
+                LIMIT 8000
+            """
+            with self.connect() as conn:
+                fetched = [dict(row) for row in conn.execute(light_sql, params).fetchall()]
+            seen_keys: set[str] = set()
+            matched: list[dict[str, Any]] = []
+            for row in fetched:
+                key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                if not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
+                    continue
+                matched.append(row)
+            total = len(matched)
+            page = matched[offset : offset + limit]
+            rows = []
+            if page:
+                holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in page)
+                flat = [item for row in page for item in (row["monitor_id"], row["id"])]
+                full_sql = f"""
+                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    FROM listings
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE {holders}
+                """
+                with self.connect() as conn:
+                    by_id = {
+                        (row["monitor_id"], row["id"]): dict(row)
+                        for row in conn.execute(full_sql, flat)
+                    }
+                rows = [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
+        else:
+            fetch_limit = min((offset + limit) * 4, 2000)
+            sql = f"""
+                SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                FROM listings
+                LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                WHERE {clause}
+                ORDER BY {order}
+                LIMIT ?
+            """
+            count_sql = f"""
+                SELECT COUNT(*) FROM (
+                    SELECT 1 FROM listings
+                    WHERE {clause}
+                    GROUP BY {identity}
+                )
+            """
+            with self.connect() as conn:
+                total = int(conn.execute(count_sql, params).fetchone()[0])
+                fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+            seen_keys = set()
+            rows = []
+            for row in fetched:
+                key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                rows.append(row)
+            rows = rows[offset : offset + limit]
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:

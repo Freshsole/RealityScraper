@@ -276,10 +276,7 @@
 
   async function ensurePlaceGeoms() {
     const missing = selectedPlaces.filter((row) => !row.geojson);
-    if (!missing.length) {
-      drawPlaceLayer(false);
-      return;
-    }
+    if (!missing.length) return;
     const response = await fetch(`/api/places/geometry?ids=${encodeURIComponent(missing.map((row) => row.id).join(","))}`);
     const data = await response.json().catch(() => ({ items: [] }));
     for (const item of data.items || []) {
@@ -293,7 +290,6 @@
       row.buffer_m = item.buffer_m;
     }
     renderPlaceChips();
-    drawPlaceLayer(true);
   }
 
   async function addPlace(item) {
@@ -309,7 +305,6 @@
     syncFilterUi();
     hidePlaceSuggest();
     if ($("cat-q")) $("cat-q").value = "";
-    await ensurePlaceGeoms();
     loadCatalog();
   }
 
@@ -723,8 +718,8 @@
         L.geoJSON(place.geojson, {
           style: {
             color: "#4a90c4",
-            weight: 42,
-            opacity: 0.32,
+            weight: 78,
+            opacity: 0.28,
             lineCap: "round",
             lineJoin: "round",
           },
@@ -1418,9 +1413,10 @@
 
   async function loadCatalog(append = false) {
     if (!append) offset = 0;
-    await ensurePlaceGeoms();
+    const geoTask = ensurePlaceGeoms();
     const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`);
     const data = await response.json();
+    await geoTask.catch(() => {});
     const items = uniqueOffers(data.items || []);
     total = data.total || 0;
     renderFacets(data.facets);
@@ -1436,7 +1432,10 @@
       else empty.textContent = "Nic v uložené nabídce neodpovídá filtrům.";
     }
     renderList(items, append);
-    if (!append) loadPins();
+    if (!append) {
+      drawPlaceLayer(Boolean(selectedPlaces.length));
+      loadPins();
+    }
     offset = lastItems.length;
     $("catalog-more").hidden = lastItems.length >= total;
     updateFilterToggle();
