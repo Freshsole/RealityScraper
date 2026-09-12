@@ -64,7 +64,7 @@ PLANS: dict[str, dict[str, Any]] = {
         "price_czk": None,
         "watch_limit": None,
         "features": [
-            "Neomezeně + API",
+            "Neomezeně + API a MCP",
             "Všechny portály + vlastní zdroje",
             "Webhook do 30 s",
             "Export a filtry na míru",
@@ -147,6 +147,7 @@ def billing_state(store: Store) -> dict[str, Any]:
     data["configured"] = bool(config.STRIPE_SECRET_KEY)
     data["plan_rank"] = PLAN_RANK
     data["whatsapp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
+    data["mcp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
     data["downgrade_losses"] = {f"{src}_{dst}": rows for (src, dst), rows in DOWNGRADE_LOSSES.items()}
     pending = data.get("pending_plan") if data.get("pending_plan") in PLANS and data.get("pending_plan") != plan else ""
     data["pending_plan"] = pending
@@ -164,6 +165,7 @@ def billing_state(store: Store) -> dict[str, Any]:
         data["watch_limit"] = catalog["watch_limit"]
         data["features"] = catalog["features"]
         data["whatsapp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
+        data["mcp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
     data["pending_promo_code"] = str(data.get("pending_promo_code") or "").strip().upper()
     data["first_order"] = plan == "free" and not data.get("subscription_id")
     return data

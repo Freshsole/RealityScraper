@@ -198,11 +198,19 @@
     $("ad-avatar").textContent = me.initials || "AD";
     $("ad-side-av").textContent = me.initials || "AD";
     $("ad-side-name").textContent = me.name || "Admin";
+    const navName = $("ad-nav-name");
+    if (navName) navName.textContent = me.name || "Admin";
   }
 
   function navOn(route) {
     document.querySelectorAll("#ad-links a").forEach((a) => {
-      a.classList.toggle("is-on", a.dataset.route === route || (route === "uzivatel" && a.dataset.route === "uzivatele"));
+      const cms = String(route || "").startsWith("cms");
+      a.classList.toggle(
+        "is-on",
+        a.dataset.route === route ||
+          (route === "uzivatel" && a.dataset.route === "uzivatele") ||
+          (cms && a.dataset.route === "cms"),
+      );
     });
   }
 
@@ -2064,6 +2072,11 @@
     });
   }
 
+  const cmsPages =
+    typeof window.AdCms === "function"
+      ? window.AdCms({ api, esc, ico, $, main, fmtN, getMe: () => me })
+      : {};
+
   const routes = {
     prehled: pageOverview,
     uzivatele: pageUsers,
@@ -2073,6 +2086,7 @@
     provoz: pageOps,
     fakturace: pageBilling,
     promo: pagePromo,
+    ...cmsPages,
   };
 
   function syncAdminPath() {
@@ -2088,6 +2102,11 @@
   function currentRoute() {
     const rest = location.pathname.replace(/^\/admin\/?/, "").replace(/\/+$/, "") || "prehled";
     if (rest.startsWith("uzivatele/")) return "uzivatel";
+    if (rest === "cms" || rest.startsWith("cms/")) {
+      if (rest.endsWith("/nahled")) return "cms-preview";
+      if (rest === "cms") return "cms";
+      return "cms-edit";
+    }
     return rest.split("/")[0] || "prehled";
   }
 
@@ -2105,6 +2124,31 @@
     main.classList.toggle("ad-ops", route === "provoz");
     main.classList.toggle("ad-bill", route === "fakturace");
     main.classList.toggle("ad-promo", route === "promo");
+    const cms = String(route).startsWith("cms");
+    main.classList.toggle("ad-cms", cms);
+    main.classList.toggle("ad-cms-edit", route === "cms-edit");
+    document.body.classList.toggle("ad-cms-mode", cms);
+    const crumb = $("ad-crumb");
+    const div = $("ad-nav-div");
+    const navName = $("ad-nav-name");
+    if (crumb && div && navName) {
+      crumb.hidden = !cms;
+      div.hidden = !cms;
+      navName.hidden = !cms;
+      const rest = location.pathname.replace(/^\/admin\/?/, "");
+      crumb.textContent =
+        route === "cms-preview"
+          ? "CMS / Náhled článku"
+          : rest === "cms/novy"
+            ? "CMS / Nový příspěvek"
+            : route === "cms-edit"
+              ? "CMS / Upravit příspěvek"
+              : "CMS / Správa článků";
+    }
+    const logoutTop = $("ad-logout-top");
+    if (logoutTop) logoutTop.hidden = cms;
+    const menu = document.querySelector(".ad-menu");
+    if (menu) menu.style.display = cms ? "none" : "";
     main.innerHTML = "<p class='ad-lead'>Načítám…</p>";
     try {
       await (routes[route] || pageOverview)();
@@ -2145,23 +2189,45 @@
   });
 
   const logout = async () => {
+    if (window.AdUnsavedLeave && !(await window.AdUnsavedLeave())) return;
     await api("/api/admin/logout", { method: "POST" }).catch(() => {});
     me = null;
     showLogin();
   };
   $("ad-logout").addEventListener("click", logout);
   $("ad-logout-top").addEventListener("click", logout);
-  document.addEventListener("click", (event) => {
+  let navLock = false;
+  let lastAdminUrl = location.pathname + location.search;
+  document.addEventListener("click", async (event) => {
     const link = event.target.closest("a[href^='/admin']");
     if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (link.target && link.target !== "_self") return;
     event.preventDefault();
+    if (navLock) return;
     const href = link.getAttribute("href");
-    if (href && href !== location.pathname) history.pushState({}, "", href);
-    if (me) render();
+    navLock = true;
+    try {
+      if (window.AdUnsavedLeave && !(await window.AdUnsavedLeave())) return;
+      if (href && href !== location.pathname + location.search) history.pushState({}, "", href);
+      lastAdminUrl = location.pathname + location.search;
+      if (me) await render();
+    } finally {
+      navLock = false;
+    }
   });
-  window.addEventListener("popstate", () => {
-    if (me) render();
+  window.addEventListener("popstate", async () => {
+    if (navLock) return;
+    navLock = true;
+    try {
+      if (window.AdUnsavedLeave && !(await window.AdUnsavedLeave())) {
+        history.pushState({}, "", lastAdminUrl);
+        return;
+      }
+      lastAdminUrl = location.pathname + location.search;
+      if (me) await render();
+    } finally {
+      navLock = false;
+    }
   });
   boot();
 })();

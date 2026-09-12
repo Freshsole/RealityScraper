@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n63" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n67" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -188,20 +188,23 @@
     <div id="view-settings" hidden>
       <div class="set-shell">
         <aside class="set-side">
-          <div class="set-user">
-            <div class="set-avatar" id="set-avatar"></div>
-            <div>
-              <p class="set-user-name" id="set-user-name"></p>
-              <p class="set-user-mail" id="set-user-mail"></p>
+          <div class="set-side-top">
+            <div class="set-user">
+              <div class="set-avatar" id="set-avatar"></div>
+              <div>
+                <p class="set-user-name" id="set-user-name"></p>
+                <p class="set-user-mail" id="set-user-mail"></p>
+              </div>
             </div>
+            <nav class="set-navs">
+              <a class="set-nav" href="/nastaveni" data-panel="profile"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Můj profil</a>
+              <a class="set-nav" href="/nastaveni/profily" data-panel="watch"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>Hlídací profily</a>
+              <a class="set-nav" href="/nastaveni/notifikace" data-panel="notify"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="m6.6 6.6 2.1 2.1"/><path d="M3 12h3"/><path d="m6.6 17.4 2.1-2.1"/><path d="M12 18v3"/><path d="m17.4 17.4-2.1-2.1"/><path d="M18 12h3"/><path d="m17.4 6.6-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg></span>Notifikace</a>
+              <a class="set-nav" href="/nastaveni/predplatne" data-panel="billing"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/></svg></span>Předplatné a fakturace</a>
+              <a class="set-nav" href="/nastaveni/agenti" data-panel="agents"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>AI agenti a MCP</a>
+              <a class="set-nav" href="/nastaveni/bezpecnost" data-panel="security"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></span>Bezpečnost</a>
+            </nav>
           </div>
-          <nav class="set-navs">
-            <a class="set-nav" href="/nastaveni" data-panel="profile"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Můj profil</a>
-            <a class="set-nav" href="/nastaveni/profily" data-panel="watch"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>Hlídací profily</a>
-            <a class="set-nav" href="/nastaveni/notifikace" data-panel="notify"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="m6.6 6.6 2.1 2.1"/><path d="M3 12h3"/><path d="m6.6 17.4 2.1-2.1"/><path d="M12 18v3"/><path d="m17.4 17.4-2.1-2.1"/><path d="M18 12h3"/><path d="m17.4 6.6-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg></span>Notifikace</a>
-            <a class="set-nav" href="/nastaveni/predplatne" data-panel="billing"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/></svg></span>Předplatné a fakturace</a>
-            <a class="set-nav" href="/nastaveni/bezpecnost" data-panel="security"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></span>Bezpečnost</a>
-          </nav>
           <button class="set-nav set-nav-out" id="set-logout" type="button"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg></span>Odhlásit se</button>
         </aside>
         <div class="set-main">
@@ -676,6 +679,63 @@
             </article>
           </section>
 
+          <section class="set-panel" id="panel-agents" hidden>
+            <header class="set-head">
+              <h1>AI AGENTI A MCP</h1>
+              <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů. Vyžaduje tarif PRO.</p>
+            </header>
+            <div id="agents-locked" class="set-limit" hidden>
+              <p><span class="set-chip-pro">PRO</span> MCP a AI konektory jsou v tarifu PRO a INDIVIDUAL.</p>
+              <a class="btn" href="/nastaveni/predplatne">Upgradovat na PRO</a>
+            </div>
+            <div id="agents-live">
+            <article class="set-card">
+              <div class="set-card-top">
+                <h2>API KLÍČE</h2>
+                <span class="set-pill-outline" id="agents-plan-pill">PRO</span>
+              </div>
+              <p class="set-copy">Klíč se ukáže jen jednou. Vložte ho do Cursor, Claude Desktop, ChatGPT Custom GPT nebo Grok jako Bearer token.</p>
+              <div class="agent-create">
+                <label>Název klíče<input id="agent-key-name" placeholder="např. Cursor, Claude, ChatGPT" /></label>
+                <button class="btn" id="agent-key-create" type="button">Vygenerovat klíč</button>
+              </div>
+              <div id="agent-key-once" class="agent-once" hidden>
+                <p class="set-row-title">Nový klíč (zkopírujte teď)</p>
+                <code id="agent-key-token"></code>
+                <button class="btn btn-ghost" id="agent-key-copy" type="button">Kopírovat</button>
+              </div>
+              <div id="agent-key-list" class="agent-keys"></div>
+            </article>
+            <article class="set-card">
+              <h2>PŘIPOJENÍ</h2>
+              <p class="set-copy" id="agents-url-copy">MCP endpoint a OpenAPI se doplní po načtení.</p>
+              <div class="agent-snips">
+                <div>
+                  <div class="agent-snip-head"><p class="set-row-title">Cursor</p><button class="btn btn-ghost" type="button" data-copy-snip="cursor">Kopírovat</button></div>
+                  <pre id="agent-snip-cursor" class="agent-code"></pre>
+                </div>
+                <div>
+                  <div class="agent-snip-head"><p class="set-row-title">Claude.ai (custom connector)</p><button class="btn btn-ghost" type="button" data-copy-snip="claude_web">Kopírovat</button></div>
+                  <p class="set-copy" id="agents-claude-hint"></p>
+                  <pre id="agent-snip-claude_web" class="agent-code"></pre>
+                </div>
+                <div>
+                  <div class="agent-snip-head"><p class="set-row-title">Claude Desktop</p><button class="btn btn-ghost" type="button" data-copy-snip="claude">Kopírovat</button></div>
+                  <pre id="agent-snip-claude" class="agent-code"></pre>
+                </div>
+                <div>
+                  <div class="agent-snip-head"><p class="set-row-title">ChatGPT</p><button class="btn btn-ghost" type="button" data-copy-snip="chatgpt">Kopírovat</button></div>
+                  <pre id="agent-snip-chatgpt" class="agent-code"></pre>
+                </div>
+                <div>
+                  <div class="agent-snip-head"><p class="set-row-title">Grok</p><button class="btn btn-ghost" type="button" data-copy-snip="grok">Kopírovat</button></div>
+                  <pre id="agent-snip-grok" class="agent-code"></pre>
+                </div>
+              </div>
+            </article>
+            </div>
+          </section>
+
           <section class="set-panel" id="panel-security" hidden>
             <header class="set-head">
               <h1>BEZPEČNOST ÚČTU</h1>
@@ -915,8 +975,8 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n72"></script>
+    <script src="/static/app.js?v=1.2.0-n75"></script>
     <script src="/static/catalog.js?v=1.2.0-n68"></script>
-    <script src="/static/t.js?v=2"></script>
+    <script src="/static/t.js?v=7"></script>
   </body>
 </html>

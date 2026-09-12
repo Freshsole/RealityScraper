@@ -242,7 +242,8 @@ if (loginForm) {
     const password = loginPw?.value || "";
     try {
       await postJson("/api/auth/login", { email, password });
-      location.href = "/prehled";
+      const next = new URLSearchParams(location.search).get("next") || "/prehled";
+      location.href = next.startsWith("/oauth/authorize") ? next : "/prehled";
     } catch (err) {
       toast(err.message || "Přihlášení se nepovedlo");
     }

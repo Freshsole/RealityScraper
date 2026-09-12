@@ -7,10 +7,11 @@ import sys
 import zipfile
 from contextlib import asynccontextmanager
 import time
+from urllib.parse import quote, urlencode
 from typing import Any
 
 from fastapi import Body, Cookie, FastAPI, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
 
@@ -27,10 +28,13 @@ from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
 from app import admin as admin_panel
+from app import cms as stories_cms
 from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
 from app import whatsapp as wa_notify
+from app import agents as agent_hub
+from app import mcp_oauth
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict
 
@@ -99,6 +103,9 @@ async def no_store_ui(request: Request, call_next):
         or path in {
         "/",
         "/kontakt",
+        "/obchodni-podminky",
+        "/ochrana-soukromi",
+        "/nastaveni-cookies",
         "/prihlaseni",
         "/registrace",
         "/heslo",
@@ -130,6 +137,29 @@ async def require_account(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def agent_cors(request: Request, call_next):
+    path = request.url.path
+    if (
+        path == "/mcp"
+        or path.startswith("/api/v1")
+        or path.startswith("/api/agents/openapi")
+        or path.startswith("/.well-known/oauth")
+        or path.startswith("/oauth/")
+    ):
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+        else:
+            response = await call_next(request)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Authorization, Content-Type, Mcp-Session-Id, MCP-Protocol-Version"
+        )
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS, HEAD"
+        return response
+    return await call_next(request)
+
+
 def page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -140,6 +170,18 @@ def landing() -> FileResponse:
 
 def contact() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def terms() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "obchodni-podminky.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def privacy() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "ochrana-soukromi.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def cookies_page() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "nastaveni-cookies.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 def stories() -> FileResponse:
@@ -168,6 +210,9 @@ def admin_page() -> FileResponse:
 
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
+app.add_api_route("/obchodni-podminky", terms, methods=["GET"], include_in_schema=False)
+app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_schema=False)
+app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
 app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
@@ -200,6 +245,10 @@ def _current_user(session: str | None) -> dict[str, Any]:
 
 @app.post("/api/t")
 async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    if not site_stats.analytics_allowed(request):
+        response = JSONResponse({"ok": True, "skipped": True})
+        response.delete_cookie(site_stats.VISITOR_COOKIE, path="/")
+        return response
     visitor = await asyncio.to_thread(site_stats.ingest, hub.store, request, payload or {})
     response = JSONResponse({"ok": True})
     site_stats.attach_cookie(response, visitor)
@@ -450,6 +499,121 @@ async def admin_action(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/stories")
+async def stories_index() -> dict:
+    return await asyncio.to_thread(stories_cms.public_listing, hub.store)
+
+
+@app.get("/api/stories/{slug}")
+async def stories_detail(slug: str, view: int = 0) -> dict:
+    try:
+        return await asyncio.to_thread(stories_cms.public_by_slug, hub.store, slug, bool(view))
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/inquiries")
+async def public_inquiry(payload: dict[str, Any] | None = Body(None)) -> dict:
+    try:
+        return await asyncio.to_thread(stories_cms.create_inquiry, hub.store, payload or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/admin/cms")
+async def admin_cms_list(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(stories_cms.list_articles, hub.store)
+
+
+@app.post("/api/admin/cms-inquiry/{inquiry_id}")
+async def admin_cms_inquiry_save(
+    inquiry_id: str,
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(stories_cms.update_inquiry, hub.store, inquiry_id, payload or {})
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/admin/cms-inquiry/{inquiry_id}/delete")
+async def admin_cms_inquiry_delete(
+    inquiry_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")
+) -> dict:
+    _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(stories_cms.delete_inquiry, hub.store, inquiry_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/admin/cms/{article_id}")
+async def admin_cms_one(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(stories_cms.get_article, hub.store, article_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/admin/cms")
+async def admin_cms_create(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    return await asyncio.to_thread(stories_cms.save_article, hub.store, None, payload or {}, user.get("name") or "Admin")
+
+
+@app.post("/api/admin/cms/{article_id}")
+async def admin_cms_save(
+    article_id: str,
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    user = _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(stories_cms.save_article, hub.store, article_id, payload or {}, user.get("name") or "Admin")
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/admin/cms/{article_id}/delete")
+async def admin_cms_delete(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    try:
+        return await asyncio.to_thread(stories_cms.delete_article, hub.store, article_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/admin/cms-upload")
+async def admin_cms_upload(
+    file: UploadFile = File(...),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(400, "Soubor je větší než 5 MB")
+    url = await asyncio.to_thread(stories_cms.save_upload, file.filename or "image.jpg", raw)
+    return {"url": url}
+
+
+@app.get("/media/cms/{name}")
+async def cms_media(name: str) -> FileResponse:
+    try:
+        path = stories_cms.media_path(name)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return FileResponse(path)
 
 
 @app.get("/api/status")
@@ -1417,3 +1581,215 @@ async def billing_webhook(request: Request) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+def _agent_key(request: Request) -> dict[str, Any]:
+    try:
+        key = agent_hub.require_mcp(hub.store, request.headers.get("authorization"))
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail=str(exc),
+            headers={"WWW-Authenticate": mcp_oauth.www_authenticate()},
+        ) from exc
+    if not agent_hub.rate_ok(str(key.get("id") or "")):
+        raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
+    return key
+
+
+def _mcp_http(request: Request, payload: Any):
+    accept = (request.headers.get("accept") or "").lower()
+    if payload is None:
+        return Response(status_code=202)
+    if "text/event-stream" in accept and "application/json" not in accept:
+        return Response(
+            f"event: message\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n",
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+    return JSONResponse(payload)
+
+
+@app.get("/.well-known/oauth-protected-resource")
+@app.get("/.well-known/oauth-protected-resource/mcp")
+async def oauth_protected_resource() -> dict:
+    return mcp_oauth.protected_resource_metadata()
+
+
+@app.get("/.well-known/oauth-authorization-server")
+@app.get("/.well-known/oauth-authorization-server/mcp")
+async def oauth_authorization_server() -> dict:
+    return mcp_oauth.authorization_server_metadata()
+
+
+@app.post("/oauth/register")
+async def oauth_register(payload: dict[str, Any] | None = Body(None)):
+    try:
+        created = mcp_oauth.register_client(hub.store, payload or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return JSONResponse(created, status_code=201)
+
+
+@app.get("/oauth/authorize")
+async def oauth_authorize_get(request: Request):
+    params = {key: str(value) for key, value in request.query_params.items()}
+    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+    if not user:
+        nxt = "/oauth/authorize?" + urlencode(list(request.query_params.multi_items()))
+        return RedirectResponse("/prihlaseni?next=" + quote(nxt, safe=""), status_code=303)
+    try:
+        mcp_oauth.validate_authorize(hub.store, params)
+    except ValueError as exc:
+        return HTMLResponse(mcp_oauth.consent_html(params, error=str(exc)), status_code=400)
+    return HTMLResponse(mcp_oauth.consent_html(params))
+
+
+@app.post("/oauth/authorize")
+async def oauth_authorize_post(request: Request):
+    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    if not user:
+        nxt = "/oauth/authorize?" + urlencode(form)
+        return RedirectResponse("/prihlaseni?next=" + quote(nxt, safe=""), status_code=303)
+    try:
+        target = mcp_oauth.complete_authorize(hub.store, form)
+    except PermissionError as exc:
+        return HTMLResponse(mcp_oauth.consent_html(form, error=str(exc)), status_code=403)
+    except ValueError as exc:
+        return HTMLResponse(mcp_oauth.consent_html(form, error=str(exc)), status_code=400)
+    return RedirectResponse(target, status_code=303)
+
+
+@app.post("/oauth/token")
+async def oauth_token(request: Request):
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    grant = str(form.get("grant_type") or "")
+    try:
+        if grant == "authorization_code":
+            data = mcp_oauth.exchange_code(
+                hub.store,
+                code=str(form.get("code") or ""),
+                redirect_uri=str(form.get("redirect_uri") or ""),
+                client_id=str(form.get("client_id") or ""),
+                code_verifier=str(form.get("code_verifier") or ""),
+            )
+        elif grant == "refresh_token":
+            data = mcp_oauth.refresh_tokens(hub.store, str(form.get("refresh_token") or ""))
+        else:
+            return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
+    except ValueError:
+        return JSONResponse({"error": "invalid_grant"}, status_code=400)
+    return JSONResponse(data)
+
+
+@app.post("/oauth/revoke")
+async def oauth_revoke(request: Request) -> dict:
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    mcp_oauth.revoke(hub.store, str(form.get("token") or ""))
+    return {"ok": True}
+
+
+@app.get("/api/agents")
+async def agents_dashboard() -> dict:
+    return agent_hub.dashboard_payload(hub.store)
+
+
+@app.post("/api/agents/keys")
+async def agents_create_key(payload: dict[str, Any] | None = Body(None)) -> dict:
+    try:
+        created = agent_hub.create_key(hub.store, str((payload or {}).get("name") or ""))
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {**created, "snippets": agent_hub.connector_snippets(created["token"])}
+
+
+@app.delete("/api/agents/keys/{key_id}")
+async def agents_delete_key(key_id: str) -> dict:
+    try:
+        return agent_hub.delete_key(hub.store, key_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/agents/openapi.json")
+async def agents_openapi() -> dict:
+    return agent_hub.openapi_spec()
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "HEAD"])
+async def mcp_endpoint(request: Request):
+    _agent_key(request)
+    if request.method == "GET":
+        return {
+            "name": "realitify",
+            "protocolVersion": agent_hub.PROTOCOL,
+            "mcp_url": agent_hub.mcp_url(),
+        }
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Očekávám JSON-RPC") from exc
+    if isinstance(payload, list):
+        out = []
+        for msg in payload:
+            item = agent_hub.handle_mcp(hub.store, msg if isinstance(msg, dict) else {})
+            if item is not None:
+                out.append(item)
+        return _mcp_http(request, out)
+    result = agent_hub.handle_mcp(hub.store, payload if isinstance(payload, dict) else {})
+    return _mcp_http(request, result)
+
+
+@app.get("/api/v1/listings")
+async def agent_search_listings(request: Request) -> dict:
+    _agent_key(request)
+    args = dict(request.query_params)
+    return agent_hub.run_tool(hub.store, "search_listings", args)
+
+
+@app.get("/api/v1/listings/{monitor_id}/{listing_id}")
+async def agent_get_listing(request: Request, monitor_id: str, listing_id: int) -> dict:
+    _agent_key(request)
+    try:
+        return agent_hub.run_tool(hub.store, "get_listing", {"monitor_id": monitor_id, "listing_id": listing_id})
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/v1/monitors")
+async def agent_list_monitors(request: Request) -> dict:
+    _agent_key(request)
+    return agent_hub.run_tool(hub.store, "list_monitors", {})
+
+
+@app.post("/api/v1/monitors")
+async def agent_create_monitor(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _agent_key(request)
+    try:
+        return agent_hub.run_tool(hub.store, "create_monitor", payload or {})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/v1/monitors/{monitor_id}")
+async def agent_delete_monitor(request: Request, monitor_id: str) -> dict:
+    _agent_key(request)
+    try:
+        return agent_hub.run_tool(hub.store, "delete_monitor", {"id": monitor_id})
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v1/alerts")
+async def agent_list_alerts(request: Request) -> dict:
+    _agent_key(request)
+    return agent_hub.run_tool(hub.store, "list_alerts", dict(request.query_params))
+
+
+@app.get("/api/v1/account")
+async def agent_get_account(request: Request) -> dict:
+    _agent_key(request)
+    return agent_hub.run_tool(hub.store, "get_account", {})

@@ -308,6 +308,7 @@ const ROUTES = {
   "/nastaveni/profily": "settings",
   "/nastaveni/notifikace": "settings",
   "/nastaveni/predplatne": "settings",
+  "/nastaveni/agenti": "settings",
   "/nastaveni/bezpecnost": "settings",
   "/monitory": "settings",
   "/filtry": "settings",
@@ -325,6 +326,7 @@ const SETTINGS_PANELS = {
   watch: { title: "Hlídací profily", path: "/nastaveni/profily" },
   notify: { title: "Notifikace", path: "/nastaveni/notifikace" },
   billing: { title: "Předplatné", path: "/nastaveni/predplatne" },
+  agents: { title: "AI agenti a MCP", path: "/nastaveni/agenti" },
   security: { title: "Bezpečnost", path: "/nastaveni/bezpecnost" },
 };
 
@@ -342,6 +344,7 @@ function settingsPanel() {
   const path = currentPath();
   if (path === "/nastaveni/notifikace") return "notify";
   if (path === "/nastaveni/predplatne") return "billing";
+  if (path === "/nastaveni/agenti") return "agents";
   if (path === "/nastaveni/bezpecnost") return "security";
   if (path === "/nastaveni/profily" || path === "/monitory" || path === "/filtry" || path === "/zprava") return "watch";
   return "profile";
@@ -371,6 +374,7 @@ function applySettingsPanel() {
   const meta = SETTINGS_PANELS[panel];
   document.title = `${meta?.title || "Nastavení"} · Sreality monitor`;
   if (panel === "billing") loadBillingInvoices();
+  if (panel === "agents") loadAgents();
   if (panel === "notify") {
     loadDiscordLink().then((data) => {
       if (data?.bot_ready && !data.linked) startDiscordPoll();
@@ -378,6 +382,78 @@ function applySettingsPanel() {
     updateEmailHint();
   } else {
     stopDiscordPoll();
+  }
+}
+
+function formatAgentDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("cs-CZ");
+}
+
+let agentSnippets = {};
+let lastAgentToken = "";
+
+function paintAgentSnippets(snippets) {
+  agentSnippets = snippets || {};
+  ["cursor", "claude", "claude_web", "chatgpt", "grok"].forEach((key) => {
+    const el = $(`agent-snip-${key}`);
+    if (el) el.textContent = agentSnippets[key] || "";
+  });
+}
+
+async function loadAgents() {
+  const response = await fetch("/api/agents");
+  const data = await response.json().catch(() => ({}));
+  const enabled = Boolean(data.enabled);
+  if ($("agents-locked")) $("agents-locked").hidden = enabled;
+  if ($("agents-live")) $("agents-live").hidden = !enabled;
+  if ($("agents-plan-pill")) $("agents-plan-pill").textContent = (data.plan || "").toUpperCase() || "PRO";
+  if ($("agents-url-copy")) {
+    $("agents-url-copy").textContent = enabled
+      ? `MCP: ${data.mcp_url || ""} · OpenAPI: ${data.openapi_url || ""}`
+      : "Po aktivaci PRO uvidíte MCP URL, OpenAPI a ukázky pro Cursor, Claude, ChatGPT a Grok.";
+  }
+  if ($("agents-claude-hint")) {
+    $("agents-claude-hint").textContent = data.https
+      ? "Do Claude.ai zadejte název Realitify a tuto HTTPS adresu. Client ID i secret nechte prázdné."
+      : "Claude.ai nepřijme http://127.0.0.1. Potřebuje https:// na portu 443 (nasazená doména). Na tomto počítači použijte Claude Desktop.";
+  }
+  if (!lastAgentToken) paintAgentSnippets(data.snippets);
+  const list = $("agent-key-list");
+  if (!list) return;
+  const keys = data.keys || [];
+  if (!enabled) {
+    list.innerHTML = "";
+    return;
+  }
+  if (!keys.length) {
+    list.innerHTML = `<p class="set-muted">Zatím žádný klíč. Vygenerujte první pro Cursor nebo ChatGPT.</p>`;
+    return;
+  }
+  list.innerHTML = keys
+    .map((row) => {
+      const used = row.last_used_at ? `poslední použití ${escapeHtml(formatAgentDate(row.last_used_at))}` : "ještě nepoužit";
+      return `<div class="agent-key" data-id="${escapeHtml(row.id || "")}">
+        <div>
+          <p class="set-row-title">${escapeHtml(row.name || "Agent")}</p>
+          <p class="set-row-sub">${escapeHtml(row.prefix || "")}… · ${used}</p>
+        </div>
+        <button class="btn btn-ghost" type="button" data-revoke="${escapeHtml(row.id || "")}">Zrušit</button>
+      </div>`;
+    })
+    .join("");
+}
+
+async function copyText(value, okMessage) {
+  const text = String(value || "");
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(okMessage || "Zkopírováno");
+  } catch {
+    toast("Kopírování se nepovedlo", "error");
   }
 }
 
@@ -3032,6 +3108,47 @@ $("billing-promo")?.addEventListener("keydown", (event) => {
 $("billing-cancel")?.addEventListener("click", () => pickBillingPlan("free"));
 $("billing-change")?.addEventListener("click", () => openBillingPortal());
 
+$("agent-key-create")?.addEventListener("click", async () => {
+  const response = await fetch("/api/agents/keys", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: $("agent-key-name")?.value || "Agent" }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    toast(data.detail || "Klíč se nepodařilo vytvořit", "error");
+    return;
+  }
+  lastAgentToken = data.token || "";
+  if ($("agent-key-once")) $("agent-key-once").hidden = !lastAgentToken;
+  if ($("agent-key-token")) $("agent-key-token").textContent = lastAgentToken;
+  if ($("agent-key-name")) $("agent-key-name").value = "";
+  if (data.snippets) paintAgentSnippets(data.snippets);
+  toast("Klíč je vytvořený. Zkopírujte ho teď, znovu ho neuvidíte.");
+  await loadAgents();
+});
+$("agent-key-copy")?.addEventListener("click", () => copyText(lastAgentToken, "Klíč je ve schránce"));
+$("agent-key-list")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-revoke]");
+  if (!btn) return;
+  const id = btn.getAttribute("data-revoke");
+  if (!id || !confirm("Zrušit tento API klíč? Agent se odpojí.")) return;
+  const response = await fetch(`/api/agents/keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    toast(data.detail || "Klíč se nepodařilo smazat", "error");
+    return;
+  }
+  toast("Klíč je zrušený");
+  await loadAgents();
+});
+document.querySelectorAll("[data-copy-snip]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const key = btn.getAttribute("data-copy-snip");
+    copyText(agentSnippets[key], "Konfigurace je ve schránce");
+  });
+});
+
 async function boot() {
   applyRoute();
   const catalogRes = await fetch("/api/filters/catalog");
@@ -3047,6 +3164,7 @@ async function boot() {
   await refresh();
   await loadAppSettings();
   if (settingsPanel() === "billing") await loadBillingInvoices();
+  if (settingsPanel() === "agents") await loadAgents();
   const billingParams = new URLSearchParams(location.search);
   if (billingParams.get("billing") === "success" && billingParams.get("session_id")) {
     await fetch("/api/billing/sync", {

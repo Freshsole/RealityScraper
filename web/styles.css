@@ -2116,10 +2116,27 @@ html[data-page="overview"] #view-catalog,
 html[data-page="overview"] #view-settings {
   display: none !important;
 }
-html[data-page="settings"] #view-settings,
+html[data-page="settings"] #view-settings {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 html[data-page="catalog"] #view-catalog,
 html[data-page="overview"] #view-overview {
   display: block !important;
+}
+html[data-page="settings"],
+html[data-page="settings"] body {
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+html[data-page="settings"] body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 html[data-page="settings"] body,
 body.is-settings {
@@ -2128,6 +2145,7 @@ body.is-settings {
 html[data-page="settings"] .nav,
 body.is-settings .nav {
   background: #fff;
+  flex-shrink: 0;
 }
 html[data-page="settings"] .footer,
 body.is-settings .footer { display: none; }
@@ -2136,18 +2154,30 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .set-shell {
   display: flex;
   align-items: stretch;
-  min-height: calc(100vh - 80px);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 .set-side {
   width: 280px;
   flex-shrink: 0;
+  height: 100%;
   background: #fff;
   border-right: 1px solid #e8ebe6;
   padding: 24px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  overflow: hidden;
+}
+.set-side-top {
+  display: flex;
+  flex-direction: column;
   gap: 32px;
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
 }
 .set-user { display: flex; align-items: center; gap: 12px; }
 .set-avatar {
@@ -2185,7 +2215,11 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   color: var(--forest);
   font-weight: 600;
 }
-.set-nav-out { color: var(--negative); margin-top: auto; }
+.set-nav-out {
+  color: var(--negative);
+  margin-top: auto;
+  flex-shrink: 0;
+}
 .set-ico {
   width: 18px;
   height: 18px;
@@ -2219,6 +2253,8 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .set-main {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 40px 80px 80px 60px;
 }
 .set-head { margin-bottom: 40px; }
@@ -2310,6 +2346,11 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   border-radius: 16px;
   padding: 20px;
   margin-bottom: 32px;
+}
+.set-limit[hidden],
+.set-card[hidden],
+.agent-once[hidden] {
+  display: none !important;
 }
 .set-limit p {
   margin: 0;
@@ -2474,6 +2515,64 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
+}
+.agent-create {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+  margin: 12px 0 16px;
+}
+.agent-once {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--forest);
+  border-radius: 12px;
+  background: #f4fbea;
+}
+.agent-once code {
+  flex: 1;
+  min-width: 180px;
+  word-break: break-all;
+  font-size: 13px;
+}
+.agent-keys {
+  display: grid;
+  gap: 10px;
+}
+.agent-key {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid #e8ebe6;
+}
+.agent-snips {
+  display: grid;
+  gap: 18px;
+}
+.agent-snip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.agent-code {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #163300;
+  color: #9fe870;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 .set-link {
   background: none;
@@ -2879,10 +2978,19 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   .nav,
   html[data-page="settings"] .nav,
   body.is-settings .nav { padding: 0 24px; }
-  .set-shell { flex-direction: column; }
-  .set-side { width: 100%; border-right: 0; border-bottom: 1px solid #e8ebe6; }
-  .set-main { padding: 32px 20px 64px; }
-  .set-grid-2, .set-plan, .watch-fields { grid-template-columns: 1fr; }
+  html[data-page="settings"],
+  html[data-page="settings"] body {
+    height: auto;
+    overflow: auto;
+  }
+  html[data-page="settings"] #view-settings {
+    overflow: visible;
+    flex: none;
+  }
+  .set-shell { flex-direction: column; overflow: visible; min-height: auto; }
+  .set-side { width: 100%; height: auto; border-right: 0; border-bottom: 1px solid #e8ebe6; overflow: visible; }
+  .set-main { padding: 32px 20px 64px; overflow: visible; }
+  .set-grid-2, .set-plan, .watch-fields, .agent-create { grid-template-columns: 1fr; }
   .bill-tiers { flex-direction: column; }
   .set-limit, .set-danger-row, .watch-meta { flex-direction: column; align-items: flex-start; }
   .set-head h1 { font-size: 28px; }

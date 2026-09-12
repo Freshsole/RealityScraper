@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -11,6 +12,7 @@ from app import account as user_account
 from app.store import Store
 
 VISITOR_COOKIE = "rf_vid"
+CONSENT_COOKIE = "rf_consent"
 KIND_PAGE = "pageview"
 KIND_SIGNUP = "signup"
 KIND_MONITOR = "monitor"
@@ -201,6 +203,9 @@ PATH_LABELS = {
     "/registrace": "Registrace",
     "/heslo": "Obnova hesla",
     "/kontakt": "Kontakt",
+    "/obchodni-podminky": "Obchodní podmínky",
+    "/ochrana-soukromi": "Ochrana soukromí",
+    "/nastaveni-cookies": "Nastavení cookies",
     "/uspechy": "Vaše úspěchy",
 }
 
@@ -380,7 +385,24 @@ def live_visitors(store: Store, *, within: int = 90) -> dict[str, Any]:
     }
 
 
+def analytics_allowed(request: Request) -> bool:
+    raw = (request.cookies.get(CONSENT_COOKIE) or "").strip()
+    if not raw:
+        return True
+    try:
+        data = json.loads(raw)
+        if "a" in data:
+            return bool(data.get("a"))
+        if "analytics" in data:
+            return bool(data.get("analytics"))
+    except Exception:
+        pass
+    return "a=0" not in raw and '"a":0' not in raw
+
+
 def ingest(store: Store, request: Request, payload: dict[str, Any] | None) -> str:
+    if not analytics_allowed(request):
+        return ""
     body = payload or {}
     path = str(body.get("path") or request.headers.get("referer") or "")
     if "://" in path:
@@ -482,6 +504,27 @@ def count_kind(store: Store, kind: str, since: str, until: str | None = None) ->
         params.append(until)
     with store.connect() as conn:
         return int(conn.execute(sql, params).fetchone()[0])
+
+
+def story_view_counts(store: Store) -> dict[str, int]:
+    ensure_schema(store)
+    counts: dict[str, int] = {}
+    with store.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT path, COUNT(*) AS n
+            FROM analytics_events
+            WHERE kind = ? AND path LIKE '/uspechy/%'
+            GROUP BY path
+            """,
+            (KIND_PAGE,),
+        ).fetchall()
+    for path, n in rows:
+        parts = str(path or "").split("?")[0].rstrip("/").split("/")
+        if len(parts) >= 3 and parts[1] == "uspechy" and parts[2]:
+            slug = parts[2]
+            counts[slug] = counts.get(slug, 0) + int(n or 0)
+    return counts
 
 
 def pageviews_by_day(store: Store, days: int = 30) -> list[int]:
