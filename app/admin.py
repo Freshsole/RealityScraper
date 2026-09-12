@@ -1274,6 +1274,8 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             portals[name] = {"name": name.title() if name != "sreality" else "Sreality", "n": int(row["n"]), "seen": row["seen"]}
     if "bezrealitky" in portals:
         portals["bezrealitky"]["name"] = "Bezrealitky"
+    if "idnes" in portals:
+        portals["idnes"]["name"] = "Reality.iDNES"
     for item in live_jobs:
         portal = str(item.get("portal") or "")
         if portal not in portals:
@@ -1360,7 +1362,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         prev = by_portal.get(portal)
         if not prev or stamp > (prev.get("finished_at") or prev.get("started_at") or ""):
             by_portal[portal] = item
-    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky"}
+    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES"}
     seen_portals = set(by_portal) | {key for key in portals if key in titles}
     for portal in sorted(seen_portals, key=lambda key: titles.get(key, key)):
         title = titles.get(portal, portal.title())
@@ -1390,19 +1392,27 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
                 "next": _next_in(item.get("finished_at") or item.get("started_at"), interval),
             }
         )
-    cat_secs = [_job_secs(item) for item in catalog_jobs]
-    cat_secs_n = [s for s in cat_secs if s is not None]
-    cron.append(
-        {
-            "name": "Katalog — denní agregace",
-            "interval": f"denně {config.CATALOG_SYNC_HOUR}:00",
-            "last": relative_short(catalog.get("last_run")),
-            "duration": _dur(sum(cat_secs_n) / len(cat_secs_n)) if cat_secs_n else "—",
-            "status": "Error" if catalog.get("last_error") else ("OK" if catalog.get("status") != "running" else "Běží"),
-            "ok": not bool(catalog.get("last_error")),
-            "next": f"zítra {config.CATALOG_SYNC_HOUR}:00",
-        }
-    )
+    cat_by_portal: dict[str, list] = {}
+    for item in catalog_jobs:
+        cat_by_portal.setdefault(str(item.get("portal") or ""), []).append(item)
+    for portal, hour in config.CATALOG_SYNC_HOURS.items():
+        jobs = cat_by_portal.get(portal) or []
+        secs = [_job_secs(item) for item in jobs]
+        secs_n = [s for s in secs if s is not None]
+        last_job = max(jobs, key=lambda item: item.get("finished_at") or item.get("started_at") or "", default=None)
+        err = next((item.get("last_error") for item in jobs if item.get("last_error")), None)
+        running = any(item.get("status") == "running" for item in jobs)
+        cron.append(
+            {
+                "name": f"Katalog — {titles.get(portal, portal.title())}",
+                "interval": f"denně {hour:02d}:00",
+                "last": relative_short((last_job or {}).get("finished_at") or catalog.get("last_run")),
+                "duration": _dur(sum(secs_n) / len(secs_n)) if secs_n else "—",
+                "status": "Error" if err else ("Běží" if running else "OK"),
+                "ok": not bool(err),
+                "next": f"dnes {hour:02d}:00" if datetime.now().hour < hour else f"zítra {hour:02d}:00",
+            }
+        )
     last_ping = ping_row[0]["processed_at"] if ping_row else None
     cron.append(
         {

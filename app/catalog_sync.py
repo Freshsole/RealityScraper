@@ -5,8 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app import bezrealitky_url, localities, url_builder
-from app.sources import is_bezrealitky
+from app import bezrealitky_url, idnes_url, localities, url_builder
+from app.identity import portal_from_url
+from app.sources import is_bezrealitky, is_idnes
 
 KRAJ_HINTS = {
     "praha": ["praha"],
@@ -65,6 +66,10 @@ def normalize_search_url(url: str) -> str:
     raw = (url or "").strip()
     if not raw:
         return ""
+    if is_idnes(raw):
+        filters = idnes_url.parse_url(raw)
+        filters["sort"] = "nejnovejsi"
+        return idnes_url.build_url(filters)
     if is_bezrealitky(raw):
         filters = bezrealitky_url.parse_url(raw)
         filters["sort"] = "TIMEORDER_DESC"
@@ -132,6 +137,37 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": url,
                 }
             )
+    # iDNES stops returning new pages around ~150; Praha-wide searches exceed that.
+    # "projekty" is a mixed view of the same ads and is too large to paginate.
+    idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
+        f"praha-{i}" for i in range(1, 11)
+    ]
+    idnes_categories = [key for key, _ in idnes_url.CATEGORIES if key != "projekty"]
+    for offer in ("pronajem", "prodej", "drazba"):
+        for category in idnes_categories:
+            for region in idnes_localities:
+                url = idnes_url.build_url(
+                    {
+                        "source": "idnes",
+                        "offers": [offer],
+                        "category": category,
+                        "districts": [region],
+                        "sizes": [],
+                        "sort": "nejnovejsi",
+                        "price_from": None,
+                        "price_to": None,
+                        "area_from": None,
+                        "area_to": None,
+                    }
+                )
+                shards.append(
+                    {
+                        "kind": "catalog_daily",
+                        "portal": "idnes",
+                        "shard_key": f"idnes:{category}:{offer}:{region}",
+                        "search_url": url,
+                    }
+                )
     return shards
 
 
@@ -167,6 +203,8 @@ def _extras(listing: Any) -> dict[str, Any]:
 def listing_offer(listing: Any) -> str:
     extras = _extras(listing)
     offer = str(extras.get("offer") or "").casefold()
+    if "draz" in offer:
+        return "drazba"
     if "pronáj" in offer or "pronaj" in offer:
         return "pronajem"
     if "prodej" in offer:
@@ -174,6 +212,9 @@ def listing_offer(listing: Any) -> str:
     label = str(_field(listing, "price_label") or "")
     if "měsíc" in label.casefold() or "mesic" in fold(label):
         return "pronajem"
+    path = str(_field(listing, "url") or "").lower()
+    if "/drazba/" in path:
+        return "drazba"
     return "prodej"
 
 
@@ -186,9 +227,11 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
     url = str(_field(listing, "url") or "")
     source = str(data.get("source") or "")
     if not ignore_source:
+        if source == "idnes" and "idnes" not in url:
+            return False
         if source == "bezrealitky" and "bezrealitky" not in url:
             return False
-        if source == "sreality" and "sreality" not in url and "bezrealitky" in url:
+        if source == "sreality" and ("bezrealitky" in url or "idnes" in url):
             return False
     low = data.get("price_from")
     high = data.get("price_to")
@@ -210,6 +253,8 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
             folded = fold(item)
             if "pronaj" in folded:
                 mapped.append("pronajem")
+            elif "draz" in folded:
+                mapped.append("drazba")
             elif "prodej" in folded:
                 mapped.append("prodej")
         if mapped and got not in mapped:
@@ -229,6 +274,8 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
     url = (search_url or "").strip()
     if not url:
         return False
+    if is_idnes(url):
+        return listing_matches_filters(listing, idnes_url.parse_url(url), ignore_source=ignore_source)
     if is_bezrealitky(url):
         return listing_matches_filters(listing, bezrealitky_url.parse_url(url), ignore_source=ignore_source)
     return listing_matches_filters(listing, url_builder.parse_url(url), ignore_source=ignore_source)
@@ -236,14 +283,14 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
 
 def normalize_portals(value: str | None) -> str:
     raw = (value or "all").strip().lower()
-    if raw in {"sreality", "bezrealitky"}:
+    if raw in {"sreality", "bezrealitky", "idnes"}:
         return raw
     return "all"
 
 
 def listing_matches_monitor(listing: Any, monitor: dict[str, Any]) -> bool:
     listing_url = str(_field(listing, "url") or "").lower()
-    listing_portal = "bezrealitky" if "bezrealitky" in listing_url else "sreality"
+    listing_portal = portal_from_url(listing_url)
     for target in monitor_search_targets(monitor):
         if target["portal"] != listing_portal:
             continue
@@ -253,22 +300,13 @@ def listing_matches_monitor(listing: Any, monitor: dict[str, Any]) -> bool:
 
 
 def monitor_search_targets(monitor: dict[str, Any]) -> list[dict[str, str]]:
-    from app.filter_bridge import convert_search_url
+    from app.filter_bridge import search_urls_for_portals
 
     url = normalize_search_url(monitor.get("search_url") or "")
     if not url:
         return []
     portals = normalize_portals(monitor.get("portals"))
-    primary = "bezrealitky" if is_bezrealitky(url) else "sreality"
-    urls = {primary: url}
-    if portals == "all" or portals != primary:
-        try:
-            converted = convert_search_url(url).get("url") or ""
-            other = "bezrealitky" if primary == "sreality" else "sreality"
-            if converted:
-                urls[other] = normalize_search_url(converted)
-        except Exception:
-            pass
+    urls = search_urls_for_portals(url)
     return [
         {"portal": portal, "search_url": search}
         for portal, search in urls.items()
@@ -277,10 +315,10 @@ def monitor_search_targets(monitor: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _disposition_matches(disp: str, sizes: list[str]) -> bool:
-    compact = disp.replace("pokoj", "").replace("bytu", "")
+    compact = disp.replace("pokoj", "").replace("bytu", "").replace("-", "+")
     for size in sizes:
         raw = size.replace("disp_", "")
-        if "6-a-vice" in raw or raw in {"disp_6_1", "disp_6_kk", "disp_7_1", "disp_7_kk"}:
+        if "6-a-vice" in raw or "6-kk-a-vetsi" in raw or raw in {"disp_6_1", "disp_6_kk", "disp_7_1", "disp_7_kk"}:
             if any(token in compact for token in ("6+", "7+", "8+", "9+", "6kk", "7kk")):
                 return True
             continue

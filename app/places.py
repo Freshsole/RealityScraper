@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
+import threading
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -433,6 +435,186 @@ async def search_places(query: str) -> list[dict[str, Any]]:
     items = items[:12]
     _SEARCH_CACHE[cache_key] = (time.monotonic(), items)
     return items
+
+
+_GEOCODE_CACHE: dict[str, tuple[float, float] | None] = {}
+_photon_ok = True
+_geocode_nom_lock = threading.Lock()
+_last_geocode_nom = 0.0
+
+
+def locality_query(text: str) -> str:
+    needle = re.sub(r"\s+", " ", (text or "").strip())
+    return needle.replace(" – ", ", ").replace(" - ", ", ")
+
+
+def _usable_geocode_point(lat: float, lon: float) -> tuple[float, float] | None:
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        return None
+    if abs(lat) < 1e-6 and abs(lon) < 1e-6:
+        return None
+    if not (48.5 <= lat <= 51.2 and 12.0 <= lon <= 19.0):
+        return None
+    return (lat, lon)
+
+
+def _photon_locality_sync(needle: str) -> tuple[float, float] | None:
+    global _photon_ok
+    if not _photon_ok:
+        return None
+    try:
+        with httpx.Client(timeout=1.5, headers=HEADERS) as client:
+            response = client.get(
+                "https://photon.komoot.io/api/",
+                params={"q": needle, "limit": 1, "lat": 50.087, "lon": 14.421, "lang": "cs"},
+            )
+            response.raise_for_status()
+            features = (response.json() or {}).get("features") or []
+            if not features:
+                return None
+            coords = (features[0].get("geometry") or {}).get("coordinates") or []
+            if len(coords) < 2:
+                return None
+            return _usable_geocode_point(float(coords[1]), float(coords[0]))
+    except Exception:
+        _photon_ok = False
+        return None
+
+
+def _nominatim_locality_sync(needle: str) -> tuple[tuple[float, float] | None, str]:
+    global _last_geocode_nom
+    with _geocode_nom_lock:
+        wait = 1.1 - (time.monotonic() - _last_geocode_nom)
+        if wait > 0:
+            time.sleep(wait)
+        _last_geocode_nom = time.monotonic()
+        try:
+            with httpx.Client(timeout=12.0, headers=HEADERS) as client:
+                response = client.get(
+                    f"{_NOMINATIM}/search",
+                    params={
+                        "q": needle,
+                        "format": "json",
+                        "limit": 1,
+                        "countrycodes": "cz",
+                    },
+                )
+                if response.status_code == 429:
+                    return None, "busy"
+                response.raise_for_status()
+                rows = response.json() or []
+                if not rows:
+                    return None, "empty"
+                return _usable_geocode_point(float(rows[0]["lat"]), float(rows[0]["lon"])), "ok"
+        except Exception:
+            return None, "error"
+
+
+def geocode_locality_sync(text: str) -> tuple[float, float] | None:
+    needle = locality_query(text)
+    if len(needle) < 4:
+        return None
+    key = needle.casefold()
+    if key in _GEOCODE_CACHE:
+        return _GEOCODE_CACHE[key]
+    point = _photon_locality_sync(needle)
+    status = "ok"
+    if point is None:
+        point, status = _nominatim_locality_sync(needle)
+    if point is not None or status == "empty":
+        _GEOCODE_CACHE[key] = point
+    return point
+
+
+async def geocode_locality(text: str) -> tuple[float, float] | None:
+    return await asyncio.to_thread(geocode_locality_sync, text)
+
+
+def street_from_locality(text: str) -> str:
+    return locality_query(text).split(",")[0].strip()
+
+
+def _norm_street(name: str) -> str:
+    raw = re.sub(r"\s+", " ", (name or "").strip()).casefold()
+    return re.sub(r"^(ulice|ul\.)\s+", "", raw)
+
+
+_STREET_INDEX: dict[str, dict[str, tuple[float, float]]] = {}
+
+
+def street_index_sync(geoms: list[dict[str, Any]] | None) -> dict[str, tuple[float, float]]:
+    merged: dict[str, tuple[float, float]] = {}
+    for geom in geoms or []:
+        ident = normalize_osm_id(str(geom.get("id") or ""))
+        if not ident:
+            continue
+        if ident not in _STREET_INDEX:
+            _STREET_INDEX[ident] = _load_street_index(ident)
+        merged.update(_STREET_INDEX[ident])
+    return merged
+
+
+def _load_street_index(ident: str) -> dict[str, tuple[float, float]]:
+    cache_path = config.DATA_DIR / f"street_index_{ident}.json"
+    if cache_path.exists():
+        try:
+            raw = json.loads(cache_path.read_text(encoding="utf-8"))
+            return {str(key): (float(val[0]), float(val[1])) for key, val in raw.items() if isinstance(val, (list, tuple)) and len(val) >= 2}
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    fetched = _fetch_street_index(ident)
+    if fetched:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(json.dumps({key: [val[0], val[1]] for key, val in fetched.items()}), encoding="utf-8")
+        except OSError:
+            pass
+    return fetched
+
+
+def _fetch_street_index(ident: str) -> dict[str, tuple[float, float]]:
+    kind = {"R": "relation", "W": "way", "N": "node"}.get(ident[:1])
+    if not kind or not ident[1:].isdigit():
+        return {}
+    query = (
+        f'[out:json][timeout:45]; {kind}({ident[1:]}); map_to_area; '
+        f'way["highway"]["name"](area); out tags center;'
+    )
+    payload = _overpass_json_sync(query)
+    sums: dict[str, list[float]] = {}
+    for element in payload.get("elements") or []:
+        name = _norm_street((element.get("tags") or {}).get("name") or "")
+        center = element.get("center") or {}
+        try:
+            lat = float(center["lat"])
+            lon = float(center["lon"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not name:
+            continue
+        bucket = sums.setdefault(name, [0.0, 0.0, 0.0])
+        bucket[0] += lat
+        bucket[1] += lon
+        bucket[2] += 1
+    return {name: (vals[0] / vals[2], vals[1] / vals[2]) for name, vals in sums.items() if vals[2]}
+
+
+def _overpass_json_sync(query: str) -> dict[str, Any]:
+    urls = ["https://overpass-api.de/api/interpreter", *_OVERPASS_URLS]
+    seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            with httpx.Client(timeout=50.0, headers=HEADERS) as client:
+                response = client.post(url, data={"data": query})
+                response.raise_for_status()
+                payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            continue
+    return {}
 
 
 def _walk_coords(coords: Any, acc: list[tuple[float, float]]) -> None:

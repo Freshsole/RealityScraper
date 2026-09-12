@@ -55,7 +55,17 @@ DISCORD_SERVER_INVITE = os.getenv("DISCORD_SERVER_INVITE", "").strip()
 SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
 POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
 POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))
-CATALOG_SYNC_HOUR = max(0, min(23, int(os.getenv("CATALOG_SYNC_HOUR", "3"))))
+def _hour_env(name: str, default: int) -> int:
+    return max(0, min(23, int(os.getenv(name, str(default)))))
+
+
+CATALOG_SYNC_HOUR = _hour_env("CATALOG_SYNC_HOUR", 3)
+CATALOG_SYNC_HOURS = {
+    "sreality": _hour_env("CATALOG_SYNC_HOUR_SREALITY", 1),
+    "bezrealitky": _hour_env("CATALOG_SYNC_HOUR_BEZREALITKY", 2),
+    "idnes": _hour_env("CATALOG_SYNC_HOUR_IDNES", 3),
+}
+IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
 NEW_MAX_AGE_DAYS = max(1, int(os.getenv("NEW_MAX_AGE_DAYS", "2")))
 NOTIFY_REFRESHES = os.getenv("NOTIFY_REFRESHES", "0").strip() in {"1", "true", "yes"}
 SOLD_INVENTORY_SEC = max(120, int(os.getenv("SOLD_INVENTORY_SEC", "600")))

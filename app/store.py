@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from app import config, localities, places
+from app.identity import (
+    link_payload,
+    listing_identity,
+    listing_key,
+    portal_from_url,
+    portal_label,
+    same_listing,
+    url_canonical,
+)
 from app.sreality import IMAGE_TRANSFORM, Listing, cdn_image_url, google_maps_url, listing_from_dict
 from app.sources import is_discord_webhook, usable_discord_webhook, webhook_for
 from app.templates import default_template_config
@@ -122,14 +133,8 @@ def _is_discord_webhook(url: str) -> bool:
     return is_discord_webhook(url)
 
 
-def listing_key(url: str) -> str:
-    parsed = urlparse((url or "").strip())
-    host = (parsed.hostname or "").lower().removeprefix("www.")
-    path = (parsed.path or "").rstrip("/").lower()
-    return f"{host}{path}"
-
-
 def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
+    identity = listing_identity(row)
     return {
         "id": row.get("id"),
         "monitor_id": row.get("monitor_id"),
@@ -139,9 +144,97 @@ def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
         "price_label": row.get("price_label"),
         "name": row.get("name"),
         "locality": row.get("locality"),
-        "listing_key": row.get("listing_key") or listing_key(row.get("url") or ""),
+        "listing_key": identity,
+        "canonical_key": identity,
         "url": row.get("url") or "",
     }
+
+
+def _place_center(geoms: list[dict[str, Any]]) -> tuple[float, float] | None:
+    for geom in geoms:
+        try:
+            return float(geom["lat"]), float(geom["lon"])
+        except (TypeError, ValueError, KeyError):
+            continue
+    return None
+
+
+def _pin_with_place(row: dict[str, Any], geoms: list[dict[str, Any]] | None = None, approx: bool = False) -> dict[str, Any] | None:
+    pin = _pin_item(row)
+    if pin.get("lat") is not None and pin.get("lon") is not None:
+        if approx:
+            pin["approx"] = True
+        return pin
+    locality = str(row.get("locality") or "")
+    if "," in locality:
+        return None
+    center = _place_center(geoms or [])
+    if not center:
+        return None
+    seed = abs(int(row.get("id") or 0))
+    pin["lat"] = center[0] + ((seed % 17) - 8) * 0.00016
+    pin["lon"] = center[1] + ((seed % 13) - 6) * 0.0002
+    pin["approx"] = True
+    return pin
+
+
+def _hidden_listing_sql() -> str:
+    canon = "COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)"
+    return f"""
+        EXISTS (
+            SELECT 1 FROM listing_user
+            WHERE listing_user.status = 'hidden'
+              AND (
+                listing_user.url = listings.url
+                OR EXISTS (
+                    SELECT 1 FROM listing_links
+                    WHERE listing_links.url = listing_user.url
+                      AND listing_links.canonical_key = {canon}
+                )
+              )
+        )
+    """
+
+
+def _saved_listing_sql() -> str:
+    canon = "COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)"
+    return f"""
+        EXISTS (
+            SELECT 1 FROM listing_user
+            WHERE listing_user.status = 'saved'
+              AND (
+                listing_user.url = listings.url
+                OR EXISTS (
+                    SELECT 1 FROM listing_links
+                    WHERE listing_links.url = listing_user.url
+                      AND listing_links.canonical_key = {canon}
+                )
+              )
+        )
+    """
+
+
+def _monitor_hit_sql() -> str:
+    canon = "COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key, listings.url)"
+    return f"""
+        EXISTS (
+            SELECT 1 FROM monitor_hits
+            WHERE monitor_hits.monitor_id = ?
+              AND (
+                monitor_hits.listing_key = {canon}
+                OR monitor_hits.listing_key = listings.listing_key
+                OR monitor_hits.listing_key = listings.url
+                OR EXISTS (
+                    SELECT 1 FROM listing_links
+                    WHERE listing_links.canonical_key = {canon}
+                      AND (
+                        listing_links.url_key = monitor_hits.listing_key
+                        OR listing_links.url = monitor_hits.listing_key
+                      )
+                )
+              )
+        )
+    """
 
 
 CATALOG_MONITOR_ID = "__catalog__"
@@ -161,7 +254,7 @@ def channel_key(webhook_url: str) -> str:
 
 def listing_identity_sql(alias: str = "listings") -> str:
     return (
-        f"COALESCE(NULLIF({alias}.listing_key, ''), {alias}.url, "
+        f"COALESCE(NULLIF({alias}.canonical_key, ''), NULLIF({alias}.listing_key, ''), {alias}.url, "
         f"{alias}.monitor_id || ':' || {alias}.id)"
     )
 
@@ -238,6 +331,61 @@ PRAGUE_DISTRICTS = {
     "9": ["Vysočany", "Prosek", "Střížkov", "Hloubětín", "Hrdlořezy", "Kbely"],
     "10": ["Vršovice", "Strašnice", "Malešice", "Záběhlice", "Michle"],
 }
+_PRAHA_PLACE_RE = re.compile(r"praha[\s-]*(\d+)", re.I)
+
+
+def _prague_number_from_place(geom: dict[str, Any]) -> str | None:
+    ident = str(geom.get("id") or "")
+    slug = str(localities.OSM_TO_SREALITY.get(ident) or "")
+    match = re.match(r"praha-(\d+)$", slug, re.I)
+    if match:
+        return match.group(1)
+    match = _PRAHA_PLACE_RE.search(str(geom.get("label") or ""))
+    return match.group(1) if match else None
+
+
+def _place_text_sql(geoms: list[dict[str, Any]]) -> tuple[str, list[Any]]:
+    parts: list[str] = []
+    params: list[Any] = []
+    for geom in geoms:
+        number = _prague_number_from_place(geom)
+        if number:
+            parts.append("(listings.locality GLOB ? OR listings.locality GLOB ? OR listings.url LIKE ?)")
+            params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*", f"%praha-{number}%"])
+            continue
+        label = str(geom.get("label") or "").strip()
+        if label:
+            parts.append("(listings.locality LIKE ? OR listings.name LIKE ?)")
+            params.extend([f"%{label}%", f"%{label}%"])
+    if not parts:
+        return "", []
+    return "(" + " OR ".join(parts) + ")", params
+
+
+def listing_matches_place_text(row: dict[str, Any], geoms: list[dict[str, Any]]) -> bool:
+    locality = str(row.get("locality") or "")
+    url = str(row.get("url") or "").casefold()
+    name = str(row.get("name") or "")
+    hay = f"{locality} {name}".casefold()
+    for geom in geoms:
+        number = _prague_number_from_place(geom)
+        if number:
+            if re.search(rf"praha\s*{number}(?!\d)", locality, re.I) or f"praha-{number}" in url:
+                return True
+            continue
+        label = str(geom.get("label") or "").strip()
+        if label and label.casefold() in hay:
+            return True
+    return False
+
+
+def listing_matches_places(row: dict[str, Any], geoms: list[dict[str, Any]]) -> bool:
+    if not geoms:
+        return True
+    lat, lon = row.get("lat"), row.get("lon")
+    if lat is not None and lon is not None:
+        return places.point_matches(lat, lon, geoms)
+    return listing_matches_place_text(row, geoms)
 
 
 class Store:
@@ -383,6 +531,7 @@ class Store:
             ("gone", "INTEGER"),
             ("sold_notified", "INTEGER"),
             ("listing_key", "TEXT"),
+            ("canonical_key", "TEXT"),
         )
         existing = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
         for column, decl in extras:
@@ -391,6 +540,8 @@ class Store:
         if "sold_notified" not in existing:
             conn.execute("UPDATE listings SET sold_notified = 1 WHERE IFNULL(gone, 0) = 1")
         self._backfill_listing_keys(conn)
+        self._ensure_listing_links(conn)
+        self._unify_listing_identities(conn)
         if pk_cols == ["id"]:
             conn.executescript(
                 """
@@ -451,6 +602,356 @@ class Store:
                 "UPDATE listings SET listing_key = ? WHERE rowid = ?",
                 (listing_key(row["url"] or ""), row["rowid"]),
             )
+
+    def _ensure_listing_links(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS listing_links (
+                url TEXT PRIMARY KEY,
+                url_key TEXT NOT NULL,
+                canonical_key TEXT NOT NULL,
+                portal TEXT NOT NULL,
+                native_id TEXT,
+                agency TEXT,
+                last_seen TEXT,
+                gone INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_listing_links_canonical ON listing_links(canonical_key);
+            CREATE INDEX IF NOT EXISTS idx_listing_links_url_key ON listing_links(url_key);
+            """
+        )
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(listings)")}
+        if "canonical_key" not in existing:
+            conn.execute("ALTER TABLE listings ADD COLUMN canonical_key TEXT")
+        cat_cols = {row[1] for row in conn.execute("PRAGMA table_info(catalog_listings)")}
+        if cat_cols and "canonical_key" not in cat_cols:
+            conn.execute("ALTER TABLE catalog_listings ADD COLUMN canonical_key TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
+        if cat_cols:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
+
+    def _upsert_listing_link(self, conn: sqlite3.Connection, listing: Listing | dict[str, Any], canonical: str, *, gone: bool = False) -> None:
+        if isinstance(listing, Listing):
+            url = listing.url
+            native_id = listing.id
+            extras = listing.extras
+            last_seen = utc_now()
+        else:
+            url = str(listing.get("url") or "")
+            native_id = listing.get("id")
+            extras = listing.get("extras")
+            last_seen = str(listing.get("last_seen") or utc_now())
+        payload = link_payload(url, native_id=native_id, extras=extras, last_seen=last_seen, gone=gone)
+        if not payload["url"]:
+            return
+        conn.execute(
+            """
+            INSERT INTO listing_links(url, url_key, canonical_key, portal, native_id, agency, last_seen, gone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(url) DO UPDATE SET
+                url_key = excluded.url_key,
+                canonical_key = excluded.canonical_key,
+                portal = excluded.portal,
+                native_id = COALESCE(excluded.native_id, listing_links.native_id),
+                agency = CASE WHEN excluded.agency != '' THEN excluded.agency ELSE listing_links.agency END,
+                last_seen = excluded.last_seen,
+                gone = excluded.gone
+            """,
+            (
+                payload["url"],
+                payload["url_key"],
+                canonical,
+                payload["portal"],
+                payload["native_id"] or None,
+                payload["agency"],
+                payload["last_seen"],
+                1 if gone else 0,
+            ),
+        )
+
+    def _listing_dict(self, listing: Listing) -> dict[str, Any]:
+        return {
+            "url": listing.url,
+            "lat": listing.lat,
+            "lon": listing.lon,
+            "disposition": listing.disposition,
+            "area_m2": listing.area_m2,
+            "price_czk": listing.price_czk,
+            "price_label": listing.price_label,
+            "extras": listing.extras or {},
+            "id": listing.id,
+        }
+
+    def _resolve_canonical(self, conn: sqlite3.Connection, listing: Listing | dict[str, Any]) -> str:
+        row = listing if isinstance(listing, dict) else self._listing_dict(listing)
+        url = str(row.get("url") or "")
+        url_key = listing_key(url)
+        if url:
+            found = conn.execute(
+                "SELECT canonical_key FROM listing_links WHERE url = ? OR url_key = ? LIMIT 1",
+                (url, url_key),
+            ).fetchone()
+            if found and found["canonical_key"]:
+                return str(found["canonical_key"])
+        nearby = self._find_canonical_nearby(conn, row)
+        if nearby:
+            return nearby
+        return url_canonical(url)
+
+    def _find_canonical_nearby(self, conn: sqlite3.Connection, row: dict[str, Any]) -> str | None:
+        try:
+            lat = float(row["lat"])
+            lon = float(row["lon"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        box = 0.0005
+        candidates = conn.execute(
+            """
+            SELECT canonical_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras
+            FROM listings
+            WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
+              AND IFNULL(canonical_key, '') != ''
+            LIMIT 80
+            """,
+            (lat - box, lat + box, lon - box, lon + box),
+        ).fetchall()
+        for cand in candidates:
+            if same_listing(row, dict(cand)):
+                return str(cand["canonical_key"])
+        catalog = conn.execute(
+            """
+            SELECT canonical_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras
+            FROM catalog_listings
+            WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
+              AND IFNULL(canonical_key, '') != ''
+            LIMIT 80
+            """,
+            (lat - box, lat + box, lon - box, lon + box),
+        ).fetchall()
+        for cand in catalog:
+            if same_listing(row, dict(cand)):
+                return str(cand["canonical_key"])
+        return None
+
+    def _links_for(self, conn: sqlite3.Connection, keys: list[str]) -> dict[str, list[dict[str, Any]]]:
+        keys = [key for key in keys if key]
+        if not keys:
+            return {}
+        holders = ",".join("?" * len(keys))
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in conn.execute(
+            f"""
+            SELECT * FROM listing_links
+            WHERE canonical_key IN ({holders})
+            ORDER BY gone, portal, url
+            """,
+            keys,
+        ):
+            item = dict(row)
+            item["label"] = portal_label(item.get("portal") or "")
+            item["gone"] = bool(item.get("gone"))
+            grouped.setdefault(str(item["canonical_key"]), []).append(item)
+        return grouped
+
+    def _unify_listing_identities(self, conn: sqlite3.Connection) -> None:
+        done = conn.execute("SELECT value FROM meta WHERE key = 'listing_identity_v4'").fetchone()
+        if done:
+            self._backfill_catalog_canonical(conn)
+            return
+        conn.execute("UPDATE listing_links SET canonical_key = 'url:' || url_key WHERE IFNULL(url_key, '') != ''")
+        rows = [dict(row) for row in conn.execute("SELECT rowid AS rid, * FROM listings")]
+        assigned: dict[int, str] = {}
+        for row in rows:
+            assigned[int(row["rid"])] = url_canonical(str(row.get("url") or ""))
+        assigned = self._merge_nearby_assigned(rows, assigned, "rid")
+        seen_old: dict[str, str] = {}
+        for row in rows:
+            rid = int(row["rid"])
+            new = assigned[rid]
+            old = url_canonical(str(row.get("url") or ""))
+            conn.execute("UPDATE listings SET canonical_key = ? WHERE rowid = ?", (new, rid))
+            self._upsert_listing_link(conn, row, new, gone=bool(row.get("gone")))
+            if old != new:
+                seen_old[old] = new
+        for old, new in seen_old.items():
+            conn.execute("UPDATE listing_links SET canonical_key = ? WHERE canonical_key = ?", (new, old))
+            try:
+                conn.execute("UPDATE catalog_listings SET canonical_key = ? WHERE canonical_key = ?", (new, old))
+            except sqlite3.OperationalError:
+                pass
+        self._collapse_duplicate_listings(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('listing_identity_v4', '1')")
+        self._backfill_catalog_canonical(conn)
+
+    def _merge_nearby_assigned(self, rows: list[dict[str, Any]], assigned: dict[Any, str], id_field: str) -> dict[Any, str]:
+        cells: dict[tuple[float, float], list[Any]] = {}
+        by_id: dict[Any, dict[str, Any]] = {}
+        for row in rows:
+            key = row[id_field]
+            by_id[key] = row
+            try:
+                lat, lon = float(row["lat"]), float(row["lon"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            cells.setdefault((round(lat, 3), round(lon, 3)), []).append(key)
+        remap: dict[str, str] = {}
+
+        def resolve(value: str) -> str:
+            seen: set[str] = set()
+            while value in remap and value not in seen:
+                seen.add(value)
+                value = remap[value]
+            return value
+
+        for row in rows:
+            try:
+                lat, lon = float(row["lat"]), float(row["lon"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            current = resolve(assigned[row[id_field]])
+            gy, gx = round(lat, 3), round(lon, 3)
+            nearby_ids: list[Any] = []
+            for dy in (-0.001, 0.0, 0.001):
+                for dx in (-0.001, 0.0, 0.001):
+                    nearby_ids.extend(cells.get((round(gy + dy, 3), round(gx + dx, 3)), []))
+            for other_id in nearby_ids:
+                if other_id == row[id_field]:
+                    continue
+                other = by_id[other_id]
+                if not same_listing(row, other):
+                    continue
+                target = resolve(assigned[other_id])
+                if target == current:
+                    continue
+                keep, drop = (current, target) if current.startswith("g:") or not target.startswith("g:") else (target, current)
+                remap[drop] = keep
+                current = keep
+        for key, value in list(assigned.items()):
+            assigned[key] = resolve(value)
+        return assigned
+
+    def _backfill_catalog_canonical(self, conn: sqlite3.Connection) -> None:
+        try:
+            missing = conn.execute(
+                "SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras, gone, id, last_seen FROM catalog_listings WHERE IFNULL(canonical_key, '') = ''"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return
+        for row in missing:
+            item = dict(row)
+            canon = url_canonical(str(item.get("url") or ""))
+            link = conn.execute(
+                "SELECT canonical_key FROM listing_links WHERE url = ? OR url_key = ? LIMIT 1",
+                (item.get("url") or "", listing_key(item.get("url") or "")),
+            ).fetchone()
+            if link and link["canonical_key"]:
+                canon = str(link["canonical_key"])
+            conn.execute(
+                "UPDATE catalog_listings SET canonical_key = ? WHERE listing_key = ?",
+                (canon, item["listing_key"]),
+            )
+            self._upsert_listing_link(conn, item, canon, gone=bool(item.get("gone")))
+        catalog_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras, canonical_key FROM catalog_listings"
+            )
+        ]
+        cat_assigned = {
+            row["listing_key"]: str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in catalog_rows
+        }
+        cat_assigned = self._merge_nearby_assigned(catalog_rows, cat_assigned, "listing_key")
+        for row in catalog_rows:
+            new = cat_assigned[row["listing_key"]]
+            if new != (row.get("canonical_key") or ""):
+                conn.execute(
+                    "UPDATE catalog_listings SET canonical_key = ? WHERE listing_key = ?",
+                    (new, row["listing_key"]),
+                )
+                self._upsert_listing_link(conn, row, new, gone=False)
+        self._collapse_duplicate_catalog(conn)
+
+    def _collapse_duplicate_listings(self, conn: sqlite3.Connection) -> None:
+        groups = conn.execute(
+            """
+            SELECT monitor_id, canonical_key, COUNT(*) AS n
+            FROM listings
+            WHERE IFNULL(canonical_key, '') != ''
+            GROUP BY monitor_id, canonical_key
+            HAVING n > 1
+            """
+        ).fetchall()
+        for group in groups:
+            members = conn.execute(
+                """
+                SELECT rowid AS rid, id, first_seen FROM listings
+                WHERE monitor_id = ? AND canonical_key = ?
+                ORDER BY first_seen ASC, rowid ASC
+                """,
+                (group["monitor_id"], group["canonical_key"]),
+            ).fetchall()
+            keep = members[0]
+            keep_id = int(keep["id"])
+            for extra in members[1:]:
+                extra_id = int(extra["id"])
+                if extra_id == keep_id:
+                    conn.execute("DELETE FROM listings WHERE rowid = ?", (extra["rid"],))
+                    continue
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO listing_photos(monitor_id, listing_id, url, sort_order)
+                    SELECT monitor_id, ?, url, sort_order FROM listing_photos
+                    WHERE monitor_id = ? AND listing_id = ?
+                    """,
+                    (keep_id, group["monitor_id"], extra_id),
+                )
+                conn.execute(
+                    "DELETE FROM listing_photos WHERE monitor_id = ? AND listing_id = ?",
+                    (group["monitor_id"], extra_id),
+                )
+                conn.execute(
+                    "UPDATE price_history SET listing_id = ? WHERE monitor_id = ? AND listing_id = ?",
+                    (keep_id, group["monitor_id"], extra_id),
+                )
+                conn.execute(
+                    "UPDATE events SET listing_id = ? WHERE monitor_id = ? AND listing_id = ?",
+                    (keep_id, group["monitor_id"], extra_id),
+                )
+                conn.execute("DELETE FROM listings WHERE monitor_id = ? AND id = ?", (group["monitor_id"], extra_id))
+
+    def _collapse_duplicate_catalog(self, conn: sqlite3.Connection) -> None:
+        groups = conn.execute(
+            """
+            SELECT canonical_key, COUNT(*) AS n
+            FROM catalog_listings
+            WHERE IFNULL(canonical_key, '') != ''
+            GROUP BY canonical_key
+            HAVING n > 1
+            """
+        ).fetchall()
+        for group in groups:
+            members = conn.execute(
+                """
+                SELECT listing_key, first_seen FROM catalog_listings
+                WHERE canonical_key = ?
+                ORDER BY first_seen ASC, listing_key ASC
+                """,
+                (group["canonical_key"],),
+            ).fetchall()
+            keep = members[0]["listing_key"]
+            canon = group["canonical_key"]
+            for extra in members[1:]:
+                extra_key = extra["listing_key"]
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO monitor_hits(monitor_id, listing_key, first_matched)
+                    SELECT monitor_id, ?, first_matched FROM monitor_hits WHERE listing_key = ?
+                    """,
+                    (canon, extra_key),
+                )
+                conn.execute("DELETE FROM monitor_hits WHERE listing_key = ?", (extra_key,))
+                conn.execute("DELETE FROM catalog_listings WHERE listing_key = ?", (extra_key,))
 
     def _migrate_events(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
@@ -1100,91 +1601,148 @@ class Store:
     def catalog_prev(self, listing: Listing) -> dict[str, Any] | None:
         key = listing_key(listing.url)
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM catalog_listings WHERE listing_key = ?", (key,)).fetchone()
+            canon = self._resolve_canonical(conn, listing)
+            row = conn.execute(
+                "SELECT * FROM catalog_listings WHERE canonical_key = ? OR listing_key = ? LIMIT 1",
+                (canon, key),
+            ).fetchone()
         return dict(row) if row else None
 
     def upsert_catalog_listing(self, listing: Listing, *, kind: str = "refresh") -> dict[str, Any]:
-        from app.sources import is_bezrealitky
-
-        prev = self.catalog_prev(listing)
         key = listing_key(listing.url)
         now = utc_now()
-        portal = "bezrealitky" if is_bezrealitky(listing.url) else "sreality"
-        changed = False
-        if prev and prev.get("price_czk") is not None and listing.price_czk is not None:
-            try:
-                changed = int(prev["price_czk"]) != int(listing.price_czk)
-            except (TypeError, ValueError):
-                changed = False
-        self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind)
+        portal = portal_from_url(listing.url)
         with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO catalog_listings(
-                    listing_key, id, name, price_czk, price_label, disposition, area_m2,
-                    locality, url, image_url, first_seen, created_on, edited_on, old_price_czk,
-                    last_kind, lat, lon, description, extras, last_seen, gone, portal
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-                ON CONFLICT(listing_key) DO UPDATE SET
-                    id = excluded.id,
-                    name = excluded.name,
-                    price_czk = excluded.price_czk,
-                    price_label = excluded.price_label,
-                    disposition = excluded.disposition,
-                    area_m2 = excluded.area_m2,
-                    locality = excluded.locality,
-                    url = excluded.url,
-                    image_url = excluded.image_url,
-                    created_on = COALESCE(excluded.created_on, catalog_listings.created_on),
-                    edited_on = COALESCE(excluded.edited_on, catalog_listings.edited_on),
-                    old_price_czk = excluded.old_price_czk,
-                    last_kind = excluded.last_kind,
-                    lat = COALESCE(excluded.lat, catalog_listings.lat),
-                    lon = COALESCE(excluded.lon, catalog_listings.lon),
-                    description = COALESCE(excluded.description, catalog_listings.description),
-                    extras = CASE
-                        WHEN excluded.extras IS NOT NULL AND excluded.extras != '' AND excluded.extras != '{}'
-                        THEN excluded.extras ELSE catalog_listings.extras
-                    END,
-                    last_seen = excluded.last_seen,
-                    gone = 0,
-                    portal = excluded.portal
-                """,
-                (
-                    key,
-                    listing.id,
-                    listing.name,
-                    listing.price_czk,
-                    listing.price_label,
-                    listing.disposition,
-                    listing.area_m2,
-                    listing.locality,
-                    listing.url,
-                    cdn_image_url(listing.image_url),
-                    now if not prev else prev.get("first_seen") or now,
-                    listing.created_on,
-                    listing.edited_on,
-                    listing.old_price_czk,
-                    kind,
-                    listing.lat,
-                    listing.lon,
-                    (listing.description or "").strip() or None,
-                    _extras_json(listing.extras),
-                    now,
-                    portal,
-                ),
+            canon = self._resolve_canonical(conn, listing)
+            prev_row = conn.execute(
+                "SELECT * FROM catalog_listings WHERE canonical_key = ? OR listing_key = ? LIMIT 1",
+                (canon, key),
+            ).fetchone()
+            prev = dict(prev_row) if prev_row else None
+            changed = False
+            if prev and prev.get("price_czk") is not None and listing.price_czk is not None:
+                try:
+                    changed = int(prev["price_czk"]) != int(listing.price_czk)
+                except (TypeError, ValueError):
+                    changed = False
+            self._upsert_listing_link(conn, listing, canon, gone=False)
+            values = (
+                listing.id,
+                listing.name,
+                listing.price_czk,
+                listing.price_label,
+                listing.disposition,
+                listing.area_m2,
+                listing.locality,
+                listing.url,
+                cdn_image_url(listing.image_url),
+                now if not prev else prev.get("first_seen") or now,
+                listing.created_on,
+                listing.edited_on,
+                listing.old_price_czk,
+                kind,
+                listing.lat,
+                listing.lon,
+                (listing.description or "").strip() or None,
+                _extras_json(listing.extras),
+                now,
+                portal,
+                canon,
             )
-        return {"listing_key": key, "new": prev is None, "changed": changed, "prev": prev}
+            if prev:
+                extras_json = _extras_json(listing.extras)
+                conn.execute(
+                    """
+                    UPDATE catalog_listings SET
+                        name = ?,
+                        price_czk = ?,
+                        price_label = ?,
+                        disposition = ?,
+                        area_m2 = ?,
+                        locality = ?,
+                        image_url = COALESCE(?, image_url),
+                        created_on = COALESCE(?, created_on),
+                        edited_on = COALESCE(?, edited_on),
+                        old_price_czk = ?,
+                        last_kind = ?,
+                        lat = COALESCE(?, lat),
+                        lon = COALESCE(?, lon),
+                        description = COALESCE(?, description),
+                        extras = CASE
+                            WHEN ? IS NOT NULL AND ? != '' AND ? != '{}' THEN ? ELSE extras
+                        END,
+                        last_seen = ?,
+                        gone = 0,
+                        canonical_key = ?
+                    WHERE listing_key = ?
+                    """,
+                    (
+                        listing.name,
+                        listing.price_czk,
+                        listing.price_label,
+                        listing.disposition,
+                        listing.area_m2,
+                        listing.locality,
+                        cdn_image_url(listing.image_url),
+                        listing.created_on,
+                        listing.edited_on,
+                        listing.old_price_czk,
+                        kind,
+                        listing.lat,
+                        listing.lon,
+                        (listing.description or "").strip() or None,
+                        extras_json,
+                        extras_json,
+                        extras_json,
+                        extras_json,
+                        now,
+                        canon,
+                        prev["listing_key"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO catalog_listings(
+                        listing_key, id, name, price_czk, price_label, disposition, area_m2,
+                        locality, url, image_url, first_seen, created_on, edited_on, old_price_czk,
+                        last_kind, lat, lon, description, extras, last_seen, gone, portal, canonical_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    """,
+                    (key, *values),
+                )
+        self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind)
+        return {"listing_key": canon, "url_key": key, "canonical_key": canon, "new": prev is None, "changed": changed, "prev": prev}
 
     def add_monitor_hit(self, monitor_id: str, listing_key_value: str) -> None:
+        if not listing_key_value:
+            return
         with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO monitor_hits(monitor_id, listing_key, first_matched)
-                VALUES (?, ?, ?)
-                """,
-                (monitor_id, listing_key_value, utc_now()),
-            )
+            keys = {listing_key_value}
+            row = conn.execute(
+                "SELECT canonical_key FROM listing_links WHERE url_key = ? OR canonical_key = ? OR url = ? LIMIT 1",
+                (listing_key_value, listing_key_value, listing_key_value),
+            ).fetchone()
+            if row and row["canonical_key"]:
+                keys.add(str(row["canonical_key"]))
+            cat = conn.execute(
+                "SELECT canonical_key, listing_key FROM catalog_listings WHERE listing_key = ? OR canonical_key = ? LIMIT 1",
+                (listing_key_value, listing_key_value),
+            ).fetchone()
+            if cat:
+                if cat["canonical_key"]:
+                    keys.add(str(cat["canonical_key"]))
+                if cat["listing_key"]:
+                    keys.add(str(cat["listing_key"]))
+            now = utc_now()
+            for key in keys:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO monitor_hits(monitor_id, listing_key, first_matched)
+                    VALUES (?, ?, ?)
+                    """,
+                    (monitor_id, key, now),
+                )
 
     def ensure_scrape_job(self, *, kind: str, portal: str, shard_key: str, search_url: str) -> dict[str, Any]:
         job_id = uuid.uuid4().hex[:12]
@@ -1227,10 +1785,10 @@ class Store:
         if jobs:
             return jobs[0]
         from app.catalog_sync import normalize_search_url
-        from app.sources import is_bezrealitky
+        from app.sources import portal_of
 
         url = normalize_search_url(monitor.get("search_url") or "")
-        portal = "bezrealitky" if is_bezrealitky(url) else "sreality"
+        portal = portal_of(url)
         return self.ensure_scrape_job(kind="monitor_live", portal=portal, shard_key=f"live:{url}", search_url=url)
 
     def attach_monitor_live_jobs(self, monitor: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1271,10 +1829,10 @@ class Store:
 
         matched = 0
         with self.connect() as conn:
-            rows = conn.execute("SELECT listing_key, url, price_czk, price_label, area_m2, locality, disposition, extras, created_on FROM catalog_listings WHERE IFNULL(gone, 0) = 0").fetchall()
+            rows = conn.execute("SELECT listing_key, canonical_key, url, price_czk, price_label, area_m2, locality, disposition, extras, created_on FROM catalog_listings WHERE IFNULL(gone, 0) = 0").fetchall()
         for row in rows:
             if listing_matches_monitor(dict(row), monitor):
-                self.add_monitor_hit(monitor["id"], row["listing_key"])
+                self.add_monitor_hit(monitor["id"], row["canonical_key"] or row["listing_key"])
                 matched += 1
         return matched
 
@@ -1301,52 +1859,123 @@ class Store:
         if not complete_portals:
             return 0
         holders = ",".join("?" * len(complete_portals))
+        gone_keys: list[str] = []
         with self.connect() as conn:
-            rows = [
-                dict(row)
-                for row in conn.execute(
-                    f"""
-                    SELECT listing_key FROM catalog_listings
-                    WHERE IFNULL(gone, 0) = 0
-                      AND portal IN ({holders})
-                      AND (last_seen IS NULL OR last_seen < ?)
-                    """,
-                    (*complete_portals, seen_before),
-                )
-            ]
             conn.execute(
                 f"""
-                UPDATE catalog_listings
+                UPDATE listing_links
                 SET gone = 1
-                WHERE IFNULL(gone, 0) = 0
-                  AND portal IN ({holders})
+                WHERE portal IN ({holders})
+                  AND IFNULL(gone, 0) = 0
                   AND (last_seen IS NULL OR last_seen < ?)
                 """,
                 (*complete_portals, seen_before),
             )
-        for row in rows:
-            self._fanout_catalog_gone(row["listing_key"])
-        return len(rows)
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT listing_key, canonical_key, portal, last_seen
+                    FROM catalog_listings
+                    WHERE IFNULL(gone, 0) = 0
+                    """
+                )
+            ]
+            for row in rows:
+                canon = row.get("canonical_key") or row.get("listing_key")
+                live = conn.execute(
+                    "SELECT 1 FROM listing_links WHERE canonical_key = ? AND IFNULL(gone, 0) = 0 LIMIT 1",
+                    (canon,),
+                ).fetchone()
+                if live:
+                    continue
+                links = conn.execute(
+                    "SELECT 1 FROM listing_links WHERE canonical_key = ? LIMIT 1",
+                    (canon,),
+                ).fetchone()
+                if not links:
+                    if row.get("portal") not in complete_portals:
+                        continue
+                    last_seen = row.get("last_seen")
+                    if last_seen and last_seen >= seen_before:
+                        continue
+                conn.execute("UPDATE catalog_listings SET gone = 1 WHERE listing_key = ?", (row["listing_key"],))
+                gone_keys.append(row["listing_key"])
+        for key in gone_keys:
+            self._fanout_catalog_gone(key)
+        return len(gone_keys)
 
     def mark_catalog_listing_gone(self, key: str) -> None:
         if not key:
             return
+        fanout_key = ""
         with self.connect() as conn:
-            conn.execute("UPDATE catalog_listings SET gone = 1 WHERE listing_key = ?", (key,))
-        self._fanout_catalog_gone(key)
+            conn.execute(
+                "UPDATE listing_links SET gone = 1 WHERE url_key = ? OR url = ?",
+                (key, key),
+            )
+            row = conn.execute(
+                "SELECT listing_key, canonical_key, url FROM catalog_listings WHERE listing_key = ? OR canonical_key = ? LIMIT 1",
+                (key, key),
+            ).fetchone()
+            if row and listing_key(str(row["url"] or "")) == key:
+                conn.execute(
+                    "UPDATE listing_links SET gone = 1 WHERE url = ? OR url_key = ?",
+                    (row["url"], listing_key(str(row["url"] or ""))),
+                )
+            canon = ""
+            if row:
+                canon = str(row["canonical_key"] or row["listing_key"] or "")
+            if not canon:
+                link = conn.execute(
+                    "SELECT canonical_key FROM listing_links WHERE url_key = ? OR url = ? LIMIT 1",
+                    (key, key),
+                ).fetchone()
+                if link:
+                    canon = str(link["canonical_key"])
+                    row = conn.execute(
+                        "SELECT listing_key, canonical_key FROM catalog_listings WHERE canonical_key = ? LIMIT 1",
+                        (canon,),
+                    ).fetchone()
+            if not canon:
+                conn.execute("UPDATE catalog_listings SET gone = 1 WHERE listing_key = ?", (key,))
+                fanout_key = key
+            else:
+                live = conn.execute(
+                    "SELECT 1 FROM listing_links WHERE canonical_key = ? AND IFNULL(gone, 0) = 0 LIMIT 1",
+                    (canon,),
+                ).fetchone()
+                if not live:
+                    conn.execute(
+                        "UPDATE catalog_listings SET gone = 1 WHERE canonical_key = ? OR listing_key = ?",
+                        (canon, key),
+                    )
+                    fanout_key = str(row["listing_key"]) if row else key
+        if fanout_key:
+            self._fanout_catalog_gone(fanout_key)
 
     def _fanout_catalog_gone(self, key: str) -> None:
         with self.connect() as conn:
-            row = conn.execute("SELECT * FROM catalog_listings WHERE listing_key = ?", (key,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM catalog_listings WHERE listing_key = ? OR canonical_key = ? LIMIT 1",
+                (key, key),
+            ).fetchone()
+            if not row:
+                return
+            canon = str(row["canonical_key"] or row["listing_key"] or key)
+            link_keys = [
+                item["url_key"]
+                for item in conn.execute("SELECT url_key FROM listing_links WHERE canonical_key = ?", (canon,))
+            ]
+            hit_keys = {key, canon, str(row["listing_key"] or ""), *link_keys}
+            holders = ",".join("?" * len(hit_keys))
             hits = [
                 item["monitor_id"]
                 for item in conn.execute(
-                    "SELECT monitor_id FROM monitor_hits WHERE listing_key = ?",
-                    (key,),
+                    f"SELECT DISTINCT monitor_id FROM monitor_hits WHERE listing_key IN ({holders})",
+                    tuple(hit_keys),
                 )
             ]
-        if not row:
-            return
         listing = _listing_from_catalog_dict(dict(row))
         self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind="sold")
         self.mark_gone(CATALOG_MONITOR_ID, listing.id)
@@ -1402,14 +2031,23 @@ class Store:
         change_text = "; ".join(f"{label}: {before} → {after}" for label, before, after in listing.changes)
         detail = change_text or listing.name
         with self.connect() as conn:
+            canon = self._resolve_canonical(conn, listing)
+            existing = conn.execute(
+                "SELECT id, url FROM listings WHERE monitor_id = ? AND canonical_key = ?",
+                (monitor_id, canon),
+            ).fetchone()
+            listing_id = int(existing["id"]) if existing else listing.id
+            keep_url = str(existing["url"]) if existing and existing["url"] else listing.url
+            self._upsert_listing_link(conn, listing, canon, gone=False)
+            stored = listing if listing_id == listing.id else replace(listing, id=listing_id)
             conn.execute(
                 """
                 INSERT INTO listings (
                     id, monitor_id, name, price_czk, price_label, disposition, area_m2,
-                    locality, url, listing_key, image_url, first_seen, notified,
+                    locality, url, listing_key, canonical_key, image_url, first_seen, notified,
                     created_on, edited_on, views, old_price_czk, last_kind, lat, lon,
                     description, extras, last_seen, gone
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(monitor_id, id) DO UPDATE SET
                     name = excluded.name,
                     price_czk = excluded.price_czk,
@@ -1417,9 +2055,9 @@ class Store:
                     disposition = excluded.disposition,
                     area_m2 = excluded.area_m2,
                     locality = excluded.locality,
-                    url = excluded.url,
-                    listing_key = excluded.listing_key,
-                    image_url = excluded.image_url,
+                    listing_key = listings.listing_key,
+                    canonical_key = excluded.canonical_key,
+                    image_url = COALESCE(excluded.image_url, listings.image_url),
                     created_on = COALESCE(excluded.created_on, listings.created_on),
                     edited_on = COALESCE(excluded.edited_on, listings.edited_on),
                     views = COALESCE(excluded.views, listings.views),
@@ -1437,7 +2075,7 @@ class Store:
                     notified = CASE WHEN excluded.notified = 1 THEN 1 ELSE listings.notified END
                 """,
                 (
-                    listing.id,
+                    listing_id,
                     monitor_id,
                     listing.name,
                     listing.price_czk,
@@ -1445,8 +2083,9 @@ class Store:
                     listing.disposition,
                     listing.area_m2,
                     listing.locality,
-                    listing.url,
-                    listing_key(listing.url),
+                    keep_url,
+                    listing_key(keep_url),
+                    canon,
                     cdn_image_url(listing.image_url),
                     now,
                     1 if notified else 0,
@@ -1464,10 +2103,10 @@ class Store:
             )
             conn.execute(
                 "INSERT INTO events(listing_id, monitor_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
-                (listing.id, monitor_id, event_kind, now, detail),
+                (listing_id, monitor_id, event_kind, now, detail),
             )
-            self._record_price(conn, monitor_id, listing, now)
-            self._save_photos(conn, monitor_id, listing)
+            self._record_price(conn, monitor_id, stored, now)
+            self._save_photos(conn, monitor_id, stored)
 
     def snapshot_scrape_price(self, monitor_id: str, listing: Listing) -> None:
         now = utc_now()
@@ -1562,7 +2201,7 @@ class Store:
         seen: set[str] = set()
         for row in rows:
             item = public_listing(dict(row))
-            key = item.get("listing_key") or listing_key(item.get("url") or "") or f"{item.get('monitor_id')}:{item.get('id')}"
+            key = listing_identity(item)
             if key in seen:
                 continue
             seen.add(key)
@@ -1702,11 +2341,92 @@ class Store:
             CREATE INDEX IF NOT EXISTS idx_scrape_jobs_kind ON scrape_jobs(kind, status);
             CREATE INDEX IF NOT EXISTS idx_listings_notified_seen ON listings(notified, first_seen);
             CREATE INDEX IF NOT EXISTS idx_listings_lat_lon ON listings(lat, lon);
+            CREATE TABLE IF NOT EXISTS locality_geocode (
+                key TEXT PRIMARY KEY,
+                lat REAL,
+                lon REAL,
+                fetched_at TEXT
+            );
             CREATE INDEX IF NOT EXISTS idx_events_kind_created ON events(kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_monitor_kind ON events(monitor_id, kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_monitor_hits_monitor ON monitor_hits(monitor_id);
+            CREATE TABLE IF NOT EXISTS listing_links (
+                url TEXT PRIMARY KEY,
+                url_key TEXT NOT NULL,
+                canonical_key TEXT NOT NULL,
+                portal TEXT NOT NULL,
+                native_id TEXT,
+                agency TEXT,
+                last_seen TEXT,
+                gone INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_listing_links_canonical ON listing_links(canonical_key);
+            CREATE INDEX IF NOT EXISTS idx_listing_links_url_key ON listing_links(url_key);
             """
         )
+        cat_cols = {row[1] for row in conn.execute("PRAGMA table_info(catalog_listings)")}
+        if "canonical_key" not in cat_cols:
+            conn.execute("ALTER TABLE catalog_listings ADD COLUMN canonical_key TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
+        self._unify_listing_identities(conn)
+        self._rekey_idnes_listing_ids(conn)
+
+    def _rekey_idnes_listing_ids(self, conn: sqlite3.Connection) -> None:
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'idnes_ids_js_safe'").fetchone():
+            return
+        from app.idnes import oid_to_int
+
+        oid_re = re.compile(r"/detail/[^/]+/[^/]+/[^/]+/([0-9a-f]{24})/?", re.I)
+        related = (("listing_photos", "listing_id"), ("price_history", "listing_id"), ("events", "listing_id"))
+        rows = list(conn.execute("SELECT monitor_id, id, url FROM listings WHERE url LIKE '%idnes.cz%'"))
+        for row in rows:
+            match = oid_re.search(row["url"] or "")
+            if not match:
+                continue
+            new_id = oid_to_int(match.group(1))
+            old_id = int(row["id"])
+            if new_id == old_id:
+                continue
+            clash = conn.execute(
+                "SELECT 1 FROM listings WHERE monitor_id = ? AND id = ?",
+                (row["monitor_id"], new_id),
+            ).fetchone()
+            if clash:
+                for table, column in related:
+                    try:
+                        conn.execute(
+                            f"UPDATE OR IGNORE {table} SET {column} = ? WHERE monitor_id = ? AND {column} = ?",
+                            (new_id, row["monitor_id"], old_id),
+                        )
+                        conn.execute(
+                            f"DELETE FROM {table} WHERE monitor_id = ? AND {column} = ?",
+                            (row["monitor_id"], old_id),
+                        )
+                    except sqlite3.OperationalError:
+                        continue
+                conn.execute("DELETE FROM listings WHERE monitor_id = ? AND id = ?", (row["monitor_id"], old_id))
+                continue
+            conn.execute(
+                "UPDATE listings SET id = ? WHERE monitor_id = ? AND id = ?",
+                (new_id, row["monitor_id"], old_id),
+            )
+            for table, column in related:
+                try:
+                    conn.execute(
+                        f"UPDATE {table} SET {column} = ? WHERE monitor_id = ? AND {column} = ?",
+                        (new_id, row["monitor_id"], old_id),
+                    )
+                except sqlite3.OperationalError:
+                    continue
+        for row in conn.execute("SELECT listing_key, id, url FROM catalog_listings WHERE url LIKE '%idnes.cz%'"):
+            match = oid_re.search(row["url"] or "")
+            if not match:
+                continue
+            new_id = oid_to_int(match.group(1))
+            if int(row["id"] or 0) != new_id:
+                conn.execute("UPDATE catalog_listings SET id = ? WHERE listing_key = ?", (new_id, row["listing_key"]))
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('idnes_ids_js_safe', '1')")
 
     def _migrate_monitors(self, conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(monitors)")}
@@ -1869,25 +2589,60 @@ class Store:
             self._record_price(conn, monitor_id, listing, now)
             self._save_photos(conn, monitor_id, listing, replace=True)
 
+    def _persist_locality_coords(self, locality: str, point: tuple[float, float]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE listings SET lat = ?, lon = ?
+                WHERE locality = ? AND (lat IS NULL OR lon IS NULL)
+                """,
+                (point[0], point[1], locality),
+            )
+
+    def _fill_missing_coords(self, rows: list[dict[str, Any]], geoms: list[dict[str, Any]] | None = None) -> None:
+        pending: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            if row.get("lat") is not None and row.get("lon") is not None:
+                continue
+            loc = str(row.get("locality") or "").strip()
+            if not loc:
+                continue
+            pending.setdefault(loc, []).append(row)
+        if not pending:
+            return
+        streets = places.street_index_sync(geoms)
+        for loc, group in pending.items():
+            point = streets.get(places._norm_street(places.street_from_locality(loc)))
+            if not point:
+                continue
+            self._persist_locality_coords(loc, point)
+            for row in group:
+                row["lat"], row["lon"] = point
+                row["_geo_approx"] = True
+
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
         where = ["1=1"]
         params: list[Any] = []
         portal = (filters.get("portal") or "").strip()
-        if portal == "sreality":
-            where.append("listings.url LIKE '%sreality.cz%'")
-        elif portal == "bezrealitky":
-            where.append("listings.url LIKE '%bezrealitky.cz%'")
-        monitor_id = (filters.get("monitor_id") or "").strip()
-        if monitor_id:
+        if portal in {"sreality", "bezrealitky", "idnes"}:
             where.append(
-                """
-                EXISTS (
-                    SELECT 1 FROM monitor_hits
-                    WHERE monitor_hits.monitor_id = ?
-                      AND monitor_hits.listing_key = COALESCE(NULLIF(listings.listing_key, ''), listings.url)
+                f"""
+                (
+                  EXISTS (
+                    SELECT 1 FROM listing_links
+                    WHERE listing_links.canonical_key = COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)
+                      AND listing_links.portal = ?
+                      AND IFNULL(listing_links.gone, 0) = 0
+                  )
+                  OR listings.url LIKE ?
                 )
                 """
             )
+            params.append(portal)
+            params.append(f"%{portal}.cz%" if portal != "idnes" else "%idnes.cz%")
+        monitor_id = (filters.get("monitor_id") or "").strip()
+        if monitor_id:
+            where.append(_monitor_hit_sql())
             params.append(monitor_id)
         query = (filters.get("q") or "").strip()
         place_geoms = [item for item in (filters.get("place_geoms") or []) if isinstance(item, dict)]
@@ -1968,6 +2723,9 @@ class Store:
                 elif offer == "prodej":
                     offer_parts.append("(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label NOT LIKE ?))")
                     params.extend(['%"offer": "Prodej"%', "%měsíc%"])
+                elif offer == "drazba":
+                    offer_parts.append("(listings.extras LIKE ? OR listings.url LIKE ?)")
+                    params.extend(['%"offer": "Dražba"%', "%/drazba/%"])
             if offer_parts:
                 where.append("(" + " OR ".join(offer_parts) + ")")
         districts = _csv(filters.get("district"))
@@ -2007,10 +2765,18 @@ class Store:
                 _or_likes(where, params, "listings.locality", [f"%{label}%" for label in leftover])
         if place_geoms:
             box = places.bbox_of(place_geoms)
-            where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
+            geo_sql = "listings.lat IS NOT NULL AND listings.lon IS NOT NULL"
+            geo_params: list[Any] = []
             if box:
-                where.append("listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?")
-                params.extend([box[0], box[1], box[2], box[3]])
+                geo_sql += " AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+                geo_params.extend([box[0], box[1], box[2], box[3]])
+            text_sql, text_params = _place_text_sql(place_geoms)
+            if text_sql:
+                where.append(f"(({geo_sql}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND {text_sql}))")
+                params.extend([*geo_params, *text_params])
+            else:
+                where.append(geo_sql)
+                params.extend(geo_params)
         estates = _csv(filters.get("estate"))
         if estates:
             estate_parts = []
@@ -2025,18 +2791,47 @@ class Store:
                         f"(listings.extras LIKE '%\"estate\": \"Dom%' OR listings.extras LIKE '%\"estate\": \"Dům%' "
                         f"OR ({empty_extras} AND (listings.name LIKE '%dům%' OR listings.name LIKE '%Dům%' OR listings.name LIKE '%dum%')))"
                     )
+                elif estate == "pozemek":
+                    estate_parts.append(
+                        "(listings.extras LIKE '%\"estate\": \"Pozemek%' OR listings.name LIKE '%pozemek%')"
+                    )
+                elif estate == "projekt":
+                    estate_parts.append(
+                        "(listings.extras LIKE '%\"estate\": \"Projekt%' OR listings.name LIKE '%projekt%')"
+                    )
+                elif estate == "komercni":
+                    estate_parts.append(
+                        "(listings.extras LIKE '%\"estate\": \"Komerč%' OR listings.extras LIKE '%\"estate\": \"Kancel%' OR listings.name LIKE '%kancel%')"
+                    )
+                elif estate == "ostatni":
+                    estate_parts.append(
+                        "(listings.extras LIKE '%\"estate\": \"Ostatní%' OR listings.extras LIKE '%\"estate\": \"Garáž%')"
+                    )
             if estate_parts:
                 where.append("(" + " OR ".join(estate_parts) + ")")
         ownership = _csv(filters.get("ownership"))
         if ownership:
-            _or_likes(where, params, "listings.extras", [f'%"Vlastnictví", "value": "{label}"%' for label in ownership])
+            _or_likes(
+                where,
+                params,
+                "listings.extras",
+                [f'%"Vlastnictví", "value": "{label}"%' for label in ownership]
+                + [f'%"ownership": "{label}"%' for label in ownership],
+            )
         conditions = _csv(filters.get("condition"))
         if conditions:
             patterns = []
             for label in conditions:
                 patterns.append(f'%"Stav", "value": "{label}"%')
+                patterns.append(f'%"condition": "{label}"%')
                 if label == "Po rekonstrukci":
                     patterns.append('%"Stav", "value": "Po částečné rekonstrukci"%')
+                if label == "Dobrý":
+                    patterns.append("%Dobrý stav%")
+                if label == "Špatný":
+                    patterns.append("%Špatný stav%")
+                if label == "Projekt":
+                    patterns.append("%Projekt%")
             _or_likes(where, params, "listings.extras", patterns)
         buildings = _csv(filters.get("building"))
         if buildings:
@@ -2046,6 +2841,16 @@ class Store:
                     patterns.append("%Cihl%")
                 elif item == "panelova":
                     patterns.append("%Panel%")
+                elif item == "drevena":
+                    patterns.append("%Dřev%")
+                elif item == "kamenna":
+                    patterns.append("%Kamenn%")
+                elif item == "skeletova":
+                    patterns.append("%Skelet%")
+                elif item == "montovana":
+                    patterns.append("%Montovan%")
+                elif item == "smisena":
+                    patterns.append("%Smíšen%")
                 elif item == "ostatni":
                     patterns.extend(["%Smíšená%", "%Montovan%", "%Skelet%", "%Kamenn%", "%Ostatní%"])
             _or_likes(where, params, "listings.extras", patterns)
@@ -2059,15 +2864,20 @@ class Store:
                             '%"Vybavení", "value": "Vybavený"%',
                             '%"Vybavení", "value": "Vybaveno"%',
                             '%"Vybavení", "value": "Ano"%',
+                            '%"Vybavení", "value": "Zařízený"%',
+                            '%"equipped": "Zařízený"%',
                         ]
                     )
                 elif item == "castecne":
                     patterns.append('%"Vybavení", "value": "Částečně"%')
+                    patterns.append('%"equipped": "Částečně zařízený"%')
                 elif item == "nevybaveny":
                     patterns.extend(
                         [
                             '%"Vybavení", "value": "Nevybaven"%',
                             '%"Vybavení", "value": "Ne"%',
+                            '%"Vybavení", "value": "Nezařízený"%',
+                            '%"equipped": "Nezařízený"%',
                         ]
                     )
             _or_likes(where, params, "listings.extras", patterns)
@@ -2085,11 +2895,11 @@ class Store:
         _apply_circle(where, params, filters)
         status = (filters.get("status") or "").strip()
         if status == "saved":
-            where.append("EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'saved')")
+            where.append(_saved_listing_sql())
         elif status == "hidden":
-            where.append("EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'hidden')")
+            where.append(_hidden_listing_sql())
         elif status != "all":
-            where.append("NOT EXISTS (SELECT 1 FROM listing_user WHERE listing_user.url = listings.url AND listing_user.status = 'hidden')")
+            where.append(f"NOT {_hidden_listing_sql()}")
         hits = (filters.get("hits") or "").strip()
         if hits in {"today", "day"}:
             where.append("listings.notified = 1")
@@ -2145,7 +2955,7 @@ class Store:
             light_sql = f"""
                 SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
                        listings.price_czk, listings.price_label, listings.name, listings.locality,
-                       listings.listing_key, listings.url
+                       listings.listing_key, listings.canonical_key, listings.url
                 FROM listings
                 WHERE {clause}
                 ORDER BY {order}
@@ -2156,14 +2966,15 @@ class Store:
             seen_keys: set[str] = set()
             matched: list[dict[str, Any]] = []
             for row in fetched:
-                key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
+                key = listing_identity(row)
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
-                if not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
+                if not listing_matches_places(row, place_geoms):
                     continue
                 matched.append(row)
             total = len(matched)
+            self._fill_missing_coords(matched, place_geoms)
             page = matched[offset : offset + limit]
             rows = []
             if page:
@@ -2204,7 +3015,7 @@ class Store:
             seen_keys = set()
             rows = []
             for row in fetched:
-                key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
+                key = listing_identity(row)
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
@@ -2232,7 +3043,9 @@ class Store:
         payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
         if place_geoms:
             payload["places"] = places.public_geoms(place_geoms)
-            payload["pins"] = [_pin_item(row) for row in matched if row.get("lat") is not None and row.get("lon") is not None]
+            payload["pins"] = [
+                pin for row in matched if (pin := _pin_with_place(row, place_geoms, approx=bool(row.get("_geo_approx"))))
+            ]
         else:
             payload["pins"] = self._catalog_pins(where, params, None)["items"]
         return payload
@@ -2243,7 +3056,7 @@ class Store:
         sql = f"""
             SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
                    listings.price_czk, listings.price_label, listings.name, listings.locality,
-                   listings.listing_key, listings.url
+                   listings.listing_key, listings.canonical_key, listings.url
             FROM listings
             WHERE {clause}
               AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
@@ -2255,7 +3068,7 @@ class Store:
         items = []
         seen: set[str] = set()
         for row in fetched:
-            key = row.get("listing_key") or listing_key(row.get("url") or "") or f"{row.get('monitor_id')}:{row.get('id')}"
+            key = listing_identity(row)
             if key in seen:
                 continue
             if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
@@ -2281,30 +3094,78 @@ class Store:
                 {"id": row["id"], "name": row["name"], "enabled": bool(row["enabled"])}
                 for row in conn.execute("SELECT id, name, enabled FROM monitors ORDER BY name")
             ]
-            portals = []
-            if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%sreality.cz%' LIMIT 1").fetchone():
-                portals.append("sreality")
-            if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bezrealitky.cz%' LIMIT 1").fetchone():
-                portals.append("bezrealitky")
+            portals = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT DISTINCT portal FROM listing_links WHERE IFNULL(gone, 0) = 0 AND portal != '' ORDER BY portal"
+                )
+            ]
+            if not portals:
+                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%sreality.cz%' LIMIT 1").fetchone():
+                    portals.append("sreality")
+                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bezrealitky.cz%' LIMIT 1").fetchone():
+                    portals.append("bezrealitky")
+                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%idnes.cz%' LIMIT 1").fetchone():
+                    portals.append("idnes")
         payload = {"dispositions": dispositions, "portals": portals, "monitors": monitors}
         self._facets_cache = payload
         self._facets_at = now
         return payload
 
-    def catalog_item(self, monitor_id: str, listing_id: int) -> dict[str, Any] | None:
+    def catalog_item(
+        self,
+        monitor_id: str,
+        listing_id: int | str | None = None,
+        listing_key: str = "",
+        url: str = "",
+    ) -> dict[str, Any] | None:
+        number: int | None = None
+        try:
+            if listing_id not in (None, ""):
+                number = int(listing_id)
+        except (TypeError, ValueError):
+            number = None
         with self.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                FROM listings
-                LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                WHERE listings.monitor_id = ? AND listings.id = ?
-                """,
-                (monitor_id, listing_id),
-            ).fetchone()
+            row = None
+            if monitor_id and number is not None:
+                row = conn.execute(
+                    """
+                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    FROM listings
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE listings.monitor_id = ? AND listings.id = ?
+                    """,
+                    (monitor_id, number),
+                ).fetchone()
+            if row is None and (listing_key or url):
+                row = conn.execute(
+                    """
+                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    FROM listings
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE listings.listing_key = ? OR listings.canonical_key = ? OR listings.url = ?
+                    ORDER BY listings.last_seen DESC
+                    LIMIT 1
+                    """,
+                    (listing_key or url, listing_key or url, url or listing_key),
+                ).fetchone()
+            if row is None and number is not None:
+                row = conn.execute(
+                    """
+                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    FROM listings
+                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                    WHERE listings.id = ?
+                    ORDER BY listings.last_seen DESC
+                    LIMIT 1
+                    """,
+                    (number,),
+                ).fetchone()
             if not row:
                 return None
             item = public_listing(dict(row))
+            monitor_id = item["monitor_id"]
+            listing_id = item["id"]
             item["photos"] = _photo_urls(
                 [
                     photo["url"]
@@ -2367,8 +3228,19 @@ class Store:
     def url_already_notified(self, url: str, exclude_monitor_id: str | None = None) -> bool:
         if not url:
             return False
-        sql = "SELECT 1 FROM listings WHERE url = ? AND notified = 1"
-        params: list[Any] = [url]
+        url_key = listing_key(url)
+        sql = """
+            SELECT 1 FROM listings
+            WHERE notified = 1
+              AND (
+                url = ?
+                OR canonical_key = (
+                    SELECT canonical_key FROM listing_links WHERE url = ? OR url_key = ? LIMIT 1
+                )
+                OR listing_key = ?
+              )
+        """
+        params: list[Any] = [url, url, url_key, url_key]
         if exclude_monitor_id:
             sql += " AND monitor_id != ?"
             params.append(exclude_monitor_id)
@@ -2425,6 +3297,13 @@ class Store:
         if not webhook_url or not listing_url:
             return False
         key = listing_key(listing_url)
+        with self.connect() as conn:
+            found = conn.execute(
+                "SELECT canonical_key FROM listing_links WHERE url = ? OR url_key = ? LIMIT 1",
+                (listing_url, key),
+            ).fetchone()
+            if found and found["canonical_key"]:
+                key = str(found["canonical_key"])
         channel = channel_key(webhook_url)
         now = utc_now()
         with self.connect() as conn:
@@ -2733,7 +3612,7 @@ class Store:
         items = []
         for row in rows:
             url = row.get("url") or ""
-            key = row.get("listing_key") or listing_key(url) or url
+            key = listing_identity(row)
             if key in seen:
                 continue
             seen.add(key)
@@ -2745,35 +3624,45 @@ class Store:
     def _attach_catalog_extras(self, items: list[dict[str, Any]], *, twins: bool = False) -> None:
         if not items:
             return
+        canons = [listing_identity(item) for item in items]
         urls = [item.get("url") for item in items if item.get("url")]
-        keys = [item.get("listing_key") or listing_key(item.get("url") or "") for item in items]
-        keys = [key for key in keys if key]
-        if not urls and not keys:
-            return
-        url_holders = ",".join("?" * len(urls)) if urls else "NULL"
-        key_holders = ",".join("?" * len(keys)) if keys else "NULL"
         with self.connect() as conn:
-            users = {}
-            if urls:
+            links_map = self._links_for(conn, canons)
+            extra_urls = [
+                str(link.get("url") or "")
+                for group in links_map.values()
+                for link in group
+                if link.get("url")
+            ]
+            lookup_urls = [url for url in dict.fromkeys([*urls, *extra_urls]) if url]
+            users: dict[str, dict[str, str]] = {}
+            if lookup_urls:
+                holders = ",".join("?" * len(lookup_urls))
                 users = {
                     row["url"]: {"status": row["status"] or "", "note": row["note"] or ""}
-                    for row in conn.execute(f"SELECT url, status, note FROM listing_user WHERE url IN ({url_holders})", urls)
+                    for row in conn.execute(
+                        f"SELECT url, status, note FROM listing_user WHERE url IN ({holders})",
+                        lookup_urls,
+                    )
                 }
             monitor_sql = """
-                SELECT listings.url, listings.listing_key, monitors.id, monitors.name
+                SELECT listings.url, listings.listing_key, listings.canonical_key, monitors.id, monitors.name
                 FROM listings
                 JOIN monitors ON monitors.id = listings.monitor_id
                 WHERE 0
             """
             monitor_params: list[Any] = []
-            if urls:
+            if lookup_urls:
+                url_holders = ",".join("?" * len(lookup_urls))
                 monitor_sql += f" OR listings.url IN ({url_holders})"
-                monitor_params.extend(urls)
-            if keys:
-                monitor_sql += f" OR listings.listing_key IN ({key_holders})"
-                monitor_params.extend(keys)
-            monitor_sql += " GROUP BY COALESCE(NULLIF(listings.listing_key, ''), listings.url), monitors.id ORDER BY monitors.name"
-            monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall()
+                monitor_params.extend(lookup_urls)
+            key_holders = ",".join("?" * len(canons)) if canons else ""
+            if canons:
+                monitor_sql += f" OR listings.canonical_key IN ({key_holders}) OR listings.listing_key IN ({key_holders})"
+                monitor_params.extend(canons)
+                monitor_params.extend(canons)
+            monitor_sql += " GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), NULLIF(listings.listing_key, ''), listings.url), monitors.id ORDER BY monitors.name"
+            monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall() if monitor_params else []
             history = {}
             hist_keys = [(item.get("monitor_id"), item.get("id")) for item in items if item.get("monitor_id") and item.get("id") is not None]
             if hist_keys:
@@ -2784,34 +3673,70 @@ class Store:
                     flat,
                 ):
                     history.setdefault((row["monitor_id"], int(row["listing_id"])), []).append(int(row["price_czk"]))
-            twins_map: dict[str, dict[str, Any]] = {}
-            if twins:
-                for item in items:
-                    twin = self._find_twin(conn, item)
-                    if twin:
-                        twins_map[item.get("url") or ""] = twin
         monitors_by_url: dict[str, list[dict[str, str]]] = {}
         monitors_by_key: dict[str, list[dict[str, str]]] = {}
         for row in monitor_rows:
             entry = {"id": row["id"], "name": row["name"]}
-            for bucket, map_key in ((monitors_by_url, row["url"]), (monitors_by_key, row["listing_key"])):
+            for bucket, map_key in (
+                (monitors_by_url, row["url"]),
+                (monitors_by_key, row["listing_key"]),
+                (monitors_by_key, row["canonical_key"]),
+            ):
                 if not map_key:
                     continue
                 seen_ids = {item["id"] for item in bucket.setdefault(map_key, [])}
                 if entry["id"] not in seen_ids:
                     bucket[map_key].append(entry)
         for item in items:
+            identity = listing_identity(item)
+            item["canonical_key"] = identity
+            item["listing_key"] = identity
+            links = links_map.get(identity) or []
+            if not links and item.get("url"):
+                links = [link_payload(str(item["url"]), extras=item.get("extras"), gone=bool(item.get("gone")))]
+            live = [link for link in links if not link.get("gone") and link.get("url")]
+            public_links = [
+                {
+                    "url": link.get("url"),
+                    "portal": link.get("portal"),
+                    "label": link.get("label") or portal_label(str(link.get("portal") or "")),
+                    "agency": link.get("agency") or "",
+                    "gone": bool(link.get("gone")),
+                    "last_seen": link.get("last_seen") or "",
+                }
+                for link in links
+            ]
+            item["links"] = public_links
+            if live:
+                item["url"] = live[0]["url"]
+            labels = list(dict.fromkeys(link["label"] for link in live if link.get("label")))
+            if labels:
+                item["portal"] = " · ".join(labels)
             user = users.get(item.get("url") or "", {})
+            if not user:
+                for link in links:
+                    found = users.get(str(link.get("url") or ""))
+                    if found:
+                        user = found
+                        break
             item["status"] = user.get("status") or ""
             item["note"] = user.get("note") or ""
-            identity = item.get("listing_key") or listing_key(item.get("url") or "")
             item["monitors"] = (
                 monitors_by_key.get(identity)
                 or monitors_by_url.get(item.get("url") or "")
                 or [{"id": item.get("monitor_id"), "name": item.get("monitor_name")}]
             )
-            item["twin"] = twins_map.get(item.get("url") or "")
-            item["gone"] = bool(item.get("gone"))
+            others = [link for link in live if listing_key(str(link.get("url") or "")) != listing_key(str(item.get("url") or ""))]
+            item["twin"] = (
+                {
+                    "url": others[0]["url"],
+                    "portal": others[0].get("label") or others[0].get("portal"),
+                    "agency": others[0].get("agency") or "",
+                }
+                if others
+                else None
+            )
+            item["gone"] = bool(item.get("gone")) and not live
             prices = history.get((item.get("monitor_id"), int(item["id"]) if item.get("id") is not None else -1), [])
             _apply_discount(item, prices)
 
@@ -2889,7 +3814,7 @@ class Store:
         data["seeded"] = bool(data["seeded"])
         data["interval_sec"] = data.get("interval_sec")
         data["portals"] = (data.get("portals") or "all") or "all"
-        if data["portals"] not in {"all", "sreality", "bezrealitky"}:
+        if data["portals"] not in {"all", "sreality", "bezrealitky", "idnes"}:
             data["portals"] = "all"
         data["tracked"] = self.count(data["id"]) if tracked is None else int(tracked)
         data["new_today"] = self.new_today_count(data["id"]) if new_today is None else int(new_today)
@@ -2977,7 +3902,10 @@ def _price_series(history: list[dict[str, Any]], item: dict[str, Any]) -> list[d
 def public_listing(row: dict[str, Any]) -> dict[str, Any]:
     item = enrich_maps(row)
     item.pop("_rn", None)
-    item["portal"] = "Bezrealitky" if "bezrealitky" in (item.get("url") or "") else "Sreality"
+    identity = listing_identity(item)
+    item["canonical_key"] = identity
+    item["listing_key"] = identity
+    item["portal"] = portal_label(portal_from_url(item.get("url") or ""))
     extras = item.get("extras")
     if isinstance(extras, str) and extras:
         try:
@@ -2987,6 +3915,7 @@ def public_listing(row: dict[str, Any]) -> dict[str, Any]:
     item["extras"] = extras or {}
     item["flags"] = item["extras"].get("flags") or []
     item["gone"] = bool(item.get("gone"))
+    item["links"] = item.get("links") or []
     _apply_discount(item, [])
     return item
 

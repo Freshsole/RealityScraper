@@ -592,12 +592,20 @@ function groupedPins(items, zoom) {
   }));
 }
 
+function addBaseTiles(map) {
+  if (!map) return;
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+  if (typeof ResizeObserver === "function") {
+    const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
+    ro.observe(map.getContainer());
+  }
+  requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+}
+
 function ensureMap() {
   if (hitsMap || typeof L === "undefined") return;
   hitsMap = L.map("hits-map", { scrollWheelZoom: false, attributionControl: false }).setView([50.08, 14.44], 12);
-  L.maplibreGL({
-    style: "https://tiles.openfreemap.org/styles/liberty",
-  }).addTo(hitsMap);
+  addBaseTiles(hitsMap);
   hitsLayer = L.layerGroup().addTo(hitsMap);
   hitsMap.on("zoomend", () => drawHitsPins(false));
 }
@@ -613,10 +621,13 @@ function hitMarker(item) {
   const maps = item.maps_url
     ? `<a class="map-popup-link" href="${item.maps_url}" target="_blank" rel="noreferrer">Google Maps</a>`
     : "";
-  const portal = String(item.url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
+  const links = (item.links || []).filter((row) => row?.url && !row.gone);
+  const portalLinks = (links.length ? links : [{ url: item.url, label: portalLabel(item.url) }])
+    .map((link) => `<a class="map-popup-link" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || link.portal || "Web")}</a>`)
+    .join("");
   const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true });
   marker.bindPopup(
-    `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links"><a class="map-popup-link" href="${item.url}" target="_blank" rel="noreferrer">${portal}</a>${maps}</div></div></div>`,
+    `<div class="map-popup-card">${item.image_url ? `<img class="map-popup-photo" src="${item.image_url}" alt="" />` : ""}<div class="map-popup-body"><p class="map-popup-price">${escapeHtml(item.price_label || "")}</p><p class="map-popup-name">${escapeHtml(item.name)}</p><p class="map-popup-place">${escapeHtml(item.locality || "")}</p><div class="map-popup-links">${portalLinks}${maps}</div></div></div>`,
     { className: "map-popup", maxWidth: 280, minWidth: 240 },
   );
   marker.on("popupopen", () => marker.getElement()?.classList.add("is-open"));
@@ -669,14 +680,25 @@ function renderMap(items) {
   drawHitsPins(true);
 }
 
+function sourceFromUrl(url) {
+  const raw = String(url || "").toLowerCase();
+  if (raw.includes("idnes")) return "idnes";
+  if (raw.includes("bezrealitky")) return "bezrealitky";
+  return "sreality";
+}
+
 function portalLabel(url) {
-  return String(url || "").includes("bezrealitky") ? "Bezrealitky" : "Sreality";
+  const source = sourceFromUrl(url);
+  if (source === "idnes") return "Reality.iDNES";
+  if (source === "bezrealitky") return "Bezrealitky";
+  return "Sreality";
 }
 
 function portalIcon(url) {
-  return String(url || "").includes("bezrealitky")
-    ? "/static/icons/bezrealitky.svg"
-    : "/static/icons/sreality.svg";
+  const source = sourceFromUrl(url);
+  if (source === "idnes") return "/static/icons/idnes.svg";
+  if (source === "bezrealitky") return "/static/icons/bezrealitky.svg";
+  return "/static/icons/sreality.svg";
 }
 
 let editingMonitorId = null;
@@ -695,10 +717,11 @@ function templateName(id) {
 
 function normalizeMonitorPortals(value) {
   const raw = String(value || "all").toLowerCase();
-  return raw === "sreality" || raw === "bezrealitky" ? raw : "all";
+  return raw === "sreality" || raw === "bezrealitky" || raw === "idnes" ? raw : "all";
 }
 
 function portalTitle(portal) {
+  if (portal === "idnes") return "Reality.iDNES";
   return portal === "bezrealitky" ? "Bezrealitky" : "Sreality";
 }
 
@@ -709,7 +732,7 @@ function renderPortalUrlStack(host, targets, primary) {
     .filter((item) => item.url);
   if (!rows.length && primary) {
     rows.push({
-      portal: String(primary).includes("bezrealitky") ? "bezrealitky" : "sreality",
+      portal: sourceFromUrl(primary),
       url: primary,
     });
   }
@@ -725,7 +748,8 @@ function portalsSummary(value) {
   const portals = normalizeMonitorPortals(value);
   if (portals === "sreality") return "Jen Sreality";
   if (portals === "bezrealitky") return "Jen Bezrealitky";
-  return "Všechny (Sreality i Bezrealitky)";
+  if (portals === "idnes") return "Jen iDNES Reality";
+  return "Všechny (Sreality, Bezrealitky i iDNES)";
 }
 
 function selectedMonitorPortals() {
@@ -774,6 +798,7 @@ function monitorEditorHtml(item, draft) {
           <button type="button" class="chip${data.portals === "all" ? " on" : ""}" data-portals="all">Všechny</button>
           <button type="button" class="chip${data.portals === "sreality" ? " on" : ""}" data-portals="sreality">Jen Sreality</button>
           <button type="button" class="chip${data.portals === "bezrealitky" ? " on" : ""}" data-portals="bezrealitky">Jen Bezrealitky</button>
+          <button type="button" class="chip${data.portals === "idnes" ? " on" : ""}" data-portals="idnes">Jen iDNES Reality</button>
         </div>
       </div>
       <label>Discord webhook<input name="webhook_url" value="${escapeHtml(data.webhook_url)}" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
@@ -905,6 +930,20 @@ function parseMonitorUrl(url) {
     const parsed = new URL(url);
     const query = parsed.searchParams;
     const path = parsed.pathname.split("/").filter(Boolean);
+    if (url.includes("idnes")) {
+      const start = path.indexOf("s");
+      const parts = start >= 0 ? path.slice(start + 1) : path;
+      if (parts[0]) filters.offers = [parts[0]];
+      if (parts[1]) filters.estates = [parts[1]];
+      if (parts[2]) filters.districts = [parts[2]];
+      const sizes = query.get("dispozice");
+      if (sizes) filters.sizes = sizes.split("|").filter(Boolean);
+      filters.price_from = intOrNull(query.get("s-qc[priceMin]"));
+      filters.price_to = intOrNull(query.get("s-qc[priceMax]"));
+      filters.area_from = intOrNull(query.get("s-qc[usableAreaMin]"));
+      filters.area_to = intOrNull(query.get("s-qc[usableAreaMax]"));
+      return filters;
+    }
     if (url.includes("bezrealitky")) {
       filters.offers = query.getAll("offerType");
       filters.estates = query.getAll("estateType");
@@ -934,7 +973,7 @@ function parseMonitorUrl(url) {
 }
 
 function watchFieldsHtml(item, filters) {
-  const source = (item.search_url || "").includes("bezrealitky") ? "bezrealitky" : "sreality";
+  const source = sourceFromUrl(item.search_url);
   const catalog = filterCatalog?.sources?.[source]?.catalog || {};
   const area = filters.area_from ? `${filters.area_from} m²` : "Bez minima";
   const rows = [
@@ -982,7 +1021,7 @@ async function applyUrlToFilters(url) {
     return;
   }
   filterState = data.filters || {};
-  filterState.source = (url || "").includes("bezrealitky") ? "bezrealitky" : "sreality";
+  filterState.source = sourceFromUrl(url);
   applySourceCatalog(filterState.source);
   renderFilterGroups();
   $("generated-url").value = data.url || url;
@@ -1646,7 +1685,8 @@ $("monitor-list").addEventListener("click", async (event) => {
 });
 
 function chipGroup(title, key, options, single = false) {
-  const selected = new Set(filterState[key] || []);
+  const raw = filterState[key];
+  const selected = new Set(Array.isArray(raw) ? raw : raw != null && raw !== "" ? [raw] : []);
   const known = new Map((options || []).map(([id, label]) => [String(id), label]));
   for (const id of selected) {
     if (!known.has(String(id))) known.set(String(id), String(id));
@@ -1667,7 +1707,9 @@ function chipGroup(title, key, options, single = false) {
 }
 
 function currentSource() {
-  return filterState.source === "bezrealitky" ? "bezrealitky" : "sreality";
+  const raw = filterState.source;
+  if (raw === "bezrealitky" || raw === "idnes") return raw;
+  return "sreality";
 }
 
 function localityMap() {
@@ -1799,7 +1841,7 @@ function renderFilterGroups() {
     chip.classList.toggle("on", chip.dataset.source === source);
   });
   document.querySelectorAll(".sreality-only").forEach((el) => {
-    el.hidden = source === "bezrealitky";
+    el.hidden = source !== "sreality";
   });
   document.querySelectorAll(".br-only").forEach((el) => {
     el.hidden = source !== "bezrealitky";
@@ -1809,6 +1851,7 @@ function renderFilterGroups() {
   const groups = [
     ["Typ nabídky", "offers", cat.offers],
     ["Nemovitost", "estates", cat.estates],
+    ["Nemovitost", "category", cat.categories],
     ["Dispozice", "sizes", cat.sizes],
     ["Typ vlastnictví", "ownership", cat.ownership],
     ["Převod do osobního vlastnictví", "transfers", cat.transfers],
@@ -1818,6 +1861,7 @@ function renderFilterGroups() {
     ["Něco navíc", "extras", cat.extras],
     ["Spolubydlení", "roommate", cat.roommate],
     ["Další", "flags", cat.flags],
+    ["Aktuálnost", "article_age", cat.ages],
     ["Energetická náročnost", "energy", cat.energy],
     ["V okolí nemovitosti", "pois", cat.pois],
   ];
@@ -1869,6 +1913,8 @@ function readRanges() {
   if (currentSource() === "sreality") {
     filterState.category = "byty";
     filterState.sort = filterState.sort || "nejlevnejsi";
+  } else if (currentSource() === "idnes") {
+    filterState.sort = filterState.sort || "nejnovejsi";
   } else {
     filterState.sort = filterState.sort || "TIMEORDER_DESC";
     filterState.annuity_from = num("f-annuity-from");
@@ -3200,7 +3246,7 @@ async function boot() {
   const draftedName = params.get("name");
   if (settingsPanel() === "watch" && drafted) {
     await openWatchEditor({
-      name: draftedName || (drafted.includes("bezrealitky") ? "Bezrealitky hledání" : "Nové hledání"),
+      name: draftedName || (sourceFromUrl(drafted) === "bezrealitky" ? "Bezrealitky hledání" : sourceFromUrl(drafted) === "idnes" ? "iDNES Reality hledání" : "Nové hledání"),
       search_url: drafted,
       template_id: "default",
       enabled: true,
@@ -3221,7 +3267,7 @@ async function applyMirroredFilters(monitorId) {
     return;
   }
   filterState = structuredClone(data.filters || {});
-  filterState.source = data.target === "Bezrealitky" ? "bezrealitky" : "sreality";
+  filterState.source = data.target === "Bezrealitky" ? "bezrealitky" : data.target === "Reality.iDNES" ? "idnes" : sourceFromUrl(data.url || "") === "idnes" ? "idnes" : "sreality";
   applySourceCatalog(filterState.source);
   filterSuggestedName = data.suggested_name || "";
   renderFilterGroups();

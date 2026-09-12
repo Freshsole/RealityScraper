@@ -4,6 +4,18 @@
   if (!listEl) return;
 
   const LIMIT = 36;
+  const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+  function addBaseTiles(map) {
+    if (!map) return;
+    L.tileLayer(TILE_URL, { maxZoom: 19 }).addTo(map);
+    if (typeof ResizeObserver === "function") {
+      const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
+      ro.observe(map.getContainer());
+    }
+    requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+  }
+
   let catalogMap = null;
   let catalogLayer = null;
   let pinItems = [];
@@ -86,11 +98,48 @@
   function uniqueOffers(items) {
     const seen = new Set();
     return (items || []).filter((item) => {
-      const key = item.listing_key || item.url || `${item.monitor_id}:${item.id}`;
+      const key = item.canonical_key || item.listing_key || item.url || `${item.monitor_id}:${item.id}`;
       if (!key || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+  }
+
+  function listingLinks(item) {
+    const links = (item?.links || []).filter((row) => row?.url && !row.gone);
+    if (links.length) return links;
+    return item?.url ? [{ url: item.url, label: item.portal, portal: item.portal, agency: "" }] : [];
+  }
+
+  function portalIcon(portal) {
+    const key = String(portal || "").toLowerCase();
+    if (key.includes("idnes")) return "/static/icons/idnes.svg";
+    if (key.includes("bezrealitky")) return "/static/icons/bezrealitky.svg";
+    return "/static/icons/sreality.svg";
+  }
+
+  function portalIcons(item) {
+    const seen = new Set();
+    const icons = [];
+    for (const link of listingLinks(item)) {
+      const key = String(link.portal || link.label || "").toLowerCase() || link.url;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const label = link.label || link.portal || item.portal || "Web";
+      icons.push(`<img class="offer-portal" src="${portalIcon(label)}" alt="${escapeHtml(label)}" />`);
+    }
+    if (!icons.length) icons.push(`<img class="offer-portal" src="${portalIcon(item.portal)}" alt="${escapeHtml(item.portal || "")}" />`);
+    return `<div class="offer-portals">${icons.join("")}</div>`;
+  }
+
+  function offerSourceLine(item) {
+    const parts = listingLinks(item).map((link) => {
+      const agency = link.agency ? ` · ${link.agency}` : "";
+      return `${link.label || link.portal || "Web"}${agency}`;
+    });
+    const unique = [...new Set(parts.filter(Boolean))];
+    if (unique.length <= 1) return "";
+    return `<p class="offer-sources">${escapeHtml(unique.join(" · "))}</p>`;
   }
 
   function formatTime(iso) {
@@ -109,10 +158,6 @@
     if (n > 0) return `+${abs}`;
     if (n < 0) return `−${abs}`;
     return formatKc(0);
-  }
-
-  function portalIcon(portal) {
-    return portal === "Bezrealitky" ? "/static/icons/bezrealitky.svg" : "/static/icons/sreality.svg";
   }
 
   function snippet(text) {
@@ -385,9 +430,6 @@
     hidePlaceSuggest();
     if ($("cat-q")) $("cat-q").value = "";
     needPlaceFit = true;
-    renderMapPins([]);
-    drawPlaceLayer(false);
-    goToSelection();
     const count = $("catalog-count");
     if (count) count.textContent = "Načítám…";
     loadCatalog();
@@ -710,7 +752,7 @@
                    <p class="offer-count">1 / ${photos.length}</p>`
                 : ""
           }
-          <img class="offer-portal" src="${portalIcon(item.portal)}" alt="${escapeHtml(item.portal)}" />
+          ${portalIcons(item)}
           <button type="button" class="offer-save${item.status === "saved" ? " on" : ""}" data-save-url="${escapeHtml(item.url || "")}" aria-label="Uložit" title="Uložit">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.2L5 21V4.5a1 1 0 0 1 1-1z"/></svg>
           </button>
@@ -732,7 +774,7 @@
             </span>
           </div>
           ${amenities ? `<p class="offer-amenities">${escapeHtml(amenities)}</p>` : ""}
-          ${item.twin ? `<p class="offer-twin">Podobné na ${escapeHtml(item.twin.portal)}</p>` : ""}
+          ${offerSourceLine(item)}
           <div class="offer-foot">
             ${priceBlock(item)}
             <div class="offer-tools">
@@ -876,21 +918,52 @@
     );
   }
 
+  function finiteCoord(value) {
+    if (value === null || value === undefined || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function isUsableLatLon(lat, lon) {
+    return lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon) && !(Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6);
+  }
+
+  function boundsAreUsable(bounds) {
+    if (!bounds?.isValid?.()) return false;
+    const center = bounds.getCenter();
+    if (!isUsableLatLon(center.lat, center.lng)) return false;
+    const span = Math.abs(bounds.getNorth() - bounds.getSouth()) + Math.abs(bounds.getEast() - bounds.getWest());
+    return span > 0 && span < 80;
+  }
+
+  function pinBounds() {
+    let bounds = null;
+    for (const item of pinItems) {
+      const lat = finiteCoord(item.lat);
+      const lon = finiteCoord(item.lon);
+      if (!isUsableLatLon(lat, lon)) continue;
+      const point = L.latLng(lat, lon);
+      bounds = bounds ? bounds.extend(point) : L.latLngBounds(point, point);
+    }
+    return bounds;
+  }
+
   function extentBounds(place) {
     const extent = place?.extent;
     if (!Array.isArray(extent) || extent.length < 4) return null;
-    const west = Number(extent[0]);
-    const north = Number(extent[1]);
-    const east = Number(extent[2]);
-    const south = Number(extent[3]);
-    if (![south, north, west, east].every(Number.isFinite)) return null;
-    return L.latLngBounds([south, west], [north, east]);
+    const west = finiteCoord(extent[0]);
+    const north = finiteCoord(extent[1]);
+    const east = finiteCoord(extent[2]);
+    const south = finiteCoord(extent[3]);
+    if (west == null || north == null || east == null || south == null) return null;
+    const bounds = L.latLngBounds([south, west], [north, east]);
+    return boundsAreUsable(bounds) ? bounds : null;
   }
 
   function selectionBounds() {
     if (placeLayer?.getLayers?.().length) {
       const drawn = placeLayer.getBounds();
-      if (drawn?.isValid?.()) return drawn;
+      if (boundsAreUsable(drawn)) return drawn;
     }
     let bounds = null;
     for (const place of selectedPlaces) {
@@ -899,21 +972,21 @@
         bounds = bounds ? bounds.extend(fromExtent) : fromExtent;
         continue;
       }
-      const lat = Number(place.lat);
-      const lon = Number(place.lon);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      const lat = finiteCoord(place.lat);
+      const lon = finiteCoord(place.lon);
+      if (!isUsableLatLon(lat, lon)) continue;
       const pad = place.kind === "street" ? 0.004 : 0.03;
       const part = L.latLngBounds([lat - pad, lon - pad * 1.4], [lat + pad, lon + pad * 1.4]);
       bounds = bounds ? bounds.extend(part) : part;
     }
-    return bounds;
+    return boundsAreUsable(bounds) ? bounds : null;
   }
 
   function goToSelection() {
     ensureMap();
-    if (!catalogMap || !selectedPlaces.length) return;
-    let bounds = selectionBounds();
-    if (!bounds?.isValid?.()) return;
+    if (!catalogMap) return;
+    let bounds = selectionBounds() || pinBounds();
+    if (!boundsAreUsable(bounds)) return;
     ignoreMapMove += 1;
     const streetOnly =
       selectedPlaces.length > 0 &&
@@ -942,7 +1015,7 @@
     ensureMap();
     if (!catalogMap) return;
     if (!placeLayer) {
-      placeLayer = L.layerGroup().addTo(catalogMap);
+      placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
     }
     placeLayer.clearLayers();
     for (const place of selectedPlaces) {
@@ -971,12 +1044,13 @@
         continue;
       }
       if (!place.geojson || place.geojson.type === "Point") continue;
-      L.geoJSON(place.geojson, {
+            L.geoJSON(place.geojson, {
+        pane: "placePane",
         style: {
-          color: "#3d7ea6",
+          color: "#163300",
           weight: 2,
-          fillColor: "#5ba3d0",
-          fillOpacity: 0.28,
+          fillColor: "#9fe870",
+          fillOpacity: 0.12,
         },
       }).addTo(placeLayer);
     }
@@ -1078,7 +1152,7 @@
         placeCircle(item.lat, item.lon);
         return;
       }
-      openDetail(item.monitor_id, item.id);
+      openDetail(item.monitor_id, item.id, item);
     });
     marker.on("mouseover", () => highlightCard(listingKey(item)));
     marker.on("mouseout", () => clearCardHighlight());
@@ -1093,10 +1167,8 @@
     catalogMap.getPane("placePane").style.pointerEvents = "none";
     catalogMap.createPane("pinPane");
     catalogMap.getPane("pinPane").style.zIndex = 650;
-    L.maplibreGL({
-      style: "https://tiles.openfreemap.org/styles/liberty",
-    }).addTo(catalogMap);
-    placeLayer = L.layerGroup().addTo(catalogMap);
+    addBaseTiles(catalogMap);
+    placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
     catalogLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
     hoverLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
     catalogMap.on("click", (event) => {
@@ -1146,7 +1218,7 @@
         }),
         zIndexOffset: 1800,
       });
-      marker.on("click", () => openDetail(item.monitor_id, item.id));
+      marker.on("click", () => openDetail(item.monitor_id, item.id, item));
       marker.on("mouseover", () => highlightCard(listingKey(item)));
       marker.on("mouseout", () => clearCardHighlight());
       hoverLayer.addLayer(marker);
@@ -1330,9 +1402,7 @@
     const lon = Number(item.lon);
     if (!el || !Number.isFinite(lat) || !Number.isFinite(lon) || typeof L === "undefined") return;
     detailMap = L.map(el, { scrollWheelZoom: true, zoomControl: true, attributionControl: false }).setView([lat, lon], 15);
-    L.maplibreGL({
-      style: "https://tiles.openfreemap.org/styles/liberty",
-    }).addTo(detailMap);
+    addBaseTiles(detailMap);
     const marker = L.marker([lat, lon], {
       icon: L.divIcon({
         className: "price-pin-wrap",
@@ -1355,7 +1425,16 @@
     document.body.classList.remove("catalog-modal-open");
   }
 
-  async function openDetail(monitorId, listingId) {
+  async function fetchCatalogItem(item) {
+    const params = new URLSearchParams();
+    if (item?.monitor_id) params.set("monitor_id", item.monitor_id);
+    if (item?.id != null) params.set("id", String(item.id));
+    if (item?.listing_key) params.set("listing_key", item.listing_key);
+    if (item?.url) params.set("url", item.url);
+    return fetch(`/api/catalog/item?${params}`);
+  }
+
+  async function openDetail(monitorId, listingId, extra = {}) {
     const modal = $("catalog-modal");
     const host = $("catalog-detail");
     catalogMap?.closePopup();
@@ -1364,7 +1443,12 @@
     host.innerHTML = `<p class="empty">Načítám detail…</p>`;
     let item;
     try {
-      const response = await fetch(`/api/catalog/item?monitor_id=${encodeURIComponent(monitorId)}&id=${listingId}`);
+      const response = await fetchCatalogItem({
+        monitor_id: monitorId,
+        id: listingId,
+        listing_key: extra.listing_key || "",
+        url: extra.url || "",
+      });
       item = await response.json().catch(() => ({}));
       if (!response.ok) {
         host.innerHTML = `<p class="empty">${escapeHtml(item.detail || "Detail se nepodařilo načíst")}</p>`;
@@ -1394,11 +1478,20 @@
       </div>
       <div class="detail-grid">
         <div class="detail-copy">
-          <p class="offer-kicker">${escapeHtml(item.portal)} · ${escapeHtml((item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "")}</p>
+          <p class="offer-kicker">${escapeHtml((item.portal || listingLinks(item).map((row) => row.label || row.portal).join(" · ")) || "")} · ${escapeHtml((item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "")}</p>
           <h2>${escapeHtml(item.name || item.locality)}</h2>
           <p>${escapeHtml(item.locality || "")}</p>
           ${item.gone ? `<p class="offer-badge offer-badge-gone">Prodáno</p>` : ""}
-          ${item.twin ? `<p><a href="${escapeHtml(item.twin.url)}" target="_blank" rel="noreferrer">Podobné na ${escapeHtml(item.twin.portal)}</a></p>` : ""}
+          ${
+            listingLinks(item).length
+              ? `<div class="offer-link-list">${listingLinks(item)
+                  .map((link) => {
+                    const agency = link.agency ? ` · ${escapeHtml(link.agency)}` : "";
+                    return `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || link.portal || "Web")}${agency}</a>`;
+                  })
+                  .join("")}</div>`
+              : ""
+          }
           <div class="detail-specs">
             <span>${escapeHtml(item.disposition || "—")}</span>
             <span>${item.area_m2 ? `${item.area_m2} m²` : "rozloha neuvedena"}</span>
@@ -1430,7 +1523,12 @@
             <p>Cena</p>
             <strong>${escapeHtml(item.price_label || "")}</strong>
             ${item.discount_czk ? `<p>Sleva ${escapeHtml(formatKc(item.discount_czk))}${item.discount_pct ? ` · ${item.discount_pct} %` : ""}</p>` : ""}
-            <a class="btn" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${icon("external")}<span>Otevřít na ${escapeHtml(item.portal)}</span></a>
+            ${listingLinks(item)
+              .map(
+                (link) =>
+                  `<a class="btn" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${icon("external")}<span>Otevřít na ${escapeHtml(link.label || link.portal || item.portal || "webu")}${link.agency ? ` · ${escapeHtml(link.agency)}` : ""}</span></a>`,
+              )
+              .join("")}
             ${item.maps_url ? `<a class="btn btn-ghost" href="${escapeHtml(item.maps_url)}" target="_blank" rel="noreferrer">${icon("pin")}<span>Google Maps</span></a>` : ""}
           </div>
           <div id="detail-commute" class="detail-commute" hidden></div>
@@ -1621,7 +1719,7 @@
     for (const url of compareUrls) {
       const local = itemByUrl(url);
       if (!local) continue;
-      const response = await fetch(`/api/catalog/item?monitor_id=${encodeURIComponent(local.monitor_id)}&id=${local.id}`);
+      const response = await fetchCatalogItem(local);
       items.push(response.ok ? await response.json() : local);
     }
     grid.innerHTML = items
@@ -1637,6 +1735,10 @@
           <p>${item.discount_czk ? `Sleva ${escapeHtml(formatKc(item.discount_czk))}` : "Bez slevy"}</p>
           <p>${escapeHtml((item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "")}</p>
           <a href="${escapeHtml(item.url || "")}" target="_blank" rel="noreferrer">Otevřít</a>
+          ${(item.links || [])
+            .filter((link) => link.url && !link.gone && link.url !== item.url)
+            .map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || link.portal || "Další zdroj")}</a>`)
+            .join("")}
         </article>`;
       })
       .join("");
@@ -1656,6 +1758,14 @@
     const ac = new AbortController();
     catalogAbort = ac;
     const seq = ++catalogSeq;
+    if (!append && selectedPlaces.length) {
+      ensurePlaceGeoms()
+        .then(() => {
+          if (seq !== catalogSeq) return;
+          drawPlaceLayer(false);
+        })
+        .catch(() => {});
+    }
     const timer = window.setTimeout(() => ac.abort(), 20000);
     let data;
     try {
@@ -1698,7 +1808,7 @@
     if (!append) {
       renderMapPins(incomingPins);
       drawPlaceLayer(false);
-      if (needPlaceFit && selectedPlaces.length) goToSelection();
+      if (selectedPlaces.length || circleFilter) goToSelection();
       needPlaceFit = false;
     }
     offset = lastItems.length;
@@ -1744,7 +1854,8 @@
     const card = event.target.closest("[data-open-offer]");
     if (!card) return;
     const [monitorId, listingId] = card.dataset.openOffer.split(":");
-    openDetail(monitorId, Number(listingId));
+    const fromList = lastItems.find((item) => listingKey(item) === card.dataset.openOffer);
+    openDetail(monitorId, listingId, fromList || { url: card.dataset.url || "" });
   });
 
   let galleryStart = null;
@@ -1862,7 +1973,7 @@
       }
       if (event.key === "Enter" && focusedIndex >= 0) {
         const item = lastItems[focusedIndex];
-        openDetail(item.monitor_id, item.id);
+        openDetail(item.monitor_id, item.id, item);
       }
       if (event.key === "f" && focusedIndex >= 0) {
         const item = lastItems[focusedIndex];

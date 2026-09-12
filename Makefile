@@ -85,7 +85,7 @@ open:
 	@open "$(URL)" 2>/dev/null || xdg-open "$(URL)" 2>/dev/null || echo "$(URL)"
 
 check: $(PYTHON)
-	$(PYTHON) -m py_compile app/main.py app/monitor.py app/store.py app/sreality.py app/bezrealitky.py app/billing.py app/account.py app/push.py
+	$(PYTHON) -m py_compile app/main.py app/monitor.py app/store.py app/identity.py app/sreality.py app/bezrealitky.py app/idnes.py app/idnes_url.py app/catalog_sync.py app/filter_bridge.py app/billing.py app/account.py app/push.py
 
 release: $(PYTHON)
 	$(PYTHON) packaging/release.py patch

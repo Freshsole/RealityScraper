@@ -1248,6 +1248,13 @@ body:has(#view-catalog:not([hidden])) .footer { display: none; }
   min-height: 0;
   z-index: 0;
   border-radius: 24px;
+  background: #e8ebe6;
+}
+#catalog-map .leaflet-pin-pane {
+  z-index: 700;
+}
+#catalog-map .leaflet-tile-pane {
+  z-index: 200;
 }
 .map-tools {
   position: absolute;
@@ -1456,6 +1463,9 @@ body:has(#view-catalog:not([hidden])) .footer { display: none; }
 .offer-badge-sale { background: var(--mint); }
 .offer-badge-gone { background: #f3d6d6; color: var(--negative); }
 .offer-twin { margin: 4px 0 0; color: var(--gray-2); font-size: 12px; font-weight: 600; }
+.offer-sources { margin: 4px 0 0; color: var(--gray-2); font-size: 12px; font-weight: 600; }
+.offer-link-list { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0 0; }
+.offer-link-list a { color: var(--forest); font-size: 13px; font-weight: 600; }
 .catalog-views { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; align-items: center; }
 .catalog-views .chip[data-watch].is-off { opacity: 0.55; }
 .catalog-place-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -1661,15 +1671,20 @@ body:has(#view-catalog:not([hidden])) .footer { display: none; }
   border-radius: 999px;
   z-index: 2;
 }
-.offer-portal {
+.offer-portals {
   position: absolute;
   top: 10px;
   right: 10px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+.offer-portal {
+  position: static;
   width: 28px;
   height: 28px;
   border-radius: 8px;
   background: #fff;
-  z-index: 2;
 }
 .offer-body {
   flex: 1;

@@ -452,35 +452,54 @@ class Hub:
             except asyncio.CancelledError:
                 raise
 
+    def _due_catalog_portals(self, force: bool = False) -> list[str]:
+        now = datetime.now().astimezone()
+        today = now.date().isoformat()
+        due: list[str] = []
+        for portal, hour in config.CATALOG_SYNC_HOURS.items():
+            if not force and now.hour < hour:
+                continue
+            last = self.store.get_meta(f"catalog_sync_{portal}_last") or ""
+            status = self.store.get_meta(f"catalog_sync_{portal}_status") or ""
+            if str(last).startswith(today) and status == "done":
+                continue
+            due.append(portal)
+        return due
+
     def _catalog_due_today(self) -> bool:
-        last = self.store.get_meta("catalog_sync_last") or ""
-        today = datetime.now().astimezone().date().isoformat()
-        if str(last).startswith(today) and self.store.get_meta("catalog_sync_status") == "done":
-            return False
-        return datetime.now().astimezone().hour >= config.CATALOG_SYNC_HOUR
+        return bool(self._due_catalog_portals())
 
     async def maybe_run_catalog_sync(self, force: bool = False) -> dict[str, Any]:
         if self.catalog_running:
             return {"ok": False, "reason": "already-running"}
-        if not force and not self._catalog_due_today():
+        portals = None if force else self._due_catalog_portals()
+        if not force and not portals:
             return {"ok": False, "reason": "not-due"}
-        return await self.run_catalog_sync()
+        return await self.run_catalog_sync(portals=portals)
 
-    def start_catalog_sync(self) -> dict[str, Any]:
+    def start_catalog_sync(self, portals: list[str] | None = None) -> dict[str, Any]:
         if self.catalog_running:
             return {"ok": False, "reason": "already-running", "status": self.store.catalog_sync_status()}
-        asyncio.create_task(self.run_catalog_sync(), name="sreality-catalog-run")
+        self.catalog_running = True
+        asyncio.create_task(
+            self.run_catalog_sync(portals=portals, rerun=bool(portals), claimed=True),
+            name="sreality-catalog-run",
+        )
         return {"ok": True, "started": True, "status": self.store.catalog_sync_status()}
 
-    async def run_catalog_sync(self) -> dict[str, Any]:
-        if self.catalog_running:
-            return {"ok": False, "reason": "already-running"}
-        self.catalog_running = True
+    async def run_catalog_sync(
+        self, portals: list[str] | None = None, rerun: bool = False, claimed: bool = False
+    ) -> dict[str, Any]:
+        if not claimed:
+            if self.catalog_running:
+                return {"ok": False, "reason": "already-running"}
+            self.catalog_running = True
         started = utc_now()
         today = started[:10]
+        wanted = set(portals or config.CATALOG_SYNC_HOURS)
+        shards = [item for item in daily_shards() if item["portal"] in wanted]
         self.store.set_meta("catalog_sync_status", "running")
         self.store.set_meta("catalog_sync_error", None)
-        shards = daily_shards()
         shard_ok: dict[str, bool] = {}
         try:
             for shard in shards:
@@ -491,10 +510,10 @@ class Hub:
                     search_url=shard["search_url"],
                 )
                 finished = str(job.get("finished_at") or "")
-                if job.get("status") == "done" and finished[:10] == today:
+                if not rerun and job.get("status") == "done" and finished[:10] == today:
                     shard_ok[shard["shard_key"]] = True
                     continue
-                if finished[:10] != today:
+                if rerun or finished[:10] != today:
                     self.store.update_scrape_job(
                         job["id"],
                         page=1,
@@ -506,16 +525,25 @@ class Hub:
                     job = {**job, "page": 1, "upserts": 0, "started_at": None, "status": "pending"}
                 shard_ok[shard["shard_key"]] = await self._run_catalog_job(job)
             complete_portals = []
-            for portal in {item["portal"] for item in shards}:
+            for portal in wanted:
                 keys = [item["shard_key"] for item in shards if item["portal"] == portal]
-                if keys and all(shard_ok.get(key) for key in keys):
+                ok = bool(keys) and all(shard_ok.get(key) for key in keys)
+                self.store.set_meta(f"catalog_sync_{portal}_status", "done" if ok else "partial")
+                self.store.set_meta(f"catalog_sync_{portal}_last", utc_now())
+                if ok:
                     complete_portals.append(portal)
             if complete_portals:
                 self.store.mark_catalog_stale_gone(started, complete_portals)
-            all_ok = bool(shards) and all(shard_ok.get(item["shard_key"]) for item in shards)
-            self.store.set_meta("catalog_sync_status", "done" if all_ok else "partial")
+            all_today = True
+            for portal in config.CATALOG_SYNC_HOURS:
+                last = self.store.get_meta(f"catalog_sync_{portal}_last") or ""
+                status = self.store.get_meta(f"catalog_sync_{portal}_status") or ""
+                if not (str(last).startswith(today) and status == "done"):
+                    all_today = False
+                    break
+            self.store.set_meta("catalog_sync_status", "done" if all_today else "partial")
             self.store.set_meta("catalog_sync_last", utc_now())
-            return {"ok": all_ok, "status": self.store.catalog_sync_status()}
+            return {"ok": all_today, "status": self.store.catalog_sync_status()}
         except Exception as exc:
             self.store.set_meta("catalog_sync_status", "error")
             self.store.set_meta("catalog_sync_error", str(exc))
@@ -534,6 +562,7 @@ class Hub:
             last_error=None,
         )
         total = int(job.get("last_total") or 0)
+        seen_ids: set[int] = set()
         try:
             while True:
                 try:
@@ -546,15 +575,20 @@ class Hub:
                             batch, page_total = await client.fetch_page(page, newest=True)
                     else:
                         raise
-                total = page_total
+                total = page_total or total
                 if not batch:
                     break
-                for listing in batch:
+                fresh = [item for item in batch if item.id not in seen_ids]
+                if page > 1 and not fresh:
+                    break
+                for listing in fresh:
+                    seen_ids.add(listing.id)
                     self.store.upsert_catalog_listing(listing, kind="seeded")
                     upserts += 1
                 self.store.update_scrape_job(job["id"], page=page + 1, upserts=upserts, last_total=total)
+                page_size = max(len(batch), 1)
                 if total:
-                    needed = (int(total) + max(len(batch), 1) - 1) // max(len(batch), 1)
+                    needed = (int(total) + page_size - 1) // page_size
                     if page >= needed:
                         break
                 page += 1

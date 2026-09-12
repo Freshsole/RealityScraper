@@ -20,7 +20,7 @@ from app.backup import export_config, export_pack, export_sqlite, import_config,
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
-from app import bezrealitky_url, localities, url_builder
+from app import bezrealitky_url, idnes_url, localities, url_builder
 from app import places as place_geo
 from app.filter_bridge import convert_search_url
 from app.catalog_sync import monitor_search_targets
@@ -662,8 +662,14 @@ async def check_now(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 
 @app.post("/api/catalog/sync")
-async def catalog_sync_now() -> dict:
-    return {"result": hub.start_catalog_sync(), "status": hub.status(fresh=True)}
+async def catalog_sync_now(payload: dict[str, Any] | None = None) -> dict:
+    raw = (payload or {}).get("portals") if isinstance(payload, dict) else None
+    portals = None
+    if isinstance(raw, str) and raw and raw != "all":
+        portals = [raw]
+    elif isinstance(raw, list):
+        portals = [str(item) for item in raw if item]
+    return {"result": hub.start_catalog_sync(portals=portals), "status": hub.status(fresh=True)}
 
 
 @app.post("/api/discord/test")
@@ -1064,20 +1070,26 @@ async def catalog_pins(
 
 
 @app.get("/api/catalog/item")
-async def catalog_item(monitor_id: str, id: int) -> dict:
-    item = hub.store.catalog_item(monitor_id, id)
+async def catalog_item(
+    monitor_id: str = "",
+    id: str = "",
+    listing_key: str = "",
+    url: str = "",
+) -> dict:
+    item = hub.store.catalog_item(monitor_id, id, listing_key=listing_key, url=url)
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
-    if item.get("search_url"):
+    source_url = item.get("url") or url
+    if source_url:
         try:
             listing = _listing_from_catalog_dict(item)
             listing.photos = []
-            listing = await hub.client_for(item["search_url"]).fetch_detail(listing)
-            hub.store.save_listing_enrichment(monitor_id, listing)
-            item = hub.store.catalog_item(monitor_id, id) or item
+            listing = await hub.client_for(source_url).fetch_detail(listing)
+            hub.store.save_listing_enrichment(item["monitor_id"], listing)
+            item = hub.store.catalog_item(item["monitor_id"], item["id"], listing_key=item.get("listing_key") or "", url=source_url) or item
         except ListingGone:
-            await hub.notify_sold(hub.store.get_monitor(monitor_id), id)
-            item = hub.store.catalog_item(monitor_id, id) or item
+            await hub.notify_sold(hub.store.get_monitor(item["monitor_id"]), item["id"])
+            item = hub.store.catalog_item(item["monitor_id"], item["id"], url=source_url) or item
         except Exception:
             pass
     return item
@@ -1179,7 +1191,10 @@ async def delete_template(template_id: str) -> dict:
 
 def _filter_mod(source: str | None = None, url: str = ""):
     raw = (source or "").lower()
-    if raw == "bezrealitky" or "bezrealitky.cz" in (url or "").lower():
+    lowered = (url or "").lower()
+    if raw == "idnes" or "idnes.cz" in lowered:
+        return idnes_url
+    if raw == "bezrealitky" or "bezrealitky.cz" in lowered:
         return bezrealitky_url
     return url_builder
 
@@ -1202,6 +1217,11 @@ async def filter_catalog() -> dict:
                 "defaults": bezrealitky_url.default_filters(),
                 "sample": bezrealitky_url.sample_filters(),
             },
+            "idnes": {
+                "catalog": idnes_url.catalog(),
+                "defaults": idnes_url.default_filters(),
+                "sample": idnes_url.sample_filters(),
+            },
         },
     }
     return payload
@@ -1212,7 +1232,7 @@ async def filter_build(payload: dict[str, Any]) -> dict:
     filters = payload.get("filters") or {}
     mod = _filter_mod(filters.get("source"))
     if not filters.get("source"):
-        filters = {**filters, "source": "bezrealitky" if mod is bezrealitky_url else "sreality"}
+        filters = {**filters, "source": "idnes" if mod is idnes_url else "bezrealitky" if mod is bezrealitky_url else "sreality"}
     filters = localities.normalize_filters(filters)
     built = mod.build_url(filters or mod.default_filters())
     portals = str(payload.get("portals") or "all")

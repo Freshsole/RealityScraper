@@ -139,6 +139,16 @@ def compact_listing(item: dict[str, Any]) -> dict[str, Any]:
         "locality": item.get("locality") or "",
         "url": item.get("url") or "",
         "portal": item.get("portal") or "",
+        "links": [
+            {
+                "url": link.get("url"),
+                "portal": link.get("portal") or link.get("label") or "",
+                "label": link.get("label") or link.get("portal") or "",
+                "agency": link.get("agency") or "",
+            }
+            for link in (item.get("links") or [])
+            if link.get("url") and not link.get("gone")
+        ],
         "gone": bool(item.get("gone")),
         "first_seen": item.get("first_seen") or "",
     }

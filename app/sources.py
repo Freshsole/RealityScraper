@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 from app import config
 from app.bezrealitky import BezrealitkyClient
+from app.idnes import IdnesClient
 from app.sreality import SrealityClient
 
 
@@ -11,14 +12,30 @@ def is_bezrealitky(url: str) -> bool:
     return "bezrealitky.cz" in (url or "").lower()
 
 
-def client_for(search_url: str) -> SrealityClient | BezrealitkyClient:
+def is_idnes(url: str) -> bool:
+    raw = (url or "").lower()
+    return "reality.idnes.cz" in raw or "idnes.cz/s/" in raw or "idnes.cz/detail/" in raw
+
+
+def portal_of(url: str) -> str:
+    if is_idnes(url):
+        return "idnes"
+    if is_bezrealitky(url):
+        return "bezrealitky"
+    return "sreality"
+
+
+def client_for(search_url: str) -> SrealityClient | BezrealitkyClient | IdnesClient:
+    if is_idnes(search_url):
+        return IdnesClient(search_url)
     if is_bezrealitky(search_url):
         return BezrealitkyClient(search_url)
     return SrealityClient(search_url)
 
 
 def source_name(url: str) -> str:
-    return "Bezrealitky" if is_bezrealitky(url) else "Sreality"
+    portal = portal_of(url)
+    return {"idnes": "Reality.iDNES", "bezrealitky": "Bezrealitky"}.get(portal, "Sreality")
 
 
 def is_discord_webhook(url: str) -> bool:
@@ -53,6 +70,8 @@ def usable_discord_webhook(url: str) -> str:
 def webhook_for(search_url: str, monitor_webhook: str | None = None) -> str:
     if (monitor_webhook or "").strip():
         return usable_discord_webhook(monitor_webhook)
+    if is_idnes(search_url):
+        return usable_discord_webhook(getattr(config, "IDNES_WEBHOOK_URL", "") or config.DISCORD_WEBHOOK_URL)
     if is_bezrealitky(search_url):
         return usable_discord_webhook(config.BEZREALITKY_WEBHOOK_URL)
     return usable_discord_webhook(config.DISCORD_WEBHOOK_URL)

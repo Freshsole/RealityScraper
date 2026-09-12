@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n67" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n70" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -150,6 +150,7 @@
               <button type="button" class="chip on" data-portal="" data-icon="grid">Všechny</button>
               <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
               <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
+              <button type="button" class="chip" data-portal="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />iDNES Reality</button>
             </div>
             <div class="chip-row" id="cat-status">
               <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
@@ -290,7 +291,7 @@
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
                 <div class="url-stack" id="monitor-urls"></div>
-                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/… nebo https://www.bezrealitky.cz/vyhledat?…"></textarea></label>
+                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz nebo reality.idnes.cz"></textarea></label>
                 <label>Šablona zprávy<select id="monitor-template"></select></label>
                 <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
                 <label class="switch-field">
@@ -315,6 +316,7 @@
                     <button type="button" class="chip on" data-portals="all" data-icon="grid">Všechny</button>
                     <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Jen Sreality</button>
                     <button type="button" class="chip" data-portals="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Jen Bezrealitky</button>
+                    <button type="button" class="chip" data-portals="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Jen iDNES Reality</button>
                   </div>
                 </div>
                 <div class="filter-group">
@@ -323,6 +325,7 @@
                   <div class="chip-row" id="filter-source">
                     <button type="button" class="chip on" data-source="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
                     <button type="button" class="chip" data-source="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
+                    <button type="button" class="chip" data-source="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />iDNES Reality</button>
                   </div>
                 </div>
                 <div class="actions" style="margin-bottom: 20px">
@@ -843,11 +846,16 @@
           <div class="chip-row" data-filter="offer">
             <button type="button" class="chip on" data-value="pronajem">Pronájem</button>
             <button type="button" class="chip" data-value="prodej">Prodej</button>
+            <button type="button" class="chip" data-value="drazba">Dražba</button>
           </div>
           <p class="catalog-label">Typ nemovitosti</p>
           <div class="chip-row" data-filter="estate">
             <button type="button" class="chip" data-value="byt">Byt</button>
             <button type="button" class="chip" data-value="dum">Dům</button>
+            <button type="button" class="chip" data-value="pozemek">Pozemek</button>
+            <button type="button" class="chip" data-value="projekt">Projekt</button>
+            <button type="button" class="chip" data-value="komercni">Komerční</button>
+            <button type="button" class="chip" data-value="ostatni">Ostatní</button>
           </div>
           <p class="catalog-label">Dispozice</p>
           <div id="cat-dispositions" class="chip-row"></div>
@@ -869,6 +877,9 @@
             <button type="button" class="chip" data-value="Osobní">Osobní</button>
             <button type="button" class="chip" data-value="Družstevní">Družstevní</button>
             <button type="button" class="chip" data-value="Obecní">Obecní</button>
+            <button type="button" class="chip" data-value="S.r.o.">S.r.o.</button>
+            <button type="button" class="chip" data-value="Podílové">Podílové</button>
+            <button type="button" class="chip" data-value="Jiné">Jiné</button>
           </div>
           <p class="catalog-label">Stav objektu</p>
           <div class="chip-row" data-filter="condition">
@@ -879,11 +890,20 @@
             <button type="button" class="chip" data-value="Před rekonstrukcí">Před rekonstrukcí</button>
             <button type="button" class="chip" data-value="V rekonstrukci">V rekonstrukci</button>
             <button type="button" class="chip" data-value="Ve výstavbě">Ve výstavbě</button>
+            <button type="button" class="chip" data-value="Projekt">Projekt</button>
+            <button type="button" class="chip" data-value="Udržovaný">Udržovaný</button>
+            <button type="button" class="chip" data-value="Špatný">Špatný</button>
+            <button type="button" class="chip" data-value="K demolici">K demolici</button>
           </div>
           <p class="catalog-label">Konstrukce</p>
           <div class="chip-row" data-filter="building">
             <button type="button" class="chip" data-value="cihlova">Cihlová</button>
             <button type="button" class="chip" data-value="panelova">Panelová</button>
+            <button type="button" class="chip" data-value="drevena">Dřevěná</button>
+            <button type="button" class="chip" data-value="kamenna">Kamenná</button>
+            <button type="button" class="chip" data-value="skeletova">Skeletová</button>
+            <button type="button" class="chip" data-value="montovana">Montovaná</button>
+            <button type="button" class="chip" data-value="smisena">Smíšená</button>
             <button type="button" class="chip" data-value="ostatni">Ostatní</button>
           </div>
           <p class="catalog-label">Vybavení bytu</p>
@@ -903,6 +923,11 @@
             <button type="button" class="chip" data-flag="garage">Garáž</button>
             <button type="button" class="chip" data-flag="garden">Zahrada</button>
             <button type="button" class="chip" data-flag="barrier_free">Bezbariérový</button>
+            <button type="button" class="chip" data-flag="phone">Telefon</button>
+            <button type="button" class="chip" data-flag="cable_tv">Kabelová TV</button>
+            <button type="button" class="chip" data-flag="internet">Internet</button>
+            <button type="button" class="chip" data-flag="video">Video</button>
+            <button type="button" class="chip" data-flag="open_house">Den otevřených dveří</button>
           </div>
           <p class="catalog-label">Jen na jednom portálu</p>
           <div class="filter-tri">
@@ -975,8 +1000,8 @@
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n75"></script>
-    <script src="/static/catalog.js?v=1.2.0-n68"></script>
+    <script src="/static/app.js?v=1.2.0-n78"></script>
+    <script src="/static/catalog.js?v=1.2.0-n80"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>
