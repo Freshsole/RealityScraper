@@ -319,6 +319,9 @@ def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
     if text:
         listing.description = text
     listing.extras = extras_from_sreality(estate)
+    from app.places import refine_listing_location
+
+    refine_listing_location(listing)
     return listing
 
 
@@ -556,14 +559,45 @@ def google_maps_url(lat: float | None, lon: float | None, locality: str = "") ->
 
 def format_locality(loc: dict[str, Any]) -> str:
     street = (loc.get("street") or "").strip()
+    number = _locality_house_number(loc)
     part = (loc.get("cityPart") or "").strip()
     district = (loc.get("district") or "").strip()
     city = (loc.get("city") or "Praha").strip()
-    if street and part:
-        return f"{street}, {city} – {part}"
+    street_line = f"{street} {number}".strip() if number else street
+    if street_line and part:
+        return f"{street_line}, {city} – {part}"
+    if street_line:
+        return f"{street_line}, {city}"
     if part:
         return f"{city} – {part}"
     return district or city
+
+
+def _locality_house_number(loc: dict[str, Any]) -> str:
+    for key in (
+        "streetNumber",
+        "houseNumber",
+        "houseNo",
+        "streetNo",
+        "descNumber",
+        "descriptiveNumber",
+        "orientationNumber",
+        "evidenceNumber",
+        "cp",
+        "co",
+    ):
+        value = loc.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    desc = loc.get("descNo") or loc.get("cisloPopisne")
+    ori = loc.get("oriNo") or loc.get("cisloOrientacni")
+    if desc and ori:
+        return f"{str(desc).strip()}/{str(ori).strip()}"
+    if desc:
+        return str(desc).strip()
+    if ori:
+        return str(ori).strip()
+    return ""
 
 
 def build_detail_url(raw: dict[str, Any]) -> str:

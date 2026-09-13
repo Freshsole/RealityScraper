@@ -5,6 +5,7 @@
 
   const LIMIT = 36;
   const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const STREET_ZOOM = 16;
 
   function addBaseTiles(map) {
     if (!map) return;
@@ -35,6 +36,7 @@
   let catalogSeq = 0;
   let radiusTimer = null;
   let mapReloadTimer = 0;
+  let lastMapQueryKey = "";
   let ignoreMapMove = 0;
   let needPlaceFit = false;
   const PRAHA_BOUNDS = { south: "49.94", north: "50.177", west: "14.22", east: "14.71" };
@@ -185,22 +187,30 @@
   }
 
   function mapBoundsParams() {
-    if (selectedPlaces.length || circleFilter || selected.monitor) return {};
+    const skip = Boolean(selectedPlaces.length || circleFilter || selected.monitor);
     ensureMap();
     const bounds = catalogMap?.getBounds?.();
-    if (!bounds || !bounds.isValid?.()) return { ...PRAHA_BOUNDS };
-    const latPad = Math.max(0.002, (bounds.getNorth() - bounds.getSouth()) * 0.02);
-    const lonPad = Math.max(0.002, (bounds.getEast() - bounds.getWest()) * 0.02);
-    return {
-      south: String(bounds.getSouth() - latPad),
-      north: String(bounds.getNorth() + latPad),
-      west: String(bounds.getWest() - lonPad),
-      east: String(bounds.getEast() + lonPad),
-    };
+    const fallback = !bounds || !bounds.isValid?.();
+    const latPad = fallback ? 0 : Math.max(0.002, (bounds.getNorth() - bounds.getSouth()) * 0.02);
+    const lonPad = fallback ? 0 : Math.max(0.002, (bounds.getEast() - bounds.getWest()) * 0.02);
+    const out = skip
+      ? {}
+      : fallback
+        ? { ...PRAHA_BOUNDS }
+        : {
+            south: String(bounds.getSouth() - latPad),
+            north: String(bounds.getNorth() + latPad),
+            west: String(bounds.getWest() - lonPad),
+            east: String(bounds.getEast() + lonPad),
+          };
+    if (skip) return {};
+    if (fallback) return { ...PRAHA_BOUNDS };
+    return out;
   }
 
   function filters() {
     return {
+      q: $("cat-q") ? $("cat-q").value : "",
       portal: selected.portal,
       disposition: [...selected.dispositions].join(","),
       price_from: $("cat-price-from").value,
@@ -264,7 +274,7 @@
     selected.roommate = params.get("roommate") || "";
     selected.pets = params.get("pets") || "";
     selected.short_term = params.get("short_term") || "";
-    if ($("cat-q")) $("cat-q").value = "";
+    if ($("cat-q")) $("cat-q").value = params.get("q") || "";
     if ($("cat-price-from")) $("cat-price-from").value = params.get("price_from") || "";
     if ($("cat-price-to")) $("cat-price-to").value = params.get("price_to") || "";
     if ($("cat-area-from")) $("cat-area-from").value = params.get("area_from") || "";
@@ -762,7 +772,7 @@
             <p class="offer-kicker">${escapeHtml(offerKicker(item))}${monitors.length ? ` · ${escapeHtml(monitors.join(" · "))}` : ""}</p>
             ${badges}
           </div>
-          <h3>${escapeHtml(item.locality || item.name)}</h3>
+          <h3>${escapeHtml(item.extras?.address || item.locality || item.name)}</h3>
           <div class="offer-specs">
             <span>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg>
@@ -1109,35 +1119,122 @@
     syncCircleUi();
   }
 
+  function pinWeight(item) {
+    const n = Number(item?.count);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+
   function clusterCell(zoom) {
-    if (zoom >= 16) return 0;
+    if (zoom >= STREET_ZOOM) return 0;
     if (zoom >= 14) return 0.004;
     if (zoom >= 13) return 0.008;
     if (zoom >= 12) return 0.016;
     if (zoom >= 11) return 0.03;
-    return 0.06;
+    if (zoom >= 10) return 0.08;
+    if (zoom >= 9) return 0.2;
+    if (zoom >= 8) return 0.45;
+    if (zoom >= 7) return 0.9;
+    return 1.5;
   }
 
   function groupedPins(items, zoom) {
     const cell = clusterCell(zoom);
-    if (!cell) return items.map((item) => ({ items: [item], lat: item.lat, lon: item.lon }));
-    const groups = new Map();
-    for (const item of items) {
-      const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
-      const group = groups.get(key) || { items: [], lat: 0, lon: 0 };
-      group.items.push(item);
-      group.lat += item.lat;
-      group.lon += item.lon;
-      groups.set(key, group);
+    const raw = [];
+    if (!cell) {
+      for (const item of items) {
+        raw.push({ items: [item], lat: item.lat, lon: item.lon, count: pinWeight(item) });
+      }
+    } else {
+      const groups = new Map();
+      for (const item of items) {
+        const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
+        const group = groups.get(key) || { items: [], lat: 0, lon: 0, count: 0 };
+        const weight = pinWeight(item);
+        group.items.push(item);
+        group.lat += item.lat * weight;
+        group.lon += item.lon * weight;
+        group.count += weight;
+        groups.set(key, group);
+      }
+      for (const group of groups.values()) {
+        raw.push({
+          items: group.items,
+          lat: group.lat / group.count,
+          lon: group.lon / group.count,
+          count: group.count,
+        });
+      }
     }
-    return [...groups.values()].map((group) => ({
-      items: group.items,
-      lat: group.lat / group.items.length,
-      lon: group.lon / group.items.length,
-    }));
+    if (zoom >= STREET_ZOOM) return spreadStackedPins(raw);
+    return mergeNearbyPinGroups(raw);
   }
 
-  function priceMarker(item) {
+  function offsetAround(lat, lon, index, count, px = 36) {
+    if (!catalogMap || count <= 1) return [lat, lon];
+    const origin = catalogMap.latLngToLayerPoint([lat, lon]);
+    const angle = (2 * Math.PI * index) / count - Math.PI / 2;
+    const shifted = catalogMap.layerPointToLatLng(
+      L.point(origin.x + px * Math.cos(angle), origin.y + px * Math.sin(angle)),
+    );
+    return [shifted.lat, shifted.lng];
+  }
+
+  function spreadStackedPins(groups) {
+    if (!catalogMap || groups.length < 2) return groups;
+    const buckets = [];
+    for (const group of groups) {
+      const point = catalogMap.latLngToLayerPoint([group.lat, group.lon]);
+      const hit = buckets.find((bucket) => point.distanceTo(bucket.point) < 22);
+      if (hit) {
+        hit.items.push(...group.items);
+        continue;
+      }
+      buckets.push({ point, items: group.items.slice(), lat: group.lat, lon: group.lon });
+    }
+    const out = [];
+    for (const bucket of buckets) {
+      if (bucket.items.length === 1) {
+        const item = bucket.items[0];
+        out.push({ items: [item], lat: item.lat, lon: item.lon, count: 1 });
+        continue;
+      }
+      bucket.items.forEach((item, index) => {
+        const [lat, lon] = offsetAround(bucket.lat, bucket.lon, index, bucket.items.length, 28);
+        out.push({ items: [item], lat, lon, count: 1 });
+      });
+    }
+    return out;
+  }
+
+  function mergeNearbyPinGroups(groups) {
+    if (!catalogMap || groups.length < 2) return groups;
+    const remaining = groups.map((group) => ({ ...group, items: group.items.slice() }));
+    let merged = true;
+    while (merged) {
+      merged = false;
+      remaining.sort((a, b) => b.count - a.count);
+      outer: for (let i = 0; i < remaining.length; i += 1) {
+        const a = remaining[i];
+        const pa = catalogMap.latLngToLayerPoint([a.lat, a.lon]);
+        for (let j = i + 1; j < remaining.length; j += 1) {
+          const b = remaining[j];
+          const pb = catalogMap.latLngToLayerPoint([b.lat, b.lon]);
+          if (pa.distanceTo(pb) >= 56) continue;
+          const count = a.count + b.count;
+          a.lat = (a.lat * a.count + b.lat * b.count) / count;
+          a.lon = (a.lon * a.count + b.lon * b.count) / count;
+          a.count = count;
+          a.items.push(...b.items);
+          remaining.splice(j, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+    return remaining;
+  }
+
+  function priceMarker(item, lat = item.lat, lon = item.lon) {
     const pin = L.divIcon({
       className: "price-pin-wrap",
       html: `<div class="price-pin">${escapeHtml(pinPrice(item))}</div>`,
@@ -1145,7 +1242,7 @@
       iconAnchor: [44, 16],
       popupAnchor: [0, -18],
     });
-    const marker = L.marker([item.lat, item.lon], { icon: pin, riseOnHover: true, pane: "pinPane" });
+    const marker = L.marker([lat, lon], { icon: pin, riseOnHover: true, pane: "pinPane" });
     marker.bindPopup(`<strong>${escapeHtml(pinPrice(item))}</strong><br />${escapeHtml(item.locality || item.name)}`);
     marker.on("click", () => {
       if (drawingCircle) {
@@ -1181,7 +1278,19 @@
     catalogMap.on("moveend", () => {
       if (ignoreMapMove || drawingCircle || selectedPlaces.length || circleFilter) return;
       window.clearTimeout(mapReloadTimer);
-      mapReloadTimer = window.setTimeout(() => loadCatalog(), 280);
+      mapReloadTimer = window.setTimeout(() => {
+        const b = catalogMap.getBounds();
+        const key = [
+          catalogMap.getZoom(),
+          b.getSouth().toFixed(2),
+          b.getNorth().toFixed(2),
+          b.getWest().toFixed(2),
+          b.getEast().toFixed(2),
+        ].join("|");
+        if (key === lastMapQueryKey) return;
+        lastMapQueryKey = key;
+        loadCatalog();
+      }, 550);
     });
   }
 
@@ -1205,10 +1314,9 @@
     if (!hoverLayer || !catalogMap) return;
     hoverLayer.clearLayers();
     const count = group.items.length;
-    const radius = 0.00032 * Math.max(3, Math.sqrt(count));
     group.items.forEach((item, index) => {
-      const angle = (2 * Math.PI * index) / count - Math.PI / 2;
-      const marker = L.marker([group.lat + radius * Math.cos(angle), group.lon + radius * Math.sin(angle)], {
+      const [lat, lon] = offsetAround(group.lat, group.lon, index, count, 40);
+      const marker = L.marker([lat, lon], {
         pane: "pinPane",
         icon: L.divIcon({
           className: "price-pin-wrap",
@@ -1267,20 +1375,29 @@
     clusterByKey.clear();
     hoverLayer?.clearLayers();
     hoverMarker = null;
-    const groups = groupedPins(items, catalogMap.getZoom());
+    const zoom = catalogMap.getZoom();
+    const groups = groupedPins(items, zoom);
     for (const group of groups) {
-      if (group.items.length === 1) {
+      const weight = group.count || group.items.reduce((sum, item) => sum + pinWeight(item), 0);
+      if (weight === 1 && group.items.length === 1) {
         const item = group.items[0];
-        const marker = priceMarker(item);
+        const marker = priceMarker(item, group.lat, group.lon);
         catalogLayer.addLayer(marker);
         markerByKey.set(listingKey(item), marker);
+      } else if (zoom >= STREET_ZOOM) {
+        group.items.forEach((item, index) => {
+          const [lat, lon] = offsetAround(group.lat, group.lon, index, group.items.length, 28);
+          const marker = priceMarker(item, lat, lon);
+          catalogLayer.addLayer(marker);
+          markerByKey.set(listingKey(item), marker);
+        });
       } else {
-        const size = group.items.length > 99 ? 48 : group.items.length > 9 ? 42 : 36;
+        const size = weight > 99 ? 48 : weight > 9 ? 42 : 36;
         const marker = L.marker([group.lat, group.lon], {
           pane: "pinPane",
           icon: L.divIcon({
             className: "price-cluster-wrap",
-            html: `<div class="price-cluster">${group.items.length}</div>`,
+            html: `<div class="price-cluster">${weight}</div>`,
             iconSize: [size, size],
             iconAnchor: [size / 2, size / 2],
           }),
@@ -1480,7 +1597,7 @@
         <div class="detail-copy">
           <p class="offer-kicker">${escapeHtml((item.portal || listingLinks(item).map((row) => row.label || row.portal).join(" · ")) || "")} · ${escapeHtml((item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "")}</p>
           <h2>${escapeHtml(item.name || item.locality)}</h2>
-          <p>${escapeHtml(item.locality || "")}</p>
+          <p>${escapeHtml(item.extras?.address || item.locality || "")}</p>
           ${item.gone ? `<p class="offer-badge offer-badge-gone">Prodáno</p>` : ""}
           ${
             listingLinks(item).length
@@ -1526,7 +1643,7 @@
             ${listingLinks(item)
               .map(
                 (link) =>
-                  `<a class="btn" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${icon("external")}<span>Otevřít na ${escapeHtml(link.label || link.portal || item.portal || "webu")}${link.agency ? ` · ${escapeHtml(link.agency)}` : ""}</span></a>`,
+                  `<a class="btn" href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${icon("external")}<span>Otevřít na ${escapeHtml(link.label || link.portal || item.portal || "webu")}</span></a>`,
               )
               .join("")}
             ${item.maps_url ? `<a class="btn btn-ghost" href="${escapeHtml(item.maps_url)}" target="_blank" rel="noreferrer">${icon("pin")}<span>Google Maps</span></a>` : ""}
@@ -1754,6 +1871,16 @@
   async function loadCatalog(append = false) {
     if (!append) offset = 0;
     ensureMap();
+    if (catalogMap) {
+      const b = catalogMap.getBounds();
+      lastMapQueryKey = [
+        catalogMap.getZoom(),
+        b.getSouth().toFixed(2),
+        b.getNorth().toFixed(2),
+        b.getWest().toFixed(2),
+        b.getEast().toFixed(2),
+      ].join("|");
+    }
     catalogAbort?.abort();
     const ac = new AbortController();
     catalogAbort = ac;

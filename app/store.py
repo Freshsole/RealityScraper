@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import sqlite3
 import time
 import uuid
@@ -147,6 +148,7 @@ def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
         "listing_key": identity,
         "canonical_key": identity,
         "url": row.get("url") or "",
+        "count": int(row["count"]) if row.get("count") else 1,
     }
 
 
@@ -292,9 +294,28 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
         return
     if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
         return
-    where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
-    where.append("listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?")
-    params.extend([south, north, west, east])
+    gps = (
+        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+    )
+    anchors = places.anchors_in_bbox(south, north, west, east)
+    span = (north - south) + (east - west)
+    filters["_bbox"] = (south, north, west, east)
+    filters["_bbox_anchors"] = anchors
+    filters["_bbox_span"] = span
+    if span >= 3.5:
+        where.append(
+            f"(({gps}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND TRIM(IFNULL(listings.locality, '')) != ''))"
+        )
+        params.extend([south, north, west, east])
+    elif anchors:
+        labels = places.coarse_anchor_labels(anchors)
+        text_sql, text_params = places.locality_match_sql("listings.locality", labels)
+        where.append(f"(({gps}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND {text_sql}))")
+        params.extend([south, north, west, east, *text_params])
+    else:
+        where.append(gps)
+        params.extend([south, north, west, east])
 
 
 def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
@@ -394,6 +415,7 @@ class Store:
         self.path = path
         self._facets_cache: dict[str, Any] | None = None
         self._facets_at = 0.0
+        self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
         self._init()
 
     def connect(self) -> sqlite3.Connection:
@@ -472,6 +494,21 @@ class Store:
             self._ensure_ping_queue(conn)
             self._ensure_push(conn)
             self._ensure_analytics(conn)
+            self._ensure_guest_searches(conn)
+
+    def _ensure_guest_searches(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS guest_searches (
+                token TEXT PRIMARY KEY,
+                ip TEXT NOT NULL DEFAULT '',
+                visitor_id TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_ip ON guest_searches(ip)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_vid ON guest_searches(visitor_id)")
 
     def _ensure_analytics(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -627,8 +664,11 @@ class Store:
         if cat_cols and "canonical_key" not in cat_cols:
             conn.execute("ALTER TABLE catalog_listings ADD COLUMN canonical_key TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_first_seen ON listings(first_seen)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_locality ON listings(locality)")
         if cat_cols:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_first_seen ON catalog_listings(first_seen)")
 
     def _upsert_listing_link(self, conn: sqlite3.Connection, listing: Listing | dict[str, Any], canonical: str, *, gone: bool = False) -> None:
         if isinstance(listing, Listing):
@@ -1598,6 +1638,139 @@ class Store:
         with self.connect() as conn:
             return int(conn.execute(sql, params).fetchone()[0])
 
+    def catalog_new_today_count(self) -> int:
+        since = local_day_start()
+        with self.connect() as conn:
+            catalog = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
+            if catalog:
+                return int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM catalog_listings WHERE first_seen >= ?",
+                        (since,),
+                    ).fetchone()[0]
+                )
+        return self.new_today_count()
+
+    def guest_search_has_access(self, token: str) -> bool:
+        token = (token or "").strip()
+        if not token:
+            return False
+        with self.connect() as conn:
+            row = conn.execute("SELECT 1 FROM guest_searches WHERE token = ? LIMIT 1", (token,)).fetchone()
+        return bool(row)
+
+    def guest_search_used(self, ip: str, visitor_id: str) -> bool:
+        ip = (ip or "").strip()
+        visitor_id = (visitor_id or "").strip()
+        with self.connect() as conn:
+            if visitor_id and conn.execute(
+                "SELECT 1 FROM guest_searches WHERE visitor_id = ? LIMIT 1", (visitor_id,)
+            ).fetchone():
+                return True
+            if ip and conn.execute("SELECT 1 FROM guest_searches WHERE ip = ? LIMIT 1", (ip,)).fetchone():
+                return True
+        return False
+
+    def grant_guest_search(self, ip: str, visitor_id: str) -> str | None:
+        ip = (ip or "").strip()
+        visitor_id = (visitor_id or "").strip()
+        if self.guest_search_used(ip, visitor_id):
+            return None
+        token = secrets.token_hex(16)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO guest_searches(token, ip, visitor_id, created_at) VALUES (?, ?, ?, ?)",
+                (token, ip, visitor_id, utc_now()),
+            )
+        return token
+
+    def landing_preview_listings(self) -> list[dict[str, Any]]:
+        data = self.catalog(
+            {
+                "district": "Brno",
+                "disposition": "1+kk,1+1,2+kk,2+1,3+kk,3+1",
+                "price_to": 22000,
+                "offer": "pronajem",
+                "estate": "byt",
+                "sort": "newest",
+                "limit": 48,
+                "offset": 0,
+            }
+        )
+        items = [item for item in (data.get("items") or []) if item.get("id") is not None]
+        cleaned: list[dict[str, Any]] = []
+        for item in items:
+            try:
+                price = int(item.get("price_czk") or 0)
+            except (TypeError, ValueError):
+                price = 0
+            try:
+                area = int(item.get("area_m2") or 0)
+            except (TypeError, ValueError):
+                area = 0
+            if price < 4000:
+                continue
+            if area and area < 16:
+                continue
+            cleaned.append(item)
+        items = cleaned
+        picked: list[dict[str, Any]] = []
+        seen: set[Any] = set()
+
+        def take(item: dict[str, Any]) -> None:
+            key = item.get("canonical_key") or item.get("listing_key") or item.get("id")
+            if key in seen:
+                return
+            seen.add(key)
+            picked.append(item)
+
+        def matches_portal(item: dict[str, Any], needle: str) -> bool:
+            blob = f"{item.get('portal') or ''} {item.get('url') or ''}".casefold()
+            return needle in blob
+
+        for needle in ("bezrealitky", "sreality", "idnes"):
+            hit = next((item for item in items if matches_portal(item, needle)), None)
+            if hit:
+                take(hit)
+            if len(picked) >= 3:
+                break
+        for item in items:
+            if len(picked) >= 3:
+                break
+            take(item)
+        return [self._landing_card(item) for item in picked[:3]]
+
+    def _landing_card(self, item: dict[str, Any]) -> dict[str, Any]:
+        portal = str(item.get("portal") or "")
+        if not portal:
+            portal = portal_label(portal_from_url(str(item.get("url") or "")))
+        price = str(item.get("price_label") or "").strip()
+        if not price and item.get("price_czk") is not None:
+            try:
+                price = f"{int(item['price_czk']):,} Kč".replace(",", " ")
+            except (TypeError, ValueError):
+                price = ""
+        area = item.get("area_m2")
+        locality = str(item.get("locality") or "").strip()
+        spec = locality
+        if area:
+            try:
+                spec = f"{locality} • {int(area)} m²" if locality else f"{int(area)} m²"
+            except (TypeError, ValueError):
+                spec = locality
+        return {
+            "monitor_id": item.get("monitor_id") or "",
+            "id": item.get("id"),
+            "listing_key": item.get("listing_key") or item.get("canonical_key") or "",
+            "url": item.get("url") or "",
+            "name": item.get("name") or locality or "Byt",
+            "portal": portal.split(" · ")[0] if portal else "Web",
+            "price": price,
+            "locality": spec,
+            "image": item.get("image_url") or "",
+            "disposition": item.get("disposition") or "",
+        }
+
     def catalog_prev(self, listing: Listing) -> dict[str, Any] | None:
         key = listing_key(listing.url)
         with self.connect() as conn:
@@ -2368,6 +2541,7 @@ class Store:
         if "canonical_key" not in cat_cols:
             conn.execute("ALTER TABLE catalog_listings ADD COLUMN canonical_key TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_first_seen ON catalog_listings(first_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
         self._unify_listing_identities(conn)
         self._rekey_idnes_listing_ids(conn)
@@ -2557,6 +2731,7 @@ class Store:
                     price_czk = COALESCE(?, price_czk),
                     price_label = CASE WHEN ? != '' THEN ? ELSE price_label END,
                     old_price_czk = CASE WHEN ? THEN ? ELSE COALESCE(?, old_price_czk) END,
+                    locality = CASE WHEN ? != '' THEN ? ELSE listings.locality END,
                     lat = COALESCE(?, lat),
                     lon = COALESCE(?, lon),
                     image_url = COALESCE(?, image_url),
@@ -2578,6 +2753,8 @@ class Store:
                     1 if dropped else 0,
                     old,
                     listing.old_price_czk,
+                    (listing.locality or "").strip(),
+                    (listing.locality or "").strip(),
                     listing.lat,
                     listing.lon,
                     cdn_image_url(listing.image_url),
@@ -2613,9 +2790,13 @@ class Store:
         streets = places.street_index_sync(geoms)
         for loc, group in pending.items():
             point = streets.get(places._norm_street(places.street_from_locality(loc)))
+            persist = bool(point)
+            if not point:
+                point = places.approx_point_from_locality(loc)
             if not point:
                 continue
-            self._persist_locality_coords(loc, point)
+            if persist:
+                self._persist_locality_coords(loc, point)
             for row in group:
                 row["lat"], row["lon"] = point
                 row["_geo_approx"] = True
@@ -2936,7 +3117,7 @@ class Store:
         if filters.get("pins_only"):
             if str(filters.get("places") or "").strip() and not place_geoms:
                 return {"items": []}
-            return self._catalog_pins(where, params, place_geoms)
+            return self._catalog_pins(where, params, place_geoms, filters)
         sorts = {
             "newest": "listings.first_seen DESC",
             "oldest": "listings.first_seen ASC",
@@ -3002,16 +3183,21 @@ class Store:
                 ORDER BY {order}
                 LIMIT ?
             """
-            count_sql = f"""
-                SELECT COUNT(*) FROM (
-                    SELECT 1 FROM listings
-                    WHERE {clause}
-                    GROUP BY {identity}
-                )
-            """
-            with self.connect() as conn:
-                total = int(conn.execute(count_sql, params).fetchone()[0])
-                fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+            if float(filters.get("_bbox_span") or 0) >= 1.5:
+                with self.connect() as conn:
+                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+                total = 0
+            else:
+                count_sql = f"""
+                    SELECT COUNT(*) FROM (
+                        SELECT 1 FROM listings
+                        WHERE {clause}
+                        GROUP BY {identity}
+                    )
+                """
+                with self.connect() as conn:
+                    total = int(conn.execute(count_sql, params).fetchone()[0])
+                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
             seen_keys = set()
             rows = []
             for row in fetched:
@@ -3047,24 +3233,151 @@ class Store:
                 pin for row in matched if (pin := _pin_with_place(row, place_geoms, approx=bool(row.get("_geo_approx"))))
             ]
         else:
-            payload["pins"] = self._catalog_pins(where, params, None)["items"]
+            payload["pins"] = self._catalog_pins(where, params, None, filters)["items"]
+            if float(filters.get("_bbox_span") or 0) >= 1.5:
+                pin_sum = sum(int(item.get("count") or 1) for item in payload["pins"])
+                if pin_sum:
+                    payload["total"] = pin_sum
         return payload
 
-    def _catalog_pins(self, where: list[str], params: list[Any], place_geoms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def _catalog_pins(
+        self,
+        where: list[str],
+        params: list[Any],
+        place_geoms: list[dict[str, Any]] | None = None,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         clause = " AND ".join(where)
-        pin_limit = 8000 if place_geoms else 800
-        sql = f"""
+        filters = filters or {}
+        anchors = [item for item in (filters.get("_bbox_anchors") or []) if isinstance(item, tuple)]
+        bbox = filters.get("_bbox")
+        wide = False
+        if isinstance(bbox, tuple) and len(bbox) == 4:
+            south, north, west, east = bbox
+            wide = (north - south) + (east - west) > 1.5
+        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 else 800
+        span = float(filters.get("_bbox_span") or 0)
+        cache_hit = False
+        cache_key: tuple[Any, ...] | None = None
+        leftover = 0
+        leftover_sample: list[str] = []
+        select = """
             SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
                    listings.price_czk, listings.price_label, listings.name, listings.locality,
                    listings.listing_key, listings.canonical_key, listings.url
             FROM listings
-            WHERE {clause}
-              AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-            ORDER BY listings.notified DESC, listings.rowid ASC
-            LIMIT {int(pin_limit)}
         """
-        with self.connect() as conn:
-            fetched = [dict(row) for row in conn.execute(sql, params).fetchall()]
+        fetched: list[dict[str, Any]] = []
+        if anchors and not place_geoms and wide and span >= 3.5:
+            skip = {"south", "north", "west", "east", "lat", "lon", "radius_m", "limit", "offset", "sort", "places", "place_geoms", "place_empty"}
+            cache_key = tuple(sorted((str(k), str(v)) for k, v in filters.items() if not str(k).startswith("_") and k not in skip))
+            hit = self._city_pin_cache.get(cache_key)
+            if hit and time.monotonic() - hit[0] < 45:
+                fetched, leftover, leftover_sample = hit[1], hit[2], hit[3]
+                cache_hit = True
+                filters["_pin_leftover"] = leftover
+                filters["_pin_leftover_sample"] = leftover_sample
+        if not cache_hit:
+            with self.connect() as conn:
+                if anchors and not place_geoms and wide:
+                    agg_sql = f"""
+                    SELECT listings.locality AS locality, COUNT(*) AS n,
+                           AVG(listings.lat) AS lat, AVG(listings.lon) AS lon
+                    FROM listings
+                    WHERE {clause}
+                    GROUP BY listings.locality
+                    """
+                    cities: dict[str, dict[str, Any]] = {}
+                    leftover = 0
+                    leftover_sample = []
+
+                    def add_city(label: str, alat: float, alon: float, n: int) -> None:
+                        key = f"{round(alat, 3)}:{round(alon, 3)}:{label}"
+                        bucket = cities.get(key)
+                        if not bucket:
+                            seed = 0
+                            for ch in key:
+                                seed = (seed * 33 + ord(ch)) & 0x7FFFFFFF
+                            bucket = {
+                                "id": seed,
+                                "monitor_id": "__cluster__",
+                                "lat": alat,
+                                "lon": alon,
+                                "locality": label,
+                                "name": label,
+                                "listing_key": f"cluster:{key}",
+                                "canonical_key": f"cluster:{key}",
+                                "url": "",
+                                "count": 0,
+                                "_geo_approx": True,
+                            }
+                            cities[key] = bucket
+                        bucket["count"] += int(n or 0)
+
+                    for row in conn.execute(agg_sql, params).fetchall():
+                        loc = str(row["locality"] or "")
+                        n = int(row["n"] or 0)
+                        match = places.locality_anchor_match(loc, collapse_prague=True)
+                        lat = row["lat"]
+                        lon = row["lon"]
+                        if match:
+                            add_city(match[0], match[1], match[2], n)
+                        elif lat is not None and lon is not None:
+                            label = loc.split(",")[-1].strip() or loc or "Další"
+                            add_city(label[:40], round(float(lat), 2), round(float(lon), 2), n)
+                        else:
+                            leftover += n
+                            if len(leftover_sample) < 8:
+                                leftover_sample.append(loc[:60])
+                    if leftover:
+                        add_city("Další", 49.82, 15.47, leftover)
+                    fetched.extend(cities.values())
+                    filters["_pin_leftover"] = leftover
+                    filters["_pin_leftover_sample"] = leftover_sample
+                    if cache_key is not None:
+                        self._city_pin_cache[cache_key] = (time.monotonic(), list(fetched), leftover, leftover_sample)
+                elif anchors and not place_geoms:
+                    gps_sql = f"""
+                    {select}
+                    WHERE {clause}
+                      AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+                    ORDER BY listings.notified DESC, listings.rowid ASC
+                    LIMIT 400
+                    """
+                    fetched.extend(dict(row) for row in conn.execute(gps_sql, params).fetchall())
+                    null_sql = f"""
+                    {select}
+                    WHERE {clause}
+                      AND (listings.lat IS NULL OR listings.lon IS NULL)
+                    ORDER BY listings.first_seen DESC
+                    LIMIT 4000
+                    """
+                    buckets: dict[str, list[dict[str, Any]]] = {}
+                    for row in conn.execute(null_sql, params).fetchall():
+                        item = dict(row)
+                        loc = str(item.get("locality") or "")
+                        point = places.approx_point_from_locality(loc)
+                        if not point:
+                            continue
+                        seed = abs(int(item.get("id") or 0))
+                        item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
+                        item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
+                        item["_geo_approx"] = True
+                        key = f"{round(point[0], 2)}:{round(point[1], 2)}"
+                        bucket = buckets.setdefault(key, [])
+                        if len(bucket) < 50:
+                            bucket.append(item)
+                    for bucket in buckets.values():
+                        fetched.extend(bucket)
+                else:
+                    sql = f"""
+                    {select}
+                    WHERE {clause}
+                      AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+                    ORDER BY listings.notified DESC, listings.rowid ASC
+                    LIMIT {int(pin_limit)}
+                    """
+                    fetched.extend(dict(row) for row in conn.execute(sql, params).fetchall())
         items = []
         seen: set[str] = set()
         for row in fetched:
@@ -3074,8 +3387,11 @@ class Store:
             if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
                 continue
             seen.add(key)
-            items.append(_pin_item(row))
-            if len(items) >= pin_limit:
+            pin = _pin_item(row)
+            if row.get("_geo_approx"):
+                pin["approx"] = True
+            items.append(pin)
+            if not wide and len(items) >= pin_limit:
                 break
         return {"items": items}
 

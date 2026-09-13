@@ -412,4 +412,10 @@ class IdnesClient:
         if listing.price_czk and not listing.price_label:
             unit = "měsíc" if "/pronajem/" in listing.url else "ks"
             listing.price_label = format_price(listing.price_czk, unit)
+        from app.places import refine_listing_location
+
+        refine_listing_location(listing)
         return listing
+
+    async def aclose(self) -> None:
+        await self._client.aclose()

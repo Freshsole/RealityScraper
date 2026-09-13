@@ -369,6 +369,9 @@ class BezrealitkyClient:
         parsed = self._parse(raw)
         if not parsed:
             return listing
+        from app.places import refine_listing_location
+
+        refine_listing_location(parsed)
         if parsed.views is None:
             parsed.views = listing.views
         if not parsed.description:

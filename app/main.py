@@ -77,6 +77,14 @@ app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 
 
 @app.middleware("http")
+async def static_asset_cache(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=2592000"
+    return response
+
+
+@app.middleware("http")
 async def record_ops_timing(request: Request, call_next):
     path = request.url.path
     if path.startswith("/static/"):
@@ -96,8 +104,7 @@ async def no_store_ui(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     if (
-        path.startswith("/static/")
-        or path.startswith("/nastaveni")
+        path.startswith("/nastaveni")
         or path.startswith("/admin")
         or path.startswith("/uspechy")
         or path in {
@@ -128,11 +135,27 @@ def _is_app_page(path: str) -> bool:
     return path in {"/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"} or path.startswith("/nastaveni/")
 
 
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded[:64]
+    return ((request.client.host if request.client else "") or "")[:64]
+
+
 @app.middleware("http")
 async def require_account(request: Request, call_next):
     if request.method == "GET" and _is_app_page(request.url.path):
         user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
         if not user:
+            if request.url.path == "/nabidka" and hub.store.guest_search_has_access(
+                request.cookies.get("rf_guest_search") or ""
+            ):
+                return await call_next(request)
+            if request.url.path == "/nabidka":
+                nxt = request.url.path
+                if request.url.query:
+                    nxt = f"{nxt}?{request.url.query}"
+                return RedirectResponse(f"/registrace?next={quote(nxt, safe='')}", status_code=303)
             return RedirectResponse("/prihlaseni", status_code=303)
     return await call_next(request)
 
@@ -166,6 +189,10 @@ def page() -> FileResponse:
 
 def landing() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def byt_preview() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "byt.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 def contact() -> FileResponse:
@@ -209,6 +236,7 @@ def admin_page() -> FileResponse:
 
 
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
+app.add_api_route("/byt", byt_preview, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
 app.add_api_route("/obchodni-podminky", terms, methods=["GET"], include_in_schema=False)
 app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_schema=False)
@@ -836,6 +864,56 @@ async def push_test() -> dict:
     return {"ok": True, "sent": sent}
 
 
+@app.get("/api/public/stats")
+async def public_stats() -> dict:
+    return {"new_today": await asyncio.to_thread(hub.store.catalog_new_today_count)}
+
+
+@app.get("/api/public/landing-listings")
+async def public_landing_listings() -> dict:
+    items = await asyncio.to_thread(hub.store.landing_preview_listings)
+    return {"items": items}
+
+
+def _guest_search_payload(request: Request, *, consume: bool) -> tuple[dict[str, Any], str | None]:
+    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+    if user:
+        return {"ok": True, "logged_in": True, "allowed": True}, None
+    token = request.cookies.get("rf_guest_search") or ""
+    ip = _client_ip(request)
+    visitor = request.cookies.get(site_stats.VISITOR_COOKIE) or ""
+    if hub.store.guest_search_has_access(token):
+        if consume:
+            return {"ok": False, "logged_in": False, "allowed": False, "need_register": True}, None
+        return {"ok": False, "logged_in": False, "allowed": False, "need_register": True, "used": True}, token
+    if hub.store.guest_search_used(ip, visitor):
+        return {"ok": False, "logged_in": False, "allowed": False, "need_register": True}, None
+    if not consume:
+        return {"ok": True, "logged_in": False, "allowed": True, "remaining": 1}, None
+    granted = hub.store.grant_guest_search(ip, visitor)
+    if not granted:
+        return {"ok": False, "logged_in": False, "allowed": False, "need_register": True}, None
+    return {"ok": True, "logged_in": False, "allowed": True}, granted
+
+
+@app.get("/api/public/guest-search")
+async def public_guest_search_status(request: Request) -> dict:
+    payload, _token = _guest_search_payload(request, consume=False)
+    return payload
+
+
+@app.post("/api/public/guest-search")
+async def public_guest_search_start(request: Request) -> JSONResponse:
+    payload, token = _guest_search_payload(request, consume=True)
+    response = JSONResponse(payload)
+    if token and payload.get("ok"):
+        response.set_cookie("rf_guest_search", token, max_age=60 * 60 * 24 * 400, samesite="lax", path="/")
+        visitor = request.cookies.get(site_stats.VISITOR_COOKIE)
+        if visitor:
+            site_stats.attach_cookie(response, visitor)
+    return response
+
+
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
     return {"items": hub.store.public_gone_fast_rentals(days=3, limit=4)}
@@ -1085,6 +1163,9 @@ async def catalog_item(
             listing = _listing_from_catalog_dict(item)
             listing.photos = []
             listing = await hub.client_for(source_url).fetch_detail(listing)
+            from app.places import refine_listing_location
+
+            refine_listing_location(listing)
             hub.store.save_listing_enrichment(item["monitor_id"], listing)
             item = hub.store.catalog_item(item["monitor_id"], item["id"], listing_key=item.get("listing_key") or "", url=source_url) or item
         except ListingGone:

@@ -548,7 +548,8 @@ if (register) {
         }
       }
       writeStoredPromo(promo);
-      location.href = "/nabidka";
+      const next = new URLSearchParams(location.search).get("next") || "/nabidka";
+      location.href = next.startsWith("/") ? next : "/nabidka";
     } catch (err) {
       toast(err.message || "Registrace se nepovedla");
     }

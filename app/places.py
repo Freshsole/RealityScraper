@@ -6,6 +6,7 @@ import math
 import re
 import threading
 import time
+import unicodedata
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,275 @@ def bundled_shapes() -> dict[str, dict[str, Any]]:
         else:
             _BUNDLED = {}
     return _BUNDLED
+
+
+CITY_CENTERS = [
+    ("Olomouc", 49.5938, 17.2509),
+    ("Liberec", 50.7671, 15.0562),
+    ("České Budějovice", 48.9747, 14.4747),
+    ("Hradec Králové", 50.2104, 15.8252),
+    ("Ústí nad Labem", 50.6607, 14.0323),
+    ("Pardubice", 50.0343, 15.7812),
+    ("Zlín", 49.2265, 17.6670),
+    ("Havířov", 49.7798, 18.4369),
+    ("Kladno", 50.1470, 14.1028),
+    ("Most", 50.5030, 13.6360),
+    ("Opava", 49.9387, 17.9026),
+    ("Frýdek-Místek", 49.6853, 18.3480),
+    ("Karviná", 49.8540, 18.5417),
+    ("Jihlava", 49.3961, 15.5910),
+    ("Teplice", 50.6404, 13.8245),
+    ("Děčín", 50.7822, 14.2148),
+    ("Karlovy Vary", 50.2315, 12.8720),
+    ("Chomutov", 50.4605, 13.4178),
+    ("Jablonec nad Nisou", 50.7243, 15.1711),
+    ("Mladá Boleslav", 50.4114, 14.9031),
+    ("Prostějov", 49.4722, 17.1117),
+    ("Přerov", 49.4551, 17.4509),
+    ("Třebíč", 49.2149, 15.8816),
+    ("Česká Lípa", 50.6855, 14.5376),
+    ("Třinec", 49.6776, 18.6708),
+    ("Tábor", 49.4141, 14.6578),
+    ("Znojmo", 48.8555, 16.0488),
+    ("Kolín", 50.0281, 15.2006),
+    ("Příbram", 49.6899, 14.0104),
+    ("Cheb", 50.0796, 12.3739),
+    ("Písek", 49.3088, 14.1475),
+    ("Trutnov", 50.5610, 15.9127),
+    ("Kroměříž", 49.2979, 17.3931),
+    ("Vsetín", 49.3387, 17.9962),
+    ("Šumperk", 49.9653, 16.9706),
+    ("Uherské Hradiště", 49.0697, 17.4597),
+    ("Hodonín", 48.8489, 17.1324),
+    ("Břeclav", 48.7590, 16.8820),
+    ("Jičín", 50.4372, 15.3516),
+    ("Litoměřice", 50.5335, 14.1318),
+    ("Jindřichův Hradec", 49.1440, 15.0030),
+    ("Žďár nad Sázavou", 49.5627, 15.9395),
+    ("Havlíčkův Brod", 49.6079, 15.5807),
+    ("Blansko", 49.3632, 16.6432),
+    ("Vyškov", 49.2775, 16.9990),
+    ("Náchod", 50.4167, 16.1630),
+    ("Klatovy", 49.3955, 13.2951),
+    ("Sokolov", 50.1814, 12.6401),
+    ("Chrudim", 49.9511, 15.7956),
+    ("Strakonice", 49.2614, 13.9024),
+    ("Kutná Hora", 49.9484, 15.2682),
+    ("Beroun", 49.9638, 14.0720),
+    ("Mělník", 50.3505, 14.4741),
+    ("Nymburk", 50.1861, 15.0417),
+    ("Benešov", 49.7816, 14.6869),
+    ("Rakovník", 50.1042, 13.7334),
+    ("Domažlice", 49.4405, 12.9298),
+    ("Tachov", 49.7953, 12.6336),
+    ("Rokycany", 49.7428, 13.5946),
+    ("Prachatice", 49.0129, 13.9975),
+    ("Pelhřimov", 49.4313, 15.2231),
+    ("Svitavy", 49.7559, 16.4683),
+    ("Ústí nad Orlicí", 49.9739, 16.3936),
+    ("Jeseník", 50.2296, 17.2046),
+    ("Bruntál", 49.9884, 17.4647),
+    ("Nový Jičín", 49.5944, 18.0103),
+    ("Semily", 50.6019, 15.3356),
+    ("Louny", 50.3570, 13.7968),
+    ("Český Krumlov", 48.8110, 14.3150),
+    ("Rychnov nad Kněžnou", 50.1660, 16.2750),
+    ("Rožnov pod Radhoštěm", 49.4586, 18.1430),
+    ("Valašské Meziříčí", 49.4718, 17.9712),
+    ("Veselí nad Moravou", 48.9536, 17.3761),
+    ("Frenštát pod Radhoštěm", 49.5483, 18.2108),
+    ("Zábřeh", 49.8826, 16.8722),
+    ("Nový Bor", 50.7576, 14.5556),
+    ("Bojkovice", 49.0387, 17.8137),
+    ("Kaplice", 48.7386, 14.4963),
+    ("Uherský Brod", 49.0251, 17.6472),
+    ("Brandýs nad Labem", 50.1860, 14.6637),
+    ("Říčany", 49.9917, 14.6543),
+    ("Turnov", 50.5836, 15.1515),
+    ("Žatec", 50.3273, 13.5458),
+    ("Kopřivnice", 49.5995, 18.1448),
+    ("Orlová", 49.8453, 18.4301),
+    ("Bohumín", 49.9041, 18.3576),
+    ("Hranice", 49.5479, 17.7347),
+    ("Otrokovice", 49.2099, 17.5308),
+    ("Kyjov", 49.0103, 17.1225),
+    ("Mikulov", 48.8056, 16.6378),
+    ("Boskovice", 49.4875, 16.6600),
+    ("Velké Meziříčí", 49.3552, 16.0123),
+    ("Humpolec", 49.5415, 15.3593),
+    ("Vlašim", 49.7064, 14.8988),
+    ("Neratovice", 50.2593, 14.5176),
+    ("Kralupy nad Vltavou", 50.2411, 14.3116),
+    ("Slaný", 50.2305, 14.0869),
+    ("Dobříš", 49.7811, 14.1672),
+    ("Poděbrady", 50.1425, 15.1188),
+]
+_ANCHORS: list[tuple[str, float, float]] | None = None
+
+
+def _fold_label(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.casefold()
+
+
+def locality_anchors() -> list[tuple[str, float, float]]:
+    global _ANCHORS
+    if _ANCHORS is not None:
+        return _ANCHORS
+    items: list[tuple[str, float, float]] = []
+    seen: set[str] = set()
+    shapes = bundled_shapes()
+    for ident, label in bezrealitky_url.DISTRICTS:
+        if label == "Česko":
+            continue
+        raw = shapes.get(ident) or {}
+        try:
+            lat = float(raw["lat"])
+            lon = float(raw["lon"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        key = _fold_label(label)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append((label, lat, lon))
+    for label, lat, lon in CITY_CENTERS:
+        key = _fold_label(label)
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append((label, lat, lon))
+    items.sort(key=lambda item: len(item[0]), reverse=True)
+    _ANCHORS = items
+    return _ANCHORS
+
+
+def anchors_in_bbox(south: float, north: float, west: float, east: float) -> list[tuple[str, float, float]]:
+    return [
+        (name, lat, lon)
+        for name, lat, lon in locality_anchors()
+        if south <= lat <= north and west <= lon <= east
+    ]
+
+
+def locality_match_sql(column: str, labels: list[str]) -> tuple[str, list[str]]:
+    parts: list[str] = []
+    params: list[str] = []
+    for label in labels:
+        if len(label) <= 4:
+            parts.append(f"({column} = ? OR {column} LIKE ? OR {column} LIKE ? OR {column} LIKE ?)")
+            params.extend([label, f"{label},%", f"{label} -%", f"%, {label}%"])
+        else:
+            parts.append(f"{column} LIKE ?")
+            params.append(f"%{label}%")
+    if not parts:
+        return "0", []
+    return "(" + " OR ".join(parts) + ")", params
+
+
+def coarse_anchor_labels(anchors: list[tuple[str, float, float]]) -> list[str]:
+    labels = [name for name, _lat, _lon in anchors]
+    if any(_fold_label(name) == "praha" for name in labels):
+        labels = [name for name in labels if not _fold_label(name).startswith("praha ")]
+    return labels
+
+
+PIN_ANCHOR_RANK = {
+    "Praha": 100,
+    "Brno": 90,
+    "Ostrava": 80,
+    "Plzeň": 75,
+    "Liberec": 60,
+    "Olomouc": 60,
+    "České Budějovice": 55,
+    "Hradec Králové": 55,
+    "Ústí nad Labem": 50,
+    "Pardubice": 50,
+    "Zlín": 48,
+    "Havířov": 45,
+    "Kladno": 44,
+    "Most": 40,
+    "Opava": 40,
+    "Karlovy Vary": 40,
+    "Jihlava": 38,
+    "Teplice": 36,
+}
+
+
+def pin_anchor_sample(anchors: list[tuple[str, float, float]], limit: int = 12) -> list[tuple[str, float, float]]:
+    ranked = sorted(anchors, key=lambda item: (PIN_ANCHOR_RANK.get(item[0], 10), len(item[0])), reverse=True)
+    picked: list[tuple[str, float, float]] = []
+    seen: set[str] = set()
+    for item in ranked:
+        key = _fold_label(item[0])
+        if key.startswith("praha ") and "praha" in seen:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(item)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+_OKRES_RE = re.compile(r"\bokres\s+([^,;]+)", re.I)
+_MATCH_CACHE: dict[tuple[str, bool], tuple[str, float, float] | None] = {}
+
+
+def _anchor_from_folded(folded: str, collapse_prague: bool = False) -> tuple[str, float, float] | None:
+    if not folded:
+        return None
+    best: tuple[str, float, float] | None = None
+    best_len = 0
+    praha: tuple[str, float, float] | None = None
+    for label, lat, lon in locality_anchors():
+        needle = _fold_label(label)
+        if needle == "praha":
+            praha = (label, lat, lon)
+        if len(needle) < 4 or len(needle) <= best_len or needle not in folded:
+            continue
+        if len(needle) <= 4:
+            padded = f" {folded} "
+            if f" {needle} " not in padded and f"{needle}," not in padded and padded.strip() != needle:
+                continue
+        best = (label, lat, lon)
+        best_len = len(needle)
+    if collapse_prague and best and _fold_label(best[0]).startswith("praha") and praha:
+        return praha
+    return best
+
+
+def locality_anchor_match(text: str, collapse_prague: bool = False) -> tuple[str, float, float] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    cache_key = (raw, collapse_prague)
+    if cache_key in _MATCH_CACHE:
+        return _MATCH_CACHE[cache_key]
+    found = _anchor_from_folded(_fold_label(raw), collapse_prague)
+    if not found:
+        okres = _OKRES_RE.search(raw)
+        if okres:
+            found = _anchor_from_folded(_fold_label(okres.group(1)), collapse_prague)
+    if not found:
+        for part in reversed(re.split(r"[,–-]", raw)):
+            part = part.strip()
+            if len(part) < 4:
+                continue
+            found = _anchor_from_folded(_fold_label(part), collapse_prague)
+            if found:
+                break
+    _MATCH_CACHE[cache_key] = found
+    return found
+
+
+def approx_point_from_locality(text: str) -> tuple[float, float] | None:
+    match = locality_anchor_match(text)
+    if not match:
+        return None
+    return match[1], match[2]
 
 
 def cached_item(ident: str) -> dict[str, Any] | None:
@@ -528,6 +798,93 @@ def geocode_locality_sync(text: str) -> tuple[float, float] | None:
 
 async def geocode_locality(text: str) -> tuple[float, float] | None:
     return await asyncio.to_thread(geocode_locality_sync, text)
+
+
+def has_house_number(text: str) -> bool:
+    street = locality_query(text).split(",")[0]
+    return bool(re.search(r"\d", street))
+
+
+def format_reverse_address(addr: dict[str, Any] | None) -> str:
+    data = addr if isinstance(addr, dict) else {}
+    road = str(data.get("road") or data.get("pedestrian") or data.get("footway") or "").strip()
+    number = str(data.get("house_number") or "").strip()
+    city = str(data.get("city") or data.get("town") or data.get("village") or "").strip()
+    suburb = str(data.get("suburb") or data.get("quarter") or data.get("neighbourhood") or "").strip()
+    district = ""
+    for value in (data.get("city_district"), data.get("district"), data.get("state_district")):
+        match = re.search(r"Praha\s*\d+", str(value or ""), re.I)
+        if match:
+            district = match.group(0).replace("  ", " ")
+            break
+    street = " ".join(part for part in (road, number) if part)
+    city_part = district or city
+    if suburb and suburb.casefold() not in f"{city_part} {city}".casefold():
+        if city_part:
+            return f"{street}, {city_part} – {suburb}" if street else f"{city_part} – {suburb}"
+        return f"{street}, {suburb}" if street else suburb
+    if street and city_part:
+        return f"{street}, {city_part}"
+    return street or city_part or suburb
+
+
+def reverse_address_sync(lat: float, lon: float) -> str:
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return ""
+    point = _usable_geocode_point(lat_f, lon_f)
+    if not point:
+        return ""
+    key = f"rev:{round(point[0], 5)}:{round(point[1], 5)}"
+    if key in _GEOCODE_CACHE:
+        cached = _GEOCODE_CACHE[key]
+        return cached[0] if cached else ""
+    global _last_geocode_nom
+    with _geocode_nom_lock:
+        wait = 1.1 - (time.monotonic() - _last_geocode_nom)
+        if wait > 0:
+            time.sleep(wait)
+        _last_geocode_nom = time.monotonic()
+        try:
+            with httpx.Client(timeout=12.0, headers=HEADERS) as client:
+                response = client.get(
+                    f"{_NOMINATIM}/reverse",
+                    params={
+                        "lat": point[0],
+                        "lon": point[1],
+                        "format": "json",
+                        "addressdetails": 1,
+                        "zoom": 18,
+                    },
+                )
+                if response.status_code == 429:
+                    return ""
+                response.raise_for_status()
+                payload = response.json() or {}
+        except Exception:
+            return ""
+    label = format_reverse_address(payload.get("address") if isinstance(payload, dict) else None)
+    _GEOCODE_CACHE[key] = (label, point[0], point[1]) if label else None
+    return label
+
+
+def refine_listing_location(listing: Any) -> Any:
+    locality = str(getattr(listing, "locality", None) or "").strip()
+    lat = getattr(listing, "lat", None)
+    lon = getattr(listing, "lon", None)
+    if has_house_number(locality):
+        return listing
+    if lat is None or lon is None:
+        return listing
+    label = reverse_address_sync(float(lat), float(lon))
+    if label:
+        listing.locality = label
+        extras = dict(getattr(listing, "extras", None) or {})
+        extras["address"] = label
+        listing.extras = extras
+    return listing
 
 
 def street_from_locality(text: str) -> str:
