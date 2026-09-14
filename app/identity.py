@@ -12,6 +12,8 @@ MAX_AREA_RATIO = 0.03
 MAX_PRICE_RATIO = 0.08
 
 _DISP_RE = re.compile(r"(\d+)\s*\+?\s*(kk|1)", re.I)
+_NP_RE = re.compile(r"(-?\d+)\s*\.?\s*np\b", re.I)
+_PATRO_RE = re.compile(r"(-?\d+)\s*\.?\s*patro", re.I)
 _FLOOR_RE = re.compile(r"(-?\d+)")
 
 
@@ -28,6 +30,8 @@ def portal_from_url(url: str) -> str:
         return "bezrealitky"
     if "reality.idnes" in raw or "idnes.cz" in raw:
         return "idnes"
+    if "bazos" in raw:
+        return "bazos"
     if "sreality" in raw:
         return "sreality"
     host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
@@ -35,7 +39,7 @@ def portal_from_url(url: str) -> str:
 
 
 def portal_label(portal: str) -> str:
-    names = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES"}
+    names = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
     return names.get((portal or "").lower(), (portal or "Web").title())
 
 
@@ -51,9 +55,9 @@ def offer_kind(url: str = "", extras: Any = None, price_label: str = "") -> str:
     label = (price_label or "").casefold()
     if "draz" in offer or "/drazby/" in path or "/drazba/" in path:
         return "auction"
-    if offer in {"prodej", "sale"} or "/prodej/" in path or "nemovitost" in label:
+    if offer in {"prodej", "sale"} or "/prodej/" in path or "/prodam/" in path or "nemovitost" in label:
         return "sale"
-    if offer in {"pronájem", "pronajem", "rent"} or "/pronajem/" in path or "měsíc" in label or "mesic" in label:
+    if offer in {"pronájem", "pronajem", "rent"} or "/pronajem/" in path or "/pronajmu/" in path or "měsíc" in label or "mesic" in label:
         return "rent"
     return "rent" if "kč" in label else "unknown"
 
@@ -81,7 +85,20 @@ def floor_token(extras: Any) -> str:
         label = _fold(str(spec.get("label") or ""))
         if "podlaz" not in label and "patro" not in label:
             continue
-        match = _FLOOR_RE.search(str(spec.get("value") or ""))
+        value = str(spec.get("value") or "")
+        folded = _fold(value)
+        np_match = _NP_RE.search(folded)
+        if np_match:
+            return np_match.group(1)
+        patro_match = _PATRO_RE.search(folded)
+        if patro_match:
+            try:
+                return str(int(patro_match.group(1)) + 1)
+            except ValueError:
+                return patro_match.group(1)
+        if "prizem" in folded:
+            return "1"
+        match = _FLOOR_RE.search(value)
         if match:
             return match.group(1)
     return ""
@@ -156,8 +173,7 @@ def same_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
     url_a, url_b = str(left.get("url") or ""), str(right.get("url") or "")
     if listing_key(url_a) and listing_key(url_a) == listing_key(url_b):
         return True
-    if portal_from_url(url_a) == portal_from_url(url_b):
-        return False
+    same_portal = portal_from_url(url_a) == portal_from_url(url_b)
     offer_a = offer_kind(url_a, extras_a, str(left.get("price_label") or ""))
     offer_b = offer_kind(url_b, extras_b, str(right.get("price_label") or ""))
     if offer_a != offer_b or offer_a == "unknown":
@@ -181,12 +197,13 @@ def same_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
         return False
     if haversine_m(lat1, lon1, lat2, lon2) > MAX_MATCH_M:
         return False
+    price_a, price_b = _as_int(left.get("price_czk")), _as_int(right.get("price_czk"))
+    if price_a and price_b and abs(price_a - price_b) / max(price_a, price_b) > MAX_PRICE_RATIO:
+        return False
     if floor_a and floor_b:
         return True
-    price_a, price_b = _as_int(left.get("price_czk")), _as_int(right.get("price_czk"))
-    if price_a and price_b:
-        if abs(price_a - price_b) / max(price_a, price_b) > MAX_PRICE_RATIO:
-            return False
+    if same_portal and not (price_a and price_b):
+        return False
     return True
 
 

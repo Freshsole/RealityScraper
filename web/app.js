@@ -593,13 +593,8 @@ function groupedPins(items, zoom) {
 }
 
 function addBaseTiles(map) {
-  if (!map) return;
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
-  if (typeof ResizeObserver === "function") {
-    const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
-    ro.observe(map.getContainer());
-  }
-  requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+  if (window.RFMapBasemap) window.RFMapBasemap.addTo(map);
+  else L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 20, subdomains: "abcd" }).addTo(map);
 }
 
 function ensureMap() {
@@ -684,6 +679,7 @@ function sourceFromUrl(url) {
   const raw = String(url || "").toLowerCase();
   if (raw.includes("idnes")) return "idnes";
   if (raw.includes("bezrealitky")) return "bezrealitky";
+  if (raw.includes("bazos")) return "bazos";
   return "sreality";
 }
 
@@ -691,6 +687,7 @@ function portalLabel(url) {
   const source = sourceFromUrl(url);
   if (source === "idnes") return "Reality.iDNES";
   if (source === "bezrealitky") return "Bezrealitky";
+  if (source === "bazos") return "Bazoš";
   return "Sreality";
 }
 
@@ -698,6 +695,7 @@ function portalIcon(url) {
   const source = sourceFromUrl(url);
   if (source === "idnes") return "/static/icons/idnes.svg";
   if (source === "bezrealitky") return "/static/icons/bezrealitky.svg";
+  if (source === "bazos") return "/static/icons/bazos.svg";
   return "/static/icons/sreality.svg";
 }
 
@@ -717,11 +715,12 @@ function templateName(id) {
 
 function normalizeMonitorPortals(value) {
   const raw = String(value || "all").toLowerCase();
-  return raw === "sreality" || raw === "bezrealitky" || raw === "idnes" ? raw : "all";
+  return raw === "sreality" || raw === "bezrealitky" || raw === "idnes" || raw === "bazos" ? raw : "all";
 }
 
 function portalTitle(portal) {
   if (portal === "idnes") return "Reality.iDNES";
+  if (portal === "bazos") return "Bazoš";
   return portal === "bezrealitky" ? "Bezrealitky" : "Sreality";
 }
 
@@ -749,7 +748,8 @@ function portalsSummary(value) {
   if (portals === "sreality") return "Jen Sreality";
   if (portals === "bezrealitky") return "Jen Bezrealitky";
   if (portals === "idnes") return "Jen iDNES Reality";
-  return "Všechny (Sreality, Bezrealitky i iDNES)";
+  if (portals === "bazos") return "Jen Bazoš";
+  return "Všechny (Sreality, Bezrealitky, iDNES i Bazoš)";
 }
 
 function selectedMonitorPortals() {
@@ -799,6 +799,7 @@ function monitorEditorHtml(item, draft) {
           <button type="button" class="chip${data.portals === "sreality" ? " on" : ""}" data-portals="sreality">Jen Sreality</button>
           <button type="button" class="chip${data.portals === "bezrealitky" ? " on" : ""}" data-portals="bezrealitky">Jen Bezrealitky</button>
           <button type="button" class="chip${data.portals === "idnes" ? " on" : ""}" data-portals="idnes">Jen iDNES Reality</button>
+          <button type="button" class="chip${data.portals === "bazos" ? " on" : ""}" data-portals="bazos">Jen Bazoš</button>
         </div>
       </div>
       <label>Discord webhook<input name="webhook_url" value="${escapeHtml(data.webhook_url)}" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
@@ -954,6 +955,19 @@ function parseMonitorUrl(url) {
       filters.price_from = intOrNull(query.get("priceFrom"));
       filters.price_to = intOrNull(query.get("priceTo"));
       filters.area_from = intOrNull(query.get("surfaceFrom"));
+      return filters;
+    }
+    if (url.includes("bazos")) {
+      const parts = path.filter((part) => part && !/^\d+$/.test(part));
+      if (parts[0] === "pronajmu") filters.offers = ["pronajem"];
+      if (parts[0] === "prodam") filters.offers = ["prodej"];
+      if (parts[1]) filters.estates = [parts[1]];
+      const hledat = query.get("hledat");
+      if (hledat) filters.sizes = [hledat.replace(/\s+/g, "")];
+      const place = query.get("hlokalita");
+      if (place) filters.localities = [{ label: place }];
+      filters.price_from = intOrNull(query.get("cenaod"));
+      filters.price_to = intOrNull(query.get("cenado"));
       return filters;
     }
     const start = path.indexOf("hledani");
@@ -1708,7 +1722,7 @@ function chipGroup(title, key, options, single = false) {
 
 function currentSource() {
   const raw = filterState.source;
-  if (raw === "bezrealitky" || raw === "idnes") return raw;
+  if (raw === "bezrealitky" || raw === "idnes" || raw === "bazos") return raw;
   return "sreality";
 }
 
@@ -1846,6 +1860,9 @@ function renderFilterGroups() {
   document.querySelectorAll(".br-only").forEach((el) => {
     el.hidden = source !== "bezrealitky";
   });
+  document.querySelectorAll(".bazos-only").forEach((el) => {
+    el.hidden = source !== "bazos";
+  });
   const cat = filterCatalog.catalog;
   const singles = new Set(cat.single_keys || []);
   const groups = [
@@ -1896,6 +1913,7 @@ function renderFilterGroups() {
   setVal("f-br-neighborhood", filterState.neighborhood || 0);
   setVal("f-br-available", filterState.available_from);
   setVal("f-br-id", filterState.advert_id);
+  setVal("f-bazos-radius", filterState.radius ?? 20);
 }
 
 function readRanges() {
@@ -1915,6 +1933,10 @@ function readRanges() {
     filterState.sort = filterState.sort || "nejlevnejsi";
   } else if (currentSource() === "idnes") {
     filterState.sort = filterState.sort || "nejnovejsi";
+  } else if (currentSource() === "bazos") {
+    filterState.sort = "nejnovejsi";
+    filterState.radius = num("f-bazos-radius");
+    if (filterState.radius == null) filterState.radius = 20;
   } else {
     filterState.sort = filterState.sort || "TIMEORDER_DESC";
     filterState.annuity_from = num("f-annuity-from");
@@ -1991,6 +2013,7 @@ const rangeIds = [
   "f-br-neighborhood",
   "f-br-available",
   "f-br-id",
+  "f-bazos-radius",
 ];
 rangeIds.forEach((id) => {
   $(id)?.addEventListener("change", rebuildUrl);
@@ -3246,7 +3269,7 @@ async function boot() {
   const draftedName = params.get("name");
   if (settingsPanel() === "watch" && drafted) {
     await openWatchEditor({
-      name: draftedName || (sourceFromUrl(drafted) === "bezrealitky" ? "Bezrealitky hledání" : sourceFromUrl(drafted) === "idnes" ? "iDNES Reality hledání" : "Nové hledání"),
+      name: draftedName || (sourceFromUrl(drafted) === "bezrealitky" ? "Bezrealitky hledání" : sourceFromUrl(drafted) === "idnes" ? "iDNES Reality hledání" : sourceFromUrl(drafted) === "bazos" ? "Bazoš hledání" : "Nové hledání"),
       search_url: drafted,
       template_id: "default",
       enabled: true,
@@ -3267,7 +3290,7 @@ async function applyMirroredFilters(monitorId) {
     return;
   }
   filterState = structuredClone(data.filters || {});
-  filterState.source = data.target === "Bezrealitky" ? "bezrealitky" : data.target === "Reality.iDNES" ? "idnes" : sourceFromUrl(data.url || "") === "idnes" ? "idnes" : "sreality";
+  filterState.source = data.target === "Bezrealitky" ? "bezrealitky" : data.target === "Reality.iDNES" ? "idnes" : sourceFromUrl(data.url || "") === "idnes" ? "idnes" : sourceFromUrl(data.url || "") === "bazos" ? "bazos" : "sreality";
   applySourceCatalog(filterState.source);
   filterSuggestedName = data.suggested_name || "";
   renderFilterGroups();

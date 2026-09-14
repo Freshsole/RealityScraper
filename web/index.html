@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n70" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n80" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -127,6 +127,9 @@
       <div class="catalog-shell">
         <div class="catalog-map-wrap">
           <div id="catalog-map"></div>
+          <div id="catalog-map-loading" hidden>
+            <img id="catalog-load-anim" src="/static/assets/catalog-loading.webp?v=6" alt="" width="140" height="140" decoding="async" />
+          </div>
           <div class="map-tools">
             <button type="button" class="map-tool" id="map-circle-btn" data-icon="circle">Kruh</button>
             <label class="map-radius" id="map-radius-wrap" hidden>
@@ -151,6 +154,7 @@
               <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
               <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
               <button type="button" class="chip" data-portal="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />iDNES Reality</button>
+              <button type="button" class="chip" data-portal="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
             </div>
             <div class="chip-row" id="cat-status">
               <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
@@ -291,7 +295,7 @@
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
                 <div class="url-stack" id="monitor-urls"></div>
-                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz nebo reality.idnes.cz"></textarea></label>
+                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea></label>
                 <label>Šablona zprávy<select id="monitor-template"></select></label>
                 <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
                 <label class="switch-field">
@@ -317,6 +321,7 @@
                     <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Jen Sreality</button>
                     <button type="button" class="chip" data-portals="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Jen Bezrealitky</button>
                     <button type="button" class="chip" data-portals="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Jen iDNES Reality</button>
+                    <button type="button" class="chip" data-portals="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Jen Bazoš</button>
                   </div>
                 </div>
                 <div class="filter-group">
@@ -326,6 +331,7 @@
                     <button type="button" class="chip on" data-source="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
                     <button type="button" class="chip" data-source="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
                     <button type="button" class="chip" data-source="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />iDNES Reality</button>
+                    <button type="button" class="chip" data-source="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
                   </div>
                 </div>
                 <div class="actions" style="margin-bottom: 20px">
@@ -354,6 +360,7 @@
                     <label class="sreality-only">Patro od<input id="f-floor-from" type="number" /></label>
                     <label class="sreality-only">Patro do<input id="f-floor-to" type="number" /></label>
                     <label class="sreality-only">POI do km<input id="f-poi-km" type="number" /></label>
+                    <label class="bazos-only" hidden>Okolí km<input id="f-bazos-radius" type="number" min="0" max="400" /></label>
                     <label class="br-only" hidden>Anuita od<input id="f-annuity-from" type="number" /></label>
                     <label class="br-only" hidden>Anuita do<input id="f-annuity-to" type="number" /></label>
                     <label class="br-only" hidden>Balkón od m²<input id="f-balcony-from" type="number" /></label>
@@ -999,9 +1006,10 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
+    <script src="/static/map-basemap.js?v=2"></script>
     <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n78"></script>
-    <script src="/static/catalog.js?v=1.2.0-n90"></script>
+    <script src="/static/app.js?v=1.2.0-n80"></script>
+    <script src="/static/catalog.js?v=1.2.0-n111"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>

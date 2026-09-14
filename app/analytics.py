@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -264,29 +265,32 @@ def touch_presence(
     if not key:
         return
     ensure_schema(store)
-    with store.connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO analytics_presence(visitor_id, last_seen, path, device, country, country_name, city, email, name, ip)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(visitor_id) DO UPDATE SET
-                last_seen = excluded.last_seen,
-                path = excluded.path,
-                device = excluded.device,
-                country = excluded.country,
-                country_name = excluded.country_name,
-                city = excluded.city,
-                email = CASE WHEN excluded.email != '' THEN excluded.email ELSE analytics_presence.email END,
-                name = CASE WHEN excluded.name != '' THEN excluded.name ELSE analytics_presence.name END,
-                ip = excluded.ip
-            """,
-            (key, _now(), path[:240], device, country, country_name, city, email[:180], name[:120], ip),
-        )
-        if ip:
+    try:
+        with store.connect() as conn:
             conn.execute(
-                "DELETE FROM analytics_presence WHERE ip = ? AND visitor_id != ?",
-                (ip, key),
+                """
+                INSERT INTO analytics_presence(visitor_id, last_seen, path, device, country, country_name, city, email, name, ip)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(visitor_id) DO UPDATE SET
+                    last_seen = excluded.last_seen,
+                    path = excluded.path,
+                    device = excluded.device,
+                    country = excluded.country,
+                    country_name = excluded.country_name,
+                    city = excluded.city,
+                    email = CASE WHEN excluded.email != '' THEN excluded.email ELSE analytics_presence.email END,
+                    name = CASE WHEN excluded.name != '' THEN excluded.name ELSE analytics_presence.name END,
+                    ip = excluded.ip
+                """,
+                (key, _now(), path[:240], device, country, country_name, city, email[:180], name[:120], ip),
             )
+            if ip:
+                conn.execute(
+                    "DELETE FROM analytics_presence WHERE ip = ? AND visitor_id != ?",
+                    (ip, key),
+                )
+    except sqlite3.OperationalError:
+        return
 
 
 def _parse_iso(value: str) -> datetime | None:

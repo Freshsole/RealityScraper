@@ -24,4 +24,4 @@ if __name__ == "__main__":
     print("Zavři toto okno, až chceš hlídání ukončit.")
     print(f"Data a .env: {config.ROOT}")
     threading.Thread(target=open_browser, daemon=True).start()
-    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="info")
+    uvicorn.run(app, host=config.HOST, port=config.PORT, log_level="info", timeout_graceful_shutdown=2)

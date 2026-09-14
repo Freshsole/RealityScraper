@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,11 +31,22 @@ class Hub:
         self._ping_task: asyncio.Task[None] | None = None
         self._catalog_task: asyncio.Task[None] | None = None
         self._discord_task: asyncio.Task[None] | None = None
+        self._coords_task: asyncio.Task[None] | None = None
+        self._dedupe_task: asyncio.Task[None] | None = None
         self.catalog_running = False
+        self.catalog_running_portals: set[str] = set()
+        self.dedupe_running = False
+        self.dedupe_scanning = False
         self.last_error: str | None = None
         self._portal_gate = asyncio.Semaphore(2)
+        self._bazos_gate = asyncio.Semaphore(24)
+        self._catalog_write = asyncio.Lock()
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
+        self.catalog_gen = 0
+        self.ui_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-ui")
+        self.auth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-auth")
+        self.job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-job")
 
     def client_for(self, search_url: str):
         client = self.clients.get(search_url)
@@ -42,6 +54,12 @@ class Hub:
             client = client_for(search_url)
             self.clients[search_url] = client
         return client
+
+    async def _job_db(self, fn, *args, **kwargs):
+        def _call():
+            return fn(*args, **kwargs)
+
+        return await asyncio.get_running_loop().run_in_executor(self.job_pool, _call)
 
     async def start(self) -> None:
         if self.running:
@@ -56,35 +74,55 @@ class Hub:
             from app.discord_bot import run_discord_bot
 
             self._discord_task = asyncio.create_task(run_discord_bot(self.store), name="discord-bot")
-        asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
+        self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
+        self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
 
     async def stop(self) -> None:
         self.running = False
-        for task in (self._task, self._sold_task, self._ping_task, self._catalog_task, self._discord_task):
-            if not task:
-                continue
+        tasks = [
+            task
+            for task in (
+                self._task,
+                self._sold_task,
+                self._ping_task,
+                self._catalog_task,
+                self._discord_task,
+                self._coords_task,
+                self._dedupe_task,
+            )
+            if task is not None
+        ]
+        for task in tasks:
             task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        if tasks:
+            await asyncio.wait(tasks, timeout=1.5)
         self._task = None
         self._sold_task = None
         self._ping_task = None
         self._catalog_task = None
         self._discord_task = None
+        self._coords_task = None
+        self._dedupe_task = None
 
     async def close(self) -> None:
         await self.stop()
-        for client in self.clients.values():
-            await client.aclose()
+        for client in list(self.clients.values()):
+            closer = getattr(client, "aclose", None)
+            if closer is None:
+                continue
+            try:
+                await asyncio.wait_for(closer(), timeout=0.5)
+            except (asyncio.TimeoutError, Exception):
+                pass
         self.clients.clear()
 
     async def _loop(self) -> None:
+        await asyncio.sleep(20)
         while self.running:
             try:
-                await self.check_due()
-                await self.maybe_send_digest()
+                if not self.catalog_running:
+                    await self.check_due()
+                    await self.maybe_send_digest()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -114,6 +152,8 @@ class Hub:
     async def check_due(self) -> dict[str, Any]:
         if self.checking:
             return {"ok": False, "reason": "already-checking"}
+        if self.catalog_running:
+            return {"ok": False, "reason": "catalog-running"}
         self.checking = True
         try:
             groups: dict[str, dict[str, Any]] = {}
@@ -182,12 +222,12 @@ class Hub:
                     notify_limit = len(listings)
             for index, listing in enumerate(listings):
                 try:
-                    result = self.store.upsert_catalog_listing(listing, kind="refresh")
-                    targets = self.store.matching_monitors(listing, job["id"])
+                    result = await self._job_db(self.store.upsert_catalog_listing, listing, kind="refresh")
+                    targets = await self._job_db(self.store.matching_monitors, listing, job["id"])
                     if not targets:
                         targets = monitors
                     for monitor in targets:
-                        self.store.add_monitor_hit(monitor["id"], result["listing_key"])
+                        await self._job_db(self.store.add_monitor_hit, monitor["id"], result["listing_key"])
                     if index >= notify_limit:
                         continue
                     alert = await self._classify(client, listing, result.get("prev"))
@@ -404,19 +444,23 @@ class Hub:
     async def _ping_loop(self) -> None:
         while self.running:
             try:
-                item = self.store.claim_next_ping()
+                item = await asyncio.to_thread(self.store.claim_next_ping)
                 if not item:
                     await asyncio.sleep(0.25)
                     continue
                 try:
                     await self._dispatch_ping(item)
-                    self.store.mark_ping_sent(item)
+                    await asyncio.to_thread(self.store.mark_ping_sent, item)
                 except asyncio.CancelledError:
-                    self.store.mark_ping_failed(int(item["id"]), "cancelled", int(item.get("attempts") or 1))
+                    await asyncio.to_thread(
+                        self.store.mark_ping_failed, int(item["id"]), "cancelled", int(item.get("attempts") or 1)
+                    )
                     raise
                 except Exception as exc:
                     self.last_error = f"Discord queue: {exc}"
-                    self.store.mark_ping_failed(int(item["id"]), str(exc), int(item.get("attempts") or 1))
+                    await asyncio.to_thread(
+                        self.store.mark_ping_failed, int(item["id"]), str(exc), int(item.get("attempts") or 1)
+                    )
                 await asyncio.sleep(0.45)
             except asyncio.CancelledError:
                 raise
@@ -446,11 +490,84 @@ class Hub:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.store.set_meta("catalog_sync_error", str(exc))
+                await self._job_db(self.store.set_meta, "catalog_sync_error", str(exc))
             try:
                 await asyncio.sleep(60)
             except asyncio.CancelledError:
                 raise
+
+    async def _dedupe_loop(self) -> None:
+        await asyncio.sleep(20)
+        while self.running:
+            try:
+                await self.maybe_run_dedupe()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+
+    def _dedupe_due_today(self) -> bool:
+        settings = self.store.dedupe_settings()
+        if not settings.get("enabled"):
+            return False
+        now = datetime.now().astimezone()
+        if now.hour < int(settings.get("hour") or 3):
+            return False
+        last = str(settings.get("last_run") or "")
+        return not last.startswith(now.date().isoformat())
+
+    async def maybe_run_dedupe(self) -> dict[str, Any]:
+        if self.dedupe_running or self.dedupe_scanning:
+            return {"ok": False, "reason": "already-running"}
+        if not self._dedupe_due_today():
+            return {"ok": False, "reason": "not-due"}
+        return await self.run_dedupe()
+
+    def start_dedupe(self) -> dict[str, Any]:
+        if self.dedupe_running or self.dedupe_scanning:
+            return {"ok": False, "reason": "already-running"}
+        asyncio.create_task(self.run_dedupe(), name="dedupe-run")
+        return {"ok": True, "started": True}
+
+    def start_dedupe_scan(self) -> dict[str, Any]:
+        if self.dedupe_running or self.dedupe_scanning:
+            return {"ok": False, "reason": "already-running"}
+        asyncio.create_task(self.run_dedupe_scan(), name="dedupe-scan")
+        return {"ok": True, "started": True}
+
+    async def run_dedupe(self) -> dict[str, Any]:
+        if self.dedupe_running or self.dedupe_scanning:
+            return {"ok": False, "reason": "already-running"}
+        self.dedupe_running = True
+        self.store.patch_dedupe_meta({"status": "running", "error": ""})
+        try:
+            stats = await asyncio.to_thread(lambda: self.store.merge_duplicate_listings(force=True))
+            return {"ok": True, "stats": stats}
+        except Exception as exc:
+            self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+            print(f"Sloučení duplicit selhalo: {exc}", flush=True)
+            return {"ok": False, "error": str(exc)}
+        finally:
+            self.dedupe_running = False
+
+    async def run_dedupe_scan(self) -> dict[str, Any]:
+        if self.dedupe_running or self.dedupe_scanning:
+            return {"ok": False, "reason": "already-running"}
+        self.dedupe_scanning = True
+        self.store.patch_dedupe_meta({"status": "scanning", "error": ""})
+        try:
+            result = await asyncio.to_thread(self.store.preview_duplicate_listings)
+            return {"ok": True, **result}
+        except Exception as exc:
+            self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+            print(f"Kontrola duplicit selhala: {exc}", flush=True)
+            return {"ok": False, "error": str(exc)}
+        finally:
+            self.dedupe_scanning = False
 
     def _due_catalog_portals(self, force: bool = False) -> list[str]:
         now = datetime.now().astimezone()
@@ -470,89 +587,126 @@ class Hub:
         return bool(self._due_catalog_portals())
 
     async def maybe_run_catalog_sync(self, force: bool = False) -> dict[str, Any]:
-        if self.catalog_running:
-            return {"ok": False, "reason": "already-running"}
-        portals = None if force else self._due_catalog_portals()
+        portals = None if force else await self._job_db(self._due_catalog_portals)
         if not force and not portals:
             return {"ok": False, "reason": "not-due"}
-        return await self.run_catalog_sync(portals=portals)
+        wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        to_start = wanted - self.catalog_running_portals
+        if not to_start:
+            return {"ok": False, "reason": "already-running"}
+        if not force and self.catalog_running_portals:
+            return {"ok": False, "reason": "already-running"}
+        if not force:
+            pick = "bazos" if "bazos" in to_start else sorted(to_start)[0]
+            to_start = {pick}
+        return await self.run_catalog_sync(portals=sorted(to_start))
 
     def start_catalog_sync(self, portals: list[str] | None = None) -> dict[str, Any]:
-        if self.catalog_running:
+        wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        to_start = wanted - self.catalog_running_portals
+        if not to_start:
             return {"ok": False, "reason": "already-running", "status": self.store.catalog_sync_status()}
+        self.catalog_running_portals |= to_start
         self.catalog_running = True
         asyncio.create_task(
-            self.run_catalog_sync(portals=portals, rerun=bool(portals), claimed=True),
+            self.run_catalog_sync(portals=sorted(to_start), rerun=bool(portals), claimed=True),
             name="sreality-catalog-run",
         )
-        return {"ok": True, "started": True, "status": self.store.catalog_sync_status()}
+        return {"ok": True, "started": True, "portals": sorted(to_start), "status": self.store.catalog_sync_status()}
 
     async def run_catalog_sync(
         self, portals: list[str] | None = None, rerun: bool = False, claimed: bool = False
     ) -> dict[str, Any]:
+        wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
         if not claimed:
-            if self.catalog_running:
+            to_start = wanted - self.catalog_running_portals
+            if not to_start:
                 return {"ok": False, "reason": "already-running"}
+            wanted = to_start
+            self.catalog_running_portals |= wanted
             self.catalog_running = True
         started = utc_now()
         today = started[:10]
-        wanted = set(portals or config.CATALOG_SYNC_HOURS)
         shards = [item for item in daily_shards() if item["portal"] in wanted]
-        self.store.set_meta("catalog_sync_status", "running")
-        self.store.set_meta("catalog_sync_error", None)
+        await self._job_db(self.store.set_meta, "catalog_sync_status", "running")
+        await self._job_db(self.store.set_meta, "catalog_sync_error", None)
         shard_ok: dict[str, bool] = {}
         try:
-            for shard in shards:
-                job = self.store.ensure_scrape_job(
-                    kind=shard["kind"],
-                    portal=shard["portal"],
-                    shard_key=shard["shard_key"],
-                    search_url=shard["search_url"],
-                )
-                finished = str(job.get("finished_at") or "")
-                if not rerun and job.get("status") == "done" and finished[:10] == today:
-                    shard_ok[shard["shard_key"]] = True
-                    continue
-                if rerun or finished[:10] != today:
-                    self.store.update_scrape_job(
-                        job["id"],
-                        page=1,
-                        upserts=0,
-                        status="pending",
-                        finished_at=None,
-                        last_error=None,
+            async def run_portal(portal: str) -> None:
+                portal_shards = [item for item in shards if item["portal"] == portal]
+                async def run_shard(shard: dict[str, str]) -> None:
+                    job = await self._job_db(
+                        self.store.ensure_scrape_job,
+                        kind=shard["kind"],
+                        portal=shard["portal"],
+                        shard_key=shard["shard_key"],
+                        search_url=shard["search_url"],
                     )
-                    job = {**job, "page": 1, "upserts": 0, "started_at": None, "status": "pending"}
-                shard_ok[shard["shard_key"]] = await self._run_catalog_job(job)
+                    finished = str(job.get("finished_at") or "")
+                    if not rerun and job.get("status") == "done" and finished[:10] == today:
+                        shard_ok[shard["shard_key"]] = True
+                        return
+                    if rerun or finished[:10] != today:
+                        await self._job_db(
+                            self.store.update_scrape_job,
+                            job["id"],
+                            page=1,
+                            upserts=0,
+                            status="pending",
+                            finished_at=None,
+                            last_error=None,
+                        )
+                        job = {**job, "page": 1, "upserts": 0, "started_at": None, "status": "pending"}
+                    shard_ok[shard["shard_key"]] = await self._run_catalog_job(job)
+
+                if portal == "bazos":
+                    shard_gate = asyncio.Semaphore(2)
+
+                    async def run_bazos_shard(shard: dict[str, str]) -> None:
+                        async with shard_gate:
+                            await run_shard(shard)
+
+                    await asyncio.gather(*(run_bazos_shard(shard) for shard in portal_shards))
+                else:
+                    for shard in portal_shards:
+                        await run_shard(shard)
+
+            await asyncio.gather(*(run_portal(portal) for portal in sorted(wanted)))
             complete_portals = []
             for portal in wanted:
                 keys = [item["shard_key"] for item in shards if item["portal"] == portal]
                 ok = bool(keys) and all(shard_ok.get(key) for key in keys)
-                self.store.set_meta(f"catalog_sync_{portal}_status", "done" if ok else "partial")
-                self.store.set_meta(f"catalog_sync_{portal}_last", utc_now())
+                await self._job_db(
+                    self.store.set_meta, f"catalog_sync_{portal}_status", "done" if ok else "partial"
+                )
+                await self._job_db(self.store.set_meta, f"catalog_sync_{portal}_last", utc_now())
                 if ok:
                     complete_portals.append(portal)
             if complete_portals:
-                self.store.mark_catalog_stale_gone(started, complete_portals)
+                await self._job_db(self.store.mark_catalog_stale_gone, started, complete_portals)
             all_today = True
             for portal in config.CATALOG_SYNC_HOURS:
-                last = self.store.get_meta(f"catalog_sync_{portal}_last") or ""
-                status = self.store.get_meta(f"catalog_sync_{portal}_status") or ""
+                last = await self._job_db(self.store.get_meta, f"catalog_sync_{portal}_last") or ""
+                status = await self._job_db(self.store.get_meta, f"catalog_sync_{portal}_status") or ""
                 if not (str(last).startswith(today) and status == "done"):
                     all_today = False
                     break
-            self.store.set_meta("catalog_sync_status", "done" if all_today else "partial")
-            self.store.set_meta("catalog_sync_last", utc_now())
-            return {"ok": all_today, "status": self.store.catalog_sync_status()}
+            await self._job_db(self.store.set_meta, "catalog_sync_status", "done" if all_today else "partial")
+            await self._job_db(self.store.set_meta, "catalog_sync_last", utc_now())
+            status = await self._job_db(self.store.catalog_sync_status)
+            return {"ok": all_today, "status": status}
         except Exception as exc:
-            self.store.set_meta("catalog_sync_status", "error")
-            self.store.set_meta("catalog_sync_error", str(exc))
+            await self._job_db(self.store.set_meta, "catalog_sync_status", "error")
+            await self._job_db(self.store.set_meta, "catalog_sync_error", str(exc))
             raise
         finally:
-            self.catalog_running = False
+            self.catalog_running_portals -= wanted
+            self.catalog_running = bool(self.catalog_running_portals)
 
     async def _run_catalog_job(self, job: dict[str, Any]) -> bool:
         client = self.client_for(job["search_url"])
+        if str(job.get("portal") or "") == "bazos" and hasattr(client, "fetch_catalog"):
+            return await self._run_bazos_catalog_job(job, client)
         page = max(int(job.get("page") or 1), 1)
         upserts = int(job.get("upserts") or 0)
         self.store.update_scrape_job(
@@ -587,8 +741,8 @@ class Hub:
                     upserts += 1
                 self.store.update_scrape_job(job["id"], page=page + 1, upserts=upserts, last_total=total)
                 page_size = max(len(batch), 1)
+                needed = (int(total) + page_size - 1) // page_size if total else None
                 if total:
-                    needed = (int(total) + page_size - 1) // page_size
                     if page >= needed:
                         break
                 page += 1
@@ -609,6 +763,39 @@ class Hub:
                 last_error=str(exc),
                 upserts=upserts,
                 page=page,
+            )
+            return False
+
+    async def _run_bazos_catalog_job(self, job: dict[str, Any], client: Any) -> bool:
+        started = time.monotonic()
+        await self._job_db(
+            self.store.update_scrape_job,
+            job["id"],
+            status="running",
+            started_at=utc_now(),
+            last_error=None,
+        )
+        try:
+            listings, total = await client.fetch_catalog(self._bazos_gate)
+            async with self._catalog_write:
+                await self._job_db(self.store.upsert_catalog_listings_batch, listings, kind="seeded")
+            pages = max(1, (int(total) + 19) // 20) if total else 1
+            await self._job_db(
+                self.store.update_scrape_job,
+                job["id"],
+                status="done",
+                finished_at=utc_now(),
+                last_total=total,
+                upserts=len(listings),
+                page=pages,
+            )
+            return True
+        except Exception as exc:
+            await self._job_db(
+                self.store.update_scrape_job,
+                job["id"],
+                status="error",
+                last_error=str(exc)[:300],
             )
             return False
 

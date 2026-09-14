@@ -4,8 +4,10 @@ import json
 import re
 import secrets
 import sqlite3
+import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +16,7 @@ from urllib.parse import urlparse
 
 from app import config, localities, places
 from app.identity import (
+    fingerprint,
     link_payload,
     listing_identity,
     listing_key,
@@ -298,20 +301,34 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
         "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
         "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
     )
-    anchors = places.anchors_in_bbox(south, north, west, east)
     span = (north - south) + (east - west)
+    anchors = places.anchors_in_bbox(south, north, west, east)
+    if not anchors:
+        # Jen když ve výřezu není žádný centroid: vezmi okolí / nejbližší,
+        # ať zoom do čtvrti nepřijde o locality match.
+        pad_lat = max(0.05, (north - south) * 0.5)
+        pad_lon = max(0.05, (east - west) * 0.5)
+        anchors = places.anchors_in_bbox(south - pad_lat, north + pad_lat, west - pad_lon, east + pad_lon)
+    if not anchors:
+        anchors = places.nearest_anchors((south + north) / 2, (west + east) / 2, limit=6)
     filters["_bbox"] = (south, north, west, east)
     filters["_bbox_anchors"] = anchors
     filters["_bbox_span"] = span
-    if span >= 3.5:
-        where.append(
-            f"(({gps}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND TRIM(IFNULL(listings.locality, '')) != ''))"
-        )
-        params.extend([south, north, west, east])
-    elif anchors:
-        labels = places.coarse_anchor_labels(anchors)
+    if anchors:
+        # U těsného zoomu nech district labels (Praha 4…); coarse „Praha“ až u širšího výřezu.
+        if span >= 0.85:
+            labels = places.coarse_anchor_labels(anchors)
+        else:
+            labels = [name for name, _lat, _lon in anchors]
+            # „Praha“ / „Brno“ by přes „Praha %“ vytáhly celý katalog čtvrtí.
+            folded = [places._fold_label(name) for name in labels]
+            if any(item.startswith("praha ") for item in folded):
+                labels = [name for name, key in zip(labels, folded) if key != "praha"]
+            if any(item.startswith("brno") and item != "brno" for item in folded):
+                labels = [name for name, key in zip(labels, folded) if key != "brno"]
         text_sql, text_params = places.locality_match_sql("listings.locality", labels)
-        where.append(f"(({gps}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND {text_sql}))")
+        # Locality match platí i když má inzerát GPS jinde (centroid dump / špatný approx).
+        where.append(f"(({gps}) OR {text_sql})")
         params.extend([south, north, west, east, *text_params])
     else:
         where.append(gps)
@@ -418,15 +435,27 @@ class Store:
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
         self._init()
 
-    def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA journal_mode=WAL")
+    def connect(self, readonly: bool = False) -> sqlite3.Connection:
+        on_loop = threading.current_thread() is threading.main_thread()
+        if readonly:
+            uri = f"file:{Path(self.path).resolve().as_posix()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=5)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=250")
+        elif on_loop:
+            conn = sqlite3.connect(self.path, timeout=0.08)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=80")
+        else:
+            conn = sqlite3.connect(self.path, timeout=30)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _init(self) -> None:
         with self.connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS listings (
@@ -726,17 +755,40 @@ class Store:
         row = listing if isinstance(listing, dict) else self._listing_dict(listing)
         url = str(row.get("url") or "")
         url_key = listing_key(url)
+        found = ""
         if url:
-            found = conn.execute(
+            link = conn.execute(
                 "SELECT canonical_key FROM listing_links WHERE url = ? OR url_key = ? LIMIT 1",
                 (url, url_key),
             ).fetchone()
-            if found and found["canonical_key"]:
-                return str(found["canonical_key"])
-        nearby = self._find_canonical_nearby(conn, row)
-        if nearby:
-            return nearby
-        return url_canonical(url)
+            if link and link["canonical_key"]:
+                found = str(link["canonical_key"])
+        nearby = self._find_canonical_nearby(conn, row) or ""
+        keep = nearby or found or url_canonical(url)
+        if found and found != keep:
+            self._retarget_canonical(conn, found, keep)
+        return keep
+
+    def _retarget_canonical(self, conn: sqlite3.Connection, drop: str, keep: str) -> None:
+        if not drop or not keep or drop == keep:
+            return
+        conn.execute("UPDATE listing_links SET canonical_key = ? WHERE canonical_key = ?", (keep, drop))
+        conn.execute("UPDATE listings SET canonical_key = ? WHERE canonical_key = ?", (keep, drop))
+        try:
+            conn.execute("UPDATE catalog_listings SET canonical_key = ? WHERE canonical_key = ?", (keep, drop))
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO monitor_hits(monitor_id, listing_key, first_matched)
+                SELECT monitor_id, ?, first_matched FROM monitor_hits WHERE listing_key = ?
+                """,
+                (keep, drop),
+            )
+            conn.execute("DELETE FROM monitor_hits WHERE listing_key = ?", (drop,))
+        except sqlite3.OperationalError:
+            pass
 
     def _find_canonical_nearby(self, conn: sqlite3.Connection, row: dict[str, Any]) -> str | None:
         try:
@@ -794,36 +846,575 @@ class Store:
         return grouped
 
     def _unify_listing_identities(self, conn: sqlite3.Connection) -> None:
-        done = conn.execute("SELECT value FROM meta WHERE key = 'listing_identity_v4'").fetchone()
-        if done:
-            self._backfill_catalog_canonical(conn)
+        v4 = conn.execute("SELECT value FROM meta WHERE key = 'listing_identity_v4'").fetchone()
+        if not v4:
+            conn.execute("UPDATE listing_links SET canonical_key = 'url:' || url_key WHERE IFNULL(url_key, '') != ''")
+            rows = [dict(row) for row in conn.execute("SELECT rowid AS rid, * FROM listings")]
+            assigned: dict[int, str] = {}
+            for row in rows:
+                assigned[int(row["rid"])] = url_canonical(str(row.get("url") or ""))
+            assigned = self._merge_nearby_assigned(rows, assigned, "rid")
+            seen_old: dict[str, str] = {}
+            for row in rows:
+                rid = int(row["rid"])
+                new = assigned[rid]
+                old = url_canonical(str(row.get("url") or ""))
+                conn.execute("UPDATE listings SET canonical_key = ? WHERE rowid = ?", (new, rid))
+                self._upsert_listing_link(conn, row, new, gone=bool(row.get("gone")))
+                if old != new:
+                    seen_old[old] = new
+            for old, new in seen_old.items():
+                self._retarget_canonical(conn, old, new)
+            self._collapse_duplicate_listings(conn)
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('listing_identity_v4', '1')")
+            self._backfill_catalog_canonical(conn, merge=True)
             return
-        conn.execute("UPDATE listing_links SET canonical_key = 'url:' || url_key WHERE IFNULL(url_key, '') != ''")
-        rows = [dict(row) for row in conn.execute("SELECT rowid AS rid, * FROM listings")]
-        assigned: dict[int, str] = {}
+        self._backfill_catalog_canonical(conn, merge=False)
+
+    def schedule_identity_relink(self) -> None:
+        if getattr(self, "_identity_relink_started", False):
+            return
+        self._identity_relink_started = True
+
+        def run() -> None:
+            time.sleep(8)
+            try:
+                self.merge_duplicate_listings()
+            except Exception as exc:
+                print(f"Sloučení duplicit selhalo: {exc}", flush=True)
+
+        threading.Thread(target=run, name="identity-v5", daemon=True).start()
+
+    def _unify_listing_identities_v5(self) -> None:
+        self.merge_duplicate_listings()
+
+    def merge_duplicate_listings(self, *, force: bool = False) -> dict[str, int]:
+        with self.connect() as conn:
+            if not force and conn.execute("SELECT value FROM meta WHERE key = 'listing_identity_v5'").fetchone():
+                print("Sloučení duplicit už proběhlo.", flush=True)
+                return {"skipped": 1}
+
+        print("Načítám inzeráty ke sloučení…", flush=True)
+        listing_rows, catalog_rows = self._load_identity_rows()
+
+        print(
+            f"Hledám duplicity v {len(listing_rows)} inzerátech a {len(catalog_rows)} katalogových záznamech…",
+            flush=True,
+        )
+        listing_assigned = {
+            int(row["rid"]): str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in listing_rows
+        }
+        listing_assigned = self._merge_nearby_assigned(listing_rows, listing_assigned, "rid")
+        to_relink = sum(
+            1
+            for row in listing_rows
+            if listing_assigned[int(row["rid"])] != str(row.get("canonical_key") or "")
+        )
+        print(f"Přepojuji {to_relink} inzerátů…", flush=True)
+        listing_changed = self._commit_listing_canonicals(listing_rows, listing_assigned)
+
+        catalog_assigned = {
+            row["listing_key"]: str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in catalog_rows
+        }
+        catalog_assigned = self._merge_nearby_assigned(catalog_rows, catalog_assigned, "listing_key")
+        to_relink_cat = sum(
+            1
+            for row in catalog_rows
+            if catalog_assigned[row["listing_key"]] != str(row.get("canonical_key") or "")
+        )
+        print(f"Přepojuji {to_relink_cat} katalogových záznamů…", flush=True)
+        catalog_changed = self._commit_catalog_canonicals(catalog_rows, catalog_assigned)
+
+        print("Mažu zdvojené řádky…", flush=True)
+        listing_collapsed, catalog_collapsed = self._collapse_duplicates_chunked()
+
+        with self.connect() as conn:
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('listing_identity_v5', '1')")
+
+        stats = {
+            "listings": len(listing_rows),
+            "catalog": len(catalog_rows),
+            "listings_relinked": listing_changed,
+            "catalog_relinked": catalog_changed,
+            "listings_collapsed": listing_collapsed,
+            "catalog_collapsed": catalog_collapsed,
+        }
+        print(
+            f"Sloučení duplicit je hotové. Přepojené inzeráty: {listing_changed}, "
+            f"katalog: {catalog_changed}, smazané duplicity: {listing_collapsed + catalog_collapsed}.",
+            flush=True,
+        )
+        self.patch_dedupe_meta(
+            {
+                "status": "done",
+                "last_kind": "merge",
+                "last_run": utc_now(),
+                "last_stats": stats,
+                "error": "",
+            }
+        )
+        return stats
+
+    def _load_identity_rows(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        with self.connect() as conn:
+            listing_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT rowid AS rid, url, lat, lon, disposition, area_m2, price_czk, price_label,
+                           extras, canonical_key, gone, id, last_seen, name, locality
+                    FROM listings
+                    """
+                )
+            ]
+            catalog_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label,
+                           extras, canonical_key, gone, id, last_seen
+                    FROM catalog_listings
+                    """
+                )
+            ]
+        return listing_rows, catalog_rows
+
+    def dedupe_settings(self) -> dict[str, Any]:
+        raw = self.get_meta("dedupe") or "{}"
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        try:
+            hour = int(data.get("hour", 3))
+        except (TypeError, ValueError):
+            hour = 3
+        return {
+            "enabled": bool(data.get("enabled")),
+            "hour": max(0, min(23, hour)),
+            "status": str(data.get("status") or "idle"),
+            "last_kind": str(data.get("last_kind") or ""),
+            "last_run": data.get("last_run") or "",
+            "last_scan": data.get("last_scan") or "",
+            "last_stats": data.get("last_stats") if isinstance(data.get("last_stats"), dict) else {},
+            "last_scan_stats": data.get("last_scan_stats") if isinstance(data.get("last_scan_stats"), dict) else {},
+            "samples": data.get("samples") if isinstance(data.get("samples"), list) else [],
+            "error": str(data.get("error") or ""),
+        }
+
+    def patch_dedupe_meta(self, updates: dict[str, Any]) -> dict[str, Any]:
+        current = self.dedupe_settings()
+        current.update(updates)
+        self.set_meta("dedupe", json.dumps(current, ensure_ascii=False))
+        return current
+
+    def save_dedupe_schedule(self, *, enabled: bool, hour: int) -> dict[str, Any]:
+        return self.patch_dedupe_meta({"enabled": bool(enabled), "hour": max(0, min(23, int(hour)))})
+
+    def duplicate_row_counts(self) -> dict[str, int]:
+        with self.connect() as conn:
+            listings = int(conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0])
+            catalog = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
+            listing_dup = conn.execute(
+                """
+                SELECT COUNT(*) AS groups, COALESCE(SUM(n - 1), 0) AS extra
+                FROM (
+                    SELECT COUNT(*) AS n
+                    FROM listings
+                    WHERE canonical_key IS NOT NULL AND canonical_key != ''
+                    GROUP BY monitor_id, canonical_key
+                    HAVING n > 1
+                )
+                """
+            ).fetchone()
+            catalog_dup = conn.execute(
+                """
+                SELECT COUNT(*) AS groups, COALESCE(SUM(n - 1), 0) AS extra
+                FROM (
+                    SELECT COUNT(*) AS n
+                    FROM catalog_listings
+                    WHERE canonical_key IS NOT NULL AND canonical_key != ''
+                    GROUP BY canonical_key
+                    HAVING n > 1
+                )
+                """
+            ).fetchone()
+        return {
+            "listings": listings,
+            "catalog": catalog,
+            "listing_dup_groups": int(listing_dup["groups"] or 0),
+            "listing_dup_extra": int(listing_dup["extra"] or 0),
+            "catalog_dup_groups": int(catalog_dup["groups"] or 0),
+            "catalog_dup_extra": int(catalog_dup["extra"] or 0),
+        }
+
+    def preview_duplicate_listings(self, *, sample_limit: int = 12) -> dict[str, Any]:
+        listing_rows, catalog_rows = self._load_identity_rows()
+        listing_assigned = {
+            int(row["rid"]): str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in listing_rows
+        }
+        listing_assigned = self._merge_nearby_assigned(listing_rows, listing_assigned, "rid")
+        catalog_assigned = {
+            row["listing_key"]: str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in catalog_rows
+        }
+        catalog_assigned = self._merge_nearby_assigned(catalog_rows, catalog_assigned, "listing_key")
+        listing_relink = sum(
+            1
+            for row in listing_rows
+            if listing_assigned[int(row["rid"])] != str(row.get("canonical_key") or "")
+        )
+        catalog_relink = sum(
+            1
+            for row in catalog_rows
+            if catalog_assigned[row["listing_key"]] != str(row.get("canonical_key") or "")
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in listing_rows:
+            new = listing_assigned[int(row["rid"])]
+            old = str(row.get("canonical_key") or "")
+            if new == old:
+                continue
+            grouped.setdefault(new, []).append(row)
+        samples = []
+        for key, members in sorted(grouped.items(), key=lambda item: -len(item[1]))[:sample_limit]:
+            first = members[0]
+            samples.append(
+                {
+                    "canonical": key,
+                    "n": len(members),
+                    "name": str(first.get("name") or first.get("locality") or first.get("url") or "")[:120],
+                    "disposition": str(first.get("disposition") or ""),
+                    "area_m2": first.get("area_m2"),
+                    "price_czk": first.get("price_czk"),
+                    "urls": [str(item.get("url") or "") for item in members[:4]],
+                }
+            )
+        stats = {
+            "listings": len(listing_rows),
+            "catalog": len(catalog_rows),
+            "listings_relinkable": listing_relink,
+            "catalog_relinkable": catalog_relink,
+            "sample_groups": len(grouped),
+        }
+        counts = self.duplicate_row_counts()
+        self.patch_dedupe_meta(
+            {
+                "status": "done",
+                "last_kind": "scan",
+                "last_scan": utc_now(),
+                "last_scan_stats": {**stats, **counts},
+                "samples": samples,
+                "error": "",
+            }
+        )
+        return {"stats": {**stats, **counts}, "samples": samples}
+
+    def _write_retry(self, fn) -> None:
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(8):
+            conn = self.connect()
+            conn.execute("PRAGMA busy_timeout=8000")
+            try:
+                with conn:
+                    fn(conn)
+                return
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if "locked" not in str(exc).lower() or attempt == 7:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
+            finally:
+                conn.close()
+        if last_error:
+            raise last_error
+
+    def _commit_listing_canonicals(self, rows: list[dict[str, Any]], assigned: dict[Any, str]) -> int:
+        changes: list[tuple[dict[str, Any], str, str]] = []
+        remaps: dict[str, str] = {}
         for row in rows:
-            assigned[int(row["rid"])] = url_canonical(str(row.get("url") or ""))
+            rid = int(row["rid"])
+            new = assigned[rid]
+            old = str(row.get("canonical_key") or "")
+            if new != old:
+                changes.append((row, old, new))
+                if old:
+                    remaps[old] = new
+        batch = 40
+        for index in range(0, len(changes), batch):
+            chunk = changes[index : index + batch]
+
+            def apply(conn: sqlite3.Connection, chunk=chunk) -> None:
+                for row, _old, new in chunk:
+                    conn.execute("UPDATE listings SET canonical_key = ? WHERE rowid = ?", (new, int(row["rid"])))
+                    self._upsert_listing_link(conn, row, new, gone=bool(row.get("gone")))
+
+            self._write_retry(apply)
+            if index and index % 400 == 0:
+                print(f"  inzeráty {min(index + batch, len(changes))}/{len(changes)}", flush=True)
+            time.sleep(0.01)
+        remap_items = list(remaps.items())
+        for index in range(0, len(remap_items), batch):
+            chunk = remap_items[index : index + batch]
+
+            def apply(conn: sqlite3.Connection, chunk=chunk) -> None:
+                for old, new in chunk:
+                    self._retarget_canonical(conn, old, new)
+
+            self._write_retry(apply)
+            time.sleep(0.01)
+        return len(changes)
+
+    def _commit_catalog_canonicals(self, rows: list[dict[str, Any]], assigned: dict[Any, str]) -> int:
+        changes: list[tuple[dict[str, Any], str, str]] = []
+        remaps: dict[str, str] = {}
+        for row in rows:
+            new = assigned[row["listing_key"]]
+            old = str(row.get("canonical_key") or "")
+            if new != old:
+                changes.append((row, old, new))
+                if old:
+                    remaps[old] = new
+        batch = 40
+        for index in range(0, len(changes), batch):
+            chunk = changes[index : index + batch]
+
+            def apply(conn: sqlite3.Connection, chunk=chunk) -> None:
+                for row, _old, new in chunk:
+                    conn.execute(
+                        "UPDATE catalog_listings SET canonical_key = ? WHERE listing_key = ?",
+                        (new, row["listing_key"]),
+                    )
+                    self._upsert_listing_link(conn, row, new, gone=bool(row.get("gone")))
+
+            self._write_retry(apply)
+            if index and index % 800 == 0:
+                print(f"  katalog {min(index + batch, len(changes))}/{len(changes)}", flush=True)
+            time.sleep(0.01)
+        remap_items = list(remaps.items())
+        for index in range(0, len(remap_items), batch):
+            chunk = remap_items[index : index + batch]
+
+            def apply(conn: sqlite3.Connection, chunk=chunk) -> None:
+                for old, new in chunk:
+                    self._retarget_canonical(conn, old, new)
+
+            self._write_retry(apply)
+            time.sleep(0.01)
+        return len(changes)
+
+    def _collapse_duplicates_chunked(self) -> tuple[int, int]:
+        listing_count = 0
+        catalog_count = 0
+
+        def collapse_listings(conn: sqlite3.Connection) -> None:
+            nonlocal listing_count
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_monitor_listing ON events(monitor_id, listing_id)")
+            conn.execute("DROP TABLE IF EXISTS listing_keep")
+            conn.execute("DROP TABLE IF EXISTS listing_map")
+            conn.execute(
+                """
+                CREATE TEMP TABLE listing_keep AS
+                SELECT monitor_id, canonical_key, MIN(rowid) AS keep_rid
+                FROM listings
+                WHERE canonical_key IS NOT NULL AND canonical_key != ''
+                GROUP BY monitor_id, canonical_key
+                HAVING COUNT(*) > 1
+                """
+            )
+            listing_count = conn.execute("SELECT COUNT(*) FROM listing_keep").fetchone()[0]
+            conn.execute(
+                """
+                CREATE TEMP TABLE listing_map AS
+                SELECT l.monitor_id AS monitor_id, l.id AS extra_id, k.id AS keep_id, l.rowid AS extra_rid
+                FROM listings l
+                JOIN listing_keep g ON g.monitor_id = l.monitor_id AND g.canonical_key = l.canonical_key
+                JOIN listings k ON k.rowid = g.keep_rid
+                WHERE l.rowid != g.keep_rid
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO listing_photos(monitor_id, listing_id, url, sort_order)
+                SELECT m.monitor_id, m.keep_id, p.url, p.sort_order
+                FROM listing_photos p
+                JOIN listing_map m ON m.monitor_id = p.monitor_id AND m.extra_id = p.listing_id
+                WHERE m.extra_id != m.keep_id
+                """
+            )
+            conn.execute(
+                """
+                DELETE FROM listing_photos
+                WHERE EXISTS (
+                    SELECT 1 FROM listing_map m
+                    WHERE m.monitor_id = listing_photos.monitor_id
+                      AND m.extra_id = listing_photos.listing_id
+                      AND m.extra_id != m.keep_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE price_history
+                SET listing_id = (
+                    SELECT keep_id FROM listing_map m
+                    WHERE m.monitor_id = price_history.monitor_id AND m.extra_id = price_history.listing_id
+                    LIMIT 1
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM listing_map m
+                    WHERE m.monitor_id = price_history.monitor_id AND m.extra_id = price_history.listing_id
+                      AND m.extra_id != m.keep_id
+                )
+                """
+            )
+            conn.execute(
+                """
+                UPDATE events
+                SET listing_id = (
+                    SELECT keep_id FROM listing_map m
+                    WHERE m.monitor_id = events.monitor_id AND m.extra_id = events.listing_id
+                    LIMIT 1
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM listing_map m
+                    WHERE m.monitor_id = events.monitor_id AND m.extra_id = events.listing_id
+                      AND m.extra_id != m.keep_id
+                )
+                """
+            )
+            conn.execute("DELETE FROM listings WHERE rowid IN (SELECT extra_rid FROM listing_map WHERE extra_id = keep_id)")
+            conn.execute(
+                """
+                DELETE FROM listings
+                WHERE EXISTS (
+                    SELECT 1 FROM listing_map m
+                    WHERE m.monitor_id = listings.monitor_id AND m.extra_id = listings.id AND m.extra_id != m.keep_id
+                )
+                """
+            )
+
+        def collapse_catalog(conn: sqlite3.Connection) -> None:
+            nonlocal catalog_count
+            conn.execute("DROP TABLE IF EXISTS catalog_extra")
+            conn.execute(
+                """
+                CREATE TEMP TABLE catalog_extra AS
+                SELECT listing_key, canonical_key
+                FROM (
+                    SELECT listing_key, canonical_key,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY canonical_key
+                               ORDER BY first_seen ASC, listing_key ASC
+                           ) AS rn
+                    FROM catalog_listings
+                    WHERE canonical_key IS NOT NULL AND canonical_key != ''
+                )
+                WHERE rn > 1
+                """
+            )
+            catalog_count = conn.execute(
+                "SELECT COUNT(DISTINCT canonical_key) FROM catalog_extra"
+            ).fetchone()[0]
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO monitor_hits(monitor_id, listing_key, first_matched)
+                SELECT h.monitor_id, e.canonical_key, h.first_matched
+                FROM monitor_hits h
+                JOIN catalog_extra e ON e.listing_key = h.listing_key
+                """
+            )
+            conn.execute(
+                """
+                DELETE FROM monitor_hits
+                WHERE listing_key IN (SELECT listing_key FROM catalog_extra)
+                """
+            )
+            conn.execute(
+                """
+                DELETE FROM catalog_listings
+                WHERE listing_key IN (SELECT listing_key FROM catalog_extra)
+                """
+            )
+
+        print("  collapse listings…", flush=True)
+        self._write_retry(collapse_listings)
+        print(f"  listing groups: {listing_count}", flush=True)
+        print("  collapse catalog…", flush=True)
+        self._write_retry(collapse_catalog)
+        print(f"  catalog groups: {catalog_count}", flush=True)
+        return listing_count, catalog_count
+
+    def _relink_nearby_identities(self, conn: sqlite3.Connection) -> None:
+        rows = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT rowid AS rid, url, lat, lon, disposition, area_m2, price_czk, price_label,
+                       extras, canonical_key, gone, id, last_seen
+                FROM listings
+                """
+            )
+        ]
+        if not rows:
+            return
+        assigned = {
+            int(row["rid"]): str(row.get("canonical_key") or url_canonical(str(row.get("url") or "")))
+            for row in rows
+        }
         assigned = self._merge_nearby_assigned(rows, assigned, "rid")
         seen_old: dict[str, str] = {}
         for row in rows:
             rid = int(row["rid"])
             new = assigned[rid]
-            old = url_canonical(str(row.get("url") or ""))
+            old = str(row.get("canonical_key") or "")
+            if new == old:
+                continue
             conn.execute("UPDATE listings SET canonical_key = ? WHERE rowid = ?", (new, rid))
             self._upsert_listing_link(conn, row, new, gone=bool(row.get("gone")))
-            if old != new:
+            if old:
                 seen_old[old] = new
         for old, new in seen_old.items():
-            conn.execute("UPDATE listing_links SET canonical_key = ? WHERE canonical_key = ?", (new, old))
-            try:
-                conn.execute("UPDATE catalog_listings SET canonical_key = ? WHERE canonical_key = ?", (new, old))
-            except sqlite3.OperationalError:
-                pass
+            self._retarget_canonical(conn, old, new)
         self._collapse_duplicate_listings(conn)
-        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('listing_identity_v4', '1')")
-        self._backfill_catalog_canonical(conn)
+        self._collapse_duplicate_catalog(conn)
 
     def _merge_nearby_assigned(self, rows: list[dict[str, Any]], assigned: dict[Any, str], id_field: str) -> dict[Any, str]:
+        remap: dict[str, str] = {}
+
+        def resolve(value: str) -> str:
+            seen: set[str] = set()
+            while value in remap and value not in seen:
+                seen.add(value)
+                value = remap[value]
+            return value
+
+        def prefer(left: str, right: str) -> tuple[str, str]:
+            if left.startswith("g:") or not right.startswith("g:"):
+                return left, right
+            return right, left
+
+        by_fp: dict[str, list[Any]] = {}
+        for row in rows:
+            token = fingerprint(row)
+            if token:
+                by_fp.setdefault(token, []).append(row[id_field])
+        for members in by_fp.values():
+            if len(members) < 2:
+                continue
+            keep = resolve(assigned[members[0]])
+            for other_id in members[1:]:
+                target = resolve(assigned[other_id])
+                if target == keep:
+                    continue
+                keep, drop = prefer(keep, target)
+                remap[drop] = keep
+
         cells: dict[tuple[float, float], list[Any]] = {}
         by_id: dict[Any, dict[str, Any]] = {}
         for row in rows:
@@ -834,15 +1425,8 @@ class Store:
             except (TypeError, ValueError, KeyError):
                 continue
             cells.setdefault((round(lat, 3), round(lon, 3)), []).append(key)
-        remap: dict[str, str] = {}
 
-        def resolve(value: str) -> str:
-            seen: set[str] = set()
-            while value in remap and value not in seen:
-                seen.add(value)
-                value = remap[value]
-            return value
-
+        checked = 0
         for row in rows:
             try:
                 lat, lon = float(row["lat"]), float(row["lon"])
@@ -855,6 +1439,9 @@ class Store:
                 for dx in (-0.001, 0.0, 0.001):
                     nearby_ids.extend(cells.get((round(gy + dy, 3), round(gx + dx, 3)), []))
             for other_id in nearby_ids:
+                checked += 1
+                if checked % 5000 == 0:
+                    time.sleep(0.001)
                 if other_id == row[id_field]:
                     continue
                 other = by_id[other_id]
@@ -863,14 +1450,14 @@ class Store:
                 target = resolve(assigned[other_id])
                 if target == current:
                     continue
-                keep, drop = (current, target) if current.startswith("g:") or not target.startswith("g:") else (target, current)
+                keep, drop = prefer(current, target)
                 remap[drop] = keep
                 current = keep
         for key, value in list(assigned.items()):
             assigned[key] = resolve(value)
         return assigned
 
-    def _backfill_catalog_canonical(self, conn: sqlite3.Connection) -> None:
+    def _backfill_catalog_canonical(self, conn: sqlite3.Connection, *, merge: bool = False) -> None:
         try:
             missing = conn.execute(
                 "SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras, gone, id, last_seen FROM catalog_listings WHERE IFNULL(canonical_key, '') = ''"
@@ -891,6 +1478,8 @@ class Store:
                 (canon, item["listing_key"]),
             )
             self._upsert_listing_link(conn, item, canon, gone=bool(item.get("gone")))
+        if not merge:
+            return
         catalog_rows = [
             dict(row)
             for row in conn.execute(
@@ -1375,7 +1964,7 @@ class Store:
             )
 
     def get_meta(self, key: str) -> str | None:
-        with self.connect() as conn:
+        with self.connect(readonly=True) as conn:
             row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
             return row["value"] if row else None
 
@@ -1472,18 +2061,29 @@ class Store:
         auth = str(keys.get("auth") or "").strip()
         if not endpoint or not p256dh or not auth:
             raise ValueError("Neplatná push subscription")
-        with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO push_subscriptions(endpoint, p256dh, auth, user_agent, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(endpoint) DO UPDATE SET
-                    p256dh = excluded.p256dh,
-                    auth = excluded.auth,
-                    user_agent = excluded.user_agent
-                """,
-                (endpoint, p256dh, auth, (user_agent or "")[:240], utc_now()),
-            )
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(6):
+            try:
+                with self.connect() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO push_subscriptions(endpoint, p256dh, auth, user_agent, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(endpoint) DO UPDATE SET
+                            p256dh = excluded.p256dh,
+                            auth = excluded.auth,
+                            user_agent = excluded.user_agent
+                        """,
+                        (endpoint, p256dh, auth, (user_agent or "")[:240], utc_now()),
+                    )
+                return
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if "locked" not in str(exc).lower() or attempt == 5:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
+        if last_error:
+            raise last_error
 
     def delete_push_subscription(self, endpoint: str) -> None:
         endpoint = (endpoint or "").strip()
@@ -1655,7 +2255,7 @@ class Store:
         token = (token or "").strip()
         if not token:
             return False
-        with self.connect() as conn:
+        with self.connect(readonly=True) as conn:
             row = conn.execute("SELECT 1 FROM guest_searches WHERE token = ? LIMIT 1", (token,)).fetchone()
         return bool(row)
 
@@ -1728,7 +2328,7 @@ class Store:
             blob = f"{item.get('portal') or ''} {item.get('url') or ''}".casefold()
             return needle in blob
 
-        for needle in ("bezrealitky", "sreality", "idnes"):
+        for needle in ("bezrealitky", "sreality", "idnes", "bazos"):
             hit = next((item for item in items if matches_portal(item, needle)), None)
             if hit:
                 take(hit)
@@ -1781,11 +2381,14 @@ class Store:
             ).fetchone()
         return dict(row) if row else None
 
-    def upsert_catalog_listing(self, listing: Listing, *, kind: str = "refresh") -> dict[str, Any]:
+    def upsert_catalog_listing(
+        self, listing: Listing, *, kind: str = "refresh", conn: sqlite3.Connection | None = None
+    ) -> dict[str, Any]:
         key = listing_key(listing.url)
         now = utc_now()
         portal = portal_from_url(listing.url)
-        with self.connect() as conn:
+        cm = self.connect() if conn is None else nullcontext(conn)
+        with cm as conn:
             canon = self._resolve_canonical(conn, listing)
             prev_row = conn.execute(
                 "SELECT * FROM catalog_listings WHERE canonical_key = ? OR listing_key = ? LIMIT 1",
@@ -1884,8 +2487,19 @@ class Store:
                     """,
                     (key, *values),
                 )
-        self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind)
+            self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind, conn=conn)
         return {"listing_key": canon, "url_key": key, "canonical_key": canon, "new": prev is None, "changed": changed, "prev": prev}
+
+    def upsert_catalog_listings_batch(self, listings: list[Listing], *, kind: str = "seeded") -> int:
+        if not listings:
+            return 0
+        with self.connect() as conn:
+            conn.execute("PRAGMA busy_timeout=8000")
+            for index, listing in enumerate(listings, start=1):
+                self.upsert_catalog_listing(listing, kind=kind, conn=conn)
+                if index % 12 == 0:
+                    conn.commit()
+        return len(listings)
 
     def add_monitor_hit(self, monitor_id: str, listing_key_value: str) -> None:
         if not listing_key_value:
@@ -2193,7 +2807,14 @@ class Store:
             "upserts": sum(int(item.get("upserts") or 0) for item in jobs),
         }
 
-    def upsert_seen(self, monitor_id: str, listing: Listing, notified: bool, kind: str | None = None) -> None:
+    def upsert_seen(
+        self,
+        monitor_id: str,
+        listing: Listing,
+        notified: bool,
+        kind: str | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         now = utc_now()
         if kind:
             event_kind = kind
@@ -2203,8 +2824,14 @@ class Store:
             event_kind = "seeded"
         change_text = "; ".join(f"{label}: {before} → {after}" for label, before, after in listing.changes)
         detail = change_text or listing.name
-        with self.connect() as conn:
+        cm = self.connect() if conn is None else nullcontext(conn)
+        with cm as conn:
             canon = self._resolve_canonical(conn, listing)
+            url_key = listing_key(listing.url)
+            conn.execute(
+                "UPDATE listings SET canonical_key = ? WHERE url = ? OR listing_key = ?",
+                (canon, listing.url, url_key),
+            )
             existing = conn.execute(
                 "SELECT id, url FROM listings WHERE monitor_id = ? AND canonical_key = ?",
                 (monitor_id, canon),
@@ -2274,12 +2901,13 @@ class Store:
                     now,
                 ),
             )
-            conn.execute(
-                "INSERT INTO events(listing_id, monitor_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
-                (listing_id, monitor_id, event_kind, now, detail),
-            )
-            self._record_price(conn, monitor_id, stored, now)
-            self._save_photos(conn, monitor_id, stored)
+            if event_kind != "seeded":
+                conn.execute(
+                    "INSERT INTO events(listing_id, monitor_id, kind, created_at, detail) VALUES (?, ?, ?, ?, ?)",
+                    (listing_id, monitor_id, event_kind, now, detail),
+                )
+                self._record_price(conn, monitor_id, stored, now)
+                self._save_photos(conn, monitor_id, stored)
 
     def snapshot_scrape_price(self, monitor_id: str, listing: Listing) -> None:
         now = utc_now()
@@ -2522,6 +3150,7 @@ class Store:
             );
             CREATE INDEX IF NOT EXISTS idx_events_kind_created ON events(kind, created_at);
             CREATE INDEX IF NOT EXISTS idx_events_monitor_kind ON events(monitor_id, kind, created_at);
+            CREATE INDEX IF NOT EXISTS idx_events_monitor_listing ON events(monitor_id, listing_id);
             CREATE INDEX IF NOT EXISTS idx_monitor_hits_monitor ON monitor_hits(monitor_id);
             CREATE TABLE IF NOT EXISTS listing_links (
                 url TEXT PRIMARY KEY,
@@ -2796,7 +3425,10 @@ class Store:
             if not point:
                 continue
             if persist:
-                self._persist_locality_coords(loc, point)
+                try:
+                    self._persist_locality_coords(loc, point)
+                except sqlite3.OperationalError:
+                    pass
             for row in group:
                 row["lat"], row["lon"] = point
                 row["_geo_approx"] = True
@@ -2805,7 +3437,7 @@ class Store:
         where = ["1=1"]
         params: list[Any] = []
         portal = (filters.get("portal") or "").strip()
-        if portal in {"sreality", "bezrealitky", "idnes"}:
+        if portal in {"sreality", "bezrealitky", "idnes", "bazos"}:
             where.append(
                 f"""
                 (
@@ -2820,7 +3452,7 @@ class Store:
                 """
             )
             params.append(portal)
-            params.append(f"%{portal}.cz%" if portal != "idnes" else "%idnes.cz%")
+            params.append({"idnes": "%idnes.cz%", "bazos": "%bazos.cz%"}.get(portal, f"%{portal}.cz%"))
         monitor_id = (filters.get("monitor_id") or "").strip()
         if monitor_id:
             where.append(_monitor_hit_sql())
@@ -3142,7 +3774,7 @@ class Store:
                 ORDER BY {order}
                 LIMIT 8000
             """
-            with self.connect() as conn:
+            with self.connect(readonly=True) as conn:
                 fetched = [dict(row) for row in conn.execute(light_sql, params).fetchall()]
             seen_keys: set[str] = set()
             matched: list[dict[str, Any]] = []
@@ -3167,7 +3799,7 @@ class Store:
                     LEFT JOIN monitors ON monitors.id = listings.monitor_id
                     WHERE {holders}
                 """
-                with self.connect() as conn:
+                with self.connect(readonly=True) as conn:
                     by_id = {
                         (row["monitor_id"], row["id"]): dict(row)
                         for row in conn.execute(full_sql, flat)
@@ -3183,19 +3815,13 @@ class Store:
                 ORDER BY {order}
                 LIMIT ?
             """
-            if float(filters.get("_bbox_span") or 0) >= 1.5:
-                with self.connect() as conn:
+            if filters.get("_bbox") is not None:
+                with self.connect(readonly=True) as conn:
+                    total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0])
                     fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
-                total = 0
             else:
-                count_sql = f"""
-                    SELECT COUNT(*) FROM (
-                        SELECT 1 FROM listings
-                        WHERE {clause}
-                        GROUP BY {identity}
-                    )
-                """
-                with self.connect() as conn:
+                count_sql = f"SELECT COUNT(*) FROM listings WHERE {clause}"
+                with self.connect(readonly=True) as conn:
                     total = int(conn.execute(count_sql, params).fetchone()[0])
                     fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
             seen_keys = set()
@@ -3212,7 +3838,7 @@ class Store:
         if keys:
             holders = " OR ".join("(monitor_id = ? AND listing_id = ?)" for _ in keys)
             flat = [item for pair in keys for item in pair]
-            with self.connect() as conn:
+            with self.connect(readonly=True) as conn:
                 for photo in conn.execute(
                     f"SELECT monitor_id, listing_id, url FROM listing_photos WHERE {holders} ORDER BY sort_order",
                     flat,
@@ -3227,17 +3853,24 @@ class Store:
         self._attach_catalog_extras(items, twins=False)
         facets = self.catalog_facets()
         payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
+        include_pins = str(filters.get("include_pins") or "1").strip().lower() not in {"0", "false", "no"}
         if place_geoms:
             payload["places"] = places.public_geoms(place_geoms)
-            payload["pins"] = [
-                pin for row in matched if (pin := _pin_with_place(row, place_geoms, approx=bool(row.get("_geo_approx"))))
-            ]
-        else:
+            payload["pins"] = (
+                [
+                    pin
+                    for row in matched
+                    if (pin := _pin_with_place(row, place_geoms, approx=bool(row.get("_geo_approx"))))
+                ]
+                if include_pins
+                else []
+            )
+        elif include_pins:
             payload["pins"] = self._catalog_pins(where, params, None, filters)["items"]
-            if float(filters.get("_bbox_span") or 0) >= 1.5:
-                pin_sum = sum(int(item.get("count") or 1) for item in payload["pins"])
-                if pin_sum:
-                    payload["total"] = pin_sum
+        else:
+            payload["pins"] = []
+        if not payload["total"]:
+            payload["total"] = offset + len(items) + (limit if len(items) >= limit else 0)
         return payload
 
     def _catalog_pins(
@@ -3278,13 +3911,17 @@ class Store:
                 filters["_pin_leftover"] = leftover
                 filters["_pin_leftover_sample"] = leftover_sample
         if not cache_hit:
-            with self.connect() as conn:
+            with self.connect(readonly=True) as conn:
                 if anchors and not place_geoms and wide:
                     agg_sql = f"""
                     SELECT listings.locality AS locality, COUNT(*) AS n,
                            AVG(listings.lat) AS lat, AVG(listings.lon) AS lon
-                    FROM listings
-                    WHERE {clause}
+                    FROM (
+                        SELECT listings.locality, listings.lat, listings.lon
+                        FROM listings
+                        WHERE {clause}
+                        GROUP BY {listing_identity_sql()}
+                    ) listings
                     GROUP BY listings.locality
                     """
                     cities: dict[str, dict[str, Any]] = {}
@@ -3317,7 +3954,7 @@ class Store:
                     for row in conn.execute(agg_sql, params).fetchall():
                         loc = str(row["locality"] or "")
                         n = int(row["n"] or 0)
-                        match = places.locality_anchor_match(loc, collapse_prague=True)
+                        match = places.locality_anchor_match(loc, collapse_prague=False)
                         lat = row["lat"]
                         lon = row["lon"]
                         if match:
@@ -3337,20 +3974,42 @@ class Store:
                     if cache_key is not None:
                         self._city_pin_cache[cache_key] = (time.monotonic(), list(fetched), leftover, leftover_sample)
                 elif anchors and not place_geoms:
-                    gps_sql = f"""
-                    {select}
-                    WHERE {clause}
-                      AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                    ORDER BY listings.notified DESC, listings.rowid ASC
-                    LIMIT 400
-                    """
-                    fetched.extend(dict(row) for row in conn.execute(gps_sql, params).fetchall())
+                    # Piny jen se souřadnicemi ve viewportu — dřívější LIMIT 400
+                    # z celého locality-match setu podvzorkoval čtvrti (11→22 při zoomu).
+                    pin_cap = max(int(pin_limit), 8000)
+                    if isinstance(bbox, tuple) and len(bbox) == 4:
+                        b_south, b_north, b_west, b_east = bbox
+                        gps_sql = f"""
+                        {select}
+                        WHERE {clause}
+                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+                          AND listings.lat BETWEEN ? AND ?
+                          AND listings.lon BETWEEN ? AND ?
+                        ORDER BY listings.notified DESC, listings.rowid ASC
+                        LIMIT {pin_cap}
+                        """
+                        gps_rows = [
+                            dict(row)
+                            for row in conn.execute(
+                                gps_sql, (*params, b_south, b_north, b_west, b_east)
+                            ).fetchall()
+                        ]
+                    else:
+                        gps_sql = f"""
+                        {select}
+                        WHERE {clause}
+                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+                        ORDER BY listings.notified DESC, listings.rowid ASC
+                        LIMIT {pin_cap}
+                        """
+                        gps_rows = [dict(row) for row in conn.execute(gps_sql, params).fetchall()]
+                    fetched.extend(gps_rows)
                     null_sql = f"""
                     {select}
                     WHERE {clause}
                       AND (listings.lat IS NULL OR listings.lon IS NULL)
                     ORDER BY listings.first_seen DESC
-                    LIMIT 4000
+                    LIMIT 2000
                     """
                     buckets: dict[str, list[dict[str, Any]]] = {}
                     for row in conn.execute(null_sql, params).fetchall():
@@ -3359,6 +4018,10 @@ class Store:
                         point = places.approx_point_from_locality(loc)
                         if not point:
                             continue
+                        if isinstance(bbox, tuple) and len(bbox) == 4:
+                            b_south, b_north, b_west, b_east = bbox
+                            if not (b_south <= point[0] <= b_north and b_west <= point[1] <= b_east):
+                                continue
                         seed = abs(int(item.get("id") or 0))
                         item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
                         item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
@@ -3399,7 +4062,7 @@ class Store:
         now = time.monotonic()
         if self._facets_cache is not None and now - self._facets_at < 30:
             return self._facets_cache
-        with self.connect() as conn:
+        with self.connect(readonly=True) as conn:
             dispositions = [
                 row[0]
                 for row in conn.execute(
@@ -3423,6 +4086,8 @@ class Store:
                     portals.append("bezrealitky")
                 if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%idnes.cz%' LIMIT 1").fetchone():
                     portals.append("idnes")
+                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bazos.cz%' LIMIT 1").fetchone():
+                    portals.append("bazos")
         payload = {"dispositions": dispositions, "portals": portals, "monitors": monitors}
         self._facets_cache = payload
         self._facets_at = now
@@ -3942,7 +4607,7 @@ class Store:
             return
         canons = [listing_identity(item) for item in items]
         urls = [item.get("url") for item in items if item.get("url")]
-        with self.connect() as conn:
+        with self.connect(readonly=True) as conn:
             links_map = self._links_for(conn, canons)
             extra_urls = [
                 str(link.get("url") or "")
@@ -4130,7 +4795,7 @@ class Store:
         data["seeded"] = bool(data["seeded"])
         data["interval_sec"] = data.get("interval_sec")
         data["portals"] = (data.get("portals") or "all") or "all"
-        if data["portals"] not in {"all", "sreality", "bezrealitky", "idnes"}:
+        if data["portals"] not in {"all", "sreality", "bezrealitky", "idnes", "bazos"}:
             data["portals"] = "all"
         data["tracked"] = self.count(data["id"]) if tracked is None else int(tracked)
         data["new_today"] = self.new_today_count(data["id"]) if new_today is None else int(new_today)

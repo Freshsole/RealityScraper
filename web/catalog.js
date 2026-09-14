@@ -4,17 +4,13 @@
   if (!listEl) return;
 
   const LIMIT = 36;
-  const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
   const STREET_ZOOM = 16;
+  const STACK_PX = 28; // piny blíž než tolik px = jedno místo (centroid Bazoš)
+
 
   function addBaseTiles(map) {
-    if (!map) return;
-    L.tileLayer(TILE_URL, { maxZoom: 19 }).addTo(map);
-    if (typeof ResizeObserver === "function") {
-      const ro = new ResizeObserver(() => map.invalidateSize({ animate: false }));
-      ro.observe(map.getContainer());
-    }
-    requestAnimationFrame(() => map.invalidateSize({ animate: false }));
+    if (window.RFMapBasemap) window.RFMapBasemap.addTo(map);
+    else L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", { maxZoom: 20, subdomains: "abcd" }).addTo(map);
   }
 
   let catalogMap = null;
@@ -32,7 +28,6 @@
   let placeSuggestFocus = -1;
   let placeSearchAbort = null;
   let placeSearchSeq = 0;
-  let catalogAbort = null;
   let catalogSeq = 0;
   let radiusTimer = null;
   let mapReloadTimer = 0;
@@ -114,8 +109,12 @@
   }
 
   function portalIcon(portal) {
-    const key = String(portal || "").toLowerCase();
+    const key = String(portal || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
     if (key.includes("idnes")) return "/static/icons/idnes.svg";
+    if (key.includes("bazos")) return "/static/icons/bazos.svg";
     if (key.includes("bezrealitky")) return "/static/icons/bezrealitky.svg";
     return "/static/icons/sreality.svg";
   }
@@ -123,12 +122,13 @@
   function portalIcons(item) {
     const seen = new Set();
     const icons = [];
-    for (const link of listingLinks(item)) {
+    const links = listingLinks(item);
+    for (const link of links) {
       const key = String(link.portal || link.label || "").toLowerCase() || link.url;
       if (seen.has(key)) continue;
       seen.add(key);
       const label = link.label || link.portal || item.portal || "Web";
-      icons.push(`<img class="offer-portal" src="${portalIcon(label)}" alt="${escapeHtml(label)}" />`);
+      icons.push(`<img class="offer-portal" src="${portalIcon(link.portal || label)}" alt="${escapeHtml(label)}" />`);
     }
     if (!icons.length) icons.push(`<img class="offer-portal" src="${portalIcon(item.portal)}" alt="${escapeHtml(item.portal || "")}" />`);
     return `<div class="offer-portals">${icons.join("")}</div>`;
@@ -241,19 +241,36 @@
     };
   }
 
-  function writeUrlState() {
-    if (location.pathname.replace(/\/$/, "") !== "/nabidka") return;
+  const FILTER_STATE_KEY = "nabidka-state";
+  let restoredFilterState = false;
+
+  function filterStateParams() {
     const params = new URLSearchParams();
-    const skipUrl = new Set(["south", "north", "west", "east"]);
+    const skipUrl = new Set(["south", "north", "west", "east", "include_pins"]);
     for (const [key, value] of Object.entries(filters())) {
       if (value && !skipUrl.has(key)) params.set(key, String(value));
     }
+    return params;
+  }
+
+  function persistFilterState(params) {
+    try {
+      localStorage.setItem(FILTER_STATE_KEY, params.toString());
+    } catch {
+      /* ignore quota */
+    }
+  }
+
+  function writeUrlState() {
+    if (location.pathname.replace(/\/$/, "") !== "/nabidka") return;
+    const params = filterStateParams();
+    persistFilterState(params);
     const query = params.toString();
     history.replaceState(null, "", query ? `/nabidka?${query}` : "/nabidka");
   }
 
-  function readUrlState() {
-    const params = new URLSearchParams(location.search);
+  function readUrlState(params) {
+    if (!(params instanceof URLSearchParams)) params = new URLSearchParams(location.search);
     selected.portal = params.get("portal") || "";
     selected.status = params.get("status") || "";
     selected.discounted = params.get("discounted") === "1";
@@ -542,10 +559,11 @@
   }
 
   function extraFilterCount() {
+    const offerCount = selected.offers.size === 1 && selected.offers.has("pronajem") ? 0 : selected.offers.size;
     return (
       selected.dispositions.size +
       selected.amenities.size +
-      selected.offers.size === 1 && selected.offers.has("pronajem") ? 0 : selected.offers.size +
+      offerCount +
       selected.estates.size +
       selected.districts.size +
       selected.ownership.size +
@@ -631,6 +649,24 @@
     document.querySelector('[data-filter="offer"] [data-value="pronajem"]')?.classList.add("on");
     if ($("cat-monitor")) $("cat-monitor").value = "";
     if ($("cat-sort")) $("cat-sort").value = "newest";
+    ["cat-price-from", "cat-price-to", "cat-area-from", "cat-area-to"].forEach((id) => {
+      if ($(id)) $(id).value = "";
+    });
+    selectedPlaces = [];
+    selected.districts = new Set();
+    selected.dispositions = new Set();
+    selected.amenities = new Set();
+    selected.estates = new Set();
+    selected.ownership = new Set();
+    selected.conditions = new Set();
+    selected.buildings = new Set();
+    selected.equipped = new Set();
+    selected.roommate = "";
+    selected.pets = "";
+    selected.short_term = "";
+    selected.monitor = "";
+    renderPlaceChips();
+    readFilterUi();
   }
 
   function openFilters() {
@@ -1018,7 +1054,7 @@
     }
     window.setTimeout(() => {
       ignoreMapMove = Math.max(0, ignoreMapMove - 1);
-    }, 400);
+    }, 1600);
   }
 
   function drawPlaceLayer(fit) {
@@ -1141,32 +1177,74 @@
     const cell = clusterCell(zoom);
     const raw = [];
     if (!cell) {
+      // I na street zoomu nejdřív slouč stejné/centroid souřadnice — ať nevznikne vějíř cenovek.
       for (const item of items) {
         raw.push({ items: [item], lat: item.lat, lon: item.lon, count: pinWeight(item) });
       }
-    } else {
-      const groups = new Map();
-      for (const item of items) {
-        const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
-        const group = groups.get(key) || { items: [], lat: 0, lon: 0, count: 0 };
-        const weight = pinWeight(item);
-        group.items.push(item);
-        group.lat += item.lat * weight;
-        group.lon += item.lon * weight;
-        group.count += weight;
-        groups.set(key, group);
-      }
-      for (const group of groups.values()) {
-        raw.push({
-          items: group.items,
-          lat: group.lat / group.count,
-          lon: group.lon / group.count,
-          count: group.count,
-        });
-      }
+      return collapseCoincidentPins(raw);
     }
-    if (zoom >= STREET_ZOOM) return spreadStackedPins(raw);
+    const groups = new Map();
+    for (const item of items) {
+      const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
+      const group = groups.get(key) || { items: [], lat: 0, lon: 0, count: 0 };
+      const weight = pinWeight(item);
+      group.items.push(item);
+      group.lat += item.lat * weight;
+      group.lon += item.lon * weight;
+      group.count += weight;
+      groups.set(key, group);
+    }
+    for (const group of groups.values()) {
+      raw.push({
+        items: group.items,
+        lat: group.lat / group.count,
+        lon: group.lon / group.count,
+        count: group.count,
+      });
+    }
+    if (raw.some((group) => group.count > 40)) return raw;
     return mergeNearbyPinGroups(raw);
+  }
+
+  function collapseCoincidentPins(groups) {
+    if (!catalogMap || groups.length < 2) return groups;
+    const buckets = [];
+    for (const group of groups) {
+      const point = catalogMap.latLngToLayerPoint([group.lat, group.lon]);
+      const hit = buckets.find((bucket) => point.distanceTo(bucket.point) < STACK_PX);
+      if (hit) {
+        hit.items.push(...group.items);
+        hit.count += group.count || group.items.length;
+        continue;
+      }
+      buckets.push({
+        point,
+        items: group.items.slice(),
+        lat: group.lat,
+        lon: group.lon,
+        count: group.count || group.items.length,
+      });
+    }
+    return buckets.map((bucket) => ({
+      items: bucket.items,
+      lat: bucket.lat,
+      lon: bucket.lon,
+      count: bucket.count,
+      coincident: bucket.items.length > 1,
+    }));
+  }
+
+  function groupNeedsApproxTip(group) {
+    const items = group?.items || [];
+    if (!items.length) return false;
+    if (group.coincident) return true;
+    if (items.some((item) => item.approx)) return true;
+    if (items.length < 2) return Boolean(items[0]?.approx);
+    const lat0 = Number(items[0].lat);
+    const lon0 = Number(items[0].lon);
+    return items.every(
+      (item) => Math.abs(Number(item.lat) - lat0) < 0.0003 && Math.abs(Number(item.lon) - lon0) < 0.0003,
+    );
   }
 
   function offsetAround(lat, lon, index, count, px = 36) {
@@ -1177,33 +1255,6 @@
       L.point(origin.x + px * Math.cos(angle), origin.y + px * Math.sin(angle)),
     );
     return [shifted.lat, shifted.lng];
-  }
-
-  function spreadStackedPins(groups) {
-    if (!catalogMap || groups.length < 2) return groups;
-    const buckets = [];
-    for (const group of groups) {
-      const point = catalogMap.latLngToLayerPoint([group.lat, group.lon]);
-      const hit = buckets.find((bucket) => point.distanceTo(bucket.point) < 22);
-      if (hit) {
-        hit.items.push(...group.items);
-        continue;
-      }
-      buckets.push({ point, items: group.items.slice(), lat: group.lat, lon: group.lon });
-    }
-    const out = [];
-    for (const bucket of buckets) {
-      if (bucket.items.length === 1) {
-        const item = bucket.items[0];
-        out.push({ items: [item], lat: item.lat, lon: item.lon, count: 1 });
-        continue;
-      }
-      bucket.items.forEach((item, index) => {
-        const [lat, lon] = offsetAround(bucket.lat, bucket.lon, index, bucket.items.length, 28);
-        out.push({ items: [item], lat, lon, count: 1 });
-      });
-    }
-    return out;
   }
 
   function mergeNearbyPinGroups(groups) {
@@ -1234,16 +1285,34 @@
     return remaining;
   }
 
+  function approxLocalityTip(count = 1) {
+    const n = Number(count) || 1;
+    if (n > 1) {
+      return "Přesná lokalita u těchto inzerátů není známá — původní stránka ji neuvedla, proto jsou na přibližném místě.";
+    }
+    return "Přesná lokalita u tohoto inzerátu není známá — původní stránka ji neuvedla, proto je na přibližném místě.";
+  }
+
+  function bindApproxTip(marker, count = 1) {
+    marker.bindTooltip(approxLocalityTip(count), {
+      direction: "top",
+      opacity: 0.96,
+      className: "map-approx-tip",
+      offset: [0, -8],
+    });
+  }
+
   function priceMarker(item, lat = item.lat, lon = item.lon) {
     const pin = L.divIcon({
       className: "price-pin-wrap",
-      html: `<div class="price-pin">${escapeHtml(pinPrice(item))}</div>`,
+      html: `<div class="price-pin${item.approx ? " is-approx" : ""}">${escapeHtml(pinPrice(item))}</div>`,
       iconSize: [88, 32],
       iconAnchor: [44, 16],
       popupAnchor: [0, -18],
     });
     const marker = L.marker([lat, lon], { icon: pin, riseOnHover: true, pane: "pinPane" });
     marker.bindPopup(`<strong>${escapeHtml(pinPrice(item))}</strong><br />${escapeHtml(item.locality || item.name)}`);
+    if (item.approx) bindApproxTip(marker, 1);
     marker.on("click", () => {
       if (drawingCircle) {
         placeCircle(item.lat, item.lon);
@@ -1290,7 +1359,7 @@
         if (key === lastMapQueryKey) return;
         lastMapQueryKey = key;
         loadCatalog();
-      }, 550);
+      }, 900);
     });
   }
 
@@ -1310,26 +1379,38 @@
     listEl.querySelectorAll(".offer-card.is-hot").forEach((el) => el.classList.remove("is-hot"));
   }
 
-  function spiderfyGroup(group) {
-    if (!hoverLayer || !catalogMap) return;
-    hoverLayer.clearLayers();
-    const count = group.items.length;
-    group.items.forEach((item, index) => {
-      const [lat, lon] = offsetAround(group.lat, group.lon, index, count, 40);
-      const marker = L.marker([lat, lon], {
-        pane: "pinPane",
-        icon: L.divIcon({
-          className: "price-pin-wrap",
-          html: `<div class="price-pin">${escapeHtml(pinPrice(item))}</div>`,
-          iconSize: [88, 32],
-          iconAnchor: [44, 16],
-        }),
-        zIndexOffset: 1800,
+  function stackPopupHtml(group) {
+    const all = group.items || [];
+    const tip = approxLocalityTip(all.length);
+    const rows = all.slice(0, 8).map((item) => {
+      const key = listingKey(item);
+      const label = escapeHtml(pinPrice(item));
+      const place = escapeHtml(item.locality || item.name || "");
+      return `<button type="button" class="map-stack-item" data-stack-key="${escapeHtml(key)}" data-mid="${escapeHtml(item.monitor_id)}" data-id="${escapeHtml(String(item.id))}"><strong>${label}</strong><span>${place}</span></button>`;
+    });
+    const more = all.length > 8 ? `<p class="map-stack-more">+${all.length - 8} dalších v seznamu vpravo</p>` : "";
+    return `<div class="map-stack-pop"><strong>${all.length} nabídek na přibližném místě</strong><p>${escapeHtml(tip)}</p><div class="map-stack-list">${rows.join("")}</div>${more}</div>`;
+  }
+
+  function openStackPopup(marker, group) {
+    hoverLayer?.clearLayers();
+    marker.unbindPopup();
+    marker.bindPopup(stackPopupHtml(group), { className: "map-popup map-stack-popup", maxWidth: 300, closeButton: true });
+    marker.openPopup();
+    const first = group.items.find((item) => listEl.querySelector(`[data-open-offer="${CSS.escape(listingKey(item))}"]`));
+    if (first) highlightCard(listingKey(first));
+    const box = marker.getPopup()?.getElement();
+    box?.querySelectorAll(".map-stack-item").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const mid = btn.getAttribute("data-mid");
+        const id = btn.getAttribute("data-id");
+        const key = btn.getAttribute("data-stack-key");
+        const item = group.items.find((row) => listingKey(row) === key) || { monitor_id: mid, id: Number(id) };
+        if (key) highlightCard(key);
+        openDetail(item.monitor_id, item.id, item);
       });
-      marker.on("click", () => openDetail(item.monitor_id, item.id, item));
-      marker.on("mouseover", () => highlightCard(listingKey(item)));
-      marker.on("mouseout", () => clearCardHighlight());
-      hoverLayer.addLayer(marker);
     });
   }
 
@@ -1379,47 +1460,46 @@
     const groups = groupedPins(items, zoom);
     for (const group of groups) {
       const weight = group.count || group.items.reduce((sum, item) => sum + pinWeight(item), 0);
+      const approxTip = groupNeedsApproxTip(group);
       if (weight === 1 && group.items.length === 1) {
         const item = group.items[0];
         const marker = priceMarker(item, group.lat, group.lon);
         catalogLayer.addLayer(marker);
         markerByKey.set(listingKey(item), marker);
-      } else if (zoom >= STREET_ZOOM) {
-        group.items.forEach((item, index) => {
-          const [lat, lon] = offsetAround(group.lat, group.lon, index, group.items.length, 28);
-          const marker = priceMarker(item, lat, lon);
-          catalogLayer.addLayer(marker);
-          markerByKey.set(listingKey(item), marker);
-        });
-      } else {
-        const size = weight > 99 ? 48 : weight > 9 ? 42 : 36;
-        const marker = L.marker([group.lat, group.lon], {
-          pane: "pinPane",
-          icon: L.divIcon({
-            className: "price-cluster-wrap",
-            html: `<div class="price-cluster">${weight}</div>`,
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2],
-          }),
-          zIndexOffset: 200,
-        });
-        marker.on("click", () => {
-          if (drawingCircle) {
-            placeCircle(group.lat, group.lon);
-            return;
-          }
-          const nextZoom = Math.min(catalogMap.getZoom() + 2, 16);
-          if (catalogMap.getZoom() >= 15 || nextZoom >= 16) spiderfyGroup(group);
-          else catalogMap.setView([group.lat, group.lon], nextZoom);
-        });
-        marker.on("mouseover", () => {
-          const first = group.items.find((item) => listEl.querySelector(`[data-open-offer="${listingKey(item)}"]`));
-          if (first) highlightCard(listingKey(first));
-        });
-        marker.on("mouseout", () => clearCardHighlight());
-        catalogLayer.addLayer(marker);
-        for (const item of group.items) clusterByKey.set(listingKey(item), { marker, item });
+        continue;
       }
+      // Jedno číslo na místě (jako konkurence); rozbalení až po kliku — ne stack cenovek.
+      const size = weight > 99 ? 48 : weight > 9 ? 42 : 36;
+      const marker = L.marker([group.lat, group.lon], {
+        pane: "pinPane",
+        icon: L.divIcon({
+          className: "price-cluster-wrap",
+          html: `<div class="price-cluster${approxTip ? " is-approx" : ""}">${weight}</div>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        }),
+        zIndexOffset: 200,
+      });
+      if (approxTip) bindApproxTip(marker, weight);
+      marker.on("click", () => {
+        if (drawingCircle) {
+          placeCircle(group.lat, group.lon);
+          return;
+        }
+        // Nikdy nerozbaluj ceny na mapu — popup + seznam vpravo.
+        if (groupNeedsApproxTip(group) || catalogMap.getZoom() >= 14) {
+          openStackPopup(marker, group);
+          return;
+        }
+        catalogMap.setView([group.lat, group.lon], Math.min(catalogMap.getZoom() + 2, 16));
+      });
+      marker.on("mouseover", () => {
+        const first = group.items.find((item) => listEl.querySelector(`[data-open-offer="${CSS.escape(listingKey(item))}"]`));
+        if (first) highlightCard(listingKey(first));
+      });
+      marker.on("mouseout", () => clearCardHighlight());
+      catalogLayer.addLayer(marker);
+      for (const item of group.items) clusterByKey.set(listingKey(item), { marker, item });
     }
     if (keepHover) highlightListing(keepHover);
   }
@@ -1868,7 +1948,47 @@
     document.body.classList.remove("catalog-modal-open");
   }
 
+  let catalogBusy = false;
+  let catalogQueued = false;
+
+  function setCatalogLoading(listOn, mapOn = listOn) {
+    const overlay = $("catalog-map-loading");
+    const anim = $("catalog-load-anim");
+    if (overlay) {
+      overlay.hidden = !mapOn;
+      if (anim) {
+        // restart looped webp when showing
+        if (mapOn) {
+          const src = anim.getAttribute("src");
+          anim.setAttribute("src", "");
+          anim.setAttribute("src", src);
+        }
+      }
+    }
+    document.querySelector(".catalog-side")?.classList.toggle("is-loading", Boolean(listOn));
+  }
+
+  async function refreshCatalogPins(seq) {
+    try {
+      const response = await fetch(`/api/catalog/pins?${queryString({ limit: LIMIT, offset: 0 })}`);
+      if (seq !== catalogSeq || !response.ok) return;
+      const pinData = await response.json();
+      const pins = uniqueOffers(pinData.items || []);
+      if (pins.length) renderMapPins(pins);
+      else if (seq === catalogSeq) renderMapPins([]);
+
+    } catch {
+      /* list is already visible */
+    }
+  }
+
   async function loadCatalog(append = false) {
+    if (catalogBusy) {
+      if (!append) catalogQueued = true;
+      return;
+    }
+    catalogBusy = true;
+    catalogQueued = false;
     if (!append) offset = 0;
     ensureMap();
     if (catalogMap) {
@@ -1881,10 +2001,12 @@
         b.getEast().toFixed(2),
       ].join("|");
     }
-    catalogAbort?.abort();
-    const ac = new AbortController();
-    catalogAbort = ac;
     const seq = ++catalogSeq;
+    if (!append) {
+      setCatalogLoading(true, true);
+      const countEl = $("catalog-count");
+      if (countEl) countEl.textContent = "Načítám…";
+    }
     if (!append && selectedPlaces.length) {
       ensurePlaceGeoms()
         .then(() => {
@@ -1893,28 +2015,30 @@
         })
         .catch(() => {});
     }
-    const timer = window.setTimeout(() => ac.abort(), 20000);
     let data;
     try {
-      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset })}`, {
-        signal: ac.signal,
-      });
+      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset, include_pins: "0" })}`);
       if (!response.ok) throw new Error("catalog");
       data = await response.json();
-    } catch {
+    } catch (err) {
+      catalogBusy = false;
+      if (catalogQueued) {
+        catalogQueued = false;
+        queueMicrotask(() => loadCatalog());
+      }
       if (seq !== catalogSeq) return;
-      if (selectedPlaces.length && !append) {
-        lastItems = [];
-        total = 0;
-        renderList([], false);
-        renderMapPins([]);
+      setCatalogLoading(false, false);
+      if (lastItems.length && !append) {
+        $("catalog-count").textContent = `${total} nemovitostí`;
+        return;
       }
       $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
       return;
-    } finally {
-      window.clearTimeout(timer);
     }
-    if (seq !== catalogSeq) return;
+    if (seq !== catalogSeq) {
+      catalogBusy = false;
+      return;
+    }
     applyPlaceGeoms(data.places);
     const items = uniqueOffers(data.items || []);
     const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
@@ -1933,10 +2057,14 @@
     }
     renderList(items, append);
     if (!append) {
-      renderMapPins(incomingPins);
+      // Nenechávej mapu na prvních ~36 položkách seznamu — až plné /pins.
+      if (!pinItems.length && incomingPins.length) renderMapPins(incomingPins);
       drawPlaceLayer(false);
-      if (selectedPlaces.length || circleFilter) goToSelection();
+      if (needPlaceFit && (selectedPlaces.length || circleFilter)) goToSelection();
       needPlaceFit = false;
+      setCatalogLoading(false, true);
+      await refreshCatalogPins(seq);
+      if (seq === catalogSeq) setCatalogLoading(false, false);
     }
     offset = lastItems.length;
     $("catalog-more").hidden = lastItems.length >= total;
@@ -1945,6 +2073,11 @@
     renderViews();
     renderCompareTray();
     syncStatusChips();
+    catalogBusy = false;
+    if (catalogQueued) {
+      catalogQueued = false;
+      queueMicrotask(() => loadCatalog());
+    }
   }
 
   let ignoreCardClick = false;
@@ -2050,7 +2183,17 @@
   });
   $("cat-toggle")?.addEventListener("click", openFilters);
   $("filters-close")?.addEventListener("click", closeFilters);
-  $("filters-reset")?.addEventListener("click", clearFilterUi);
+  $("filters-reset")?.addEventListener("click", () => {
+    clearFilterUi();
+    syncPlacesFromDistricts();
+    restoredFilterState = true;
+    writeUrlState();
+    ignoreMapMove += 1;
+    window.setTimeout(() => {
+      ignoreMapMove = Math.max(0, ignoreMapMove - 1);
+    }, 1200);
+    loadCatalog();
+  });
   $("filters-apply")?.addEventListener("click", () => {
     readFilterUi();
     syncPlacesFromDistricts();
@@ -2283,7 +2426,8 @@
     if (!loaded || query !== lastCatalogQuery) {
       loaded = true;
       lastCatalogQuery = query;
-      readUrlState();
+      if (query) readUrlState();
+      else restoreSavedFilterState();
       loadCatalog();
     } else if (catalogMap) {
       setTimeout(() => catalogMap.invalidateSize(), 80);
@@ -2302,13 +2446,27 @@
   } catch {
     circleFilter = null;
   }
+  function restoreSavedFilterState() {
+    try {
+      const raw = localStorage.getItem(FILTER_STATE_KEY);
+      if (raw === null) return false;
+      restoredFilterState = true;
+      readUrlState(new URLSearchParams(raw));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   if (location.search) readUrlState();
-  fetch("/api/settings")
+  else restoreSavedFilterState();
+  const settingsReady = fetch("/api/settings")
     .then((res) => res.json())
     .then((data) => {
       appSettings = data || appSettings;
       const prefs = data?.watch_prefs;
-      if (location.search || !prefs) return;
+      const skipPrefs = Boolean(location.search) || restoredFilterState || !prefs;
+      if (skipPrefs) return;
       if (Array.isArray(prefs.sizes) && prefs.sizes.length) {
         selected.dispositions = new Set(prefs.sizes);
       }
@@ -2327,7 +2485,6 @@
         syncPlacesFromDistricts();
       }
       syncFilterUi();
-      if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
     })
     .catch(() => {});
   window.addEventListener("app-settings", (event) => {
@@ -2347,6 +2504,8 @@
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {
     loaded = true;
     ensureMap();
-    loadCatalog();
+    settingsReady.finally(() => {
+      if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
+    });
   }
 })();

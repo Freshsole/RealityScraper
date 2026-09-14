@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import os
+import sqlite3
 import sys
+import threading
 import zipfile
 from contextlib import asynccontextmanager
 import time
@@ -20,7 +23,7 @@ from app.backup import export_config, export_pack, export_sqlite, import_config,
 from app.monitor import Hub
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
-from app import bezrealitky_url, idnes_url, localities, url_builder
+from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
 from app import places as place_geo
 from app.filter_bridge import convert_search_url
 from app.catalog_sync import monitor_search_targets
@@ -69,7 +72,15 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        await hub.close()
+        def _force_exit() -> None:
+            time.sleep(2.5)
+            os._exit(130)
+
+        threading.Thread(target=_force_exit, name="shutdown-watchdog", daemon=True).start()
+        try:
+            await asyncio.wait_for(hub.close(), timeout=2.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            pass
 
 
 app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
@@ -145,11 +156,21 @@ def _client_ip(request: Request) -> str:
 @app.middleware("http")
 async def require_account(request: Request, call_next):
     if request.method == "GET" and _is_app_page(request.url.path):
-        user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+        user = await asyncio.get_running_loop().run_in_executor(
+            hub.auth_pool,
+            user_account.user_from_session,
+            hub.store,
+            request.cookies.get(user_account.SESSION_COOKIE),
+        )
+        guest_ok = False
+        if not user and request.url.path == "/nabidka":
+            guest_ok = await asyncio.get_running_loop().run_in_executor(
+                hub.auth_pool,
+                hub.store.guest_search_has_access,
+                request.cookies.get("rf_guest_search") or "",
+            )
         if not user:
-            if request.url.path == "/nabidka" and hub.store.guest_search_has_access(
-                request.cookies.get("rf_guest_search") or ""
-            ):
+            if request.url.path == "/nabidka" and guest_ok:
                 return await call_next(request)
             if request.url.path == "/nabidka":
                 nxt = request.url.path
@@ -449,6 +470,45 @@ async def admin_broadcast(
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _admin_user(realitify_admin)
     return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+
+
+@app.get("/api/admin/dedupe")
+async def admin_dedupe(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+
+
+@app.post("/api/admin/dedupe/schedule")
+async def admin_dedupe_schedule(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    body = payload or {}
+    try:
+        hour = int(body.get("hour", 3))
+    except (TypeError, ValueError):
+        hour = 3
+    hub.store.save_dedupe_schedule(enabled=bool(body.get("enabled")), hour=hour)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+
+
+@app.post("/api/admin/dedupe/run")
+async def admin_dedupe_run(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    result = hub.start_dedupe()
+    if not result.get("ok"):
+        raise HTTPException(409, "Deduplikace už běží")
+    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+
+
+@app.post("/api/admin/dedupe/scan")
+async def admin_dedupe_scan(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    result = hub.start_dedupe_scan()
+    if not result.get("ok"):
+        raise HTTPException(409, "Deduplikace už běží")
+    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
 
 
 @app.get("/api/admin/billing")
@@ -959,6 +1019,7 @@ def _catalog_filters(
     limit: int = 36,
     offset: int = 0,
     pins_only: bool = False,
+    include_pins: str = "1",
 ) -> dict[str, Any]:
     payload = {
         "portal": portal,
@@ -994,10 +1055,19 @@ def _catalog_filters(
         "sort": sort,
         "limit": limit,
         "offset": offset,
+        "include_pins": include_pins,
     }
     if pins_only:
         payload["pins_only"] = True
     return payload
+
+
+async def _run_catalog_query(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.store.catalog, payload)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="catalog-busy") from exc
+    return result
 
 
 @app.get("/api/catalog")
@@ -1035,6 +1105,7 @@ async def catalog(
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
+    include_pins: str = "1",
 ) -> dict:
     payload = await place_geo.attach_geoms(
         _catalog_filters(
@@ -1071,9 +1142,10 @@ async def catalog(
             sort=sort,
             limit=limit,
             offset=offset,
+            include_pins=include_pins,
         )
     )
-    return await asyncio.to_thread(hub.store.catalog, payload)
+    return await _run_catalog_query(payload)
 
 
 @app.get("/api/catalog/pins")
@@ -1144,7 +1216,7 @@ async def catalog_pins(
             pins_only=True,
         )
     )
-    return await asyncio.to_thread(hub.store.catalog, payload)
+    return await _run_catalog_query(payload)
 
 
 @app.get("/api/catalog/item")
@@ -1275,6 +1347,8 @@ def _filter_mod(source: str | None = None, url: str = ""):
     lowered = (url or "").lower()
     if raw == "idnes" or "idnes.cz" in lowered:
         return idnes_url
+    if raw == "bazos" or "bazos" in lowered:
+        return bazos_url
     if raw == "bezrealitky" or "bezrealitky.cz" in lowered:
         return bezrealitky_url
     return url_builder
@@ -1303,6 +1377,11 @@ async def filter_catalog() -> dict:
                 "defaults": idnes_url.default_filters(),
                 "sample": idnes_url.sample_filters(),
             },
+            "bazos": {
+                "catalog": bazos_url.catalog(),
+                "defaults": bazos_url.default_filters(),
+                "sample": bazos_url.sample_filters(),
+            },
         },
     }
     return payload
@@ -1313,7 +1392,16 @@ async def filter_build(payload: dict[str, Any]) -> dict:
     filters = payload.get("filters") or {}
     mod = _filter_mod(filters.get("source"))
     if not filters.get("source"):
-        filters = {**filters, "source": "idnes" if mod is idnes_url else "bezrealitky" if mod is bezrealitky_url else "sreality"}
+        filters = {
+            **filters,
+            "source": "idnes"
+            if mod is idnes_url
+            else "bazos"
+            if mod is bazos_url
+            else "bezrealitky"
+            if mod is bezrealitky_url
+            else "sreality",
+        }
     filters = localities.normalize_filters(filters)
     built = mod.build_url(filters or mod.default_filters())
     portals = str(payload.get("portals") or "all")

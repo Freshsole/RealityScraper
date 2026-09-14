@@ -195,13 +195,33 @@ def anchors_in_bbox(south: float, north: float, west: float, east: float) -> lis
     ]
 
 
+def nearest_anchors(lat: float, lon: float, limit: int = 8) -> list[tuple[str, float, float]]:
+    ranked = sorted(
+        locality_anchors(),
+        key=lambda item: (item[1] - lat) ** 2 + (item[2] - lon) ** 2,
+    )
+    return ranked[: max(1, int(limit))]
+
+
 def locality_match_sql(column: str, labels: list[str]) -> tuple[str, list[str]]:
     parts: list[str] = []
     params: list[str] = []
     for label in labels:
         if len(label) <= 4:
-            parts.append(f"({column} = ? OR {column} LIKE ? OR {column} LIKE ? OR {column} LIKE ?)")
-            params.extend([label, f"{label},%", f"{label} -%", f"%, {label}%"])
+            parts.append(
+                f"({column} = ? OR {column} LIKE ? OR {column} LIKE ? OR {column} LIKE ? "
+                f"OR {column} LIKE ? OR {column} LIKE ?)"
+            )
+            params.extend(
+                [
+                    label,
+                    f"{label},%",
+                    f"{label} -%",
+                    f"%, {label}%",
+                    f"{label} %",
+                    f"{label}-%",
+                ]
+            )
         else:
             parts.append(f"{column} LIKE ?")
             params.append(f"%{label}%")

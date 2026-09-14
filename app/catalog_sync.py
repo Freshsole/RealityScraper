@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app import bezrealitky_url, idnes_url, localities, url_builder
+from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
 from app.identity import portal_from_url
-from app.sources import is_bezrealitky, is_idnes
+from app.sources import is_bazos, is_bezrealitky, is_idnes
 
 KRAJ_HINTS = {
     "praha": ["praha"],
@@ -70,6 +70,9 @@ def normalize_search_url(url: str) -> str:
         filters = idnes_url.parse_url(raw)
         filters["sort"] = "nejnovejsi"
         return idnes_url.build_url(filters)
+    if is_bazos(raw):
+        filters = bazos_url.parse_url(raw)
+        return bazos_url.build_url(filters)
     if is_bezrealitky(raw):
         filters = bezrealitky_url.parse_url(raw)
         filters["sort"] = "TIMEORDER_DESC"
@@ -168,6 +171,28 @@ def daily_shards() -> list[dict[str, str]]:
                         "search_url": url,
                     }
                 )
+    # Nationwide category crawls cover the whole of Bazos realty (including Praha).
+    for offer in ("pronajem", "prodej"):
+        for category, _label in bazos_url.CATEGORIES:
+            shards.append(
+                {
+                    "kind": "catalog_daily",
+                    "portal": "bazos",
+                    "shard_key": f"bazos:{category}:{offer}:cz",
+                    "search_url": bazos_url.build_url(
+                        {
+                            "source": "bazos",
+                            "offers": [offer],
+                            "category": category,
+                            "districts": list(localities.SREALITY_CZECH_REGIONS),
+                            "sizes": [],
+                            "price_from": None,
+                            "price_to": None,
+                            "radius": 0,
+                        }
+                    ),
+                }
+            )
     return shards
 
 
@@ -215,6 +240,10 @@ def listing_offer(listing: Any) -> str:
     path = str(_field(listing, "url") or "").lower()
     if "/drazba/" in path:
         return "drazba"
+    if "/pronajmu/" in path or "/pronajem/" in path:
+        return "pronajem"
+    if "/prodam/" in path or "/prodej/" in path:
+        return "prodej"
     return "prodej"
 
 
@@ -231,7 +260,9 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
             return False
         if source == "bezrealitky" and "bezrealitky" not in url:
             return False
-        if source == "sreality" and ("bezrealitky" in url or "idnes" in url):
+        if source == "bazos" and "bazos" not in url:
+            return False
+        if source == "sreality" and ("bezrealitky" in url or "idnes" in url or "bazos" in url):
             return False
     low = data.get("price_from")
     high = data.get("price_to")
@@ -276,6 +307,8 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
         return False
     if is_idnes(url):
         return listing_matches_filters(listing, idnes_url.parse_url(url), ignore_source=ignore_source)
+    if is_bazos(url):
+        return listing_matches_filters(listing, bazos_url.parse_url(url), ignore_source=ignore_source)
     if is_bezrealitky(url):
         return listing_matches_filters(listing, bezrealitky_url.parse_url(url), ignore_source=ignore_source)
     return listing_matches_filters(listing, url_builder.parse_url(url), ignore_source=ignore_source)
@@ -283,7 +316,7 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
 
 def normalize_portals(value: str | None) -> str:
     raw = (value or "all").strip().lower()
-    if raw in {"sreality", "bezrealitky", "idnes"}:
+    if raw in {"sreality", "bezrealitky", "idnes", "bazos"}:
         return raw
     return "all"
 

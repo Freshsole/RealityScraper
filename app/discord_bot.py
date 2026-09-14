@@ -242,39 +242,45 @@ class DiscordBot:
         info = await self.request("GET", "/gateway/bot")
         url = f"{info['url']}?v=10&encoding=json"
         async with websockets.connect(url, max_size=2**22, ping_interval=None) as ws:
-            async for raw in ws:
-                payload = json.loads(raw)
-                if payload.get("s") is not None:
-                    self._seq = payload["s"]
-                op = payload.get("op")
-                if op == 10:
-                    interval = float(payload["d"]["heartbeat_interval"]) / 1000.0
-                    self._ack = True
-                    if self._heartbeat_task:
-                        self._heartbeat_task.cancel()
-                    self._heartbeat_task = asyncio.create_task(self._heartbeat(ws, interval * 0.9))
-                    await ws.send(
-                        json.dumps(
-                            {
-                                "op": 2,
-                                "d": {
-                                    "token": config.DISCORD_BOT_TOKEN,
-                                    "intents": 1,
-                                    "properties": {"os": "mac", "browser": "realitify", "device": "realitify"},
-                                },
-                            }
+            try:
+                while True:
+                    raw = await ws.recv()
+                    payload = json.loads(raw)
+                    if payload.get("s") is not None:
+                        self._seq = payload["s"]
+                    op = payload.get("op")
+                    if op == 10:
+                        interval = float(payload["d"]["heartbeat_interval"]) / 1000.0
+                        self._ack = True
+                        if self._heartbeat_task:
+                            self._heartbeat_task.cancel()
+                        self._heartbeat_task = asyncio.create_task(self._heartbeat(ws, interval * 0.9))
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "op": 2,
+                                    "d": {
+                                        "token": config.DISCORD_BOT_TOKEN,
+                                        "intents": 1,
+                                        "properties": {"os": "mac", "browser": "realitify", "device": "realitify"},
+                                    },
+                                }
+                            )
                         )
-                    )
-                elif op == 11:
-                    self._ack = True
-                elif op == 7:
-                    await ws.close()
-                    return
-                elif op == 9:
-                    await ws.close()
-                    return
-                elif op == 0 and payload.get("t") == "INTERACTION_CREATE":
-                    asyncio.create_task(self.on_interaction(payload.get("d") or {}))
+                    elif op == 11:
+                        self._ack = True
+                    elif op == 7:
+                        await ws.close()
+                        return
+                    elif op == 9:
+                        await ws.close()
+                        return
+                    elif op == 0 and payload.get("t") == "INTERACTION_CREATE":
+                        asyncio.create_task(self.on_interaction(payload.get("d") or {}))
+            except asyncio.CancelledError:
+                if self._heartbeat_task:
+                    self._heartbeat_task.cancel()
+                raise
 
     async def run_forever(self) -> None:
         await self.bootstrap()
@@ -296,4 +302,7 @@ async def run_discord_bot(store: Store) -> None:
     try:
         await bot.run_forever()
     finally:
-        await bot.aclose()
+        try:
+            await asyncio.wait_for(bot.aclose(), timeout=1.0)
+        except (asyncio.TimeoutError, Exception):
+            pass

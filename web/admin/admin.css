@@ -1118,6 +1118,11 @@ img {
   min-height: 18px;
 }
 
+.ad-dedupe-card .ad-err:empty {
+  display: none;
+  min-height: 0;
+}
+
 .ad-hidden {
   display: none !important;
 }
@@ -2685,10 +2690,55 @@ img {
   font-size: 11px;
 }
 
+.ad-dedupe-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ad-dedupe-lead,
+.ad-dedupe-note {
+  margin: 0;
+  font-size: 14px;
+  color: var(--body);
+}
+
+.ad-dedupe-kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ad-dedupe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+}
+
+.ad-dedupe-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--forest);
+}
+
+.ad-dedupe-hour {
+  min-width: 120px;
+}
+
+.ad-dedupe-samples .ad-utbl-head,
+.ad-dedupe-samples .ad-utbl-row {
+  grid-template-columns: 1.6fr 0.9fr 0.5fr 0.7fr;
+}
+
 @media (max-width: 1200px) {
   .ad-ops-metrics,
   .ad-scrape-card {
     flex-direction: column;
+  }
+  .ad-dedupe-kpis {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

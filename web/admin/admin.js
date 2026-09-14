@@ -1455,6 +1455,14 @@
     const data = await api("/api/admin/ops");
     const sc = data.scraper || {};
     const logs = data.logs || [];
+    const d = data.dedupe || {};
+    const counts = d.counts || {};
+    const scan = d.scan_stats || {};
+    const last = d.last_stats || {};
+    const hourOpts = Array.from({ length: 24 }, (_, hour) => {
+      const selected = Number(d.hour) === hour ? " selected" : "";
+      return `<option value="${hour}"${selected}>${String(hour).padStart(2, "0")}:00</option>`;
+    }).join("");
     const apiPts = data.api_series?.points || [];
     const errPts = data.err_series?.points || [];
     const apiLabels = data.api_series?.labels || ["00:00", "08:00", "16:00", "24:00"];
@@ -1490,6 +1498,12 @@
         <span class="muted">${esc(row.duration)}</span>
         <span class="ad-nstat ${row.ok ? "ok" : "bad"}">${esc(row.status)}</span>
         <span class="muted">${esc(row.next)}</span>
+      </div>`;
+    const sampleRow = (row) => `<div class="ad-utbl-row">
+        <span>${esc(row.name || row.canonical || "")}</span>
+        <span class="muted">${esc(row.disposition || "—")}${row.area_m2 ? ` · ${esc(row.area_m2)} m²` : ""}</span>
+        <span class="num">${esc(fmtN(row.n || 0))}</span>
+        <span class="muted">${esc((row.urls || []).length)} portálů</span>
       </div>`;
     const services = [...new Set(logs.map((row) => row.service).filter(Boolean))];
     main.innerHTML = `
@@ -1596,7 +1610,44 @@
         </article>
       </section>
       <section class="ad-nsec">
-        <h2 class="ad-kicker">5. Úlohy a cron joby</h2>
+        <h2 class="ad-kicker">5. Deduplikace inzerátů</h2>
+        <article class="ad-card ad-users-card ad-dedupe-card">
+          <p class="ad-dedupe-lead">Sloučí stejné byty z různých portálů a smaže zdvojené řádky. Kontrola nic nemění, jen spočítá, kolik duplicit zbývá.</p>
+          <div class="ad-scrape-kpis ad-dedupe-kpis">
+            <article class="ad-mini"><div class="lbl">Zdvojené inzeráty</div><strong id="d-listing-dups">${esc(fmtN(counts.listing_dup_groups || 0))}</strong></article>
+            <article class="ad-mini"><div class="lbl">Zdvojené v katalogu</div><strong id="d-catalog-dups">${esc(fmtN(counts.catalog_dup_groups || 0))}</strong></article>
+            <article class="ad-mini"><div class="lbl">Ke sloučení (posl. kontrola)</div><strong id="d-relink">${esc(fmtN((scan.listings_relinkable || 0) + (scan.catalog_relinkable || 0)))}</strong></article>
+            <article class="ad-mini"><div class="lbl">Stav</div><strong id="d-status">${esc(d.status_label || "Čeká")}</strong></article>
+            <article class="ad-mini"><div class="lbl">Poslední sloučení</div><strong id="d-last">${esc(d.last_run_rel || "—")}</strong></article>
+            <article class="ad-mini"><div class="lbl">Poslední kontrola</div><strong id="d-scan">${esc(d.last_scan_rel || "—")}</strong></article>
+          </div>
+          <p class="ad-err" id="d-err">${esc(d.error || "")}</p>
+          <div class="ad-dedupe-actions">
+            <button class="ad-btn" type="button" id="d-run" ${d.busy ? "disabled" : ""}>Sloučit teď</button>
+            <button class="ad-btn outline" type="button" id="d-scan-btn" ${d.busy ? "disabled" : ""}>Zkontrolovat duplicity</button>
+            <label class="ad-dedupe-check"><input type="checkbox" id="d-enabled" ${d.enabled ? "checked" : ""}/> Denní automatické sloučení</label>
+            <div class="ad-ufield ad-dedupe-hour">
+              <label>Hodina</label>
+              <div class="ad-uselect">
+                <select id="d-hour">${hourOpts}</select>
+                <span class="ad-ico ad-ico-chevron"><img src="/static/admin/assets/chevron.svg" width="8" height="5" alt="" /></span>
+              </div>
+            </div>
+            <button class="ad-btn soft" type="button" id="d-save">Uložit plán</button>
+          </div>
+          <p class="ad-dedupe-note" id="d-note">Další běh: ${esc(d.next || "—")}${last.listings_relinked != null ? ` · Poslední běh přepojil ${fmtN(last.listings_relinked || 0)} inzerátů a ${fmtN(last.catalog_relinked || 0)} katalogových záznamů.` : ""}</p>
+          <div class="ad-utbl-wrap" id="d-sample-wrap">
+            <h3 class="ad-sec sm">Nález z poslední kontroly</h3>
+            <div class="ad-utbl ad-dedupe-samples">
+              <div class="ad-utbl-head"><span>Byt</span><span>Dispozice</span><span class="num">Záznamů</span><span>Odkazy</span></div>
+              <div id="d-samples">${(d.samples || []).map(sampleRow).join("")}</div>
+              <div class="ad-utbl-empty" id="d-empty" ${(d.samples || []).length ? "hidden" : ""}>Zatím žádná kontrola, nebo kontrola nenašla duplicity ke sloučení.</div>
+            </div>
+          </div>
+        </article>
+      </section>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">6. Úlohy a cron joby</h2>
         <article class="ad-card ad-users-card">
           <div class="ad-utbl-wrap">
             <div class="ad-utbl ad-ops-jobs">
@@ -1675,6 +1726,80 @@
       applyFilter();
     });
     applyFilter();
+    const paintDedupe = (item) => {
+      const c = item.counts || {};
+      const s = item.scan_stats || {};
+      const set = (id, value) => {
+        const el = $(id);
+        if (el) el.textContent = value;
+      };
+      set("d-listing-dups", fmtN(c.listing_dup_groups || 0));
+      set("d-catalog-dups", fmtN(c.catalog_dup_groups || 0));
+      set("d-relink", fmtN((s.listings_relinkable || 0) + (s.catalog_relinkable || 0)));
+      set("d-status", item.status_label || "Čeká");
+      set("d-last", item.last_run_rel || "—");
+      set("d-scan", item.last_scan_rel || "—");
+      const err = $("d-err");
+      if (err) err.textContent = item.error || "";
+      const note = $("d-note");
+      const st = item.last_stats || {};
+      if (note) {
+        note.textContent = `Další běh: ${item.next || "—"}${
+          st.listings_relinked != null
+            ? ` · Poslední běh přepojil ${fmtN(st.listings_relinked || 0)} inzerátů a ${fmtN(st.catalog_relinked || 0)} katalogových záznamů.`
+            : ""
+        }`;
+      }
+      const samples = $("d-samples");
+      if (samples) samples.innerHTML = (item.samples || []).map(sampleRow).join("");
+      const empty = $("d-empty");
+      if (empty) empty.hidden = Boolean((item.samples || []).length);
+      ["d-run", "d-scan-btn", "d-save"].forEach((id) => {
+        const btn = $(id);
+        if (btn) btn.disabled = Boolean(item.busy);
+      });
+    };
+    const pollDedupe = async () => {
+      if (currentRoute() !== "provoz") return;
+      try {
+        const fresh = await api("/api/admin/dedupe");
+        paintDedupe(fresh);
+        if (fresh.busy) setTimeout(pollDedupe, 2500);
+      } catch {
+        setTimeout(pollDedupe, 4000);
+      }
+    };
+    $("d-run")?.addEventListener("click", async () => {
+      try {
+        paintDedupe(await api("/api/admin/dedupe/run", { method: "POST" }));
+        pollDedupe();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    $("d-scan-btn")?.addEventListener("click", async () => {
+      try {
+        paintDedupe(await api("/api/admin/dedupe/scan", { method: "POST" }));
+        pollDedupe();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    $("d-save")?.addEventListener("click", async () => {
+      try {
+        const fresh = await api("/api/admin/dedupe/schedule", {
+          method: "POST",
+          body: JSON.stringify({
+            enabled: Boolean($("d-enabled")?.checked),
+            hour: Number($("d-hour")?.value || 3),
+          }),
+        });
+        paintDedupe(fresh);
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    if (d.busy) pollDedupe();
   }
 
   async function pageBilling() {

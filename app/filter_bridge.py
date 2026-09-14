@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app import bezrealitky_url, idnes_url, localities, url_builder
-from app.sources import is_bezrealitky, is_idnes, portal_of, source_name
+from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
+from app.sources import is_bazos, is_bezrealitky, is_idnes, portal_of, source_name
 
 SR_OFFERS = {"pronajem": "PRONAJEM", "prodej": "PRODEJ"}
 SR_OFFER_LABELS = {"drazby": "Dražby", "podily": "Podíly"}
@@ -75,6 +75,12 @@ BR_EXTRA_LABELS = {key: label for key, label in bezrealitky_url.EXTRAS}
 def convert_search_url(url: str) -> dict[str, Any]:
     if is_idnes(url):
         filters, skipped, notes = idnes_to_sr(idnes_url.parse_url(url))
+        filters["source"] = "sreality"
+        filters = localities.normalize_filters(filters)
+        target_url = url_builder.build_url(filters)
+        target = "Sreality"
+    elif is_bazos(url):
+        filters, skipped, notes = bazos_to_sr(bazos_url.parse_url(url))
         filters["source"] = "sreality"
         filters = localities.normalize_filters(filters)
         target_url = url_builder.build_url(filters)
@@ -315,7 +321,7 @@ def _skip_if(skipped: list[str], values, label: str) -> None:
 
 
 def other_portal_name(url: str) -> str:
-    if is_idnes(url):
+    if is_idnes(url) or is_bazos(url):
         return "Sreality"
     return "Sreality" if is_bezrealitky(url) else "Bezrealitky"
 
@@ -406,6 +412,8 @@ SHARED_EXTRAS = {
 def to_sreality_filters(url: str) -> dict[str, Any]:
     if is_idnes(url):
         filters, _, _ = idnes_to_sr(idnes_url.parse_url(url))
+    elif is_bazos(url):
+        filters, _, _ = bazos_to_sr(bazos_url.parse_url(url))
     elif is_bezrealitky(url):
         filters, _, _ = br_to_sr(bezrealitky_url.parse_url(url))
     else:
@@ -436,6 +444,12 @@ def search_urls_for_portals(url: str) -> dict[str, str]:
         built["idnes"] = normalize_search_url(idnes_url.build_url(id_filters))
     except Exception:
         built["idnes"] = ""
+    try:
+        bz_filters, _, _ = sr_to_bazos(canonical)
+        bz_filters["source"] = "bazos"
+        built["bazos"] = normalize_search_url(bazos_url.build_url(bz_filters))
+    except Exception:
+        built["bazos"] = ""
     original = normalize_search_url(url)
     if original:
         built[primary] = original
@@ -533,4 +547,89 @@ def idnes_to_sr(src: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[st
         notes.append("Video / zlevněno / den otevřených dveří zůstane jen na iDNES")
     if src.get("article_age"):
         skipped.append("Aktuálnost inzerátu")
+    return dst, skipped, notes
+
+
+SR_TO_BAZOS_CAT = {
+    "byty": "byt",
+    "domy": "dum",
+    "pozemky": "pozemek",
+    "komercni": "kancelar",
+    "komercni-nemovitosti": "kancelar",
+    "male-objekty-garaze": "garaz",
+}
+BAZOS_TO_SR_CAT = {
+    "byt": "byty",
+    "dum": "domy",
+    "pozemek": "pozemky",
+    "garaz": "male-objekty-garaze",
+    "kancelar": "komercni",
+    "prostory": "komercni",
+    "projekty": "byty",
+    "chata": "domy",
+    "podnajem": "byty",
+}
+
+
+def sr_to_bazos(src: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
+    dst = bazos_url.default_filters()
+    skipped: list[str] = []
+    notes: list[str] = []
+    offers = [item for item in (src.get("offers") or []) if item in {"pronajem", "prodej"}]
+    dst["offers"] = offers[:1] or ["pronajem"]
+    if len(offers) > 1:
+        notes.append("Bazoš bere jen jeden typ nabídky — použije se první")
+    category = src.get("category") or "byty"
+    dst["category"] = SR_TO_BAZOS_CAT.get(category) or bazos_url._category(category)
+    sizes: list[str] = []
+    for size in src.get("sizes") or []:
+        if size in bazos_url.SIZE_KEYS:
+            sizes.append(size)
+            continue
+        needle = bazos_url.SIZE_QUERY.get(size)
+        match = next((key for key in bazos_url.SIZE_KEYS if needle and bazos_url.SIZE_QUERY.get(key) == needle), None)
+        if match:
+            sizes.append(match)
+        elif size:
+            skipped.append(SR_SIZE_LABELS.get(size, size))
+    dst["sizes"] = list(dict.fromkeys(sizes))
+    if len(dst["sizes"]) > 1:
+        notes.append("Bazoš do URL vloží dispozici jen když je jedna — více velikostí dopočítáme z inzerátů")
+    dst["districts"] = [str(item) for item in (src.get("districts") or []) if item]
+    dst["price_from"] = src.get("price_from")
+    dst["price_to"] = src.get("price_to")
+    dst["area_from"] = src.get("area_from")
+    dst["area_to"] = src.get("area_to")
+    try:
+        dst["radius"] = int(src["radius"]) if src.get("radius") not in (None, "") else dst["radius"]
+    except (TypeError, ValueError):
+        pass
+    _skip_if(skipped, src.get("ownership"), "Typ vlastnictví")
+    _skip_if(skipped, src.get("conditions"), "Stav budovy")
+    _skip_if(skipped, src.get("buildings"), "Konstrukce budovy")
+    _skip_if(skipped, src.get("extras"), "Vybavení (balkón, výtah, …)")
+    _skip_if(skipped, src.get("flags"), "Další filtry Sreality")
+    if skipped:
+        notes.append("Bazoš tyto filtry v URL nemá — u inzerátů je dopočítáme z textu, kde to jde")
+    return dst, skipped, notes
+
+
+def bazos_to_sr(src: dict[str, Any]) -> tuple[dict[str, Any], list[str], list[str]]:
+    dst = url_builder.default_filters()
+    skipped: list[str] = []
+    notes: list[str] = []
+    dst["offers"] = [item for item in (src.get("offers") or ["pronajem"]) if item in {"pronajem", "prodej"}][:1] or ["pronajem"]
+    category = src.get("category") or "byt"
+    dst["category"] = BAZOS_TO_SR_CAT.get(category, "byty")
+    if category not in {"byt", "dum"}:
+        notes.append(f"Typ „{category}“ na Sreality mapujeme na {dst['category']}")
+    dst["sizes"] = [item for item in (src.get("sizes") or []) if item in SR_SIZES or item in SR_SIZE_EXPAND]
+    dst["districts"] = [str(item) for item in (src.get("districts") or []) if item]
+    dst["price_from"] = src.get("price_from")
+    dst["price_to"] = src.get("price_to")
+    dst["area_from"] = src.get("area_from")
+    dst["area_to"] = src.get("area_to")
+    dst["sort"] = "nejnovejsi"
+    if src.get("hledat") and not dst["sizes"]:
+        notes.append("Volný text z Bazoše na Sreality nepřeneseme")
     return dst, skipped, notes

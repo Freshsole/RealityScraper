@@ -64,8 +64,10 @@ CATALOG_SYNC_HOURS = {
     "sreality": _hour_env("CATALOG_SYNC_HOUR_SREALITY", 1),
     "bezrealitky": _hour_env("CATALOG_SYNC_HOUR_BEZREALITKY", 2),
     "idnes": _hour_env("CATALOG_SYNC_HOUR_IDNES", 3),
+    "bazos": _hour_env("CATALOG_SYNC_HOUR_BAZOS", 4),
 }
 IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
+BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")
 NEW_MAX_AGE_DAYS = max(1, int(os.getenv("NEW_MAX_AGE_DAYS", "2")))
 NOTIFY_REFRESHES = os.getenv("NOTIFY_REFRESHES", "0").strip() in {"1", "true", "yes"}
 SOLD_INVENTORY_SEC = max(120, int(os.getenv("SOLD_INVENTORY_SEC", "600")))

@@ -81,6 +81,17 @@ class ListingDedupTests(unittest.TestCase):
         self.assertEqual(int(gone["gone"]), 0)
         self.assertEqual(live, 1)
 
+    def test_duplicate_counts_and_schedule(self):
+        self.store.save_dedupe_schedule(enabled=True, hour=4)
+        settings = self.store.dedupe_settings()
+        self.assertTrue(settings["enabled"])
+        self.assertEqual(settings["hour"], 4)
+        counts = self.store.duplicate_row_counts()
+        self.assertEqual(counts["listing_dup_groups"], 0)
+        self.assertEqual(counts["catalog_dup_groups"], 0)
+        preview = self.store.preview_duplicate_listings()
+        self.assertEqual(preview["stats"]["listings_relinkable"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

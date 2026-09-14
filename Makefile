@@ -44,7 +44,7 @@ run: $(PYTHON)
 	$(PYTHON) -m app
 
 dev: $(PYTHON)
-	$(PYTHON) -m uvicorn app.main:app --host $(HOST) --port $(PORT) --reload
+	$(PYTHON) -m app.run_dev
 
 start: $(PYTHON)
 	@mkdir -p $(PIDDIR)

@@ -1212,6 +1212,59 @@ def _next_in(last_iso: str | None, interval_sec: int) -> str:
     return f"za {_dur(delta)}"
 
 
+def dedupe_payload(store: Store, hub: Any) -> dict[str, Any]:
+    settings = store.dedupe_settings()
+    counts = store.duplicate_row_counts()
+    running = bool(getattr(hub, "dedupe_running", False))
+    scanning = bool(getattr(hub, "dedupe_scanning", False))
+    hour = int(settings.get("hour") or 3)
+    enabled = bool(settings.get("enabled"))
+    last_run = str(settings.get("last_run") or "")
+    status = "running" if running else ("scanning" if scanning else str(settings.get("status") or "idle"))
+    labels = {
+        "running": "Sloučuji",
+        "scanning": "Kontroluji",
+        "error": "Chyba",
+        "done": "OK",
+        "idle": "Čeká",
+    }
+    now = datetime.now().astimezone()
+    today = now.date().isoformat()
+    if running:
+        nxt = "běží"
+    elif scanning:
+        nxt = "kontroluji"
+    elif not enabled:
+        nxt = "vypnuto"
+    elif last_run.startswith(today) or now.hour >= hour:
+        nxt = f"zítra {hour:02d}:00"
+    else:
+        nxt = f"dnes {hour:02d}:00"
+    scan_stats = settings.get("last_scan_stats") or {}
+    last_stats = settings.get("last_stats") or {}
+    return {
+        "enabled": enabled,
+        "hour": hour,
+        "running": running,
+        "scanning": scanning,
+        "busy": running or scanning,
+        "status": status,
+        "status_label": labels.get(status, status),
+        "ok": status != "error" and not settings.get("error"),
+        "error": settings.get("error") or "",
+        "counts": counts,
+        "last_run": fmt_dt(last_run),
+        "last_run_iso": last_run,
+        "last_run_rel": relative_cs(last_run),
+        "last_scan": fmt_dt(str(settings.get("last_scan") or "")),
+        "last_scan_rel": relative_cs(str(settings.get("last_scan") or "")),
+        "last_stats": last_stats,
+        "scan_stats": scan_stats,
+        "samples": settings.get("samples") or [],
+        "next": nxt,
+    }
+
+
 def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     status = hub.status()
     jobs = store.list_scrape_jobs()
@@ -1276,6 +1329,8 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         portals["bezrealitky"]["name"] = "Bezrealitky"
     if "idnes" in portals:
         portals["idnes"]["name"] = "Reality.iDNES"
+    if "bazos" in portals:
+        portals["bazos"]["name"] = "Bazoš"
     for item in live_jobs:
         portal = str(item.get("portal") or "")
         if portal not in portals:
@@ -1362,7 +1417,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         prev = by_portal.get(portal)
         if not prev or stamp > (prev.get("finished_at") or prev.get("started_at") or ""):
             by_portal[portal] = item
-    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES"}
+    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
     seen_portals = set(by_portal) | {key for key in portals if key in titles}
     for portal in sorted(seen_portals, key=lambda key: titles.get(key, key)):
         title = titles.get(portal, portal.title())
@@ -1425,6 +1480,18 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             "next": _next_in(last_ping, interval),
         }
     )
+    dedupe = dedupe_payload(store, hub)
+    cron.append(
+        {
+            "name": "Deduplikace inzerátů",
+            "interval": f"denně {int(dedupe.get('hour') or 3):02d}:00" if dedupe.get("enabled") else "vypnuto",
+            "last": relative_short(dedupe.get("last_run_iso")),
+            "duration": "—",
+            "status": dedupe.get("status_label") or "OK",
+            "ok": not bool(dedupe.get("error")),
+            "next": dedupe.get("next") or "—",
+        }
+    )
     api_points = _api_series()
     err_points, err_now = _err_series(store)
     return {
@@ -1450,6 +1517,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         "sources": sources,
         "logs": logs,
         "jobs": cron,
+        "dedupe": dedupe,
         "running": bool(status.get("running")),
         "checking": bool(status.get("checking")),
         "uptime_sec": int(time.time() - _APP_STARTED),
