@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="cs">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realitify</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <img src="../assets/logo.svg" width="16" height="26" alt="" />
+      <div>
+        <strong>Realitify</strong>
+        <span id="status-pill" class="pill">…</span>
+      </div>
+    </header>
+
+    <section id="body" class="body">
+      <p class="muted">Načítám stav předplatného…</p>
+    </section>
+
+    <footer class="foot">
+      <label class="api">
+        API
+        <select id="api-base"></select>
+      </label>
+      <button type="button" id="refresh" class="btn ghost">Obnovit</button>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

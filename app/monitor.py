@@ -14,7 +14,7 @@ from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
 from app.sources import client_for, source_name
-from app.catalog_sync import daily_shards, listing_is_new_for_monitor
+from app.catalog_sync import daily_shards, listing_is_new_for_monitor, sreality_recent_shards
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
@@ -30,17 +30,26 @@ class Hub:
         self._sold_task: asyncio.Task[None] | None = None
         self._ping_task: asyncio.Task[None] | None = None
         self._catalog_task: asyncio.Task[None] | None = None
+        self._recent_catalog_task: asyncio.Task[None] | None = None
+        self._deep_catalog_task: asyncio.Task[None] | None = None
         self._discord_task: asyncio.Task[None] | None = None
         self._coords_task: asyncio.Task[None] | None = None
         self._dedupe_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.catalog_running_portals: set[str] = set()
+        self._recent_shard_idx = 0
+        self._deep_shard_idx = 0
         self.dedupe_running = False
         self.dedupe_scanning = False
         self.last_error: str | None = None
+        self._recover_stuck_catalog_meta()
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
+        from app.scrape_engine import AdaptiveLimiter, ScrapeEngine
+
+        self._scrape_limiter = AdaptiveLimiter()
+        self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
@@ -55,27 +64,132 @@ class Hub:
             self.clients[search_url] = client
         return client
 
+    def _recover_stuck_catalog_meta(self) -> None:
+        """Clear leftover 'running' meta from a crashed process so sync/live can resume."""
+        try:
+            status = str(self.store.get_meta("catalog_sync_status") or "")
+            if status == "running":
+                self.store.set_meta("catalog_sync_status", "partial")
+                self.store.set_meta(
+                    "catalog_sync_error",
+                    "Obnoveno po restartu — předchozí sync zůstal viset ve stavu running.",
+                )
+        except Exception:
+            pass
+        try:
+            settings = self.store.dedupe_settings()
+            status = str(settings.get("status") or "")
+            error = str(settings.get("error") or "")
+            interrupted = error.startswith("Přerušeno restartem procesu")
+            if status in {"running", "scanning"} or interrupted:
+                self.store.patch_dedupe_meta(
+                    {
+                        # A reload interruption is operational cleanup, not a
+                        # persistent dedupe failure shown as a red admin error.
+                        "status": "idle",
+                        "error": "",
+                        "last_attempt": utc_now(),
+                    }
+                )
+        except Exception:
+            pass
+        try:
+            # Stuck catalog_daily jobs (e.g. Bazos „Běží“ for days) block admin status.
+            now = utc_now()
+            for job in self.store.list_scrape_jobs():
+                if str(job.get("status") or "") != "running":
+                    continue
+                portal = str(job.get("portal") or "")
+                self.store.update_scrape_job(
+                    job["id"],
+                    status="partial",
+                    last_error="Obnoveno po restartu — job zůstal ve stavu running.",
+                    finished_at=now,
+                )
+                if portal:
+                    # Mark portal attempted today so minute ticks are not starved by catch-up.
+                    self.store.set_meta(f"catalog_sync_{portal}_status", "partial")
+                    if not str(self.store.get_meta(f"catalog_sync_{portal}_last") or "").startswith(now[:10]):
+                        self.store.set_meta(f"catalog_sync_{portal}_last", now)
+        except Exception:
+            pass
+
     async def _job_db(self, fn, *args, **kwargs):
         def _call():
-            return fn(*args, **kwargs)
+            last_error: Exception | None = None
+            for attempt in range(4):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as exc:
+                    last_error = exc
+                    if "database is locked" not in str(exc).lower() or attempt == 3:
+                        raise
+                    time.sleep(0.15 * (attempt + 1))
+            if last_error:
+                raise last_error
 
         return await asyncio.get_running_loop().run_in_executor(self.job_pool, _call)
+
+    async def _record_tick(self, tick: dict[str, Any]) -> None:
+        """Serialize tick metadata off the event loop and retry transient writers."""
+        def _call() -> None:
+            for attempt in range(5):
+                try:
+                    self.store.record_scrape_tick(tick)
+                    return
+                except Exception as exc:
+                    if "database is locked" not in str(exc).lower() or attempt == 4:
+                        raise
+                    time.sleep(0.1 * (attempt + 1))
+
+        # Coordinate with all in-process catalog writers. Without this gate a
+        # tick could lose every retry while deep batches continuously rotated.
+        async with self._catalog_write:
+            await asyncio.get_running_loop().run_in_executor(self.ui_pool, _call)
 
     async def start(self) -> None:
         if self.running:
             return
         self.running = True
         self.last_error = None
-        self._task = asyncio.create_task(self._loop(), name="sreality-hub")
-        self._sold_task = asyncio.create_task(self._sold_loop(), name="sreality-sold")
+        role = config.SCRAPE_ROLE
+        # Heavy scrape lives in scrape_worker when role=web; role=all keeps legacy single-process.
+        if role == "worker":
+            return
+        if role == "all":
+            self._task = asyncio.create_task(self._loop(), name="sreality-hub")
+            self._sold_task = asyncio.create_task(self._sold_loop(), name="sreality-sold")
+            self._catalog_task = asyncio.create_task(self._catalog_loop(), name="sreality-catalog")
+            self._recent_catalog_task = asyncio.create_task(
+                self._recent_catalog_loop(), name="sreality-catalog-recent"
+            )
+            self._deep_catalog_task = asyncio.create_task(
+                self._deep_catalog_loop(), name="sreality-catalog-deep"
+            )
+            self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
+            self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
+        elif role == "web":
+            # Digests only — listing polls / catalog / sold run in scrape_worker.
+            self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
-        self._catalog_task = asyncio.create_task(self._catalog_loop(), name="sreality-catalog")
         if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
             from app.discord_bot import run_discord_bot
 
             self._discord_task = asyncio.create_task(run_discord_bot(self.store), name="discord-bot")
-        self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
-        self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
+
+    async def _web_loop(self) -> None:
+        await asyncio.sleep(20)
+        while self.running:
+            try:
+                await self.maybe_send_digest()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"{exc}"
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise
 
     async def stop(self) -> None:
         self.running = False
@@ -86,6 +200,8 @@ class Hub:
                 self._sold_task,
                 self._ping_task,
                 self._catalog_task,
+                self._recent_catalog_task,
+                self._deep_catalog_task,
                 self._discord_task,
                 self._coords_task,
                 self._dedupe_task,
@@ -100,6 +216,8 @@ class Hub:
         self._sold_task = None
         self._ping_task = None
         self._catalog_task = None
+        self._recent_catalog_task = None
+        self._deep_catalog_task = None
         self._discord_task = None
         self._coords_task = None
         self._dedupe_task = None
@@ -117,18 +235,38 @@ class Hub:
         self.clients.clear()
 
     async def _loop(self) -> None:
-        await asyncio.sleep(20)
+        await asyncio.sleep(1)
         while self.running:
+            started = time.monotonic()
             try:
-                if not self.catalog_running:
-                    await self.check_due()
+                monitor_run = await self.check_due()
+                results = monitor_run.get("results") if isinstance(monitor_run, dict) else []
+                if results:
+                    good = [item for item in results if isinstance(item, dict)]
+                    tick = {
+                        "at": utc_now(),
+                        "kind": "monitor_priority",
+                        "role": config.SCRAPE_ROLE,
+                        "ms": int((time.monotonic() - started) * 1000),
+                        "discovery": {},
+                        "refresh": {
+                            "shards": len(good),
+                            "listings": sum(int(item.get("scanned") or 0) for item in good),
+                            "notified": sum(len(item.get("new") or []) for item in good),
+                            "errors": sum(len(item.get("errors") or []) for item in good),
+                        },
+                    }
+                    await self._record_tick(tick)
+                if config.SCRAPE_ROLE != "worker":
                     await self.maybe_send_digest()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_error = f"{exc}"
+                self.last_error = f"monitor-priority: {exc}"
             try:
-                await asyncio.sleep(10)
+                await asyncio.sleep(
+                    max(0.25, float(config.SCRAPE_MONITOR_LOOP_SEC) - (time.monotonic() - started))
+                )
             except asyncio.CancelledError:
                 raise
 
@@ -152,25 +290,55 @@ class Hub:
     async def check_due(self) -> dict[str, Any]:
         if self.checking:
             return {"ok": False, "reason": "already-checking"}
-        if self.catalog_running:
-            return {"ok": False, "reason": "catalog-running"}
         self.checking = True
         try:
             groups: dict[str, dict[str, Any]] = {}
-            for monitor in self.store.list_monitors():
+            monitors = await self._job_db(self.store.list_monitors_light)
+            for monitor in monitors:
                 if not monitor.get("enabled"):
                     continue
                 if not monitor.get("seeded"):
-                    self.store.seed_monitor_from_catalog(monitor)
-                    self.store.set_monitor_seeded(monitor["id"], True)
-                for job in self.store.attach_monitor_live_jobs(monitor):
+                    await self._job_db(self.store.seed_monitor_from_catalog, monitor)
+                    await self._job_db(self.store.set_monitor_seeded, monitor["id"], True)
+                jobs = await self._job_db(self.store.attach_monitor_live_jobs, monitor)
+                for job in jobs:
                     bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
                     bucket["monitors"].append(monitor)
-            results = []
+            pending = []
             for bucket in groups.values():
                 if not any(self._monitor_due(item) for item in bucket["monitors"]):
                     continue
-                results.append(await self.check_live_job(bucket["job"], bucket["monitors"]))
+                async def bounded_check(current=bucket):
+                    try:
+                        return await asyncio.wait_for(
+                            self.check_live_job(current["job"], current["monitors"]),
+                            timeout=float(config.SCRAPE_MONITOR_DEADLINE_SEC) + 30.0,
+                        )
+                    except asyncio.TimeoutError:
+                        message = "Monitor search timeout; další cyklus ho zkusí znovu."
+                        for item in current["monitors"]:
+                            await self._job_db(
+                                self.store.update_monitor_stats,
+                                item["id"],
+                                last_check=utc_now(),
+                                last_error=message,
+                            )
+                        return {
+                            "job_id": current["job"]["id"],
+                            "scanned": 0,
+                            "new": [],
+                            "errors": [message],
+                        }
+
+                pending.append(bounded_check())
+            raw_results = await asyncio.gather(*pending, return_exceptions=True)
+            results = []
+            for result in raw_results:
+                if isinstance(result, BaseException):
+                    self.last_error = f"monitor-priority: {result}"
+                    results.append({"ok": False, "error": str(result)})
+                else:
+                    results.append(result)
             return {"ok": True, "results": results}
         finally:
             self.checking = False
@@ -213,24 +381,46 @@ class Hub:
         notified: list[Listing] = []
         errors: list[str] = []
         try:
-            async with self._portal_gate:
-                if (job.get("kind") or "") == "monitor_live":
-                    listings, total = await client.fetch_all(newest=True, max_pages=40)
-                    notify_limit = max(config.POLL_PAGES * 20, 30)
-                else:
-                    listings, total = await client.fetch_pages(config.POLL_PAGES, newest=True)
-                    notify_limit = len(listings)
-            for index, listing in enumerate(listings):
+            fetched = await self._monitor_engine.fetch_shards(
+                [
+                    {
+                        "shard_key": f"priority:{job['id']}",
+                        "search_url": job["search_url"],
+                    }
+                ],
+                client_factory=self.client_for,
+                max_pages=config.POLL_PAGES,
+                deadline_sec=float(config.SCRAPE_MONITOR_DEADLINE_SEC),
+            )
+            result = fetched[0]
+            listings, total = result.listings, result.total
+            notify_limit = len(listings)
+            if result.error:
+                errors.append(result.error)
+            # All catalog writers share one lock. Monitor batches queue first at the
+            # network limiter and then serialize here instead of fighting SQLite.
+            async with self._catalog_write:
+                upserts = await self._job_db(
+                    self.store.upsert_catalog_listings_results,
+                    listings,
+                    kind="refresh",
+                    fast=True,
+                )
+            for index, (listing, upsert) in enumerate(zip(listings, upserts)):
                 try:
-                    result = await self._job_db(self.store.upsert_catalog_listing, listing, kind="refresh")
+                    # The common unchanged case only needs last_seen from the batch write.
+                    # Avoid monitor matching, hit writes and detail calls for every item.
+                    prev = upsert.get("prev")
+                    if prev is not None and not snapshot_price_change(prev, listing):
+                        continue
                     targets = await self._job_db(self.store.matching_monitors, listing, job["id"])
                     if not targets:
                         targets = monitors
                     for monitor in targets:
-                        await self._job_db(self.store.add_monitor_hit, monitor["id"], result["listing_key"])
+                        await self._job_db(self.store.add_monitor_hit, monitor["id"], upsert["listing_key"])
                     if index >= notify_limit:
                         continue
-                    alert = await self._classify(client, listing, result.get("prev"))
+                    alert = await self._classify(client, listing, prev)
                     for monitor in targets:
                         if alert is None:
                             continue
@@ -285,9 +475,10 @@ class Hub:
                         await self.notify_sold(monitor, listing.id)
                 except Exception as exc:
                     errors.append(f"{listing.id}: {exc}")
+            # Sold/removal probing has its own continuous _sold_loop. Doing it once
+            # per search URL multiplied detail requests and starved monitor refresh.
             for monitor in monitors:
-                await self._probe_sold(monitor, client, self.store.stale_listings(monitor["id"], days=1, limit=5))
-                current = self.store.get_monitor(monitor["id"]) or monitor
+                current = await self._job_db(self.store.get_monitor, monitor["id"]) or monitor
                 try:
                     inventory = json.loads(current.get("last_inventory") or "{}")
                 except json.JSONDecodeError:
@@ -298,7 +489,8 @@ class Hub:
                 inventory[portal] = {"total": int(total or 0), "found": len(listings)}
                 last_total = sum(int((row or {}).get("total") or 0) for row in inventory.values() if isinstance(row, dict))
                 last_found = sum(int((row or {}).get("found") or 0) for row in inventory.values() if isinstance(row, dict))
-                self.store.update_monitor_stats(
+                await self._job_db(
+                    self.store.update_monitor_stats,
                     monitor["id"],
                     last_check=utc_now(),
                     last_error="; ".join(errors) if errors else None,
@@ -315,7 +507,8 @@ class Hub:
             }
         except Exception as exc:
             for monitor in monitors:
-                self.store.update_monitor_stats(
+                await self._job_db(
+                    self.store.update_monitor_stats,
                     monitor["id"],
                     last_check=utc_now(),
                     last_error=f"{exc}\n{traceback.format_exc(limit=2)}",
@@ -482,6 +675,447 @@ class Hub:
             monitor_name=payload.get("monitor_name") or "",
         )
 
+    async def _recent_catalog_loop(self) -> None:
+        """Continuously discover new listings, independent of monitors and deep crawl."""
+        await asyncio.sleep(2)
+        while self.running:
+            tick_started = time.monotonic()
+            try:
+                await self.run_due_scrape_schedules()
+                await self._recent_catalog_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"recent-catalog: {exc}"
+                try:
+                    await self._record_tick(
+                        {
+                            "at": utc_now(),
+                            "kind": "minute_discovery",
+                            "role": config.SCRAPE_ROLE,
+                            "error": str(exc)[:240],
+                            "discovery": {"shards": 0, "listings": 0, "new": 0, "updated": 0},
+                            "refresh": {},
+                        }
+                    )
+                except Exception:
+                    pass
+            elapsed = time.monotonic() - tick_started
+            sleep_for = max(0.5, float(config.SCRAPE_DISCOVERY_LOOP_SEC) - elapsed)
+            try:
+                await asyncio.sleep(sleep_for)
+            except asyncio.CancelledError:
+                raise
+
+    async def _deep_catalog_loop(self) -> None:
+        """Continuously consume low-priority full-market shards."""
+        await asyncio.sleep(4)
+        while self.running:
+            try:
+                await self._deep_catalog_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"rolling-deep: {exc}"
+            try:
+                await asyncio.sleep(float(config.SCRAPE_DEEP_LOOP_SEC))
+            except asyncio.CancelledError:
+                raise
+
+    def start_scrape_search_url(self, url: str, *, max_pages: int = 40) -> dict[str, Any]:
+        """Queue manual URL scrape in background so admin UI does not hang on DB locks."""
+        from app.catalog_sync import normalize_search_url
+
+        cleaned = normalize_search_url(url)
+        if not cleaned:
+            return {"ok": False, "error": "Chybí URL hledání"}
+        pages = max(1, min(200, int(max_pages or 40)))
+        try:
+            self.store.record_scrape_tick(
+                {
+                    "at": utc_now(),
+                    "kind": "manual_queued",
+                    "url": cleaned,
+                    "ms": 0,
+                    "discovery": {"shards": 1, "listings": 0, "new": 0, "updated": 0, "pages": pages},
+                    "refresh": {},
+                }
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"Nelze zapsat frontu (DB locked?): {exc}"}
+        if config.SCRAPE_ROLE == "web":
+            self.store.set_meta(
+                "scrape_url_request",
+                json.dumps({"url": cleaned, "max_pages": pages}, ensure_ascii=False),
+            )
+            return {"ok": True, "queued": True, "url": cleaned, "max_pages": pages}
+        asyncio.create_task(self._run_scrape_search_url(cleaned, pages), name="admin-scrape-url")
+        return {"ok": True, "queued": True, "url": cleaned, "max_pages": pages}
+
+    def schedule_manual_scrape(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Persist a one-shot scrape (URL or whole portal) for later."""
+        from app.catalog_sync import normalize_search_url
+
+        scope = str(job.get("scope") or "url").strip().lower()
+        run_at_raw = str(job.get("run_at") or "").strip()
+        if not run_at_raw:
+            return {"ok": False, "error": "Chybí čas naplánování"}
+        try:
+            parsed = datetime.fromisoformat(run_at_raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            run_at = parsed.astimezone(timezone.utc).isoformat()
+        except ValueError:
+            return {"ok": False, "error": "Neplatný čas naplánování"}
+        payload: dict[str, Any] = {
+            "scope": scope,
+            "run_at": run_at,
+            "created_at": utc_now(),
+        }
+        if scope == "portal":
+            portal = str(job.get("portal") or "").strip().lower()
+            if portal not in config.CATALOG_SYNC_HOURS:
+                return {"ok": False, "error": "Neznámý portál"}
+            payload["portal"] = portal
+            payload["label"] = {
+                "sreality": "Sreality",
+                "bezrealitky": "Bezrealitky",
+                "idnes": "Reality.iDNES",
+                "bazos": "Bazoš",
+            }.get(portal, portal)
+        else:
+            cleaned = normalize_search_url(str(job.get("url") or ""))
+            if not cleaned:
+                return {"ok": False, "error": "Chybí URL hledání"}
+            pages = max(1, min(200, int(job.get("max_pages") or 40)))
+            payload["url"] = cleaned
+            payload["max_pages"] = pages
+            payload["label"] = cleaned[:72]
+        saved = self.store.add_scrape_schedule(payload)
+        return {"ok": True, "scheduled": True, "job": saved}
+
+    async def run_due_scrape_schedules(self) -> int:
+        due = await self._job_db(self.store.claim_due_scrape_schedules)
+        for job in due:
+            scope = str(job.get("scope") or "url")
+            if scope == "portal":
+                portal = str(job.get("portal") or "").strip()
+                if portal:
+                    self.start_catalog_sync(portals=[portal])
+            else:
+                url = str(job.get("url") or "")
+                pages = int(job.get("max_pages") or 40)
+                if url:
+                    self.start_scrape_search_url(url, max_pages=pages)
+        return len(due)
+
+    async def _run_scrape_search_url(self, cleaned: str, pages: int) -> None:
+        try:
+            await self.scrape_search_url(cleaned, max_pages=pages)
+        except Exception as exc:
+            self.last_error = f"manual-scrape: {exc}"
+            try:
+                await self._job_db(
+                    self.store.record_scrape_tick,
+                    {
+                        "at": utc_now(),
+                        "kind": "manual_url",
+                        "url": cleaned,
+                        "error": str(exc)[:240],
+                        "discovery": {"listings": 0, "new": 0, "updated": 0},
+                        "refresh": {},
+                    },
+                )
+            except Exception:
+                pass
+
+    async def _catalog_upsert(
+        self,
+        listings: list[Listing],
+        *,
+        kind: str = "seeded",
+        write_deadline_sec: float | None = None,
+    ) -> dict[str, int]:
+        """Upsert in lock-scoped chunks so minute discovery can interleave."""
+        if not listings:
+            return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
+        # Keep individual SQLite writer holds short; large 500-row transactions
+        # blocked admin/auth/tick writes for tens of seconds on a 1GB database.
+        chunk_size = max(50, min(100, int(config.SCRAPE_BATCH_COMMIT)))
+        totals = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
+        deadline = (
+            time.monotonic() + max(5.0, write_deadline_sec)
+            if write_deadline_sec is not None
+            else None
+        )
+        for offset in range(0, len(listings), chunk_size):
+            if deadline is not None and time.monotonic() >= deadline:
+                totals["deferred_write"] = len(listings) - offset
+                break
+            chunk = listings[offset : offset + chunk_size]
+            async with self._catalog_write:
+                part = await self._job_db(
+                    self.store.upsert_catalog_listings_batch,
+                    chunk,
+                    kind=kind,
+                    commit_every=chunk_size,
+                    fast=True,
+                )
+            for key in ("n", "new", "updated", "same"):
+                totals[key] += int(part.get(key) or 0)
+            # Let pending minute ticks acquire the write lock.
+            await asyncio.sleep(0)
+        return totals
+
+    async def _try_catalog_upsert(
+        self,
+        listings: list[Listing],
+        *,
+        kind: str = "refresh",
+        timeout_sec: float = 4.0,
+        write_deadline_sec: float | None = 20.0,
+    ) -> tuple[dict[str, int] | None, str | None]:
+        """Prefer minute cadence: skip write if catalog sync holds the lock too long."""
+        if not listings:
+            return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}, None
+        try:
+            await asyncio.wait_for(self._catalog_write.acquire(), timeout=max(0.5, timeout_sec))
+        except asyncio.TimeoutError:
+            return None, "write-deferred:catalog-busy"
+        # Probe only — chunked upsert re-acquires so catalog sync can interleave.
+        self._catalog_write.release()
+        return await self._catalog_upsert(
+            listings, kind=kind, write_deadline_sec=write_deadline_sec
+        ), None
+
+    def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
+        """Rotate through full Sreality shards without synchronous DB writes."""
+        deep = [item for item in daily_shards() if item.get("portal") == "sreality"]
+        if not deep:
+            return []
+        n = max(1, min(len(deep), int(take or config.SCRAPE_DEEP_SHARDS_PER_TICK)))
+        picked: list[dict[str, str]] = []
+        for _ in range(n):
+            picked.append(deep[self._deep_shard_idx % len(deep)])
+            self._deep_shard_idx = (self._deep_shard_idx + 1) % len(deep)
+        return picked
+
+    async def _recent_catalog_tick(self) -> None:
+        """High-priority NewDiscovery; never waits for rolling deep."""
+        from app.scrape_engine import ScrapeEngine
+
+        recent = sreality_recent_shards()
+        if not recent:
+            return
+
+        started = time.monotonic()
+        engine = ScrapeEngine(self._scrape_limiter, priority=1)
+        disc_stats = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
+        disc_listings: list[Listing] = []
+        disc_pages = 0
+        disc_deferred = 0
+        error: str | None = None
+        write_note: str | None = None
+        try:
+            results = await engine.fetch_shards(
+                recent,
+                client_factory=self.client_for,
+                max_pages=config.SCRAPE_RECENT_PAGES,
+                deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
+            )
+            seen: set[int] = set()
+            for item in results:
+                disc_pages += item.pages_ok
+                disc_deferred += len(item.deferred_pages)
+                for listing in item.listings:
+                    if listing.id in seen:
+                        continue
+                    seen.add(listing.id)
+                    disc_listings.append(listing)
+            if disc_listings:
+                written, write_note = await self._try_catalog_upsert(
+                    disc_listings,
+                    kind="refresh",
+                    timeout_sec=3.0,
+                    write_deadline_sec=12.0,
+                )
+                if written is not None:
+                    disc_stats = written
+                    disc_deferred += int(written.get("deferred_write") or 0)
+                else:
+                    disc_deferred += len(disc_listings)
+        except Exception as exc:
+            error = str(exc)[:240]
+            self.last_error = f"recent-catalog: {error}"
+
+        tick = {
+            "at": utc_now(),
+            "kind": "new_discovery",
+            "role": config.SCRAPE_ROLE,
+            "ms": int((time.monotonic() - started) * 1000),
+            "error": error,
+            "note": write_note,
+            "discovery": {
+                "shards": len(recent),
+                "listings": len(disc_listings),
+                "pages_ok": disc_pages,
+                "deferred": disc_deferred,
+                "new": int(disc_stats.get("new") or 0),
+                "updated": int(disc_stats.get("updated") or 0),
+                "same": int(disc_stats.get("same") or 0),
+                "write_skipped": bool(write_note) and not disc_listings,
+            },
+            "refresh": {},
+            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+        }
+        try:
+            await self._record_tick(tick)
+            print(
+                f"new_discovery listings={len(disc_listings)} new={disc_stats.get('new')} "
+                f"ms={tick['ms']}"
+                + (f" note={write_note}" if write_note else ""),
+                flush=True,
+            )
+        except Exception as exc:
+            self.last_error = f"scrape-tick: {exc}"
+            print(f"record_scrape_tick failed: {exc}", flush=True)
+
+    async def _deep_catalog_tick(self) -> None:
+        """Low-priority rolling crawl; monitor and discovery requests preempt its queue."""
+        from app.scrape_engine import ScrapeEngine
+
+        deep = self.next_deep_shards()
+        if not deep:
+            return
+        started = time.monotonic()
+        engine = ScrapeEngine(self._scrape_limiter, priority=2)
+        listings: list[Listing] = []
+        pages_ok = 0
+        deferred = 0
+        stats = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
+        error: str | None = None
+        try:
+            results = await engine.fetch_shards(
+                deep,
+                client_factory=self.client_for,
+                max_pages=config.SCRAPE_DEEP_PAGES,
+                deadline_sec=float(config.SCRAPE_DEEP_DEADLINE_SEC),
+            )
+            seen: set[int] = set()
+            for item in results:
+                pages_ok += item.pages_ok
+                deferred += len(item.deferred_pages)
+                for listing in item.listings:
+                    if listing.id in seen:
+                        continue
+                    seen.add(listing.id)
+                    listings.append(listing)
+            if listings:
+                written, note = await self._try_catalog_upsert(
+                    listings,
+                    kind="refresh",
+                    timeout_sec=1.0,
+                    write_deadline_sec=12.0,
+                )
+                if written is not None:
+                    stats = written
+                    deferred += int(written.get("deferred_write") or 0)
+                else:
+                    deferred += len(listings)
+                    error = note
+        except Exception as exc:
+            error = str(exc)[:240]
+            self.last_error = f"rolling-deep: {error}"
+
+        deep_total = len([item for item in daily_shards() if item.get("portal") == "sreality"]) or 1
+        coverage_pct = round(100.0 * self._deep_shard_idx / deep_total, 1)
+        tick = {
+            "at": utc_now(),
+            "kind": "rolling_deep",
+            "role": config.SCRAPE_ROLE,
+            "ms": int((time.monotonic() - started) * 1000),
+            "error": error if error and not error.startswith("write-deferred:") else None,
+            "note": error if error and error.startswith("write-deferred:") else None,
+            "discovery": {},
+            "refresh": {
+                "shards": len(deep),
+                "listings": len(listings),
+                "pages_ok": pages_ok,
+                "deferred": deferred,
+                "new": int(stats.get("new") or 0),
+                "updated": int(stats.get("updated") or 0),
+                "same": int(stats.get("same") or 0),
+                "deep_idx": self._deep_shard_idx,
+                "deep_total": deep_total,
+                "coverage_pct": coverage_pct,
+                "notified": 0,
+            },
+            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+        }
+        await self._record_tick(tick)
+        print(
+            f"rolling_deep listings={len(listings)} shards={len(deep)} "
+            f"cover={coverage_pct}% ms={tick['ms']}",
+            flush=True,
+        )
+
+    async def scrape_search_url(self, url: str, *, max_pages: int = 40) -> dict[str, Any]:
+        """Manually crawl a portal search URL into the catalog (admin/provoz)."""
+        from app.catalog_sync import normalize_search_url
+        from app.scrape_engine import ScrapeEngine
+        from app.sources import portal_of
+
+        cleaned = normalize_search_url(url)
+        if not cleaned:
+            return {"ok": False, "error": "Chybí URL hledání"}
+        pages = max(1, min(200, int(max_pages or 40)))
+        client = self.client_for(cleaned)
+        engine = ScrapeEngine()
+        started = time.monotonic()
+        result = await engine.fetch_pages_parallel(
+            shard_key=f"manual:{portal_of(cleaned)}:{cleaned[:80]}",
+            fetch_page=lambda p: client.fetch_page(p, newest=True),
+            max_pages=pages,
+            deadline_monotonic=time.monotonic() + max(30.0, float(config.SCRAPE_FULL_MARKET_DEADLINE_SEC)),
+        )
+        listings = list(result.listings)
+        stats = {"n": 0, "new": 0, "updated": 0, "same": 0}
+        if listings:
+            stats = await self._catalog_upsert(listings, kind="seeded")
+        tick = {
+            "at": utc_now(),
+            "kind": "manual_url",
+            "url": cleaned,
+            "ms": int((time.monotonic() - started) * 1000),
+            "discovery": {
+                "shards": 1,
+                "listings": len(listings),
+                "pages_ok": result.pages_ok,
+                "deferred": len(result.deferred_pages),
+                "new": int(stats.get("new") or 0),
+                "updated": int(stats.get("updated") or 0),
+                "same": int(stats.get("same") or 0),
+                "total": result.total,
+            },
+            "refresh": {"listings": 0, "shards": 0, "notified": 0},
+            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+        }
+        await self._job_db(self.store.record_scrape_tick, tick)
+        return {
+            "ok": True,
+            "url": cleaned,
+            "portal": portal_of(cleaned),
+            "listings": len(listings),
+            "pages_ok": result.pages_ok,
+            "deferred": result.deferred_pages,
+            "total": result.total,
+            "new": stats.get("new") or 0,
+            "updated": stats.get("updated") or 0,
+            "same": stats.get("same") or 0,
+            "ms": tick["ms"],
+            "error": result.error,
+        }
+
     async def _catalog_loop(self) -> None:
         await asyncio.sleep(8)
         while self.running:
@@ -497,16 +1131,18 @@ class Hub:
                 raise
 
     async def _dedupe_loop(self) -> None:
-        await asyncio.sleep(20)
+        await asyncio.sleep(90)
         while self.running:
             try:
                 await self.maybe_run_dedupe()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+                self.store.patch_dedupe_meta(
+                    {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()}
+                )
             try:
-                await asyncio.sleep(60)
+                await asyncio.sleep(300)
             except asyncio.CancelledError:
                 raise
 
@@ -515,14 +1151,25 @@ class Hub:
         if not settings.get("enabled"):
             return False
         now = datetime.now().astimezone()
-        if now.hour < int(settings.get("hour") or 3):
+        hour = int(settings.get("hour") or 3)
+        # Keep auto-dedupe in a short night window — all-day retries lock SQLite for minutes.
+        if now.hour < hour or now.hour > hour + 2:
             return False
+        today = now.date().isoformat()
         last = str(settings.get("last_run") or "")
-        return not last.startswith(now.date().isoformat())
+        if last.startswith(today):
+            return False
+        attempt = str(settings.get("last_attempt") or "")
+        if attempt.startswith(today):
+            return False
+        return True
 
     async def maybe_run_dedupe(self) -> dict[str, Any]:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
+        # Dedupe holds long write locks — never overlap with catalog sync / recent scrape.
+        if self.catalog_running or self.catalog_running_portals:
+            return {"ok": False, "reason": "catalog-running"}
         if not self._dedupe_due_today():
             return {"ok": False, "reason": "not-due"}
         return await self.run_dedupe()
@@ -530,6 +1177,8 @@ class Hub:
     def start_dedupe(self) -> dict[str, Any]:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
+        if self.catalog_running or self.catalog_running_portals:
+            return {"ok": False, "reason": "catalog-running"}
         asyncio.create_task(self.run_dedupe(), name="dedupe-run")
         return {"ok": True, "started": True}
 
@@ -543,12 +1192,14 @@ class Hub:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         self.dedupe_running = True
-        self.store.patch_dedupe_meta({"status": "running", "error": ""})
+        self.store.patch_dedupe_meta({"status": "running", "error": "", "last_attempt": utc_now()})
         try:
             stats = await asyncio.to_thread(lambda: self.store.merge_duplicate_listings(force=True))
             return {"ok": True, "stats": stats}
         except Exception as exc:
-            self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+            self.store.patch_dedupe_meta(
+                {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()}
+            )
             print(f"Sloučení duplicit selhalo: {exc}", flush=True)
             return {"ok": False, "error": str(exc)}
         finally:
@@ -574,11 +1225,18 @@ class Hub:
         today = now.date().isoformat()
         due: list[str] = []
         for portal, hour in config.CATALOG_SYNC_HOURS.items():
-            if not force and now.hour < hour:
-                continue
+            if not force:
+                if now.hour < hour:
+                    continue
+                # No all-day catch-up: missed window must wait until tomorrow (or manual run).
+                # Catch-up of Bazos/iDNES was holding SQLite locks for hours and killing minute ticks.
+                if now.hour > hour + 2:
+                    continue
             last = self.store.get_meta(f"catalog_sync_{portal}_last") or ""
-            status = self.store.get_meta(f"catalog_sync_{portal}_status") or ""
-            if str(last).startswith(today) and status == "done":
+            status = str(self.store.get_meta(f"catalog_sync_{portal}_status") or "")
+            if not force and str(last).startswith(today):
+                continue
+            if not force and status in {"done", "partial", "error", "running"} and str(last).startswith(today):
                 continue
             due.append(portal)
         return due
@@ -603,6 +1261,14 @@ class Hub:
 
     def start_catalog_sync(self, portals: list[str] | None = None) -> dict[str, Any]:
         wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        if config.SCRAPE_ROLE == "web":
+            self.store.set_meta("catalog_sync_request", json.dumps(sorted(wanted)))
+            return {
+                "ok": True,
+                "queued": True,
+                "portals": sorted(wanted),
+                "status": self.store.catalog_sync_status(),
+            }
         to_start = wanted - self.catalog_running_portals
         if not to_start:
             return {"ok": False, "reason": "already-running", "status": self.store.catalog_sync_status()}
@@ -643,10 +1309,15 @@ class Hub:
                         search_url=shard["search_url"],
                     )
                     finished = str(job.get("finished_at") or "")
-                    if not rerun and job.get("status") == "done" and finished[:10] == today:
+                    job_status = str(job.get("status") or "")
+                    if (
+                        not rerun
+                        and job_status == "done"
+                        and finished[:10] == today
+                    ):
                         shard_ok[shard["shard_key"]] = True
                         return
-                    if rerun or finished[:10] != today:
+                    if rerun or finished[:10] != today or job_status in {"partial", "error", "pending", "running"}:
                         await self._job_db(
                             self.store.update_scrape_job,
                             job["id"],
@@ -660,7 +1331,8 @@ class Hub:
                     shard_ok[shard["shard_key"]] = await self._run_catalog_job(job)
 
                 if portal == "bazos":
-                    shard_gate = asyncio.Semaphore(2)
+                    # One Bazos shard at a time — parallel full-catalog upserts lock SQLite for minutes.
+                    shard_gate = asyncio.Semaphore(1)
 
                     async def run_bazos_shard(shard: dict[str, str]) -> None:
                         async with shard_gate:
@@ -718,44 +1390,64 @@ class Hub:
         total = int(job.get("last_total") or 0)
         seen_ids: set[int] = set()
         try:
-            while True:
-                try:
-                    async with self._portal_gate:
-                        batch, page_total = await client.fetch_page(page, newest=True)
-                except Exception as exc:
-                    if "403" in str(exc) or "429" in str(exc):
-                        await asyncio.sleep(20)
-                        async with self._portal_gate:
-                            batch, page_total = await client.fetch_page(page, newest=True)
-                    else:
-                        raise
-                total = page_total or total
-                if not batch:
+            from app.scrape_engine import ScrapeEngine
+
+            engine = ScrapeEngine()
+            needed: int | None = None
+            while page <= 400:
+                window = max(1, engine.limiter.limit)
+                pages = list(range(page, min(page + window, (needed or 400) + 1)))
+                if not pages:
                     break
-                fresh = [item for item in batch if item.id not in seen_ids]
-                if page > 1 and not fresh:
+                results = await asyncio.gather(
+                    *(engine.fetch_one_page(lambda p=p: client.fetch_page(p, newest=True), p) for p in pages)
+                )
+                empty_streak = 0
+                chunk: list[Listing] = []
+                for result in results:
+                    if result.error:
+                        if any(code in (result.error or "") for code in ("403", "429")):
+                            await asyncio.sleep(20)
+                        raise RuntimeError(result.error)
+                    total = result.total or total
+                    if not result.listings:
+                        empty_streak += 1
+                        continue
+                    fresh = [item for item in result.listings if item.id not in seen_ids]
+                    if not fresh:
+                        empty_streak += 1
+                        continue
+                    for listing in fresh:
+                        seen_ids.add(listing.id)
+                        chunk.append(listing)
+                    page_size = max(len(result.listings), 1)
+                    if total:
+                        needed = (int(total) + page_size - 1) // page_size
+                if chunk:
+                    await self._catalog_upsert(chunk, kind="seeded")
+                    upserts += len(chunk)
+                page = pages[-1] + 1
+                # Persist progress once per window (not per page).
+                self.store.update_scrape_job(job["id"], page=page, upserts=upserts, last_total=total)
+                if needed and pages[-1] >= needed:
                     break
-                for listing in fresh:
-                    seen_ids.add(listing.id)
-                    self.store.upsert_catalog_listing(listing, kind="seeded")
-                    upserts += 1
-                self.store.update_scrape_job(job["id"], page=page + 1, upserts=upserts, last_total=total)
-                page_size = max(len(batch), 1)
-                needed = (int(total) + page_size - 1) // page_size if total else None
-                if total:
-                    if page >= needed:
-                        break
-                page += 1
-                await asyncio.sleep(0.15)
+                if empty_streak >= len(pages):
+                    break
+            complete = True
+            if total and upserts < max(1, int(total * 0.92)):
+                complete = False
             self.store.update_scrape_job(
                 job["id"],
-                status="done",
+                status="done" if complete else "partial",
                 finished_at=utc_now(),
                 last_total=total,
                 upserts=upserts,
                 page=page,
+                last_error=None
+                if complete
+                else f"Incomplete crawl: upserts={upserts} total={total}",
             )
-            return True
+            return complete
         except Exception as exc:
             self.store.update_scrape_job(
                 job["id"],
@@ -777,8 +1469,8 @@ class Hub:
         )
         try:
             listings, total = await client.fetch_catalog(self._bazos_gate)
-            async with self._catalog_write:
-                await self._job_db(self.store.upsert_catalog_listings_batch, listings, kind="seeded")
+            # Chunked writes — a single 30k+ lock was starving minute_discovery ticks.
+            await self._catalog_upsert(listings, kind="seeded")
             pages = max(1, (int(total) + 19) // 20) if total else 1
             await self._job_db(
                 self.store.update_scrape_job,
@@ -985,6 +1677,13 @@ class Hub:
         templates = self.store.list_templates()
         settings = self.store.app_settings()
         settle_pending_if_due(self.store)
+        scrape_tick = None
+        raw_tick = self.store.get_meta("scrape_worker_tick")
+        if raw_tick:
+            try:
+                scrape_tick = json.loads(str(raw_tick))
+            except json.JSONDecodeError:
+                scrape_tick = None
         payload = {
             "running": self.running,
             "checking": self.checking,
@@ -993,6 +1692,8 @@ class Hub:
             "last_error": self.last_error or (errors[0] if errors else None),
             "interval_sec": config.POLL_INTERVAL_SEC,
             "poll_pages": config.POLL_PAGES,
+            "scrape_role": config.SCRAPE_ROLE,
+            "scrape_worker": scrape_tick,
             "tracked": tracked,
             "new_today": new_today,
             "search_total": catalog.get("listings") or 0,

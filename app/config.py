@@ -55,6 +55,29 @@ DISCORD_SERVER_INVITE = os.getenv("DISCORD_SERVER_INVITE", "").strip()
 SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
 POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
 POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))
+SCRAPE_MONITOR_LOOP_SEC = max(2, int(os.getenv("SCRAPE_MONITOR_LOOP_SEC", "5")))
+SCRAPE_DISCOVERY_LOOP_SEC = max(10, int(os.getenv("SCRAPE_DISCOVERY_LOOP_SEC", "60")))
+SCRAPE_DEEP_LOOP_SEC = max(1, int(os.getenv("SCRAPE_DEEP_LOOP_SEC", "2")))
+# all = single-process local; web/worker = supervisord split (Railway).
+SCRAPE_ROLE = (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower()
+if SCRAPE_ROLE not in {"all", "web", "worker"}:
+    SCRAPE_ROLE = "all"
+SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
+SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))
+SCRAPE_RECENT_PAGES = max(1, min(10, int(os.getenv("SCRAPE_RECENT_PAGES", "4"))))
+SCRAPE_DISCOVERY_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DISCOVERY_DEADLINE_SEC", "50")))
+SCRAPE_MONITOR_DEADLINE_SEC = max(20, int(os.getenv("SCRAPE_MONITOR_DEADLINE_SEC", "55")))
+SCRAPE_FULL_MARKET_DEADLINE_SEC = max(30, int(os.getenv("SCRAPE_FULL_MARKET_DEADLINE_SEC", "70")))
+SCRAPE_FULL_MARKET_URLS = max(10, int(os.getenv("SCRAPE_FULL_MARKET_URLS", "80")))
+# Rolling deep list crawl: cover ~all Sreality shards over time (not just newest 2k).
+SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int(os.getenv("SCRAPE_DEEP_SHARDS_PER_TICK", "10"))))
+SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "20"))))
+SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40")))
+SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
+SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD", "8")))
+SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
+
+
 def _hour_env(name: str, default: int) -> int:
     return max(0, min(23, int(os.getenv(name, str(default)))))
 

@@ -120,6 +120,7 @@ class SrealityClient:
             headers=BROWSER_HEADERS,
             follow_redirects=True,
             timeout=25.0,
+            limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
         )
 
     async def aclose(self) -> None:
@@ -261,6 +262,17 @@ class SrealityClient:
         except Exception:
             return listing
 
+    async def fetch_listing_url(self, url: str) -> Listing:
+        stub = stub_listing_from_url(url)
+        if not stub.id:
+            raise ValueError("Neplatná Sreality URL")
+        listing = await self._fetch_detail_next(stub)
+        if not (listing.name or "").strip() or listing.name.startswith("Inzerát "):
+            # Still usable if price/disposition filled; otherwise fail soft
+            if listing.price_czk is None and not listing.disposition:
+                raise ValueError("Nepodařilo se načíst detail inzerátu")
+        return listing
+
     async def _fetch_detail_next(self, listing: Listing) -> Listing:
         build_id = await self._resolve_build_id()
         path = urlsplit(listing.url).path.rstrip("/")
@@ -294,6 +306,36 @@ def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
             break
     if not isinstance(estate, dict):
         return listing
+    merged = listing_from_estate(estate, listing.url or "")
+    if merged is not None:
+        # Prefer freshly scraped core fields; keep stub url/id if needed.
+        for field_name in (
+            "id",
+            "name",
+            "price_czk",
+            "price_label",
+            "disposition",
+            "area_m2",
+            "locality",
+            "image_url",
+            "photos",
+            "lat",
+            "lon",
+            "created_on",
+            "edited_on",
+            "views",
+            "old_price_czk",
+            "advert_code",
+            "description",
+            "extras",
+        ):
+            value = getattr(merged, field_name)
+            if value not in (None, "", [], {}):
+                setattr(listing, field_name, value)
+        if merged.url:
+            listing.url = merged.url
+        return listing
+
     params = estate.get("params") or {}
     listing.created_on = _as_date(params.get("since"))
     listing.edited_on = _as_date(params.get("edited"))
@@ -323,6 +365,116 @@ def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
 
     refine_listing_location(listing)
     return listing
+
+
+def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None:
+    """Build a Listing from Sreality detail `estate` JSON."""
+    listing_id = estate.get("id")
+    try:
+        listing_id = int(listing_id)
+    except (TypeError, ValueError):
+        listing_id = None
+    if not listing_id and url:
+        match = re.search(r"/(\d+)/?$", urlsplit(url).path)
+        if match:
+            listing_id = int(match.group(1))
+    name = (estate.get("name") or estate.get("title") or "").replace("\xa0", " ").strip()
+    if not listing_id:
+        return None
+    if not name:
+        name = f"Inzerát {listing_id}"
+
+    disposition = _param_label(estate.get("categorySubCb")) or ""
+    if not disposition:
+        disposition = ((estate.get("categorySubCb") or {}).get("name") or "").strip() if isinstance(estate.get("categorySubCb"), dict) else ""
+
+    price = estate.get("priceCzk")
+    if price is None:
+        price = estate.get("priceSummaryCzk")
+    try:
+        price_czk = int(price) if price is not None else None
+    except (TypeError, ValueError):
+        price_czk = None
+    unit = _param_label(estate.get("priceUnitCb")) or "měsíc"
+    if "/prodej/" in (url or "").lower():
+        unit = unit if unit and unit != "měsíc" else "ks"
+    price_label = format_price(price_czk, f"za {unit}" if not str(unit).startswith("za ") else unit)
+
+    params = estate.get("params") or {}
+    area = None
+    for key in ("usableArea", "estateArea", "area", "floorArea"):
+        raw = params.get(key) if isinstance(params, dict) else None
+        if raw is None:
+            raw = estate.get(key)
+        try:
+            if raw is not None:
+                area = int(float(raw))
+                break
+        except (TypeError, ValueError):
+            continue
+    if area is None:
+        area = parse_area(name, price_czk, estate.get("priceCzkPerSqM"))
+
+    loc = estate.get("locality") or {}
+    locality = format_locality(loc) if isinstance(loc, dict) else str(loc or "")
+    lat, lon = coords_from_locality(loc) if isinstance(loc, dict) else (None, None)
+    photos = image_urls(estate.get("images") or params.get("images") or [])
+    detail_url = (url or "").strip() or build_detail_url(estate if "locality" in estate else {**estate, "id": listing_id})
+    if not detail_url.startswith("http"):
+        detail_url = urljoin("https://www.sreality.cz", detail_url)
+
+    old_price = estate.get("priceSummaryOldCzk")
+    try:
+        old_price_czk = int(old_price) if old_price is not None else None
+    except (TypeError, ValueError):
+        old_price_czk = None
+
+    listing = Listing(
+        id=listing_id,
+        name=name,
+        price_czk=price_czk,
+        price_label=price_label,
+        disposition=disposition or "byt",
+        area_m2=area,
+        locality=locality,
+        url=detail_url.split("?")[0].rstrip("/"),
+        image_url=photos[0] if photos else None,
+        photos=photos,
+        lat=lat,
+        lon=lon,
+        created_on=_as_date(params.get("since")),
+        edited_on=_as_date(params.get("edited")),
+        views=None,
+        old_price_czk=old_price_czk,
+        advert_code=str(params["advertCode"]) if params.get("advertCode") not in (None, "") else None,
+        description=(estate.get("description") or "").replace("\xa0", " ").strip() or None,
+        extras=extras_from_sreality(estate),
+    )
+    try:
+        listing.views = int(params["stats"]) if params.get("stats") is not None else None
+    except (TypeError, ValueError):
+        listing.views = None
+    return listing
+
+
+def stub_listing_from_url(url: str) -> Listing:
+    raw = (url or "").strip()
+    if raw.startswith("/"):
+        raw = urljoin("https://www.sreality.cz", raw)
+    path = urlsplit(raw).path.rstrip("/")
+    match = re.search(r"/(\d+)$", path)
+    listing_id = int(match.group(1)) if match else 0
+    return Listing(
+        id=listing_id or 0,
+        name="",
+        price_czk=None,
+        price_label="",
+        disposition="",
+        area_m2=None,
+        locality="",
+        url=raw.split("?")[0].rstrip("/"),
+        image_url=None,
+    )
 
 
 def extras_from_sreality(estate: dict[str, Any]) -> dict[str, Any]:
@@ -482,7 +634,8 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
         return None
     disposition = ((raw.get("categorySubCb") or {}).get("name") or "").strip()
     if not disposition:
-        return None
+        # Keep listing — empty disposition used to drop valid flats from catalog.
+        disposition = "byt"
     price = raw.get("priceCzk")
     try:
         price_czk = int(price) if price is not None else None

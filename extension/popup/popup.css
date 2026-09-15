@@ -1,0 +1,135 @@
+:root {
+  --forest: #163300;
+  --green: #9fe870;
+  --pale: #f7f9f6;
+  --line: #d0d4cd;
+  --muted: #6e7570;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  width: 320px;
+  font-family: Inter, Helvetica, Arial, sans-serif;
+  color: var(--forest);
+  background: #fff;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.head strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.pill {
+  display: inline-flex;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--pale);
+  color: var(--muted);
+}
+
+.pill.on {
+  background: #e2f6d5;
+  color: var(--forest);
+  border: 1px solid var(--green);
+}
+
+.pill.off {
+  background: #fff7f2;
+  color: #e05a3e;
+}
+
+.body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.body h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.meta {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--pale);
+  font-size: 13px;
+}
+
+.meta div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--green);
+  color: var(--forest);
+  font-weight: 800;
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn.ghost {
+  background: #fff;
+  border: 1px solid var(--line);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.api {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.api select {
+  max-width: 180px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font: inherit;
+  color: var(--forest);
+}

@@ -433,6 +433,8 @@ class Store:
         self._facets_cache: dict[str, Any] | None = None
         self._facets_at = 0.0
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
+        self._monitor_index = None
+        self._monitor_index_at = 0.0
         self._init()
 
     def connect(self, readonly: bool = False) -> sqlite3.Connection:
@@ -443,6 +445,7 @@ class Store:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=250")
         elif on_loop:
+            # Short wait for request handlers so UI fails fast under writer load.
             conn = sqlite3.connect(self.path, timeout=0.08)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=80")
@@ -452,78 +455,99 @@ class Store:
             conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
+    def _connect_bootstrap(self) -> sqlite3.Connection:
+        """Long-timeout writer for schema init (uvicorn --reload races with scrapes)."""
+        conn = sqlite3.connect(self.path, timeout=60)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=60000")
+        return conn
+
     def _init(self) -> None:
-        with self.connect() as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS listings (
-                    id INTEGER NOT NULL,
-                    monitor_id TEXT NOT NULL DEFAULT 'default',
-                    name TEXT NOT NULL,
-                    price_czk INTEGER,
-                    price_label TEXT,
-                    disposition TEXT,
-                    area_m2 INTEGER,
-                    locality TEXT,
-                    url TEXT NOT NULL,
-                    image_url TEXT,
-                    first_seen TEXT NOT NULL,
-                    notified INTEGER NOT NULL DEFAULT 0,
-                    created_on TEXT,
-                    edited_on TEXT,
-                    views INTEGER,
-                    old_price_czk INTEGER,
-                    last_kind TEXT,
-                    lat REAL,
-                    lon REAL,
-                    PRIMARY KEY (monitor_id, id)
-                );
-                CREATE TABLE IF NOT EXISTS events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    listing_id INTEGER,
-                    monitor_id TEXT,
-                    kind TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    detail TEXT
-                );
-                CREATE TABLE IF NOT EXISTS meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                );
-                CREATE TABLE IF NOT EXISTS templates (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    config TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS monitors (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    search_url TEXT NOT NULL,
-                    webhook_url TEXT,
-                    template_id TEXT,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    seeded INTEGER NOT NULL DEFAULT 0,
-                    last_check TEXT,
-                    last_error TEXT,
-                    last_total INTEGER,
-                    last_found INTEGER,
-                    created_at TEXT NOT NULL
-                );
-                """
-            )
-            self._migrate_listings(conn)
-            self._migrate_events(conn)
-            self._ensure_catalog(conn)
-            self._ensure_scrape_schema(conn)
-            self._migrate_monitors(conn)
-            self._ensure_defaults(conn)
-            self._ensure_ping_queue(conn)
-            self._ensure_push(conn)
-            self._ensure_analytics(conn)
-            self._ensure_guest_searches(conn)
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(12):
+            conn = self._connect_bootstrap()
+            try:
+                with conn:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.executescript(
+                        """
+                        CREATE TABLE IF NOT EXISTS listings (
+                            id INTEGER NOT NULL,
+                            monitor_id TEXT NOT NULL DEFAULT 'default',
+                            name TEXT NOT NULL,
+                            price_czk INTEGER,
+                            price_label TEXT,
+                            disposition TEXT,
+                            area_m2 INTEGER,
+                            locality TEXT,
+                            url TEXT NOT NULL,
+                            image_url TEXT,
+                            first_seen TEXT NOT NULL,
+                            notified INTEGER NOT NULL DEFAULT 0,
+                            created_on TEXT,
+                            edited_on TEXT,
+                            views INTEGER,
+                            old_price_czk INTEGER,
+                            last_kind TEXT,
+                            lat REAL,
+                            lon REAL,
+                            PRIMARY KEY (monitor_id, id)
+                        );
+                        CREATE TABLE IF NOT EXISTS events (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            listing_id INTEGER,
+                            monitor_id TEXT,
+                            kind TEXT NOT NULL,
+                            created_at TEXT NOT NULL,
+                            detail TEXT
+                        );
+                        CREATE TABLE IF NOT EXISTS meta (
+                            key TEXT PRIMARY KEY,
+                            value TEXT
+                        );
+                        CREATE TABLE IF NOT EXISTS templates (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            config TEXT NOT NULL,
+                            created_at TEXT NOT NULL
+                        );
+                        CREATE TABLE IF NOT EXISTS monitors (
+                            id TEXT PRIMARY KEY,
+                            name TEXT NOT NULL,
+                            search_url TEXT NOT NULL,
+                            webhook_url TEXT,
+                            template_id TEXT,
+                            enabled INTEGER NOT NULL DEFAULT 1,
+                            seeded INTEGER NOT NULL DEFAULT 0,
+                            last_check TEXT,
+                            last_error TEXT,
+                            last_total INTEGER,
+                            last_found INTEGER,
+                            created_at TEXT NOT NULL
+                        );
+                        """
+                    )
+                    self._migrate_listings(conn)
+                    self._migrate_events(conn)
+                    self._ensure_catalog(conn)
+                    self._ensure_scrape_schema(conn)
+                    self._migrate_monitors(conn)
+                    self._ensure_defaults(conn)
+                    self._ensure_ping_queue(conn)
+                    self._ensure_push(conn)
+                    self._ensure_analytics(conn)
+                    self._ensure_guest_searches(conn)
+                return
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if "locked" not in str(exc).lower() or attempt == 11:
+                    raise
+                time.sleep(0.15 * (attempt + 1))
+            finally:
+                conn.close()
+        if last_error:
+            raise last_error
 
     def _ensure_guest_searches(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -751,7 +775,13 @@ class Store:
             "id": listing.id,
         }
 
-    def _resolve_canonical(self, conn: sqlite3.Connection, listing: Listing | dict[str, Any]) -> str:
+    def _resolve_canonical(
+        self,
+        conn: sqlite3.Connection,
+        listing: Listing | dict[str, Any],
+        *,
+        fast: bool = False,
+    ) -> str:
         row = listing if isinstance(listing, dict) else self._listing_dict(listing)
         url = str(row.get("url") or "")
         url_key = listing_key(url)
@@ -763,6 +793,15 @@ class Store:
             ).fetchone()
             if link and link["canonical_key"]:
                 found = str(link["canonical_key"])
+        if fast and found:
+            return found
+        if fast and url_key:
+            existing = conn.execute(
+                "SELECT canonical_key FROM catalog_listings WHERE listing_key = ? LIMIT 1",
+                (url_key,),
+            ).fetchone()
+            if existing and existing["canonical_key"]:
+                return str(existing["canonical_key"])
         nearby = self._find_canonical_nearby(conn, row) or ""
         keep = nearby or found or url_canonical(url)
         if found and found != keep:
@@ -999,6 +1038,7 @@ class Store:
             "status": str(data.get("status") or "idle"),
             "last_kind": str(data.get("last_kind") or ""),
             "last_run": data.get("last_run") or "",
+            "last_attempt": data.get("last_attempt") or "",
             "last_scan": data.get("last_scan") or "",
             "last_stats": data.get("last_stats") if isinstance(data.get("last_stats"), dict) else {},
             "last_scan_stats": data.get("last_scan_stats") if isinstance(data.get("last_scan_stats"), dict) else {},
@@ -1820,6 +1860,12 @@ class Store:
             for row in rows
         ]
 
+    def list_monitors_light(self) -> list[dict[str, Any]]:
+        """Monitor-loop view without expensive aggregate counts."""
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM monitors ORDER BY created_at").fetchall()
+        return [self._monitor_row(row) for row in rows]
+
     def _monitor_count_maps(self, conn: sqlite3.Connection) -> tuple[dict[str, int], dict[str, int]]:
         hits = {
             str(row[0]): int(row[1])
@@ -1964,19 +2010,52 @@ class Store:
             )
 
     def get_meta(self, key: str) -> str | None:
-        with self.connect(readonly=True) as conn:
-            row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
-            return row["value"] if row else None
+        last_error: Exception | None = None
+        for attempt in range(6):
+            try:
+                conn = self._connect_bootstrap() if attempt else self.connect(readonly=True)
+                try:
+                    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+                    return row["value"] if row else None
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if "locked" not in str(exc).lower() or attempt == 5:
+                    break
+                time.sleep(0.1 * (attempt + 1))
+            except Exception as exc:
+                last_error = exc
+                break
+        if last_error and "locked" in str(last_error).lower():
+            return None
+        if last_error:
+            raise last_error
+        return None
 
     def set_meta(self, key: str, value: str | None) -> None:
-        with self.connect() as conn:
-            if value is None:
-                conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(10):
+            conn = self._connect_bootstrap()
+            try:
+                with conn:
+                    if value is None:
+                        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+                    else:
+                        conn.execute(
+                            "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                            (key, value),
+                        )
                 return
-            conn.execute(
-                "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                (key, value),
-            )
+            except sqlite3.OperationalError as exc:
+                last_error = exc
+                if "locked" not in str(exc).lower() or attempt == 9:
+                    raise
+                time.sleep(0.15 * (attempt + 1))
+            finally:
+                conn.close()
+        if last_error:
+            raise last_error
 
     def app_settings(self) -> dict[str, Any]:
         raw_points = self.get_meta("commute_points") or "[]"
@@ -2382,14 +2461,19 @@ class Store:
         return dict(row) if row else None
 
     def upsert_catalog_listing(
-        self, listing: Listing, *, kind: str = "refresh", conn: sqlite3.Connection | None = None
+        self,
+        listing: Listing,
+        *,
+        kind: str = "refresh",
+        conn: sqlite3.Connection | None = None,
+        fast: bool = False,
     ) -> dict[str, Any]:
         key = listing_key(listing.url)
         now = utc_now()
         portal = portal_from_url(listing.url)
         cm = self.connect() if conn is None else nullcontext(conn)
         with cm as conn:
-            canon = self._resolve_canonical(conn, listing)
+            canon = self._resolve_canonical(conn, listing, fast=fast)
             prev_row = conn.execute(
                 "SELECT * FROM catalog_listings WHERE canonical_key = ? OR listing_key = ? LIMIT 1",
                 (canon, key),
@@ -2490,16 +2574,167 @@ class Store:
             self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind, conn=conn)
         return {"listing_key": canon, "url_key": key, "canonical_key": canon, "new": prev is None, "changed": changed, "prev": prev}
 
-    def upsert_catalog_listings_batch(self, listings: list[Listing], *, kind: str = "seeded") -> int:
+    def upsert_catalog_listings_batch(
+        self,
+        listings: list[Listing],
+        *,
+        kind: str = "seeded",
+        commit_every: int | None = None,
+        fast: bool = True,
+    ) -> dict[str, int]:
         if not listings:
-            return 0
+            return {"n": 0, "new": 0, "updated": 0, "same": 0}
+        every = max(50, int(commit_every or config.SCRAPE_BATCH_COMMIT))
+        new = updated = same = 0
         with self.connect() as conn:
             conn.execute("PRAGMA busy_timeout=8000")
             for index, listing in enumerate(listings, start=1):
-                self.upsert_catalog_listing(listing, kind=kind, conn=conn)
-                if index % 12 == 0:
+                result = self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
+                if result.get("new"):
+                    new += 1
+                elif result.get("changed"):
+                    updated += 1
+                else:
+                    same += 1
+                if index % every == 0:
                     conn.commit()
-        return len(listings)
+        return {"n": len(listings), "new": new, "updated": updated, "same": same}
+
+    def upsert_catalog_listings_results(
+        self,
+        listings: list[Listing],
+        *,
+        kind: str = "refresh",
+        fast: bool = True,
+    ) -> list[dict[str, Any]]:
+        """Batch monitored listings in one transaction while preserving previous snapshots."""
+        if not listings:
+            return []
+        results: list[dict[str, Any]] = []
+        with self.connect() as conn:
+            conn.execute("PRAGMA busy_timeout=8000")
+            for listing in listings:
+                results.append(
+                    self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
+                )
+        return results
+
+    def record_scrape_tick(self, tick: dict[str, Any], *, keep: int = 120) -> None:
+        """Persist latest minute scrape tick + rolling history for admin/provoz."""
+        payload = dict(tick or {})
+        payload.setdefault("at", utc_now())
+        encoded = json.dumps(payload, ensure_ascii=False)
+        conn = sqlite3.connect(self.path, timeout=3)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=3000")
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute(
+                    "SELECT value FROM meta WHERE key = 'scrape_tick_history'"
+                ).fetchone()
+                history: list[Any] = []
+                if row and row["value"]:
+                    try:
+                        parsed = json.loads(str(row["value"]))
+                        if isinstance(parsed, list):
+                            history = parsed
+                    except json.JSONDecodeError:
+                        pass
+                history.insert(0, payload)
+                conn.execute(
+                    """
+                    INSERT INTO meta(key, value) VALUES ('scrape_worker_tick', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (encoded,),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO meta(key, value) VALUES ('scrape_tick_history', ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """,
+                    (json.dumps(history[: max(5, keep)], ensure_ascii=False),),
+                )
+        finally:
+            conn.close()
+
+    def list_scrape_ticks(self, limit: int = 20) -> list[dict[str, Any]]:
+        raw = self.get_meta("scrape_tick_history")
+        if not raw:
+            latest = self.get_meta("scrape_worker_tick")
+            if not latest:
+                return []
+            try:
+                item = json.loads(str(latest))
+                return [item] if isinstance(item, dict) else []
+            except json.JSONDecodeError:
+                return []
+        try:
+            parsed = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in parsed[: max(1, limit)]:
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+
+    def list_scrape_schedules(self) -> list[dict[str, Any]]:
+        raw = self.get_meta("scrape_schedules")
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for item in parsed:
+            if isinstance(item, dict) and item.get("id") and item.get("run_at"):
+                out.append(item)
+        out.sort(key=lambda row: str(row.get("run_at") or ""))
+        return out
+
+    def add_scrape_schedule(self, job: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(job or {})
+        job_id = str(payload.get("id") or "").strip() or f"scrape-{uuid.uuid4().hex[:10]}"
+        payload["id"] = job_id
+        payload.setdefault("created_at", utc_now())
+        rows = self.list_scrape_schedules()
+        rows.append(payload)
+        rows.sort(key=lambda row: str(row.get("run_at") or ""))
+        self.set_meta("scrape_schedules", json.dumps(rows, ensure_ascii=False))
+        return payload
+
+    def remove_scrape_schedule(self, job_id: str) -> bool:
+        wanted = str(job_id or "").strip()
+        if not wanted:
+            return False
+        rows = self.list_scrape_schedules()
+        kept = [row for row in rows if str(row.get("id") or "") != wanted]
+        if len(kept) == len(rows):
+            return False
+        self.set_meta("scrape_schedules", json.dumps(kept, ensure_ascii=False))
+        return True
+
+    def claim_due_scrape_schedules(self, *, now: str | None = None) -> list[dict[str, Any]]:
+        stamp = str(now or utc_now())
+        rows = self.list_scrape_schedules()
+        due: list[dict[str, Any]] = []
+        kept: list[dict[str, Any]] = []
+        for row in rows:
+            run_at = str(row.get("run_at") or "")
+            if run_at and run_at <= stamp:
+                due.append(row)
+            else:
+                kept.append(row)
+        if due:
+            self.set_meta("scrape_schedules", json.dumps(kept, ensure_ascii=False))
+        return due
 
     def add_monitor_hit(self, monitor_id: str, listing_key_value: str) -> None:
         if not listing_key_value:
@@ -2624,22 +2859,19 @@ class Store:
         return matched
 
     def matching_monitors(self, listing: Listing, job_id: str | None = None) -> list[dict[str, Any]]:
-        from app.catalog_sync import listing_matches_monitor
+        from app.monitor_index import MonitorIndex
 
         found: dict[str, dict[str, Any]] = {}
         if job_id:
             for item in self.monitors_for_job(job_id):
                 if item.get("enabled"):
                     found[item["id"]] = item
-        for item in self.list_monitors():
-            if not item.get("enabled") or item["id"] in found:
-                continue
-            try:
-                matched = listing_matches_monitor(listing, item)
-            except Exception:
-                continue
-            if matched:
-                found[item["id"]] = item
+        now = time.monotonic()
+        if self._monitor_index is None or (now - self._monitor_index_at) > 30.0:
+            self._monitor_index = MonitorIndex(self.list_monitors())
+            self._monitor_index_at = now
+        for item in self._monitor_index.matching_monitors(listing):
+            found[item["id"]] = item
         return list(found.values())
 
     def mark_catalog_stale_gone(self, seen_before: str, complete_portals: list[str]) -> int:
@@ -4142,6 +4374,39 @@ class Store:
                     """,
                     (number,),
                 ).fetchone()
+            # Extension-ingested rows may live only in catalog_listings briefly / primarily
+            if row is None and (listing_key or url or number is not None):
+                cat = None
+                if listing_key or url:
+                    cat = conn.execute(
+                        """
+                        SELECT * FROM catalog_listings
+                        WHERE listing_key = ? OR canonical_key = ? OR url = ?
+                        ORDER BY last_seen DESC
+                        LIMIT 1
+                        """,
+                        (listing_key or url, listing_key or url, url or listing_key),
+                    ).fetchone()
+                if cat is None and number is not None:
+                    cat = conn.execute(
+                        """
+                        SELECT * FROM catalog_listings
+                        WHERE CAST(id AS TEXT) = ?
+                        ORDER BY last_seen DESC
+                        LIMIT 1
+                        """,
+                        (str(number),),
+                    ).fetchone()
+                if cat is not None:
+                    data = dict(cat)
+                    data["monitor_id"] = CATALOG_MONITOR_ID
+                    data["monitor_name"] = "Katalog"
+                    data["search_url"] = ""
+                    item = public_listing(data)
+                    item["photos"] = _photo_urls([data["image_url"]] if data.get("image_url") else [])
+                    item["price_history"] = _price_series([], item)
+                    self._attach_catalog_extras([item], twins=True)
+                    return item
             if not row:
                 return None
             item = public_listing(dict(row))

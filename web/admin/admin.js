@@ -166,11 +166,24 @@
       .join("");
 
   async function api(path, opts) {
-    const response = await fetch(path, {
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      ...opts,
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+        signal: opts?.signal || controller.signal,
+      });
+    } catch (err) {
+      if (err?.name === "AbortError") {
+        throw new Error("Server je vytížený. Zkus stránku obnovit za chvíli.");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const detail = data.detail;
@@ -1499,6 +1512,29 @@
         <span class="ad-nstat ${row.ok ? "ok" : "bad"}">${esc(row.status)}</span>
         <span class="muted">${esc(row.next)}</span>
       </div>`;
+    const tickRow = (row) => `<div class="ad-utbl-row">
+        <span class="muted">${esc(row.at_rel || row.at || "—")}</span>
+        <span>${esc(row.kind || "minute")}</span>
+        <span class="num">${esc(fmtN(row.listings || 0))}</span>
+        <span class="num">${esc(fmtN(row.new || 0))}</span>
+        <span class="num">${esc(fmtN(row.updated || 0))}</span>
+        <span class="muted">${esc(row.duration || "—")}</span>
+        <span class="muted">${esc(row.detail || (row.url ? String(row.url).slice(0, 64) : "—"))}</span>
+      </div>`;
+    const scheduleRow = (row) => `<div class="ad-scrape-schedule-item" data-id="${esc(row.id || "")}">
+        <div><strong>${esc(row.scope === "portal" ? "Portál" : "URL")}</strong><div class="muted">${esc(row.label || row.url || row.portal || "—")}</div></div>
+        <div class="muted">${esc(row.run_at_fmt || row.run_at || "—")}</div>
+        <div class="muted">${esc(row.run_at_rel || "")}</div>
+        <button class="ad-btn outline" type="button" data-cancel-schedule="${esc(row.id || "")}">Zrušit</button>
+      </div>`;
+    const portalOpts = (data.scrape_portals || [
+      { id: "sreality", name: "Sreality" },
+      { id: "bezrealitky", name: "Bezrealitky" },
+      { id: "idnes", name: "Reality.iDNES" },
+      { id: "bazos", name: "Bazoš" },
+    ])
+      .map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`)
+      .join("");
     const sampleRow = (row) => `<div class="ad-utbl-row">
         <span>${esc(row.name || row.canonical || "")}</span>
         <span class="muted">${esc(row.disposition || "—")}${row.area_m2 ? ` · ${esc(row.area_m2)} m²` : ""}</span>
@@ -1648,14 +1684,78 @@
       </section>
       <section class="ad-nsec">
         <h2 class="ad-kicker">6. Úlohy a cron joby</h2>
-        <article class="ad-card ad-users-card">
-          <div class="ad-utbl-wrap">
-            <div class="ad-utbl ad-ops-jobs">
-              <div class="ad-utbl-head">
-                <span>Název úlohy</span><span>Interval</span><span>Poslední běh</span><span>Trvání</span><span>Stav</span><span>Další běh</span>
+        <article class="ad-card ad-users-card ad-dedupe-card">
+          <div class="ad-ops-block">
+            <p class="ad-dedupe-lead">${esc(data.scrape_note || "")}</p>
+            <div class="ad-utbl-wrap">
+              <div class="ad-utbl ad-ops-jobs">
+                <div class="ad-utbl-head">
+                  <span>Název úlohy</span><span>Interval</span><span>Poslední běh</span><span>Trvání</span><span>Stav</span><span>Další běh</span>
+                </div>
+                <div>${(data.jobs || []).map(jobRow).join("") || ""}</div>
+                <div class="ad-utbl-empty" ${(data.jobs || []).length ? "hidden" : ""}>Žádné naplánované úlohy.</div>
               </div>
-              <div>${(data.jobs || []).map(jobRow).join("") || ""}</div>
-              <div class="ad-utbl-empty" ${(data.jobs || []).length ? "hidden" : ""}>Žádné naplánované úlohy.</div>
+            </div>
+          </div>
+          <div class="ad-ops-block">
+            <h3 class="ad-sec sm">Poslední minutové běhy</h3>
+            <div class="ad-utbl-wrap">
+              <div class="ad-utbl ad-ops-jobs ad-ops-jobs-ticks">
+                <div class="ad-utbl-head">
+                  <span>Kdy</span><span>Typ</span><span class="num">Listings</span><span class="num">Nové</span><span class="num">Změny</span><span>Trvání</span><span>Deep cover</span>
+                </div>
+                <div id="o-ticks">${(data.recent_ticks || []).map(tickRow).join("") || ""}</div>
+                <div class="ad-utbl-empty" id="o-ticks-empty" ${(data.recent_ticks || []).length ? "hidden" : ""}>Zatím žádný minutový tick.</div>
+              </div>
+            </div>
+          </div>
+          <div class="ad-ops-block">
+            <h3 class="ad-sec sm">Ruční scrape</h3>
+            <p class="ad-dedupe-lead">Spusť scrape konkrétní URL hledání, nebo celý katalog vybraného portálu. Můžeš spustit hned, nebo naplánovat na konkrétní čas.</p>
+            <div class="ad-scrape-form">
+              <div class="ad-scrape-row">
+                <div>
+                  <div class="ad-choice" id="o-scope-choice" role="group" aria-label="Rozsah scrape">
+                    <button type="button" data-scope="url" class="is-on">URL hledání</button>
+                    <button type="button" data-scope="portal">Celý portál</button>
+                  </div>
+                </div>
+                <div>
+                  <div class="ad-choice" id="o-when-choice" role="group" aria-label="Kdy spustit">
+                    <button type="button" data-when="now" class="is-on">Teď</button>
+                    <button type="button" data-when="schedule">Naplánovat</button>
+                  </div>
+                </div>
+              </div>
+              <div class="ad-scrape-row" id="o-scrape-fields">
+                <div class="ad-ufield url" id="o-url-wrap">
+                  <label>URL hledání</label>
+                  <div class="ad-uinput"><input id="o-scrape-url" type="url" placeholder="https://www.sreality.cz/hledani/pronajem/byty/ustecky-kraj?velikost=2%2Bkk" /></div>
+                </div>
+                <div class="ad-ufield portal" id="o-portal-wrap" hidden>
+                  <label>Portál</label>
+                  <div class="ad-uselect">
+                    <select id="o-scrape-portal">${portalOpts}</select>
+                    <span class="ad-ico ad-ico-chevron"><img src="/static/admin/assets/chevron.svg" width="8" height="5" alt="" /></span>
+                  </div>
+                </div>
+                <div class="ad-ufield fixed" id="o-pages-wrap">
+                  <label>Max. stránek</label>
+                  <div class="ad-uinput"><input id="o-scrape-pages" type="number" min="1" max="200" value="20" /></div>
+                </div>
+                <div class="ad-ufield when" id="o-schedule-wrap" hidden>
+                  <label>Čas spuštění</label>
+                  <div class="ad-uinput"><input id="o-scrape-when" type="datetime-local" /></div>
+                </div>
+              </div>
+              <div class="ad-scrape-actions">
+                <button class="ad-btn" type="button" id="o-scrape-run">Spustit scrape</button>
+                <p class="ad-dedupe-note" id="o-scrape-note"></p>
+              </div>
+              <div id="o-schedule-list-wrap" ${(data.scrape_schedules || []).length ? "" : "hidden"}>
+                <h3 class="ad-sec sm">Naplánované scrapy</h3>
+                <div class="ad-scrape-schedule-list" id="o-schedule-list">${(data.scrape_schedules || []).map(scheduleRow).join("")}</div>
+              </div>
             </div>
           </div>
         </article>
@@ -1799,6 +1899,140 @@
         alert(err.message);
       }
     });
+    $("o-scrape-run")?.addEventListener("click", async () => {
+      const btn = $("o-scrape-run");
+      const note = $("o-scrape-note");
+      const scope = $("o-scope-choice")?.querySelector("button.is-on")?.dataset.scope || "url";
+      const when = $("o-when-choice")?.querySelector("button.is-on")?.dataset.when || "now";
+      const url = String($("o-scrape-url")?.value || "").trim();
+      const portal = String($("o-scrape-portal")?.value || "").trim();
+      const maxPages = Number($("o-scrape-pages")?.value || 20);
+      const runAt = String($("o-scrape-when")?.value || "").trim();
+      if (scope === "url" && !url) {
+        alert("Vlož URL hledání");
+        return;
+      }
+      if (scope === "portal" && !portal) {
+        alert("Vyber portál");
+        return;
+      }
+      if (when === "schedule" && !runAt) {
+        alert("Zvol čas naplánování");
+        return;
+      }
+      if (btn) btn.disabled = true;
+      if (note) note.textContent = when === "schedule" ? "Ukládám plán…" : "Zařazuji do fronty…";
+      try {
+        const res = await api("/api/admin/scrape-url", {
+          method: "POST",
+          body: JSON.stringify({
+            scope,
+            when,
+            url,
+            portal,
+            max_pages: maxPages,
+            run_at: runAt,
+          }),
+        });
+        const r = res.result || {};
+        const paintSchedules = (rows) => {
+          const list = $("o-schedule-list");
+          const wrap = $("o-schedule-list-wrap");
+          if (list) list.innerHTML = (rows || []).map(scheduleRow).join("");
+          if (wrap) wrap.hidden = !(rows || []).length;
+          bindCancelSchedule();
+        };
+        if (note) {
+          if (r.scheduled) {
+            note.textContent = `Naplánováno na ${esc(r.job?.run_at || runAt)}.`;
+          } else if (scope === "portal") {
+            note.textContent = r.queued
+              ? `Celý katalog ${esc(portal)} zařazen do fronty.`
+              : `Katalog sync ${esc(portal)} spuštěn.`;
+          } else {
+            note.textContent = r.queued
+              ? `Zařazeno do fronty (${esc(r.url || url)}). Objeví se v „Poslední minutové běhy“.`
+              : `Hotovo: ${fmtN(r.listings || 0)} listingů · nové ${fmtN(r.new || 0)} · změny ${fmtN(r.updated || 0)}`;
+          }
+        }
+        paintSchedules(res.ops?.scrape_schedules || []);
+        const ticks = $("o-ticks");
+        if (ticks && res.ops?.recent_ticks) {
+          ticks.innerHTML = res.ops.recent_ticks.map(tickRow).join("");
+          const empty = $("o-ticks-empty");
+          if (empty) empty.hidden = Boolean(res.ops.recent_ticks.length);
+        }
+        if (when === "now" && scope === "url") {
+          let left = 8;
+          const poll = async () => {
+            if (currentRoute() !== "provoz" || left-- <= 0) return;
+            try {
+              const fresh = await api("/api/admin/ops");
+              const box = $("o-ticks");
+              if (box) box.innerHTML = (fresh.recent_ticks || []).map(tickRow).join("");
+              paintSchedules(fresh.scrape_schedules || []);
+              const done = (fresh.recent_ticks || []).some(
+                (row) => row.kind === "manual_url" && row.url && String(row.url).includes(url.slice(0, 40))
+              );
+              if (!done) setTimeout(poll, 4000);
+              else if (note) note.textContent = "Scrape dokončen — viz tabulka minutových běhů.";
+            } catch {
+              setTimeout(poll, 5000);
+            }
+          };
+          setTimeout(poll, 3000);
+        }
+      } catch (err) {
+        if (note) note.textContent = "";
+        alert(err.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    const syncScrapeForm = () => {
+      const scope = $("o-scope-choice")?.querySelector("button.is-on")?.dataset.scope || "url";
+      const when = $("o-when-choice")?.querySelector("button.is-on")?.dataset.when || "now";
+      const urlWrap = $("o-url-wrap");
+      const portalWrap = $("o-portal-wrap");
+      const pagesWrap = $("o-pages-wrap");
+      const scheduleWrap = $("o-schedule-wrap");
+      const runBtn = $("o-scrape-run");
+      if (urlWrap) urlWrap.hidden = scope !== "url";
+      if (portalWrap) portalWrap.hidden = scope !== "portal";
+      if (pagesWrap) pagesWrap.hidden = scope !== "url";
+      if (scheduleWrap) scheduleWrap.hidden = when !== "schedule";
+      if (runBtn) runBtn.textContent = when === "schedule" ? "Naplánovat scrape" : scope === "portal" ? "Spustit katalog" : "Spustit scrape";
+    };
+    const bindChoice = (id, key) => {
+      $(id)?.querySelectorAll("button").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          $(id)?.querySelectorAll("button").forEach((item) => item.classList.toggle("is-on", item === btn));
+          syncScrapeForm();
+        });
+      });
+    };
+    const bindCancelSchedule = () => {
+      $("o-schedule-list")?.querySelectorAll("[data-cancel-schedule]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-cancel-schedule");
+          if (!id) return;
+          try {
+            const res = await api(`/api/admin/scrape-schedule/${encodeURIComponent(id)}`, { method: "DELETE" });
+            const list = $("o-schedule-list");
+            const wrap = $("o-schedule-list-wrap");
+            if (list) list.innerHTML = (res.ops?.scrape_schedules || []).map(scheduleRow).join("");
+            if (wrap) wrap.hidden = !(res.ops?.scrape_schedules || []).length;
+            bindCancelSchedule();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+    };
+    bindChoice("o-scope-choice");
+    bindChoice("o-when-choice");
+    syncScrapeForm();
+    bindCancelSchedule();
     if (d.busy) pollDedupe();
   }
 

@@ -88,30 +88,47 @@ def normalize_search_url(url: str) -> str:
 
 def daily_shards() -> list[dict[str, str]]:
     shards: list[dict[str, str]] = []
+    # Sreality: never crawl whole Praha as one shard (portal page depth cannot cover it).
+    # Split Praha into districts and further by disposition so upserts can reach portal totals.
+    sreality_regions = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
+        f"praha-{i}" for i in range(1, 11)
+    ]
+    large_regions = {
+        "stredocesky-kraj",
+        "jihomoravsky-kraj",
+        "moravskoslezsky-kraj",
+        "ustecky-kraj",
+        *[f"praha-{i}" for i in range(1, 11)],
+    }
     for offer in ("pronajem", "prodej"):
-        for region in localities.SREALITY_CZECH_REGIONS:
-            url = url_builder.build_url(
-                {
-                    "source": "sreality",
-                    "offers": [offer],
-                    "category": "byty",
-                    "districts": [region],
-                    "sizes": [],
-                    "sort": "nejnovejsi",
-                    "price_from": None,
-                    "price_to": None,
-                    "area_from": None,
-                    "area_to": None,
-                }
+        for region in sreality_regions:
+            size_batches: list[list[str]] = (
+                [[size] for size, _label in url_builder.SIZES] if region in large_regions else [[]]
             )
-            shards.append(
-                {
-                    "kind": "catalog_daily",
-                    "portal": "sreality",
-                    "shard_key": f"sreality:byty:{offer}:{region}",
-                    "search_url": url,
-                }
-            )
+            for sizes in size_batches:
+                url = url_builder.build_url(
+                    {
+                        "source": "sreality",
+                        "offers": [offer],
+                        "category": "byty",
+                        "districts": [region],
+                        "sizes": sizes,
+                        "sort": "nejnovejsi",
+                        "price_from": None,
+                        "price_to": None,
+                        "area_from": None,
+                        "area_to": None,
+                    }
+                )
+                size_key = sizes[0] if sizes else "all"
+                shards.append(
+                    {
+                        "kind": "catalog_daily",
+                        "portal": "sreality",
+                        "shard_key": f"sreality:byty:{offer}:{region}:{size_key}",
+                        "search_url": url,
+                    }
+                )
     for offer in ("PRONAJEM", "PRODEJ"):
         for size, _label in bezrealitky_url.SIZES:
             url = bezrealitky_url.build_url(
@@ -191,6 +208,36 @@ def daily_shards() -> list[dict[str, str]]:
                             "radius": 0,
                         }
                     ),
+                }
+            )
+    return shards
+
+
+def sreality_recent_shards() -> list[dict[str, str]]:
+    """Small newest-first shards for continuous Sreality catalog refresh (~60s)."""
+    shards: list[dict[str, str]] = []
+    for offer in ("pronajem", "prodej"):
+        for size, _label in url_builder.SIZES:
+            url = url_builder.build_url(
+                {
+                    "source": "sreality",
+                    "offers": [offer],
+                    "category": "byty",
+                    "districts": list(localities.SREALITY_CZECH_REGIONS),
+                    "sizes": [size],
+                    "sort": "nejnovejsi",
+                    "price_from": None,
+                    "price_to": None,
+                    "area_from": None,
+                    "area_to": None,
+                }
+            )
+            shards.append(
+                {
+                    "kind": "catalog_recent",
+                    "portal": "sreality",
+                    "shard_key": f"sreality:recent:{offer}:{size}",
+                    "search_url": url,
                 }
             )
     return shards

@@ -38,6 +38,7 @@ from app import email_notify as mail_notify
 from app import whatsapp as wa_notify
 from app import agents as agent_hub
 from app import mcp_oauth
+from app import extension_score as ext_score
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict
 
@@ -181,9 +182,42 @@ async def require_account(request: Request, call_next):
     return await call_next(request)
 
 
+def _extension_cors_origin(request: Request) -> str | None:
+    origin = (request.headers.get("origin") or "").strip()
+    if not origin:
+        return None
+    if origin.startswith("chrome-extension://"):
+        return origin
+    allowed = {
+        "https://www.sreality.cz",
+        "https://sreality.cz",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+    }
+    base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+    if base:
+        allowed.add(base)
+    if origin in allowed or origin.endswith(".sreality.cz"):
+        return origin
+    return None
+
+
 @app.middleware("http")
 async def agent_cors(request: Request, call_next):
     path = request.url.path
+    if path.startswith("/api/extension"):
+        origin = _extension_cors_origin(request)
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+        else:
+            response = await call_next(request)
+        if origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Realitify-Session"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, HEAD"
+        return response
     if (
         path == "/mcp"
         or path.startswith("/api/v1")
@@ -270,6 +304,14 @@ app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=Fals
 for _path in ("/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"):
     app.add_api_route(_path, page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni/{rest:path}", page, methods=["GET"], include_in_schema=False)
+
+
+@app.get("/app", include_in_schema=False)
+async def app_alias(request: Request):
+    """Legacy /app links from extension → catalog deep-link."""
+    query = request.url.query
+    target = "/nabidka" + (f"?{query}" if query else "")
+    return RedirectResponse(target, status_code=302)
 app.add_api_route("/admin", admin_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/admin/{rest:path}", admin_page, methods=["GET"], include_in_schema=False)
 
@@ -351,6 +393,143 @@ async def auth_me(realitify_session: str | None = Cookie(default=None, alias="re
     return _current_user(realitify_session)
 
 
+def _extension_session(request: Request, cookie: str | None) -> str | None:
+    header = (request.headers.get("x-realitify-session") or "").strip()
+    return header or cookie
+
+
+@app.get("/api/extension/me")
+async def extension_me(
+    request: Request,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    session = _extension_session(request, realitify_session)
+    user = user_account.user_from_session(hub.store, session)
+    account = ext_score.extension_account(hub.store)
+    if not user:
+        account["authenticated"] = False
+        account["active"] = False
+        account["pro"] = False
+        return account
+    account["authenticated"] = True
+    return account
+
+
+@app.post("/api/extension/scores")
+async def extension_scores(
+    request: Request,
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    session = _extension_session(request, realitify_session)
+    user = user_account.user_from_session(hub.store, session)
+    account = ext_score.extension_account(hub.store)
+    if not user:
+        raise HTTPException(401, "Nejste přihlášeni")
+    if not account.get("active"):
+        raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
+    body = payload or {}
+    ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+    urls = body.get("urls") if isinstance(body.get("urls"), list) else []
+    result = ext_score.score_batch(hub.store, ids=[str(x) for x in ids], urls=[str(x) for x in urls])
+    result["account"] = {
+        "plan": account["plan"],
+        "label": account["label"],
+        "active": account["active"],
+        "pro": account["pro"],
+    }
+    return result
+
+
+@app.post("/api/extension/ingest")
+async def extension_ingest(
+    request: Request,
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    """Scrape unknown Sreality listings into catalog and return fresh scores."""
+    session = _extension_session(request, realitify_session)
+    user = user_account.user_from_session(hub.store, session)
+    account = ext_score.extension_account(hub.store)
+    if not user:
+        raise HTTPException(401, "Nejste přihlášeni")
+    if not account.get("active"):
+        raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
+
+    body = payload or {}
+    raw_urls = body.get("urls") if isinstance(body.get("urls"), list) else []
+    raw_ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+    urls: list[str] = []
+    for item in raw_urls:
+        text = str(item or "").strip()
+        if text:
+            urls.append(text)
+    for item in raw_ids:
+        native = ext_score.extract_sreality_id(item)
+        if native and not any(native in u for u in urls):
+            # Best-effort URL; scrape client needs a path — skip bare ids without URL
+            continue
+
+    # Deduplicate + keep only sreality
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for url in urls:
+        norm = ext_score.normalize_url(url)
+        if "sreality.cz" not in norm.lower():
+            continue
+        if "/detail/" not in norm.lower():
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        cleaned.append(norm)
+    cleaned = cleaned[:12]  # hard cap per request
+    if not cleaned:
+        raise HTTPException(400, "Chybí platná Sreality detail URL")
+
+    from app.sreality import ListingGone, SrealityClient
+
+    client = hub.client_for("https://www.sreality.cz/")
+    if not isinstance(client, SrealityClient):
+        client = SrealityClient("https://www.sreality.cz/")
+
+    ingested: list[str] = []
+    errors: dict[str, str] = {}
+
+    async def _one(url: str) -> None:
+        native = ext_score.extract_sreality_id(url)
+        try:
+            listing = await client.fetch_listing_url(url)
+            from app.places import refine_listing_location
+
+            refine_listing_location(listing)
+            await asyncio.to_thread(hub.store.upsert_catalog_listing, listing, kind="extension")
+            if listing.id:
+                ext_score.invalidate_scores(str(listing.id))
+                ingested.append(str(listing.id))
+            elif native:
+                ext_score.invalidate_scores(native)
+                ingested.append(native)
+        except ListingGone:
+            errors[native or url] = "gone"
+        except Exception as exc:
+            errors[native or url] = str(exc)[:200]
+
+    await asyncio.gather(*[_one(url) for url in cleaned])
+
+    score_ids = list(dict.fromkeys(ingested + [ext_score.extract_sreality_id(u) for u in cleaned if ext_score.extract_sreality_id(u)]))
+    result = ext_score.score_batch(hub.store, ids=score_ids, urls=cleaned)
+    result["ingested"] = ingested
+    result["errors"] = errors
+    result["account"] = {
+        "plan": account["plan"],
+        "label": account["label"],
+        "active": account["active"],
+        "pro": account["pro"],
+    }
+    return result
+
+
 @app.post("/api/auth/profile")
 async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     _current_user(realitify_session)
@@ -416,7 +595,7 @@ async def admin_logout_api() -> dict:
 
 @app.get("/api/admin/me")
 async def admin_me(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    return _admin_user(realitify_admin)
+    return await asyncio.to_thread(_admin_user, realitify_admin)
 
 
 @app.get("/api/admin/overview")
@@ -447,8 +626,9 @@ async def admin_user_detail(
 
 @app.get("/api/admin/monitors")
 async def admin_monitors(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.monitors_payload, hub.store)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(hub.auth_pool, _admin_user, realitify_admin)
+    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, hub.store)
 
 
 @app.get("/api/admin/notifications")
@@ -468,8 +648,66 @@ async def admin_broadcast(
 
 @app.get("/api/admin/ops")
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await asyncio.to_thread(_admin_user, realitify_admin)
     return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+
+
+@app.post("/api/admin/scrape-url")
+async def admin_scrape_url(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    body = payload or {}
+    scope = str(body.get("scope") or "url").strip().lower()
+    when = str(body.get("when") or "now").strip().lower()
+    try:
+        max_pages = int(body.get("max_pages") or 40)
+    except (TypeError, ValueError):
+        max_pages = 40
+
+    if when == "schedule":
+        result = hub.schedule_manual_scrape(
+            {
+                "scope": scope,
+                "url": body.get("url"),
+                "portal": body.get("portal"),
+                "max_pages": max_pages,
+                "run_at": body.get("run_at") or body.get("schedule_at") or "",
+            }
+        )
+        if not result.get("ok"):
+            raise HTTPException(400, str(result.get("error") or "Naplánování selhalo"))
+        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+
+    if scope == "portal":
+        portal = str(body.get("portal") or "").strip().lower()
+        if portal not in config.CATALOG_SYNC_HOURS:
+            raise HTTPException(400, "Neznámý portál")
+        result = hub.start_catalog_sync(portals=[portal])
+        if not result.get("ok") and result.get("reason") != "already-running":
+            raise HTTPException(409, str(result.get("reason") or "Katalog sync selhal"))
+        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+
+    url = str(body.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "Chybí URL hledání")
+    result = hub.start_scrape_search_url(url, max_pages=max_pages)
+    if not result.get("ok"):
+        raise HTTPException(409 if "locked" in str(result.get("error") or "").lower() else 400, str(result.get("error") or "Scrape selhal"))
+    return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+
+
+@app.delete("/api/admin/scrape-schedule/{job_id}")
+async def admin_scrape_schedule_delete(
+    job_id: str,
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    ok = await asyncio.to_thread(hub.store.remove_scrape_schedule, job_id)
+    if not ok:
+        raise HTTPException(404, "Naplánovaný scrape nenalezen")
+    return {"ok": True, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
 
 
 @app.get("/api/admin/dedupe")
@@ -900,14 +1138,24 @@ def push_vapid() -> dict:
 @app.post("/api/push/subscribe")
 async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
-    try:
-        hub.store.save_push_subscription(body, request.headers.get("user-agent") or "")
+    ua = request.headers.get("user-agent") or ""
+
+    def _save() -> dict[str, Any]:
+        hub.store.save_push_subscription(body, ua)
         prefs = hub.store.notify_prefs()
         prefs["push"] = True
         hub.store.save_notify_prefs(prefs)
+        return {"ok": True, "devices": hub.store.push_subscription_count(), "notify": hub.store.notify_prefs()}
+
+    try:
+        return await asyncio.to_thread(_save)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "devices": hub.store.push_subscription_count(), "notify": hub.store.notify_prefs()}
+    except sqlite3.OperationalError as exc:
+        # Non-critical: UI can retry later; don't 500 the nabidka boot
+        if "locked" in str(exc).lower():
+            return {"ok": False, "skipped": True, "reason": "database_locked"}
+        raise
 
 
 @app.post("/api/push/unsubscribe")

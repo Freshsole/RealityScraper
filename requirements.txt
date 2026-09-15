@@ -6,4 +6,5 @@ pywebpush==2.0.3
 stripe==15.6.1
 websockets==17.1
 python-multipart==0.0.20
+supervisor==4.2.5
 

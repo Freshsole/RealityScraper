@@ -22,8 +22,16 @@ def main() -> None:
         "--port",
         str(config.PORT),
         "--reload",
+        "--reload-exclude",
+        "tests/*",
+        "--reload-exclude",
+        ".cursor/*",
+        "--reload-exclude",
+        "data/*",
+        "--reload-exclude",
+        "extension/*",
         "--timeout-graceful-shutdown",
-        "2",
+        "15",
     ]
     proc = subprocess.Popen(cmd, start_new_session=True)
 

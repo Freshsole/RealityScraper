@@ -35,8 +35,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
+Lokálně default `SCRAPE_ROLE=all` (web + scrape v jednom procesu). Na Railway startuje `supervisord` (`railpack.toml`) se dvěma procesy: `web` (`SCRAPE_ROLE=web`) a `worker` (`python -m app.scrape_worker`). Pád scrapru neshodí web a naopak (`autorestart` per proces).
+
 Dashboard: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 
 Webhook a výchozí URL hledání jsou v `.env`. Další hledání, Discord šablony a generátor filtrů jsou v dashboardu.
 
 Výchozí interval je 60 s. Dashboard umí víc monitorů najednou, start/stop, ruční kontrolu a testovací zprávu.
+
+### Scrape worker (minutové SLA)
+
+- **NewDiscovery:** všechny Sreality „nejnovější“ size shards každou minutu (paralelní list/`_next/data`).
+- **MonitorRefresh:** deduplikované URL aktivních monitorů; nad `SCRAPE_FULL_MARKET_URLS` přepne na list shard crawl.
+- Env knoby: `SCRAPE_CONCURRENCY` (default 16), `SCRAPE_CONCURRENCY_FLOOR` (4), `SCRAPE_RECENT_PAGES` (4), `SCRAPE_DISCOVERY_DEADLINE_SEC` (50), `SCRAPE_MONITOR_DEADLINE_SEC` (55), `SCRAPE_FULL_MARKET_DEADLINE_SEC` (70), `SCRAPE_BATCH_COMMIT` (500), `SCRAPE_ERROR_RATE_ALERT` (0.10).

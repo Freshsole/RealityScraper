@@ -29,6 +29,7 @@
   let placeSearchAbort = null;
   let placeSearchSeq = 0;
   let catalogSeq = 0;
+  let catalogAbort = null;
   let radiusTimer = null;
   let mapReloadTimer = 0;
   let lastMapQueryKey = "";
@@ -471,6 +472,10 @@
     needPlaceFit = Boolean(selectedPlaces.length);
     renderMapPins([]);
     drawPlaceLayer(needPlaceFit);
+    // Drop any in-flight place-scoped request so reload with map bounds can start.
+    catalogAbort?.abort();
+    catalogBusy = false;
+    catalogQueued = false;
     loadCatalog();
   }
 
@@ -1008,7 +1013,29 @@
 
   function selectionBounds() {
     if (placeLayer?.getLayers?.().length) {
-      const drawn = placeLayer.getBounds();
+      // L.layerGroup has no getBounds — only FeatureGroup does.
+      let drawn = null;
+      if (typeof placeLayer.getBounds === "function") {
+        try {
+          drawn = placeLayer.getBounds();
+        } catch {
+          drawn = null;
+        }
+      } else {
+        for (const layer of placeLayer.getLayers()) {
+          try {
+            if (typeof layer.getBounds === "function") {
+              const part = layer.getBounds();
+              drawn = drawn ? drawn.extend(part) : part;
+            } else if (typeof layer.getLatLng === "function") {
+              const point = layer.getLatLng();
+              drawn = drawn ? drawn.extend(point) : L.latLngBounds(point, point);
+            }
+          } catch {
+            /* ignore bad layer */
+          }
+        }
+      }
       if (boundsAreUsable(drawn)) return drawn;
     }
     let bounds = null;
@@ -1061,7 +1088,7 @@
     ensureMap();
     if (!catalogMap) return;
     if (!placeLayer) {
-      placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
+      placeLayer = L.featureGroup({ pane: "placePane" }).addTo(catalogMap);
     }
     placeLayer.clearLayers();
     for (const place of selectedPlaces) {
@@ -1145,6 +1172,9 @@
     if (catalogMap) catalogMap.getContainer().style.cursor = "";
     saveCircle();
     syncCircleUi();
+    catalogAbort?.abort();
+    catalogBusy = false;
+    catalogQueued = false;
     loadCatalog();
   }
 
@@ -1334,7 +1364,7 @@
     catalogMap.createPane("pinPane");
     catalogMap.getPane("pinPane").style.zIndex = 650;
     addBaseTiles(catalogMap);
-    placeLayer = L.layerGroup({ pane: "placePane" }).addTo(catalogMap);
+    placeLayer = L.featureGroup({ pane: "placePane" }).addTo(catalogMap);
     catalogLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
     hoverLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
     catalogMap.on("click", (event) => {
@@ -1968,17 +1998,36 @@
     document.querySelector(".catalog-side")?.classList.toggle("is-loading", Boolean(listOn));
   }
 
-  async function refreshCatalogPins(seq) {
+  async function refreshCatalogPins(seq, signal) {
     try {
-      const response = await fetch(`/api/catalog/pins?${queryString({ limit: LIMIT, offset: 0 })}`);
+      const response = await fetch(`/api/catalog/pins?${queryString({ limit: LIMIT, offset: 0 })}`, {
+        signal: signal || AbortSignal.timeout(25000),
+      });
       if (seq !== catalogSeq || !response.ok) return;
       const pinData = await response.json();
       const pins = uniqueOffers(pinData.items || []);
       if (pins.length) renderMapPins(pins);
       else if (seq === catalogSeq) renderMapPins([]);
-
-    } catch {
+    } catch (err) {
+      if (err?.name === "AbortError") return;
       /* list is already visible */
+    }
+  }
+
+  function finishCatalogLoad(seq, { keepCount = false } = {}) {
+    // Only the newest in-flight load may clear busy/loading.
+    if (seq !== catalogSeq) return;
+    setCatalogLoading(false, false);
+    if (!keepCount) {
+      const countEl = $("catalog-count");
+      if (countEl && /načítám/i.test(countEl.textContent || "")) {
+        countEl.textContent = `${total} nemovitostí`;
+      }
+    }
+    catalogBusy = false;
+    if (catalogQueued) {
+      catalogQueued = false;
+      queueMicrotask(() => loadCatalog());
     }
   }
 
@@ -2002,6 +2051,10 @@
       ].join("|");
     }
     const seq = ++catalogSeq;
+    catalogAbort?.abort();
+    const ac = new AbortController();
+    catalogAbort = ac;
+    const timeout = window.setTimeout(() => ac.abort(), 25000);
     if (!append) {
       setCatalogLoading(true, true);
       const countEl = $("catalog-count");
@@ -2017,66 +2070,67 @@
     }
     let data;
     try {
-      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset, include_pins: "0" })}`);
+      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset, include_pins: "0" })}`, {
+        signal: ac.signal,
+      });
       if (!response.ok) throw new Error("catalog");
       data = await response.json();
     } catch (err) {
-      catalogBusy = false;
-      if (catalogQueued) {
-        catalogQueued = false;
-        queueMicrotask(() => loadCatalog());
+      window.clearTimeout(timeout);
+      if (seq !== catalogSeq) {
+        // Superseded — newer load owns busy/loading.
+        return;
       }
-      if (seq !== catalogSeq) return;
-      setCatalogLoading(false, false);
       if (lastItems.length && !append) {
         $("catalog-count").textContent = `${total} nemovitostí`;
+        finishCatalogLoad(seq, { keepCount: true });
         return;
       }
       $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
+      finishCatalogLoad(seq, { keepCount: true });
       return;
     }
+    window.clearTimeout(timeout);
     if (seq !== catalogSeq) {
-      catalogBusy = false;
       return;
     }
-    applyPlaceGeoms(data.places);
-    const items = uniqueOffers(data.items || []);
-    const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
-    total = data.total || 0;
-    renderFacets(data.facets);
-    if (append) lastItems = uniqueOffers(lastItems.concat(items));
-    else lastItems = items;
-    $("catalog-count").textContent = `${total} nemovitostí`;
-    const empty = $("catalog-empty");
-    empty.hidden = lastItems.length > 0;
-    if (!lastItems.length) {
-      if (selected.status === "saved") empty.textContent = "Zatím nemáš žádné uložené inzeráty.";
-      else if (selected.status === "hidden") empty.textContent = "Nic není skryté.";
-      else if (selected.discounted) empty.textContent = "Žádné zlevněné nabídky v aktuálním výběru.";
-      else empty.textContent = "Nic v uložené nabídce neodpovídá filtrům.";
-    }
-    renderList(items, append);
-    if (!append) {
-      // Nenechávej mapu na prvních ~36 položkách seznamu — až plné /pins.
-      if (!pinItems.length && incomingPins.length) renderMapPins(incomingPins);
-      drawPlaceLayer(false);
-      if (needPlaceFit && (selectedPlaces.length || circleFilter)) goToSelection();
-      needPlaceFit = false;
-      setCatalogLoading(false, true);
-      await refreshCatalogPins(seq);
-      if (seq === catalogSeq) setCatalogLoading(false, false);
-    }
-    offset = lastItems.length;
-    $("catalog-more").hidden = lastItems.length >= total;
-    updateFilterToggle();
-    writeUrlState();
-    renderViews();
-    renderCompareTray();
-    syncStatusChips();
-    catalogBusy = false;
-    if (catalogQueued) {
-      catalogQueued = false;
-      queueMicrotask(() => loadCatalog());
+    try {
+      applyPlaceGeoms(data.places);
+      const items = uniqueOffers(data.items || []);
+      const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
+      total = data.total || 0;
+      renderFacets(data.facets);
+      if (append) lastItems = uniqueOffers(lastItems.concat(items));
+      else lastItems = items;
+      $("catalog-count").textContent = `${total} nemovitostí`;
+      const empty = $("catalog-empty");
+      empty.hidden = lastItems.length > 0;
+      if (!lastItems.length) {
+        if (selected.status === "saved") empty.textContent = "Zatím nemáš žádné uložené inzeráty.";
+        else if (selected.status === "hidden") empty.textContent = "Nic není skryté.";
+        else if (selected.discounted) empty.textContent = "Žádné zlevněné nabídky v aktuálním výběru.";
+        else empty.textContent = "Nic v uložené nabídce neodpovídá filtrům.";
+      }
+      renderList(items, append);
+      if (!append) {
+        renderMapPins(incomingPins.length ? incomingPins : []);
+        drawPlaceLayer(false);
+        if (needPlaceFit && (selectedPlaces.length || circleFilter)) goToSelection();
+        needPlaceFit = false;
+        setCatalogLoading(false, true);
+        await refreshCatalogPins(seq, ac.signal);
+      }
+      offset = lastItems.length;
+      $("catalog-more").hidden = lastItems.length >= total;
+      updateFilterToggle();
+      writeUrlState();
+      renderViews();
+      renderCompareTray();
+      syncStatusChips();
+    } catch (err) {
+      console.warn("catalog render failed", err);
+    } finally {
+      finishCatalogLoad(seq, { keepCount: true });
     }
   }
 
@@ -2507,5 +2561,15 @@
     settingsReady.finally(() => {
       if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
     });
+    // Deep-link from Chrome extension CTA
+    const deep = new URLSearchParams(location.search);
+    const deepKey = deep.get("listing_key") || "";
+    const deepUrl = deep.get("url") || "";
+    const deepId = deep.get("id") || "";
+    if (deepKey || deepUrl || deepId) {
+      const open = () => openDetail("", deepId, { listing_key: deepKey, url: deepUrl });
+      // Wait a tick so modal DOM is ready
+      setTimeout(open, 0);
+    }
   }
 })();

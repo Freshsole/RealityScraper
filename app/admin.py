@@ -686,17 +686,61 @@ def monitors_payload(store: Store) -> dict[str, Any]:
     created_30 = sum(1 for item in monitors if _created(item) >= since_30)
     created_prev30 = sum(1 for item in monitors if since_60 <= _created(item) < since_30)
     existed_30 = sum(1 for item in monitors if _created(item) and _created(item) < since_30)
-    n_users = 1 if account.get("email") else 0
-    avg = round(len(monitors) / max(n_users, 1), 1)
     hit_map: dict[str, int] = {}
+    watched_total = 0
     with store.connect() as conn:
         for row in conn.execute(
             "SELECT monitor_id, COUNT(*) FROM events WHERE kind IN ('new','changed') GROUP BY monitor_id"
         ):
             hit_map[str(row[0])] = int(row[1])
-        listing_rows = conn.execute(
-            "SELECT price_czk, price_label FROM catalog_listings WHERE IFNULL(gone,0)=0 AND price_czk IS NOT NULL"
-        ).fetchall()
+        watched_total = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM (
+                    SELECT h.listing_key AS watched_key
+                    FROM monitor_hits h
+                    JOIN monitors m ON m.id = h.monitor_id
+                    WHERE m.enabled = 1
+                      AND EXISTS (
+                          SELECT 1 FROM catalog_listings c
+                          WHERE IFNULL(c.gone, 0) = 0
+                            AND (c.listing_key = h.listing_key OR c.canonical_key = h.listing_key)
+                      )
+                    UNION
+                    SELECT COALESCE(NULLIF(l.canonical_key, ''), NULLIF(l.listing_key, ''), l.url)
+                    FROM listings l
+                    JOIN monitors m ON m.id = l.monitor_id
+                    WHERE m.enabled = 1 AND IFNULL(l.gone, 0) = 0
+                )
+                """
+            ).fetchone()[0]
+            or 0
+        )
+        price_counts = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk < 10000 THEN 1 ELSE 0 END) AS rent_10,
+              SUM(CASE WHEN (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 10000 AND price_czk < 20000 THEN 1 ELSE 0 END) AS rent_20,
+              SUM(CASE WHEN (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 20000 AND price_czk < 30000 THEN 1 ELSE 0 END) AS rent_30,
+              SUM(CASE WHEN (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 30000 AND price_czk < 50000 THEN 1 ELSE 0 END) AS rent_50,
+              SUM(CASE WHEN (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 50000 THEN 1 ELSE 0 END) AS rent_more,
+              SUM(CASE WHEN NOT (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk < 3000000 THEN 1 ELSE 0 END) AS sale_3,
+              SUM(CASE WHEN NOT (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 3000000 AND price_czk < 5000000 THEN 1 ELSE 0 END) AS sale_5,
+              SUM(CASE WHEN NOT (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 5000000 AND price_czk < 8000000 THEN 1 ELSE 0 END) AS sale_8,
+              SUM(CASE WHEN NOT (LOWER(IFNULL(price_label,'')) LIKE '%měs%' OR price_czk < 200000)
+                            AND price_czk >= 8000000 THEN 1 ELSE 0 END) AS sale_more
+            FROM catalog_listings
+            WHERE IFNULL(gone,0)=0 AND price_czk IS NOT NULL
+            """
+        ).fetchone()
     loc_counts: Counter[str] = Counter()
     offer_counts: Counter[str] = Counter()
     disp_counts: Counter[str] = Counter()
@@ -710,32 +754,23 @@ def monitors_payload(store: Store) -> dict[str, Any]:
         disp_counts[_disp_bucket(_disposition_from_url(item.get("search_url") or ""))] += 1
     rent_order = ["10 000 - 20 000 Kč", "do 10 000 Kč", "20 000 - 30 000 Kč", "30 000 - 50 000 Kč", "nad 50 000 Kč"]
     sale_order = ["3 - 5 mil. Kč", "do 3 mil. Kč", "5 - 8 mil. Kč", "nad 8 mil. Kč"]
-    rent_buckets: Counter[str] = Counter()
-    sale_buckets: Counter[str] = Counter()
-    for row in listing_rows:
-        price = int(row["price_czk"] or 0)
-        label = (row["price_label"] or "").lower()
-        rent = "měs" in label or price < 200000
-        if rent:
-            if price < 10000:
-                rent_buckets["do 10 000 Kč"] += 1
-            elif price < 20000:
-                rent_buckets["10 000 - 20 000 Kč"] += 1
-            elif price < 30000:
-                rent_buckets["20 000 - 30 000 Kč"] += 1
-            elif price < 50000:
-                rent_buckets["30 000 - 50 000 Kč"] += 1
-            else:
-                rent_buckets["nad 50 000 Kč"] += 1
-        else:
-            if price < 3_000_000:
-                sale_buckets["do 3 mil. Kč"] += 1
-            elif price < 5_000_000:
-                sale_buckets["3 - 5 mil. Kč"] += 1
-            elif price < 8_000_000:
-                sale_buckets["5 - 8 mil. Kč"] += 1
-            else:
-                sale_buckets["nad 8 mil. Kč"] += 1
+    rent_buckets: Counter[str] = Counter(
+        {
+            "do 10 000 Kč": int(price_counts["rent_10"] or 0),
+            "10 000 - 20 000 Kč": int(price_counts["rent_20"] or 0),
+            "20 000 - 30 000 Kč": int(price_counts["rent_30"] or 0),
+            "30 000 - 50 000 Kč": int(price_counts["rent_50"] or 0),
+            "nad 50 000 Kč": int(price_counts["rent_more"] or 0),
+        }
+    )
+    sale_buckets: Counter[str] = Counter(
+        {
+            "do 3 mil. Kč": int(price_counts["sale_3"] or 0),
+            "3 - 5 mil. Kč": int(price_counts["sale_5"] or 0),
+            "5 - 8 mil. Kč": int(price_counts["sale_8"] or 0),
+            "nad 8 mil. Kč": int(price_counts["sale_more"] or 0),
+        }
+    )
     localities = sorted({row["locality"] for row in views if row["locality"] and row["locality"] != "—"})
     return {
         "kpis": [
@@ -744,7 +779,12 @@ def monitors_payload(store: Store) -> dict[str, Any]:
             {"label": "Pozastavených", **live(paused_n), "delta": "n/a", "delta_tone": "na"},
             {"label": "Vytvořeno dnes", **live(created_today), **_kpi_delta(created_today, created_yday)},
             {"label": "Vytvořeno 30d", **live(created_30), **_kpi_delta(created_30, created_prev30)},
-            {"label": "Průměr na uživatele", **live(avg), "delta": "n/a", "delta_tone": "na"},
+            {
+                "label": "Nonstop sledovaných nemovitostí",
+                **live(watched_total),
+                "delta": "unikátních",
+                "delta_tone": "na",
+            },
         ],
         "localities": _top_localities(loc_counts),
         "offers": _share_rows(offer_counts, ["Pronájem", "Prodej"], ["forest", "green"]),
@@ -758,6 +798,7 @@ def monitors_payload(store: Store) -> dict[str, Any]:
         "rent": _share_rows(rent_buckets, rent_order, ["forest", "green", "green", "mint", "line"]),
         "sale": _share_rows(sale_buckets, sale_order, ["forest", "green", "green", "mint"]),
         "total": len(views),
+        "watched_total": watched_total,
     }
 
 
@@ -1266,7 +1307,14 @@ def dedupe_payload(store: Store, hub: Any) -> dict[str, Any]:
 
 
 def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
-    status = hub.status()
+    # Full hub.status() performs catalog/user aggregates needed by the public app.
+    # Provoz only needs runtime flags; repeating those aggregates made this page
+    # wait behind scraper writes and remain stuck on “Načítám…”.
+    status = {
+        "running": bool(getattr(hub, "running", False)),
+        "checking": bool(getattr(hub, "checking", False)),
+        "last_error": getattr(hub, "last_error", None),
+    }
     jobs = store.list_scrape_jobs()
     catalog = store.catalog_sync_status()
     disc = user_account.discord_status(store)
@@ -1418,33 +1466,51 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         if not prev or stamp > (prev.get("finished_at") or prev.get("started_at") or ""):
             by_portal[portal] = item
     titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
+    all_scrape_ticks = store.list_scrape_ticks(limit=120)
+    # Deep runs much more often than discovery/monitor checks. Keep the admin
+    # history representative instead of letting deep rows hide both priorities.
+    per_kind: dict[str, int] = {}
+    scrape_ticks = []
+    for tick in all_scrape_ticks:
+        kind = str(tick.get("kind") or "minute")
+        if per_kind.get(kind, 0) >= 8:
+            continue
+        per_kind[kind] = per_kind.get(kind, 0) + 1
+        scrape_ticks.append(tick)
+        if len(scrape_ticks) >= 25:
+            break
+    latest_tick = all_scrape_ticks[0] if all_scrape_ticks else None
+    tick_at = str((latest_tick or {}).get("at") or "")
+    tick_ok = bool(latest_tick) and not bool((latest_tick or {}).get("error"))
     seen_portals = set(by_portal) | {key for key in portals if key in titles}
     for portal in sorted(seen_portals, key=lambda key: titles.get(key, key)):
         title = titles.get(portal, portal.title())
         item = by_portal.get(portal)
-        if not item:
-            cron.append(
-                {
-                    "name": f"Scraper - {title}",
-                    "interval": f"každých {interval}s" if interval < 60 else f"každých {max(1, interval // 60)} min",
-                    "last": relative_short(catalog.get("last_run")),
-                    "duration": "—",
-                    "status": "OK" if scraper_ok else "Stojí",
-                    "ok": scraper_ok,
-                    "next": _next_in(catalog.get("last_run"), interval),
-                }
-            )
-            continue
-        secs = _job_secs(item)
+        # Minute Sreality discovery ticks are the source of truth; monitor_live jobs go stale.
+        last_stamp = (item.get("finished_at") or item.get("started_at") if item else None) or catalog.get("last_run")
+        if portal == "sreality" and tick_at:
+            last_stamp = tick_at
+        secs = _job_secs(item) if item else None
+        if portal == "sreality" and latest_tick and latest_tick.get("ms") is not None:
+            try:
+                secs = float(latest_tick.get("ms")) / 1000.0
+            except (TypeError, ValueError):
+                pass
+        if portal == "sreality" and tick_at:
+            status_label = "OK" if tick_ok else "Stojí"
+        elif item and item.get("last_error"):
+            status_label = "Error"
+        else:
+            status_label = "OK" if scraper_ok else "Stojí"
         cron.append(
             {
-                "name": f"Scraper - {titles.get(portal, portal.title())}",
+                "name": f"Scraper - {title}",
                 "interval": f"každých {interval}s" if interval < 60 else f"každých {max(1, interval // 60)} min",
-                "last": relative_short(item.get("finished_at") or item.get("started_at")),
+                "last": relative_short(last_stamp),
                 "duration": _dur(secs),
-                "status": "Error" if item.get("last_error") else "OK",
-                "ok": not bool(item.get("last_error")),
-                "next": _next_in(item.get("finished_at") or item.get("started_at"), interval),
+                "status": status_label,
+                "ok": status_label == "OK",
+                "next": _next_in(last_stamp, interval),
             }
         )
     cat_by_portal: dict[str, list] = {}
@@ -1492,6 +1558,41 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             "next": dedupe.get("next") or "—",
         }
     )
+    recent_ticks = []
+    for item in scrape_ticks:
+        disc = item.get("discovery") if isinstance(item.get("discovery"), dict) else {}
+        ref = item.get("refresh") if isinstance(item.get("refresh"), dict) else {}
+        cover = ref.get("coverage_pct")
+        cover_label = f"{cover}%" if cover is not None else ""
+        deep_bits = []
+        if ref.get("shards"):
+            deep_bits.append(f"deep {ref.get('shards')} sh")
+        if cover_label:
+            deep_bits.append(f"cover {cover_label}")
+        if ref.get("listings"):
+            deep_bits.append(f"{ref.get('listings')} list")
+        recent_ticks.append(
+            {
+                "at": fmt_dt(item.get("at")),
+                "at_iso": item.get("at") or "",
+                "at_rel": relative_cs(str(item.get("at") or "")),
+                "kind": item.get("kind") or "minute",
+                "url": item.get("url") or "",
+                "detail": " · ".join(deep_bits) if deep_bits else (item.get("url") or "—"),
+                "ms": item.get("ms"),
+                "duration": _dur((float(item["ms"]) / 1000.0) if item.get("ms") is not None else None),
+                "listings": int(disc.get("listings") or 0) + int(ref.get("listings") or 0),
+                "discovery_listings": int(disc.get("listings") or 0),
+                "refresh_listings": int(ref.get("listings") or 0),
+                "new": int(disc.get("new") or 0) + int(ref.get("new") or 0),
+                "updated": int(disc.get("updated") or 0) + int(ref.get("updated") or 0),
+                "same": int(disc.get("same") or 0) + int(ref.get("same") or 0),
+                "notified": int(ref.get("notified") or 0),
+                "deferred": int(disc.get("deferred") or 0) + int(ref.get("deferred") or 0),
+                "shards": int(disc.get("shards") or 0) + int(ref.get("shards") or 0),
+                "coverage_pct": cover,
+            }
+        )
     api_points = _api_series()
     err_points, err_now = _err_series(store)
     return {
@@ -1512,11 +1613,40 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
                 )
             ),
             "avg": live(_dur(sum(avg_secs) / len(avg_secs)) if avg_secs else "—"),
-            "last": live(relative_cs((last_job or {}).get("finished_at") or catalog.get("last_run"))),
+            "last": live(relative_cs(tick_at or ((last_job or {}).get("finished_at") or catalog.get("last_run")))),
         },
         "sources": sources,
         "logs": logs,
         "jobs": cron,
+        "recent_ticks": recent_ticks,
+        "scrape_note": (
+            "Běží tři nezávislé kontinuální fronty: (1) monitor_priority pro nastavené "
+            "monitory, (2) new_discovery pro nejnovější nabídky a (3) rolling_deep pro "
+            f"celý trh ({config.SCRAPE_DEEP_SHARDS_PER_TICK} shardů v dávce). "
+            "Síťová fronta vždy pouští monitory před discovery a deep."
+            if tick_at
+            else "Zatím žádný minutový tick — po startu scrapu se tu objeví během ~1 minuty."
+        ),
+        "scrape_portals": [
+            {"id": key, "name": titles.get(key, key.title())}
+            for key in config.CATALOG_SYNC_HOURS
+        ],
+        "scrape_schedules": [
+            {
+                "id": item.get("id"),
+                "scope": item.get("scope") or "url",
+                "label": item.get("label")
+                or item.get("url")
+                or titles.get(str(item.get("portal") or ""), str(item.get("portal") or "")),
+                "portal": item.get("portal") or "",
+                "url": item.get("url") or "",
+                "max_pages": item.get("max_pages"),
+                "run_at": item.get("run_at") or "",
+                "run_at_fmt": fmt_dt(str(item.get("run_at") or "")),
+                "run_at_rel": relative_cs(str(item.get("run_at") or "")),
+            }
+            for item in store.list_scrape_schedules()
+        ],
         "dedupe": dedupe,
         "running": bool(status.get("running")),
         "checking": bool(status.get("checking")),

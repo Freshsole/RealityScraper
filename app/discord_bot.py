@@ -235,6 +235,8 @@ class DiscordBot:
                 await ws.send(json.dumps({"op": 1, "d": self._seq}))
         except asyncio.CancelledError:
             return
+        except websockets.exceptions.ConnectionClosedOK:
+            return
         except Exception:
             log.exception("Discord heartbeat failed")
 
@@ -290,6 +292,8 @@ class DiscordBot:
                 await self.gateway_once()
             except asyncio.CancelledError:
                 raise
+            except websockets.exceptions.ConnectionClosedOK:
+                pass
             except Exception:
                 log.exception("Discord gateway dropped")
             await asyncio.sleep(5)

@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "Realitify — AI skóre na Sreality",
+  "description": "Zobrazí Realitify skóre a analýzu přímo na Sreality.cz při aktivním předplatném.",
+  "version": "1.0.2",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Realitify",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "32": "assets/icon-32.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "32": "assets/icon-32.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "cookies", "tabs"],
+  "host_permissions": [
+    "https://www.sreality.cz/*",
+    "https://sreality.cz/*",
+    "https://*.sreality.cz/*",
+    "https://realitify.cz/*",
+    "https://www.realitify.cz/*",
+    "http://127.0.0.1:8080/*",
+    "http://localhost:8080/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.sreality.cz/*",
+        "https://sreality.cz/*",
+        "https://*.sreality.cz/*"
+      ],
+      "css": ["content/inject.css"],
+      "js": ["content/shared.js", "content/search.js", "content/detail.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*"],
+      "matches": ["https://www.sreality.cz/*", "https://sreality.cz/*", "https://*.sreality.cz/*"]
+    }
+  ]
+}
