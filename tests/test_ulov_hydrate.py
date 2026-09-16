@@ -1,0 +1,208 @@
+import asyncio
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from app.store import Store
+from app.ulovdomov import (
+    DETAIL_API,
+    UlovdomovClient,
+    listing_from_detail_payload,
+    merge_detail,
+    needs_hydrate,
+    reset_ulov_caches,
+)
+from app import ulov_hydrate
+
+FIXTURES = Path(__file__).parent / "fixtures"
+DETAIL = json.loads((FIXTURES / "ulov_offer_detail.json").read_text())
+SITEMAP = (FIXTURES / "ulov_sitemap_offers.xml").read_text()
+
+
+def test_detail_payload_has_price_and_photo():
+    listing = listing_from_detail_payload(DETAIL)
+    assert listing is not None
+    assert listing.id == 3496443
+    assert listing.price_czk == 6000
+    assert "měsíc" in listing.price_label
+    assert listing.disposition == "1+kk"
+    assert "Ústí nad Labem" in listing.locality
+    assert listing.image_url and listing.image_url.startswith("https://storage.livendo.eu/")
+    assert len(listing.photos) == 2
+    assert listing.lat == pytest.approx(50.65715)
+    assert listing.area_m2 == 18
+    assert listing.url.endswith("/3496443")
+    assert "/inzerat/" in listing.url
+
+
+def test_detail_keeps_catalog_url():
+    keep = "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443"
+    listing = listing_from_detail_payload(DETAIL, keep_url=keep)
+    assert listing is not None
+    assert listing.url == keep
+    stub = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty").listing_from_sitemap_url(
+        keep, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443
+    )
+    assert needs_hydrate(stub) is True
+    merge_detail(stub, listing)
+    assert stub.url == keep
+    assert stub.price_czk == 6000
+    assert stub.image_url
+    assert stub.extras.get("sitemap_card") is None
+    assert needs_hydrate(stub) is False
+
+
+def test_hydrate_allowed_never_on_web(monkeypatch):
+    monkeypatch.setattr("app.config.SCRAPE_ULOV_HYDRATE", True)
+    monkeypatch.setattr("app.config.SCRAPE_ROLE", "web")
+    assert ulov_hydrate.allowed() is False
+    monkeypatch.setattr("app.config.SCRAPE_ROLE", "worker")
+    assert ulov_hydrate.allowed() is True
+    monkeypatch.setattr("app.config.SCRAPE_ULOV_HYDRATE", False)
+    assert ulov_hydrate.allowed() is False
+
+
+def test_instant_site_stays_off_ulov_hydrate_path():
+    src = Path("app/site_pages.py").read_text()
+    assert "ulov_hydrate" not in src
+    assert "offer/detail" not in src
+    assert "ulovdomov" not in src
+
+
+def test_fetch_page_does_not_call_detail():
+    reset_ulov_caches()
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(f"{request.method} {request.url.path}")
+        if request.method == "POST":
+            return httpx.Response(500, json={"error": "udBe.internalServerError", "success": False})
+        if "sitemap-offers" in str(request.url):
+            return httpx.Response(200, text=SITEMAP, headers={"content-type": "application/xml"})
+        raise AssertionError(f"list path must not hit {request.url}")
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            listings, total = await client.fetch_page(1)
+            assert total == 2
+            assert len(listings) == 2
+            assert all(needs_hydrate(item) for item in listings)
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()
+    assert any("sitemap-offers" in path for path in hits)
+    assert not any("offer/detail" in path for path in hits)
+
+
+def test_hydrate_batch_fills_price_and_is_fail_fast():
+    reset_ulov_caches()
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        if "offer/detail" in str(request.url):
+            offer_id = request.url.params.get("offerId")
+            if offer_id == "3496443":
+                return httpx.Response(200, json=DETAIL)
+            if offer_id == "2037015":
+                return httpx.Response(429, json={"error": "rate"}, headers={"Retry-After": "3"})
+            return httpx.Response(404, json={"error": "Offer not found", "success": False, "data": None})
+        raise AssertionError(f"unexpected {request.url}")
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            keep = "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443"
+            first = client.listing_from_sitemap_url(keep, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+            second = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/pronajem-praha-liben-na-korabe-1-kk/2037015",
+                "pronajem",
+                "pronajem-praha-liben-na-korabe-1-kk",
+                2037015,
+            )
+            result = await client.hydrate_listings(
+                [first, second],
+                concurrency=1,
+                delay_sec=0,
+                deadline_sec=5,
+                fail_fast=True,
+            )
+            assert result.priced == 1
+            assert result.imaged == 1
+            assert first.price_czk == 6000
+            assert first.url == keep
+            assert result.blocked is not None
+            assert result.blocked.status_code == 429
+            assert result.aborted
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()
+
+
+def test_hydrate_gone_is_not_a_block():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "Offer not found", "success": False, "data": None})
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            listing = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/pronajem-x/1", "pronajem", "pronajem-x", 1
+            )
+            result = await client.hydrate_listings([listing], concurrency=1, delay_sec=0, deadline_sec=3)
+            assert result.gone == 1
+            assert result.priced == 0
+            assert result.blocked is None
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+
+
+def test_sitemap_refresh_does_not_wipe_hydrated_price(tmp_path: Path):
+    store = Store(tmp_path / "ulov-hydrate.sqlite")
+    client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+    url = "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443"
+    stub = client.listing_from_sitemap_url(url, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    detailed = listing_from_detail_payload(DETAIL, keep_url=url)
+    merge_detail(stub, detailed)
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    again = client.listing_from_sitemap_url(url, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+    store.upsert_catalog_listing(again, kind="refresh", fast=True)
+    rows = store.unpriced_ulov_listings(limit=10)
+    assert rows == []
+    with store.connect() as conn:
+        row = dict(conn.execute("SELECT price_czk, image_url, name FROM catalog_listings").fetchone())
+    assert row["price_czk"] == 6000
+    assert row["image_url"]
+    assert "1+kk" in row["name"]
+
+
+def test_unpriced_ulov_reader_prefers_missing_price(tmp_path: Path):
+    store = Store(tmp_path / "ulov-unpriced.sqlite")
+    client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+    stub = client.listing_from_sitemap_url(
+        "https://www.ulovdomov.cz/inzerat/pronajem-praha-liben-na-korabe-1-kk/2037015",
+        "pronajem",
+        "pronajem-praha-liben-na-korabe-1-kk",
+        2037015,
+    )
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    rows = store.unpriced_ulov_listings(limit=5)
+    assert len(rows) == 1
+    assert rows[0]["id"] == 2037015
+    assert DETAIL_API.endswith("/v2/offer/detail")

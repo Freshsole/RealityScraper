@@ -51,6 +51,9 @@ class ScrapeWorker:
         self.hub._sold_task = asyncio.create_task(self.hub._sold_loop(), name="worker-sold")
         self.hub._coords_task = asyncio.create_task(self.hub.backfill_missing_coords(), name="worker-coords")
         self.hub._dedupe_task = asyncio.create_task(self.hub._dedupe_loop(), name="worker-dedupe")
+        self.hub._ulov_hydrate_task = asyncio.create_task(
+            self.hub._ulov_hydrate_loop(), name="worker-ulov-hydrate"
+        )
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:

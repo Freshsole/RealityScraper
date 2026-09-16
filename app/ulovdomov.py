@@ -1,20 +1,25 @@
-"""UlovDomov scraper — JSON API first, sitemap hydration, HTML/_next/data last."""
+"""UlovDomov scraper — JSON API first, sitemap list cards, worker detail hydrate."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.block_page import PortalBlocked
 from app.html_listing import HtmlPortalClient, abs_url, listing_from_card, numeric_id, parse_disposition, parse_price
 from app.portal_urls import ulovdomov_url
-from app.sreality import Listing
+from app.sreality import Listing, ListingGone, format_price
 
 SITE = ulovdomov_url.site
 API = "https://ud.api.ulovdomov.cz/v1/offer/find"
+DETAIL_API = "https://ud.api.ulovdomov.cz/v2/offer/detail"
 SITEMAP_OFFERS = f"{SITE}/sitemap-offers.xml"
+DETAIL_TIMEOUT_SEC = 8.0
+DETAIL_CONSECUTIVE_FAILS = 2
 BOUNDS = {"northEast": {"lat": 51.06, "lng": 18.87}, "southWest": {"lat": 48.55, "lng": 12.09}}
 HREF_RE = re.compile(
     r'href="((?:https://www\.ulovdomov\.cz)?/(?:pronajem|prodej)/[^"]+/\d+[^"]*)"',
@@ -29,6 +34,27 @@ SLUG_KK_RE = re.compile(r"(?i)(?:^|-)(\d+)-kk(?:-|$)")
 SLUG_PLUS1_RE = re.compile(r"(?i)(?:^|-)(\d+)-1(?:-|$)")
 OFFER_KEYS = ("offers", "results", "items", "list", "adverts", "estates", "hits")
 SITEMAP_TTL_SEC = 480.0
+DISPOSITION_NAMES = {
+    "onepluskitchenette": "1+kk",
+    "oneplusone": "1+1",
+    "twopluskitchenette": "2+kk",
+    "twoplusone": "2+1",
+    "threepluskitchenette": "3+kk",
+    "threeplusone": "3+1",
+    "fourpluskitchenette": "4+kk",
+    "fourplusone": "4+1",
+    "fivepluskitchenette": "5+kk",
+    "fiveplusone": "5+1",
+    "sixpluskitchenette": "6+kk",
+    "sixplusone": "6+1",
+    "studio": "1+kk",
+    "garsonka": "1+kk",
+    "garsoniera": "1+kk",
+    "atypical": "atypický",
+    "atypicky": "atypický",
+    "room": "pokoj",
+    "pokoj": "pokoj",
+}
 
 _sitemap_rows: list[tuple[str, str, int, str]] | None = None
 _sitemap_at = 0.0
@@ -177,6 +203,207 @@ def parse_sitemap_offers(xml: str) -> list[tuple[str, str, int, str]]:
         rows.append((url, offer_from_inzerat_slug(slug), listing_id, slug))
     rows.sort(key=lambda item: item[2], reverse=True)
     return rows
+
+
+@dataclass
+class HydrateResult:
+    listings: list[Listing] = field(default_factory=list)
+    attempted: int = 0
+    priced: int = 0
+    imaged: int = 0
+    gone: int = 0
+    failed: int = 0
+    aborted: str | None = None
+    blocked: PortalBlocked | None = None
+    gone_ids: list[int] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "attempted": self.attempted,
+            "priced": self.priced,
+            "imaged": self.imaged,
+            "gone": self.gone,
+            "failed": self.failed,
+            "aborted": self.aborted,
+            "success_rate": round(self.priced / self.attempted, 3) if self.attempted else 0.0,
+        }
+
+
+def needs_hydrate(listing: Listing | None) -> bool:
+    if listing is None:
+        return False
+    if listing.price_czk in (None, 0):
+        return True
+    return not bool(listing.image_url)
+
+
+def _place_name(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("name") or value.get("title") or "").strip()
+    return str(value or "").strip()
+
+
+def _param_map(raw: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if name and name not in out:
+            out[name] = item.get("value")
+    return out
+
+
+def _disposition_from_detail(raw: dict[str, Any], params: dict[str, Any], title: str) -> str:
+    named = str(params.get("disposition") or raw.get("disposition") or "").replace("_", "").replace("-", "")
+    mapped = DISPOSITION_NAMES.get(named.casefold())
+    if mapped:
+        return mapped
+    if isinstance(raw.get("disposition"), dict):
+        label = str(raw["disposition"].get("name") or raw["disposition"].get("label") or "")
+        if label:
+            return parse_disposition(label) or label
+    return parse_disposition(title) or parse_disposition(named)
+
+
+def _photos_from_detail(raw: dict[str, Any]) -> list[str]:
+    photos: list[str] = []
+    for key in ("photos", "images", "photoUrls"):
+        rows = raw.get(key) or []
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if isinstance(item, str):
+                url = abs_url(item, SITE)
+            elif isinstance(item, dict):
+                url = abs_url(str(item.get("path") or item.get("url") or item.get("src") or ""), SITE)
+            else:
+                url = ""
+            if url and url not in photos:
+                photos.append(url)
+    return photos
+
+
+def _offer_from_detail(raw: dict[str, Any], params: dict[str, Any], fallback: str = "") -> str:
+    token = str(raw.get("offerTypeId") or params.get("offerType") or fallback or "").casefold()
+    if token in {"rent", "1", "pronajem", "pronájem"}:
+        return "pronajem"
+    if token in {"sale", "2", "prodej"}:
+        return "prodej"
+    if token in {"coliving", "spolubydleni"}:
+        return "spolubydleni"
+    seo = str(raw.get("seo") or raw.get("absoluteUrl") or "")
+    return offer_from_inzerat_slug(seo) if seo else (fallback or "pronajem")
+
+
+def listing_from_detail_payload(payload: Any, *, offer: str = "", keep_url: str = "") -> Listing | None:
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(raw, dict) or not raw:
+        return None
+    if payload.get("success") is False and not raw.get("id"):
+        return None
+    params = _param_map(raw.get("parameters"))
+    listing_id = numeric_id(raw.get("id") or raw.get("offerId"), keep_url or str(raw.get("seo") or ""))
+    if not listing_id:
+        return None
+    offer_kind = _offer_from_detail(raw, params, offer)
+    title = str(raw.get("title") or raw.get("name") or raw.get("headline") or "").strip()
+    locality_parts = [
+        part
+        for part in (
+            _place_name(raw.get("village")),
+            _place_name(raw.get("villagePart")),
+            str(params.get("localityCity") or "").strip(),
+            _place_name(raw.get("district")),
+        )
+        if part
+    ]
+    locality = ", ".join(dict.fromkeys(locality_parts))
+    price = raw.get("rentalPrice") if raw.get("rentalPrice") not in (None, "") else raw.get("price")
+    if isinstance(price, dict):
+        price_czk = _as_int(price.get("value") or price.get("amount") or price.get("czk"))
+    else:
+        price_czk = _as_int(price)
+    if price_czk is None:
+        price_czk = _as_int(params.get("price"))
+    price_unit = str(raw.get("priceUnit") or params.get("priceUnit") or "").casefold()
+    if offer_kind == "pronajem":
+        unit = "měsíc"
+    elif price_unit in {"persqm", "per_sqm", "m2", "m²"}:
+        unit = "m²"
+    else:
+        unit = "ks"
+    price_label = format_price(price_czk, unit)
+    note = str(raw.get("priceNote") or params.get("priceTextNote") or "").strip()
+    if note and price_czk is not None:
+        price_label = f"{price_label} {note}".strip()
+    photos = _photos_from_detail(raw)
+    gps = raw.get("geoCoordinates") or raw.get("gps") or raw.get("coordinates") or {}
+    lat = _as_float(raw.get("lat") or (gps.get("lat") if isinstance(gps, dict) else None))
+    lon = _as_float(raw.get("lng") or raw.get("lon") or (gps.get("lng") if isinstance(gps, dict) else None))
+    area = _as_int(params.get("floorArea") or raw.get("area") or raw.get("floorArea") or raw.get("surface"))
+    disp = _disposition_from_detail(raw, params, title)
+    slug = str(raw.get("seo") or "").strip().strip("/")
+    if keep_url:
+        url = keep_url
+    elif slug:
+        url = f"{SITE}/inzerat/{slug}/{listing_id}"
+    else:
+        url = str(raw.get("absoluteUrl") or f"{SITE}/inzerat/{listing_id}").split("#")[0]
+    extras = {"source": "offer_detail"}
+    listing = listing_from_card(
+        listing_id=listing_id,
+        name=title or f"{'Pronájem' if offer_kind == 'pronajem' else 'Prodej'} bytu",
+        url=url,
+        price_czk=price_czk,
+        price_label=price_label,
+        locality=locality,
+        disposition=disp,
+        area_m2=area,
+        image_url=photos[0] if photos else None,
+        photos=photos,
+        offer=offer_kind,
+        lat=lat,
+        lon=lon,
+        description=str(raw.get("description") or "").strip() or None,
+        extras=extras,
+    )
+    return listing
+
+
+def merge_detail(listing: Listing, detailed: Listing) -> Listing:
+    """Fill price/photos/geo from detail without changing the catalog URL key."""
+    listing.price_czk = detailed.price_czk if detailed.price_czk not in (None, 0) else listing.price_czk
+    if detailed.price_label and detailed.price_label != "Cena neuvedena":
+        listing.price_label = detailed.price_label
+    if detailed.image_url:
+        listing.image_url = detailed.image_url
+    if detailed.photos:
+        listing.photos = detailed.photos
+    if detailed.lat is not None:
+        listing.lat = detailed.lat
+    if detailed.lon is not None:
+        listing.lon = detailed.lon
+    if detailed.area_m2 is not None:
+        listing.area_m2 = detailed.area_m2
+    if detailed.disposition:
+        listing.disposition = detailed.disposition
+    if detailed.locality:
+        listing.locality = detailed.locality
+    if detailed.name:
+        listing.name = detailed.name
+    if detailed.description:
+        listing.description = detailed.description
+    extras = dict(listing.extras or {})
+    extras.update(detailed.extras or {})
+    extras.pop("sitemap_card", None)
+    extras["source"] = "offer_detail"
+    listing.extras = extras
+    return listing
 
 
 def fields_from_inzerat_slug(slug: str, offer: str) -> tuple[str, str, str]:
@@ -367,7 +594,7 @@ class UlovdomovClient(HtmlPortalClient):
         if not listing_id:
             return None
         name, locality, disp = fields_from_inzerat_slug(slug, offer)
-        return listing_from_card(
+        listing = listing_from_card(
             listing_id=int(listing_id),
             name=name,
             url=url,
@@ -376,7 +603,9 @@ class UlovdomovClient(HtmlPortalClient):
             locality=locality,
             disposition=disp,
             offer=offer,
+            extras={"sitemap_card": True, "source": "sitemap"},
         )
+        return listing
 
     async def _load_sitemap_rows(self) -> list[tuple[str, str, int, str]]:
         global _sitemap_rows, _sitemap_at, _sitemap_ok
@@ -523,3 +752,137 @@ class UlovdomovClient(HtmlPortalClient):
         if api_blocked:
             raise api_blocked
         return listings, total
+
+    def _offer_id(self, listing: Listing) -> int | None:
+        if listing.id and 0 < int(listing.id) < (1 << 53):
+            return int(listing.id)
+        match = INZERAT_RE.search(listing.url or "")
+        if match:
+            return numeric_id(match.group(2), listing.url)
+        return None
+
+    async def fetch_offer_detail(self, listing_id: int, *, keep_url: str = "", offer: str = "") -> Listing:
+        response = await self._client.get(
+            DETAIL_API,
+            params={"offerId": int(listing_id)},
+            headers={
+                "Accept": "application/json",
+                "Origin": SITE,
+                "Referer": f"{SITE}/",
+            },
+            timeout=DETAIL_TIMEOUT_SEC,
+        )
+        if response.status_code in {404, 410}:
+            raise ListingGone(f"{DETAIL_API}?offerId={listing_id}")
+        self._raise_if_blocked(response)
+        if response.status_code >= 500:
+            raise PortalBlocked("server_error", response.status_code, portal="ulovdomov")
+        if response.status_code in {403, 429}:
+            raise PortalBlocked(
+                "rate_limit" if response.status_code == 429 else "forbidden",
+                response.status_code,
+                portal="ulovdomov",
+            )
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise PortalBlocked("server_error", response.status_code, portal="ulovdomov") from exc
+        detailed = listing_from_detail_payload(payload, offer=offer, keep_url=keep_url)
+        if detailed is None:
+            raise ListingGone(f"{DETAIL_API}?offerId={listing_id}")
+        return detailed
+
+    async def fetch_detail(self, listing: Listing) -> Listing:
+        offer_id = self._offer_id(listing)
+        if offer_id:
+            try:
+                detailed = await self.fetch_offer_detail(offer_id, keep_url=listing.url, offer=self._context())
+                return merge_detail(listing, detailed)
+            except ListingGone:
+                raise
+            except PortalBlocked:
+                raise
+            except Exception:
+                pass
+        return await super().fetch_detail(listing)
+
+    async def hydrate_listings(
+        self,
+        listings: list[Listing],
+        *,
+        concurrency: int = 4,
+        delay_sec: float = 0.12,
+        deadline_sec: float = 15.0,
+        fail_fast: bool = True,
+    ) -> HydrateResult:
+        """Worker-only batch: fill price + image from v2/offer/detail. Not used by /hry*."""
+        result = HydrateResult()
+        pending = [item for item in listings if item and needs_hydrate(item)]
+        if not pending:
+            return result
+        gate = asyncio.Semaphore(max(1, min(8, int(concurrency or 1))))
+        deadline = time.monotonic() + max(1.0, float(deadline_sec))
+        abort = asyncio.Event()
+        consecutive = 0
+        lock = asyncio.Lock()
+
+        async def one(item: Listing) -> None:
+            nonlocal consecutive
+            if abort.is_set() or time.monotonic() >= deadline:
+                return
+            offer_id = self._offer_id(item)
+            if not offer_id:
+                async with lock:
+                    result.failed += 1
+                return
+            async with gate:
+                if abort.is_set() or time.monotonic() >= deadline:
+                    return
+                async with lock:
+                    result.attempted += 1
+                try:
+                    detailed = await self.fetch_offer_detail(offer_id, keep_url=item.url, offer=self._context())
+                except ListingGone:
+                    async with lock:
+                        result.gone += 1
+                        result.gone_ids.append(int(item.id))
+                        consecutive = 0
+                    return
+                except PortalBlocked as exc:
+                    async with lock:
+                        result.failed += 1
+                        result.blocked = exc
+                        result.aborted = str(exc)
+                        abort.set()
+                    return
+                except Exception:
+                    async with lock:
+                        result.failed += 1
+                        consecutive += 1
+                        if fail_fast and consecutive >= DETAIL_CONSECUTIVE_FAILS:
+                            result.aborted = "consecutive_fail"
+                            abort.set()
+                    return
+                merge_detail(item, detailed)
+                async with lock:
+                    consecutive = 0
+                    result.listings.append(item)
+                    if item.price_czk not in (None, 0):
+                        result.priced += 1
+                    if item.image_url:
+                        result.imaged += 1
+                if delay_sec > 0:
+                    await asyncio.sleep(delay_sec)
+
+        tasks = [asyncio.create_task(one(item)) for item in pending]
+        try:
+            await asyncio.wait_for(asyncio.gather(*tasks), timeout=max(1.5, float(deadline_sec) + 1.0))
+        except asyncio.TimeoutError:
+            result.aborted = result.aborted or "deadline"
+            abort.set()
+            for task in tasks:
+                task.cancel()
+        if time.monotonic() >= deadline and not result.aborted:
+            result.aborted = "deadline"
+        return result

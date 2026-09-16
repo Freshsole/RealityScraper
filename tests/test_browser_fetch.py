@@ -56,3 +56,5 @@ def test_instant_site_module_stays_off_browser_path():
     assert "curl_cffi" not in src
     assert "playwright" not in src
     assert "google-chrome" not in src
+    assert "ulov_hydrate" not in src
+    assert "offer/detail" not in src
