@@ -1,42 +1,62 @@
 (function () {
+  const escapeHtml = (value) =>
+    String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+
   const fmt = (n) => {
     const num = Number(n || 0);
     return `${Math.round(num).toLocaleString("cs-CZ")} Kč`;
   };
 
-  const vanishText = (hours) => {
-    const h = Number(hours || 0);
-    if (h < 1) return `za ${Math.max(8, Math.round(h * 60))} minut`;
-    if (h < 24) return `za ${h.toFixed(1).replace(".", ",")} h`;
-    return `za ${Math.round(h)} h`;
-  };
+  const specText = (item) =>
+    [item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" · ");
 
-  const cardHtml = (item, { pickable = false, showPrice = false } = {}) => `
-    <article class="flat-card${pickable ? " pickable" : ""}" data-side="${item.side || ""}" ${pickable ? 'tabindex="0" role="button"' : ""}>
-      <img src="${item.image_url || "/static/site/assets/hero-apart.png"}" alt="" />
-      <div class="meta">
-        <div class="loc">${item.locality || item.name || ""}</div>
-        <div class="spec">${[item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" • ")}</div>
-        <div class="portal">${item.portal_label || ""}</div>
-        ${showPrice ? `<div class="price">${fmt(item.price_czk)} / měsíc</div>` : ""}
+  const rowHtml = (item, { revealed = false, state = "" } = {}) => `
+    <button type="button" class="flat-row${state ? ` ${state}` : ""}${revealed ? "" : " pickable"}" data-side="${escapeHtml(item.side || "")}" ${revealed ? "disabled" : 'tabindex="0"'}>
+      <img class="flat-thumb" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="96" height="96" alt="" decoding="async" />
+      <div class="flat-meta">
+        <div class="spec">${escapeHtml(specText(item))}</div>
+        <div class="portal">${escapeHtml(item.portal_label || "")}</div>
       </div>
-    </article>
+      <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmt(item.price_czk)}` : "???"}</div>
+    </button>
   `;
 
   async function loadHigherLower() {
     const board = document.getElementById("game-board");
+    const scoreEl = document.getElementById("game-score");
     if (!board) return;
-    const status = document.getElementById("game-status");
     let streak = 0;
     let played = 0;
 
+    const renderScore = () => {
+      if (!scoreEl) return;
+      scoreEl.innerHTML = `
+        <span class="score-chip">Série <strong>${streak}</strong></span>
+        <span class="score-chip">Odehráno <strong>${played}</strong></span>
+      `;
+    };
+
     async function round() {
+      board.innerHTML = `<p class="lead">Načítám dvojici ze stejné lokality…</p>`;
       const res = await fetch("/api/public/games/higher-lower");
       const data = await res.json();
       const left = { ...data.left, side: "left" };
       const right = { ...data.right, side: "right" };
-      board.innerHTML = `${cardHtml(left, { pickable: true }) }<div class="vs-mark">VS</div>${cardHtml(right, { pickable: true })}`;
-      status.innerHTML = `<p class="fomo">${data.copy || "Dobré byty mizí rychle."}</p><div class="game-scoreline"><span>Série: ${streak}</span><span>Odehráno: ${played}</span></div>`;
+      const locality = data.locality_label || left.locality || right.locality || "Stejná lokalita";
+      board.innerHTML = `
+        <div class="loc-chip">${escapeHtml(locality)}</div>
+        ${rowHtml(left)}
+        <div class="vs-row">VS</div>
+        ${rowHtml(right)}
+        <div class="mint-banner">
+          <strong>${escapeHtml(data.copy || "Oba byty jsou ve stejné lokalitě.")}</strong>
+        </div>
+      `;
+      renderScore();
       let locked = false;
       board.querySelectorAll(".pickable").forEach((el) => {
         const pick = () => {
@@ -46,25 +66,22 @@
           const correct = side === data.cheaper;
           played += 1;
           streak = correct ? streak + 1 : 0;
-          board.querySelectorAll(".flat-card").forEach((card) => {
-            card.classList.remove("pickable");
-            card.removeAttribute("tabindex");
-            const win = card.dataset.side === data.cheaper;
-            card.classList.add(win ? "win" : "lose");
-            const price = card.dataset.side === "left" ? left.price_czk : right.price_czk;
-            const meta = card.querySelector(".meta");
-            if (meta && !meta.querySelector(".price")) {
-              const p = document.createElement("div");
-              p.className = "price";
-              p.textContent = `${fmt(price)} / měsíc`;
-              meta.appendChild(p);
-            }
-          });
-          status.innerHTML = `
-            <p class="fomo">${correct ? "Správně — ale na trhu byste měli jen vteřiny." : "Špatně. Levnější byt už je často pryč."} Podobné nabídky mizí ${vanishText(data.vanish_hours)}.</p>
-            <div class="game-scoreline"><span>Série: ${streak}</span><span>Odehráno: ${played}</span></div>
-            <button class="pill pill-lg" type="button" id="hl-next">Další dvojice</button>
+          const message = correct ? data.copy_ok : data.copy_miss;
+          board.innerHTML = `
+            <div class="loc-chip">${escapeHtml(locality)}</div>
+            ${rowHtml(left, { revealed: true, state: data.cheaper === "left" ? "win" : "lose" })}
+            <div class="vs-row">VS</div>
+            ${rowHtml(right, { revealed: true, state: data.cheaper === "right" ? "win" : "lose" })}
+            <div class="mint-banner">
+              <strong>${correct ? "Správně." : "Špatně."}</strong>
+              <span>${escapeHtml(message || "Dobré byty mizí rychle.")}</span>
+            </div>
+            <div class="converter-actions">
+              <button class="pill pill-lg" type="button" id="hl-next">Další dvojice</button>
+              <a class="pill pill-lg" href="/registrace" style="text-align:center">Hlídat podobné byty</a>
+            </div>
           `;
+          renderScore();
           document.getElementById("hl-next")?.addEventListener("click", round);
         };
         el.addEventListener("click", pick);
@@ -77,7 +94,7 @@
       });
     }
     round().catch(() => {
-      status.innerHTML = "<p class='fomo'>Hru se teď nepodařilo načíst. Zkuste to za chvíli.</p>";
+      board.innerHTML = "<div class='mint-banner'><strong>Hru se teď nepodařilo načíst. Zkuste to za chvíli.</strong></div>";
     });
   }
 
@@ -92,13 +109,13 @@
       .map(
         (item) => `
         <article class="rent-card">
-          <img src="${item.image_url || "/static/site/assets/hero-apart.png"}" alt="" />
+          <img src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" alt="" width="300" height="140" decoding="async" />
           <div class="meta">
-            <div class="loc">${item.locality || item.name || ""}</div>
-            <div class="spec">${[item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" • ")}</div>
-            <div class="portal">${item.portal_label || ""}</div>
+            <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
+            <div class="spec">${escapeHtml(specText(item))}</div>
+            <div class="portal">${escapeHtml(item.portal_label || "")}</div>
             <label>Tip nájmu / měsíc
-              <input type="number" min="1000" step="100" name="guess" data-id="${item.id}" required />
+              <input type="number" min="1000" step="100" name="guess" data-id="${escapeHtml(item.id)}" required />
             </label>
           </div>
         </article>
@@ -122,7 +139,7 @@
         }).then((row) => row.json());
         result.hidden = false;
         result.innerHTML = `
-          <h2 class="display" style="font-size:40px;line-height:34px">SKÓRE ${scored.score} / ${scored.max_score}</h2>
+          <h2 class="display">SKÓRE ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</h2>
           <p>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat 5 inzerátů ručně.</p>
           <div class="rent-grid" style="margin-top:16px">
             ${(scored.items || [])
@@ -130,15 +147,16 @@
                 (item) => `
                 <article class="rent-card">
                   <div class="meta">
-                    <div class="loc">${item.locality || item.name || ""}</div>
-                    <div class="price">${fmt(item.actual)}</div>
-                    <div class="spec">Tip ${fmt(item.guess)} · ${item.points} b · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
+                    <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
+                    <div class="flat-price">${escapeHtml(fmt(item.actual))}</div>
+                    <div class="spec">Tip ${escapeHtml(fmt(item.guess))} · ${escapeHtml(item.points)} b · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
                   </div>
                 </article>
               `,
               )
               .join("")}
           </div>
+          <a class="pill" href="/registrace">Hlídat podobné byty</a>
         `;
       } finally {
         if (submit) submit.disabled = false;
