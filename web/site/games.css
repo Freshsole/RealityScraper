@@ -694,11 +694,16 @@ button {
     display: none;
   }
 
+  .nav-login {
+    display: none;
+  }
+
   .navbar {
     height: auto;
     min-height: 72px;
     padding-top: 12px;
     padding-bottom: 12px;
+    gap: 8px;
   }
 
   .game-play,
