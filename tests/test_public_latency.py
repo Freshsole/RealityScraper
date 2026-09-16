@@ -1,9 +1,12 @@
 import asyncio
 import json
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from app.site_pages import InstantSiteASGI, site_body
 from app.store import Store, catalog_item_needs_live_fetch
@@ -186,3 +189,162 @@ def test_store_init_does_not_wait_on_writer_lock(tmp_path: Path):
     locker.rollback()
     locker.close()
     assert ms < 1500, f"reload Store() waited {ms:.1f}ms on a live writer"
+
+
+def _latency_listing(i: int):
+    from app.sreality import Listing
+
+    return Listing(
+        id=20_000 + i,
+        name=f"Byt {i} 2+kk Praha",
+        price_czk=18000 + i,
+        price_label=f"{18000 + i} Kč/měsíc",
+        disposition="2+kk",
+        area_m2=50,
+        locality=f"Praha {(i % 8) + 1}",
+        url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{20_000 + i}",
+        image_url=f"https://img.example/{i}.jpg",
+        lat=50.08 + (i % 20) * 0.001,
+        lon=14.42 + (i % 20) * 0.001,
+        extras={"offer": "Pronájem", "estate": "Byt", "portal": "sreality"},
+    )
+
+
+def test_readonly_connect_is_wal_query_only_not_mode_ro(tmp_path: Path, monkeypatch):
+    seen: list[tuple[tuple, dict]] = []
+    real = sqlite3.connect
+
+    def wrapped(*args, **kwargs):
+        seen.append((args, kwargs))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", wrapped)
+    store = Store(tmp_path / "reader.sqlite")
+    seen.clear()
+    conn = store.connect(readonly=True)
+    try:
+        assert conn.execute("PRAGMA query_only").fetchone()[0] == 1
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 250
+        with pytest.raises(sqlite3.OperationalError):
+            conn.execute("UPDATE meta SET value = value")
+    finally:
+        conn.close()
+    assert not any(kwargs.get("uri") for _args, kwargs in seen)
+    assert not any("mode=ro" in str(arg) for args, _kwargs in seen for arg in args)
+    mode = store.connect().execute("PRAGMA journal_mode").fetchone()[0]
+    assert str(mode).lower() == "wal"
+
+
+def test_writer_timeout_splits_request_path_from_scrape_worker(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "split.sqlite")
+    result: dict[str, int] = {}
+
+    def probe(label: str) -> None:
+        conn = store.connect()
+        result[label] = int(conn.execute("PRAGMA busy_timeout").fetchone()[0])
+        conn.close()
+
+    probe("main")
+    thread = threading.Thread(target=probe, args=("ui",), name="rf-ui-1")
+    thread.start()
+    thread.join()
+    thread = threading.Thread(target=probe, args=("job",), name="rf-job-1")
+    thread.start()
+    thread.join()
+    monkeypatch.setattr("app.config.SCRAPE_ROLE", "web")
+    thread = threading.Thread(target=probe, args=("web-job",), name="rf-job-2")
+    thread.start()
+    thread.join()
+    assert result["main"] == 80
+    assert result["ui"] == 80
+    assert result["job"] == 30_000
+    assert result["web-job"] == 800
+
+
+def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
+    store = Store(tmp_path / "scrape-load.sqlite")
+    seed = [_latency_listing(i) for i in range(60)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=20, fast=True)
+    stop = threading.Event()
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_latency_listing(300 + (n + k) % 40) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            n += 1
+
+    thread = threading.Thread(target=writer, name="rf-job-sim", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    catalog_ms: list[float] = []
+    pin_ms: list[float] = []
+    list_ms: list[float] = []
+    item_ms: list[float] = []
+    search_ms: list[float] = []
+    guest_ms: list[float] = []
+    try:
+        for _ in range(10):
+            t0 = time.perf_counter()
+            catalog = store.catalog({"limit": 24, "include_pins": "0", "q": "Praha"})
+            catalog_ms.append((time.perf_counter() - t0) * 1000)
+            assert catalog["items"]
+            t0 = time.perf_counter()
+            pins = store.catalog(
+                {
+                    "pins_only": True,
+                    "south": "49.90",
+                    "north": "50.25",
+                    "west": "14.10",
+                    "east": "14.75",
+                }
+            )
+            pin_ms.append((time.perf_counter() - t0) * 1000)
+            assert pins["items"]
+            t0 = time.perf_counter()
+            store.recent_notified(24)
+            list_ms.append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            item = store.catalog_item("", None, "", seed[0].url)
+            item_ms.append((time.perf_counter() - t0) * 1000)
+            assert item and item.get("url")
+            t0 = time.perf_counter()
+            store.catalog({"q": "2+kk", "limit": 12, "include_pins": "0"})
+            search_ms.append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            store.guest_search_used("127.0.0.1", "visitor-1")
+            guest_ms.append((time.perf_counter() - t0) * 1000)
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+
+    def p95(samples: list[float]) -> float:
+        ordered = sorted(samples)
+        return ordered[max(0, int(round(0.95 * (len(ordered) - 1))))]
+
+    assert p95(catalog_ms) < 80, f"catalog p95 {p95(catalog_ms):.1f}ms {catalog_ms}"
+    assert p95(pin_ms) < 50, f"pins p95 {p95(pin_ms):.1f}ms {pin_ms}"
+    assert p95(list_ms) < 40, f"listings p95 {p95(list_ms):.1f}ms {list_ms}"
+    assert p95(item_ms) < 40, f"item p95 {p95(item_ms):.1f}ms {item_ms}"
+    assert p95(search_ms) < 80, f"search p95 {p95(search_ms):.1f}ms {search_ms}"
+    assert p95(guest_ms) < 20, f"guest p95 {p95(guest_ms):.1f}ms {guest_ms}"
+
+
+def test_catalog_serves_stale_json_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "stale.sqlite")
+    store.upsert_catalog_listings_batch([_latency_listing(1)], kind="seeded", fast=True)
+    filters = {"q": "Praha", "limit": 12, "include_pins": "0"}
+    first = store.catalog(filters)
+    assert first["items"]
+
+    def boom(_filters):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_catalog_query", boom)
+    t0 = time.perf_counter()
+    again = store.catalog(filters)
+    ms = (time.perf_counter() - t0) * 1000
+    assert again.get("stale") is True
+    assert again["items"] == first["items"]
+    assert ms < 15, f"stale catalog {ms:.1f}ms"
+

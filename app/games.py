@@ -620,7 +620,7 @@ def save_rent_round(store: Any, *, player_name: str, scored: dict[str, Any]) -> 
 
 
 def leaderboard(store: Any, *, top: int = 20, recent: int = 20) -> dict[str, Any]:
-    with store.connect(readonly=True) as conn:
+    with store.read() as conn:
         tops = [
             dict(row)
             for row in conn.execute(

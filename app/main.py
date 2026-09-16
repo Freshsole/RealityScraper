@@ -1232,7 +1232,9 @@ def _guest_search_payload(request: Request, *, consume: bool) -> tuple[dict[str,
 
 @app.get("/api/public/guest-search")
 async def public_guest_search_status(request: Request) -> dict:
-    payload, _token = _guest_search_payload(request, consume=False)
+    payload, _token = await asyncio.get_running_loop().run_in_executor(
+        hub.ui_pool, lambda: _guest_search_payload(request, consume=False)
+    )
     return payload
 
 
@@ -1305,7 +1307,11 @@ async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) ->
 
 @app.get("/api/listings")
 async def listings() -> dict:
-    return {"items": hub.store.recent_notified(24)}
+    try:
+        items = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.store.recent_notified, 24)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="listings-busy") from exc
+    return {"items": items}
 
 
 def _catalog_filters(
@@ -1550,7 +1556,12 @@ async def catalog_item(
     listing_key: str = "",
     url: str = "",
 ) -> dict:
-    item = await asyncio.to_thread(hub.store.catalog_item, monitor_id, id, listing_key, url)
+    try:
+        item = await asyncio.get_running_loop().run_in_executor(
+            hub.ui_pool, hub.store.catalog_item, monitor_id, id, listing_key, url
+        )
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="catalog-busy") from exc
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
     source_url = item.get("url") or url
