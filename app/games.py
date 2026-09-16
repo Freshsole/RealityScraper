@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 import uuid
 from typing import Any
@@ -296,14 +297,14 @@ def _catalog_pool(store: Any) -> list[dict[str, Any]]:
 
 
 def higher_lower_pair(store: Any) -> dict[str, Any]:
-    pool = _catalog_pool(store)
-    ranked = sorted(pool, key=lambda item: int(item.get("price_czk") or 0))
-    if len(ranked) < 2:
-        ranked = list(SEED)
-    # Prefer a visible gap so the guess is meaningful, still snappy.
-    left = ranked[len(ranked) // 3]
-    right = ranked[(len(ranked) * 2) // 3]
-    if left["id"] == right["id"] or left.get("price_czk") == right.get("price_czk"):
+    pool = [item for item in _catalog_pool(store) if _as_int(item.get("price_czk"))]
+    if len(pool) < 2:
+        pool = list(SEED)
+    random.shuffle(pool)
+    left = pool[0]
+    right = next((item for item in pool[1:] if int(item["price_czk"]) != int(left["price_czk"])), pool[-1])
+    if left["id"] == right["id"]:
+        ranked = sorted(pool, key=lambda item: int(item.get("price_czk") or 0))
         left, right = ranked[0], ranked[-1]
     vanish = min(
         float(left.get("vanish_hours") or 8),
