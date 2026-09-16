@@ -1260,49 +1260,26 @@ async def public_gone_fast() -> dict:
 async def public_game_higher_lower() -> dict:
     from app import games as marketing_games
 
-    # Memory/seed only — catalog refresh is background and must not delay the response.
-    marketing_games.schedule_pool_refresh(hub.store)
-    return marketing_games.higher_lower_pair(hub.store)
+    # Fallback only — InstantSiteASGI serves this path from memory first.
+    return marketing_games.public_higher_lower(hub.store)
 
 
 @app.get("/api/public/games/rent-round")
 async def public_game_rent_round() -> dict:
     from app import games as marketing_games
 
-    marketing_games.schedule_pool_refresh(hub.store)
-    payload = marketing_games.rent_round(hub.store)
-    return {"round_id": payload["round_id"], "items": payload["items"]}
+    return marketing_games.public_rent_round(hub.store)
 
 
 @app.post("/api/public/games/rent-score")
 async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) -> dict:
     from app import games as marketing_games
 
-    body = payload or {}
-    guesses = body.get("guesses") or []
-    if not isinstance(guesses, list) or len(guesses) < 1:
-        raise HTTPException(400, "Chybí tipy")
-    ids = [str(item.get("id") or "") for item in guesses if isinstance(item, dict)]
-    found = await asyncio.to_thread(marketing_games.lookup_prices, hub.store, ids)
-    items = [found[key] for key in ids if key in found]
-    if len(items) < 1:
-        raise HTTPException(400, "Neznámé byty")
-    scored = marketing_games.score_round(items, [item for item in guesses if isinstance(item, dict)])
-    saved = await asyncio.to_thread(
-        marketing_games.save_rent_round,
-        hub.store,
-        player_name=str(body.get("name") or ""),
-        scored=scored,
-    )
-    return {
-        "ok": True,
-        "id": saved["id"],
-        "player_name": saved["player_name"],
-        "score": scored["score"],
-        "max_score": scored["max_score"],
-        "accuracy": scored["accuracy"],
-        "items": scored["items"],
-    }
+    result = marketing_games.public_rent_score(hub.store, payload or {}, allow_db=False)
+    status = int(result.pop("status", 200))
+    if status >= 400:
+        raise HTTPException(status, str(result.get("error") or "Chyba"))
+    return result
 
 
 @app.get("/api/listings")
@@ -2311,4 +2288,4 @@ async def agent_get_account(request: Request) -> dict:
 
 
 preload_site_pages()
-app = InstantSiteASGI(app)
+app = InstantSiteASGI(app, store=hub.store)
