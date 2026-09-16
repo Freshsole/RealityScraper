@@ -22,7 +22,7 @@ from app.games import (
     wait_refresh,
 )
 from app.sreality import Listing
-from app.site_pages import site_html, site_page
+from app.site_pages import site_body, site_html, site_page
 from app.store import Store
 
 
@@ -279,6 +279,7 @@ def test_game_listing_pool_stays_fast_on_fat_catalog(tmp_path: Path):
 
 def test_hry_html_is_memory_fast_and_nonblocking():
     site_html.cache_clear()
+    site_body.cache_clear()
     t0 = time.perf_counter()
     html = site_html("hry-vyssi-nizsi.html")
     cold_ms = (time.perf_counter() - t0) * 1000
@@ -307,6 +308,7 @@ def test_hry_html_is_memory_fast_and_nonblocking():
 
 def test_homepage_html_is_memory_fast_and_uses_webp():
     site_html.cache_clear()
+    site_body.cache_clear()
     t0 = time.perf_counter()
     html = site_html("index.html")
     cold_ms = (time.perf_counter() - t0) * 1000

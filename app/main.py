@@ -41,6 +41,7 @@ from app import mcp_oauth
 from app import extension_score as ext_score
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict, catalog_item_needs_live_fetch
+from app.site_pages import InstantSiteASGI, preload_site_pages, site_page
 
 hub = Hub()
 monitor = hub
@@ -244,9 +245,7 @@ def page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
-def landing() -> HTMLResponse:
-    from app.site_pages import site_page
-
+async def landing() -> HTMLResponse:
     return site_page("index.html")
 
 
@@ -274,21 +273,15 @@ def stories() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
-def games_hub() -> HTMLResponse:
-    from app.site_pages import site_page
-
+async def games_hub() -> HTMLResponse:
     return site_page("hry.html")
 
 
-def game_higher() -> HTMLResponse:
-    from app.site_pages import site_page
-
+async def game_higher() -> HTMLResponse:
     return site_page("hry-vyssi-nizsi.html")
 
 
-def game_rent() -> HTMLResponse:
-    from app.site_pages import site_page
-
+async def game_rent() -> HTMLResponse:
     return site_page("hry-najem.html")
 
 
@@ -2304,3 +2297,7 @@ async def agent_list_alerts(request: Request) -> dict:
 async def agent_get_account(request: Request) -> dict:
     _agent_key(request)
     return agent_hub.run_tool(hub.store, "get_account", {})
+
+
+preload_site_pages()
+app = InstantSiteASGI(app)

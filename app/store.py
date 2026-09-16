@@ -510,17 +510,35 @@ class Store:
             conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
-    def _connect_bootstrap(self) -> sqlite3.Connection:
-        """Long-timeout writer for schema init (uvicorn --reload races with scrapes)."""
-        conn = sqlite3.connect(self.path, timeout=60)
+    def _connect_bootstrap(self, timeout: float = 0.45) -> sqlite3.Connection:
+        """Short wait so uvicorn --reload is not stuck behind a scrape writer."""
+        wait = max(0.05, float(timeout))
+        conn = sqlite3.connect(self.path, timeout=wait)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=60000")
+        conn.execute(f"PRAGMA busy_timeout={max(50, int(wait * 1000))}")
         return conn
 
-    def _init(self) -> None:
+    def _schema_present(self) -> bool:
+        try:
+            conn = sqlite3.connect(self.path, timeout=0.2)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=200")
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except sqlite3.OperationalError:
+                pass
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='listings' LIMIT 1"
+            ).fetchone()
+            conn.close()
+            return bool(row)
+        except sqlite3.Error:
+            return False
+
+    def _try_init(self, *, timeout: float, attempts: int) -> bool:
         last_error: sqlite3.OperationalError | None = None
-        for attempt in range(12):
-            conn = self._connect_bootstrap()
+        for attempt in range(max(1, int(attempts))):
+            conn = self._connect_bootstrap(timeout)
             try:
                 with conn:
                     conn.execute("PRAGMA journal_mode=WAL")
@@ -593,16 +611,43 @@ class Store:
                     self._ensure_push(conn)
                     self._ensure_analytics(conn)
                     self._ensure_guest_searches(conn)
-                return
+                return True
             except sqlite3.OperationalError as exc:
                 last_error = exc
-                if "locked" not in str(exc).lower() or attempt == 11:
+                if "locked" not in str(exc).lower():
                     raise
-                time.sleep(0.15 * (attempt + 1))
+                if attempt == attempts - 1:
+                    return False
+                time.sleep(0.04 * (attempt + 1))
             finally:
                 conn.close()
-        if last_error:
+        if last_error and "locked" not in str(last_error).lower():
             raise last_error
+        return False
+
+    def _init(self) -> None:
+        if self._schema_present():
+            if self._try_init(timeout=0.25, attempts=2):
+                return
+            threading.Thread(
+                target=self._try_init,
+                kwargs={"timeout": 5.0, "attempts": 6},
+                daemon=True,
+                name="db-migrate",
+            ).start()
+            return
+        if self._try_init(timeout=0.5, attempts=8):
+            return
+        if self._schema_present():
+            threading.Thread(
+                target=self._try_init,
+                kwargs={"timeout": 5.0, "attempts": 6},
+                daemon=True,
+                name="db-migrate",
+            ).start()
+            return
+        if not self._try_init(timeout=8.0, attempts=6):
+            raise sqlite3.OperationalError("database is locked")
 
     def _ensure_guest_searches(self, conn: sqlite3.Connection) -> None:
         conn.execute(
