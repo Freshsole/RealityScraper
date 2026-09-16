@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Higher / Lower — REALITIFY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=7" />
+  </head>
+  <body class="game-page game-higher">
+    <header class="navbar">
+      <a class="brand" href="/">
+        <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
+        REALITIFY
+      </a>
+      <nav class="menu">
+        <a href="/#jak-to-funguje">Jak to funguje</a>
+        <a href="/hry">Hry</a>
+        <a href="/uspechy">Vaše úspěchy</a>
+        <a href="/#cenik">Ceník</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="nav-login" href="/prihlaseni">Přihlásit se</a>
+        <a class="pill pill-nav" href="/registrace">Hlídání zdarma</a>
+      </div>
+    </header>
+    <section class="game-hero">
+      <p class="eyebrow">HIGHER / LOWER</p>
+      <h1 class="display">KTERÝ BYT JE LEVNĚJŠÍ?</h1>
+      <p class="lead">Klikněte na levnější byt. Skvělé ceny existují — mizí ale dřív, než stačíte obnovit Sreality.</p>
+    </section>
+    <section class="game-pair" id="game-board"></section>
+    <section class="game-status" id="game-status"></section>
+    <p class="lead" style="max-width:var(--page);margin:40px auto 80px;padding:0 var(--gutter)">
+      <a class="link-row" href="/hry">Zpět na hry</a>
+    </p>
+    <script src="/static/site/games.js?v=1"></script>
+  </body>
+</html>

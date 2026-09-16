@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tipněte nájem — REALITIFY</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=7" />
+  </head>
+  <body class="game-page game-rent">
+    <header class="navbar">
+      <a class="brand" href="/">
+        <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
+        REALITIFY
+      </a>
+      <nav class="menu">
+        <a href="/#jak-to-funguje">Jak to funguje</a>
+        <a href="/hry">Hry</a>
+        <a href="/uspechy">Vaše úspěchy</a>
+        <a href="/#cenik">Ceník</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="nav-login" href="/prihlaseni">Přihlásit se</a>
+        <a class="pill pill-nav" href="/registrace">Hlídání zdarma</a>
+      </div>
+    </header>
+    <section class="game-hero">
+      <p class="eyebrow">TIP NÁJMU • 5 BYTŮ</p>
+      <h1 class="display">KOLIK STOJÍ MĚSÍC?</h1>
+      <p class="lead">Napište měsíční nájem u pěti nabídek. Čím blíž jste, tím víc bodů. Žebříček uvidí admin.</p>
+    </section>
+    <form id="rent-form">
+      <section class="rent-grid" id="rent-grid"></section>
+      <div class="game-form">
+        <input id="player-name" type="text" maxlength="64" placeholder="Jméno do žebříčku (volitelné)" />
+        <button class="pill pill-lg" type="submit">Odeslat tipy</button>
+        <a class="link-row" href="/hry">Zpět na hry</a>
+      </div>
+    </form>
+    <section class="game-result" id="rent-result" hidden></section>
+    <script src="/static/site/games.js?v=1"></script>
+  </body>
+</html>

@@ -11,7 +11,7 @@ from app.catalog_sync import (
     daily_shards,
     listing_is_new_for_monitor,
     monitor_search_targets,
-    sreality_recent_shards,
+    recent_shards,
 )
 from app.monitor import Hub
 from app.monitor_index import MonitorIndex
@@ -99,7 +99,7 @@ class ScrapeWorker:
         return self.last_tick
 
     async def run_new_discovery(self) -> dict[str, Any]:
-        shards = sreality_recent_shards()
+        shards = recent_shards()
         results = await self.engine.fetch_shards(
             shards,
             client_factory=self.hub.client_for,
@@ -212,7 +212,7 @@ class ScrapeWorker:
         if listings:
             notified = await self._notify_matches(listings)
 
-        deep_total = len([item for item in daily_shards() if item.get("portal") == "sreality"]) or 1
+        deep_total = len(daily_shards()) or 1
         return {
             "listings": len(listings),
             "shards": len(shards),
