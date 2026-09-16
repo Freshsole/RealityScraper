@@ -16,7 +16,15 @@ Measured 2026-09-16 from a datacenter IP (this Cloud Agent). InstantSiteASGI / `
 
 Worker now: API → sitemap cards (cached 8 min, newest-by-id pages of 20) → HTML/`_next/data` only if the sitemap fetch is not valid XML. Empty offer shard after a good sitemap returns `[]` without cooling the portal.
 
-Fixture yield: 2 rent + 1 sale cards from `tests/fixtures/ulov_sitemap_offers.xml` after a mocked 500. Live sitemap parse: **3295 rent / ~4293 sale** list rows without a browser.
+Fixture yield: 2 rent + 1 sale cards from `tests/fixtures/ulov_sitemap_offers.xml` after a mocked 500.
+
+Live `scripts/measure_listing_yield.py` (this agent, 2026-09-16):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| UlovDomov rent | **20** | **3295** | 1.9 s (API 500 + 1.1 MB sitemap) | later pages hit the 8 min cache |
+| UlovDomov sale | **20** | **4293** | cached | leading-dash sitemap slugs |
+| M&M Reality | **0** | 0 | 52 ms | `blocked:cloudflare:403` hard — browser not launched |
 
 Limit: sitemap cards have URL, slug locality, disposition — not price/photos until a later detail pass (`v2/offer/detail` works). Follow-up: optional worker-only detail hydrate for the newest N, still off `/hry*`.
 

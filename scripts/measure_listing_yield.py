@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from app.block_page import classify_block
-from app.ulovdomov import UlovdomovClient, parse_sitemap_offers, reset_ulov_caches
+from app.ulovdomov import UlovdomovClient, reset_ulov_caches
 from app.mmreality import MmrealityClient
 
 
