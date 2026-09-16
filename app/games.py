@@ -24,6 +24,16 @@ _IMG = {
     "d2": "/static/site/assets/db-2.webp",
     "d3": "/static/site/assets/db-3.webp",
 }
+_LOCAL_IMAGES = tuple(_IMG.values())
+
+
+def _fast_game_image(image: str | None, key: str) -> str:
+    """Keep first paint on local webp — remote portal photos are LCP killers."""
+    text = str(image or "")
+    if text.startswith("/static/site/assets/") and text.endswith((".webp", ".svg")):
+        return text
+    idx = abs(hash(str(key or text))) % len(_LOCAL_IMAGES)
+    return _LOCAL_IMAGES[idx]
 
 
 def locality_key(value: str | None) -> str:
@@ -246,7 +256,7 @@ def public_card(item: dict[str, Any], *, include_price: bool = False) -> dict[st
         "locality_key": item.get("locality_key") or locality_key(str(loc)),
         "disposition": item.get("disposition") or "",
         "area_m2": item.get("area_m2"),
-        "image_url": item.get("image_url") or "/static/site/assets/sold-1.webp",
+        "image_url": _fast_game_image(item.get("image_url"), str(item.get("id") or "")),
         "portal": portal,
         "portal_label": PORTAL_LABELS.get(portal, portal_label(portal)),
         "vanish_hours": item.get("vanish_hours"),
@@ -321,11 +331,7 @@ def _annotate(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
     loc = str(row.get("locality") or "")
     row["locality_key"] = row.get("locality_key") or locality_key(loc)
-    image = str(row.get("image_url") or "")
-    if image.endswith(".png") and "/static/site/assets/" in image:
-        row["image_url"] = image[:-4] + ".webp"
-    elif not image:
-        row["image_url"] = _IMG["s1"]
+    row["image_url"] = _fast_game_image(row.get("image_url"), str(row.get("id") or ""))
     return row
 
 

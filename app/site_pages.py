@@ -1,9 +1,10 @@
-"""In-memory marketing HTML + game JSON served without FastAPI, SQLite, or the thread pool."""
+"""In-memory marketing HTML + game JSON + /hry* assets served without FastAPI/SQLite."""
 
 from __future__ import annotations
 
 import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from fastapi.responses import HTMLResponse
@@ -13,7 +14,9 @@ from app import games as marketing_games
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=120"}
 _CACHE_CONTROL = b"public, max-age=120"
+_ASSET_CACHE_CONTROL = b"public, max-age=2592000"
 _JSON_NO_STORE = b"no-store"
+_ACAO = b"*"
 INSTANT_ROUTES: dict[str, str] = {
     "/": "index.html",
     "/hry": "hry.html",
@@ -23,6 +26,28 @@ INSTANT_ROUTES: dict[str, str] = {
     "/hry/najem": "hry-najem.html",
     "/hry/najem/": "hry-najem.html",
 }
+_ASSET_TYPES = {
+    ".css": b"text/css; charset=utf-8",
+    ".js": b"text/javascript; charset=utf-8",
+    ".woff2": b"font/woff2",
+    ".svg": b"image/svg+xml",
+    ".webp": b"image/webp",
+}
+INSTANT_ASSET_FILES = (
+    "site/games.css",
+    "site/games.js",
+    "site/assets/logo.svg",
+    "site/fonts/archivo-black-latin.woff2",
+    "site/fonts/archivo-black-latin-ext.woff2",
+    "site/assets/sold-1.webp",
+    "site/assets/sold-2.webp",
+    "site/assets/sold-3.webp",
+    "site/assets/sold-4.webp",
+    "site/assets/db-1.webp",
+    "site/assets/db-2.webp",
+    "site/assets/db-3.webp",
+)
+INSTANT_ASSETS: dict[str, str] = {f"/static/{rel}": rel for rel in INSTANT_ASSET_FILES}
 INSTANT_GAME_GET = {
     "/api/public/games/higher-lower",
     "/api/public/games/higher-lower/",
@@ -50,9 +75,25 @@ def site_body(name: str) -> bytes:
     return site_html(name).encode("utf-8")
 
 
+@lru_cache(maxsize=64)
+def site_asset(rel: str) -> tuple[bytes, bytes]:
+    path = Path(config.WEB_DIR) / rel
+    suffix = path.suffix.lower()
+    content_type = _ASSET_TYPES.get(suffix)
+    if content_type is None:
+        raise KeyError(rel)
+    return path.read_bytes(), content_type
+
+
+def instant_asset_rel(path: str) -> str | None:
+    return INSTANT_ASSETS.get(path)
+
+
 def preload_site_pages() -> None:
     for name in dict.fromkeys(INSTANT_ROUTES.values()):
         site_body(name)
+    for rel in INSTANT_ASSET_FILES:
+        site_asset(rel)
 
 
 def site_page(name: str) -> HTMLResponse:
@@ -99,16 +140,20 @@ async def _send_bytes(
     content_type: bytes,
     cache_control: bytes,
     method: str,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> None:
+    headers = [
+        (b"content-type", content_type),
+        (b"content-length", str(len(body)).encode("ascii")),
+        (b"cache-control", cache_control),
+    ]
+    if extra_headers:
+        headers.extend(extra_headers)
     await send(
         {
             "type": "http.response.start",
             "status": status,
-            "headers": [
-                (b"content-type", content_type),
-                (b"content-length", str(len(body)).encode("ascii")),
-                (b"cache-control", cache_control),
-            ],
+            "headers": headers,
         }
     )
     await send(
@@ -124,7 +169,7 @@ def _json_bytes(payload: dict[str, Any]) -> bytes:
 
 
 class InstantSiteASGI:
-    """Outer ASGI app: GET/HEAD `/`, `/hry*` and public game JSON never enter Hub/middleware/SQLite."""
+    """Outer ASGI app: GET/HEAD `/`, `/hry*`, game JSON, and game assets skip Hub/SQLite."""
 
     def __init__(self, app: App, store: Any | None = None) -> None:
         self.app = app
@@ -136,6 +181,19 @@ class InstantSiteASGI:
             method = str(scope.get("method") or "")
             path = str(scope.get("path") or "")
             if method in {"GET", "HEAD"}:
+                rel = instant_asset_rel(path)
+                if rel:
+                    body, content_type = site_asset(rel)
+                    await _send_bytes(
+                        send,
+                        status=200,
+                        body=body,
+                        content_type=content_type,
+                        cache_control=_ASSET_CACHE_CONTROL,
+                        method=method,
+                        extra_headers=[(b"access-control-allow-origin", _ACAO)],
+                    )
+                    return
                 name = instant_page_name(path)
                 if name:
                     await _send_bytes(

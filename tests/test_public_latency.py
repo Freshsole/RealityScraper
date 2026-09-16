@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.site_pages import InstantSiteASGI, site_body
+from app.site_pages import InstantSiteASGI, site_asset, site_body
 from app.store import Store, catalog_item_needs_live_fetch
 
 
@@ -177,6 +177,22 @@ def test_hry_html_bypasses_blocked_inner_app():
             status, _headers, body = await _asgi_get(app, path)
             assert status == 200, path
             assert body
+
+        css = site_asset("site/games.css")[0]
+        for path, needle in (
+            ("/static/site/games.css", b"@font-face"),
+            ("/static/site/games.js", b"[^\\d]"),
+            ("/static/site/fonts/archivo-black-latin.woff2", b"wOF2"),
+        ):
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert needle in body
+            assert headers[b"cache-control"].startswith(b"public")
+            assert headers[b"access-control-allow-origin"] == b"*"
+            assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
+        assert css == site_asset("site/games.css")[0]
 
         for path in ("/api/public/games/higher-lower", "/api/public/games/rent-round"):
             t0 = time.perf_counter()
@@ -441,13 +457,24 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
     time.sleep(0.05)
 
     html_paths = ("/", "/hry", "/hry/vyssi-nizsi", "/hry/najem")
+    asset_paths = (
+        "/static/site/games.css",
+        "/static/site/games.js",
+        "/static/site/fonts/archivo-black-latin.woff2",
+    )
     json_paths = ("/api/public/games/higher-lower", "/api/public/games/rent-round")
-    samples = {path: [] for path in (*html_paths, *json_paths, "/api/public/games/rent-score")}
+    samples = {path: [] for path in (*html_paths, *asset_paths, *json_paths, "/api/public/games/rent-score")}
 
     async def run() -> None:
         app = InstantSiteASGI(inner, store=store)
         for _ in range(24):
             for path in html_paths:
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                samples[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+            for path in asset_paths:
                 t0 = time.perf_counter()
                 status, _headers, body = await _asgi_get(app, path)
                 samples[path].append((time.perf_counter() - t0) * 1000)
@@ -498,7 +525,7 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
         p50 = _percentile(values, 0.50)
         p95 = _percentile(values, 0.95)
         report.append(f"{path} n={len(values)} p50={p50:.2f}ms p95={p95:.2f}ms")
-        html = path in html_paths
+        html = path in html_paths or path in asset_paths
         assert p50 < (8 if html else 15), f"{path} p50 {p50:.1f}ms {values}"
         assert p95 < (25 if html else 40), f"{path} p95 {p95:.1f}ms {values}"
     print("game TTFB under scrape:\n  " + "\n  ".join(report))

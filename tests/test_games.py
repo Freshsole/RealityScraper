@@ -13,6 +13,7 @@ from app.games import (
     leaderboard,
     locality_key,
     pick_same_locality_pair,
+    public_card,
     public_higher_lower,
     public_rent_round,
     public_rent_score,
@@ -293,7 +294,10 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert html == again
     assert "games.css" in html
     assert "site.css" not in html
-    assert 'media="print"' in html
+    assert "fonts.googleapis" not in html
+    assert "fonts.gstatic" not in html
+    assert "archivo-black-latin.woff2" in html
+    assert 'rel="preload"' in html
     assert ".png" not in html
     assert cold_ms < 80, f"cold HTML read {cold_ms:.1f}ms"
     assert warm_ms < 5, f"cached HTML {warm_ms:.1f}ms"
@@ -307,6 +311,9 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "rent-board" in rent
     assert 'id="rent-board"' in rent
     assert "site.css" not in rent
+    assert "fonts.googleapis" not in hub and "fonts.googleapis" not in rent
+    assert "archivo-black-latin.woff2" in hub
+    assert "is-skeleton" in rent
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
     js = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.js").read_text(encoding="utf-8")
     assert "#163300" in css
@@ -316,9 +323,15 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert ".converter" in css
     assert ".ccy-pill" in css
     assert ".info-row" in css
+    assert "@font-face" in css
+    assert "font-display: optional" in css
+    assert "fonts.googleapis" not in css
+    assert "system-ui" in css
     assert "ccy-pill" in js
     assert "info-rows" in js
     assert "pill-ghost" in js
+    assert "rent-unit" in js
+    assert "replace(/[^\\d]/g, \"\")" in js
     assert "TEACHING_RATIO" not in js
 
 
@@ -366,3 +379,15 @@ def test_public_game_helpers_are_memory_only():
     assert scored["ok"] is True
     assert scored["score"] == 1000
     assert ms < 40, f"public game helpers {ms:.1f}ms"
+    remote = public_card(
+        {
+            "id": "remote-1",
+            "locality": "Praha 3 – Žižkov",
+            "disposition": "2+kk",
+            "area_m2": 50,
+            "image_url": "https://img.sreality.cz/huge.jpg",
+            "portal": "sreality",
+        }
+    )
+    assert remote["image_url"].startswith("/static/site/assets/")
+    assert remote["image_url"].endswith(".webp")

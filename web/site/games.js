@@ -35,9 +35,9 @@
       )
       .join("")}</div>`;
 
-  const rowHtml = (item, { revealed = false, state = "" } = {}) => `
+  const rowHtml = (item, { revealed = false, state = "", priority = false } = {}) => `
     <button type="button" class="flat-row${state ? ` ${state}` : ""}${revealed ? "" : " pickable"}" data-side="${escapeHtml(item.side || "")}" ${revealed ? "disabled" : 'tabindex="0"'}>
-      <img class="flat-thumb" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="96" height="96" alt="" decoding="async" />
+      <img class="flat-thumb" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="96" height="96" alt="" decoding="async"${priority ? ' fetchpriority="high"' : ""} />
       <div class="flat-meta">
         <div class="spec">${escapeHtml(specText(item))}</div>
         <div class="portal">${escapeHtml(item.portal_label || "")}</div>
@@ -65,16 +65,17 @@
     };
 
     async function round() {
-      board.innerHTML = `<p class="lead">Načítám dvojici ze stejné lokality…</p>`;
+      board.setAttribute("aria-busy", "true");
       const res = await fetch("/api/public/games/higher-lower");
       const data = await res.json();
       const left = { ...data.left, side: "left" };
       const right = { ...data.right, side: "right" };
       const locality = data.locality_label || left.locality || right.locality || "Stejná lokalita";
       const vanish = vanishText(data.vanish_hours, data.vanish_label);
+      board.removeAttribute("aria-busy");
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(locality)}</div>
-        ${rowHtml(left)}
+        ${rowHtml(left, { priority: true })}
         <div class="vs-row">VS</div>
         ${rowHtml(right)}
         ${infoRows([
@@ -174,7 +175,11 @@
                 <div class="spec">${escapeHtml(item.locality || item.name || "")} · ${escapeHtml(specText(item))}</div>
                 <div class="portal">Tip ${escapeHtml(fmt(item.guess))} · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
               </div>
-              <div class="flat-price">${escapeHtml(fmt(item.actual))}<span class="rent-pts${low ? " is-low" : ""}">${escapeHtml(item.points)} b</span></div>
+              <div class="amount-stack">
+                <div class="flat-price">${escapeHtml(fmt(item.actual))}</div>
+                ${ccyPill()}
+                <span class="rent-pts${low ? " is-low" : ""}">${escapeHtml(item.points)} b</span>
+              </div>
             </div>
           `;
         })
@@ -199,7 +204,8 @@
     };
 
     const submitRound = async () => {
-      board.innerHTML = `<p class="lead">Počítám skóre…</p>`;
+      board.setAttribute("aria-busy", "true");
+      board.innerHTML = `<div class="mint-banner"><strong>Počítám skóre…</strong><span>Kč / měsíc — body za přesnost.</span></div>`;
       try {
         const scored = await fetch("/api/public/games/rent-score", {
           method: "POST",
@@ -210,8 +216,10 @@
           fail("Skóre se nepodařilo uložit. Zkuste to znovu.");
           return;
         }
+        board.removeAttribute("aria-busy");
         showResult(scored);
       } catch {
+        board.removeAttribute("aria-busy");
         fail("Skóre se nepodařilo uložit. Zkuste to znovu.");
       }
     };
@@ -223,17 +231,19 @@
         return;
       }
       renderScore();
+      board.removeAttribute("aria-busy");
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(item.locality || item.name || "Byt")}</div>
-        <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" />
+        <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" fetchpriority="high" />
         <div class="flat-meta" style="margin-bottom:16px">
           <div class="spec">${escapeHtml(specText(item))}</div>
           <div class="portal">${escapeHtml(item.portal_label || "")}</div>
         </div>
         <label class="rent-amount">
-          <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="18000" required autofocus />
+          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus />
           ${ccyPill()}
         </label>
+        <p class="rent-unit">Kč / měsíc</p>
         ${infoRows([
           ["Lokalita", item.locality || item.name || "Byt"],
           ["Portál", item.portal_label || ""],
@@ -248,11 +258,14 @@
       `;
       const input = document.getElementById("rent-guess");
       const next = document.getElementById("rent-next");
+      const parseGuess = (raw) => Number(String(raw || "").replace(/[^\d]/g, "") || 0);
       const advance = () => {
-        const value = Number(input?.value || 0);
+        const value = parseGuess(input?.value);
         if (!value || value < 1000) {
           input?.focus();
+          input?.setCustomValidity("Zadejte nájem aspoň 1 000 Kč.");
           input?.reportValidity?.();
+          input?.setCustomValidity("");
           return;
         }
         guesses.push({ id: item.id, guess: value });
@@ -274,7 +287,7 @@
     };
 
     async function start() {
-      board.innerHTML = `<p class="lead">Načítám pět nabídek…</p>`;
+      board.setAttribute("aria-busy", "true");
       const res = await fetch("/api/public/games/rent-round");
       const data = await res.json();
       items = data.items || [];

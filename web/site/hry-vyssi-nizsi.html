@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Higher / Lower — REALITIFY</title>
-    <link rel="stylesheet" href="/static/site/games.css?v=5" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" /></noscript>
+    <link rel="preload" href="/static/site/games.css?v=6" as="style" />
+    <link rel="preload" href="/static/site/games.js?v=6" as="script" />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/games.css?v=6" />
   </head>
   <body class="game-page game-higher">
     <header class="navbar">
@@ -36,7 +38,32 @@
         </div>
         <a class="pill-ghost" href="/hry">Zpět na hry</a>
       </section>
-      <section class="converter" id="game-board" aria-live="polite"></section>
+      <section class="converter" id="game-board" aria-busy="true" aria-live="polite">
+        <div class="loc-chip">Stejná lokalita</div>
+        <div class="flat-row is-skeleton" aria-hidden="true">
+          <span class="flat-thumb"></span>
+          <div class="flat-meta">
+            <div class="spec">2+kk · 54 m²</div>
+            <div class="portal">Načítám dvojici…</div>
+          </div>
+          <div class="amount-stack">
+            <div class="flat-price is-hidden">— — —</div>
+            <span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>
+          </div>
+        </div>
+        <div class="vs-row">VS</div>
+        <div class="flat-row is-skeleton" aria-hidden="true">
+          <span class="flat-thumb"></span>
+          <div class="flat-meta">
+            <div class="spec">1+kk · 38 m²</div>
+            <div class="portal">Stejná čtvrť</div>
+          </div>
+          <div class="amount-stack">
+            <div class="flat-price is-hidden">— — —</div>
+            <span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>
+          </div>
+        </div>
+      </section>
     </main>
     <section class="game-band">
       <div class="game-band-inner">
@@ -47,6 +74,6 @@
         <a class="pill pill-lg" href="/registrace">Chci hlídat byty</a>
       </div>
     </section>
-    <script src="/static/site/games.js?v=4"></script>
+    <script src="/static/site/games.js?v=6"></script>
   </body>
 </html>

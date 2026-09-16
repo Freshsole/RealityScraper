@@ -1,4 +1,10 @@
-"""M&M Reality list/detail scraper. Live fetches may hit Cloudflare; parsers are fixture-tested."""
+"""M&M Reality list/detail scraper. Live fetches may hit Cloudflare; parsers are fixture-tested.
+
+TODO: live M&M list/detail often returns Cloudflare 403. In-process httpx cannot
+pass JA3 / browser checks — needs a real browser or a JA3-impersonating client
+(curl_cffi / camoufox). Challenge HTML is classified and the portal is cooled
+down for the rest of the tick; do not retry other M&M shards after a block page.
+"""
 
 from __future__ import annotations
 
