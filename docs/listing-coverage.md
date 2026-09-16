@@ -9,7 +9,7 @@ Measured 2026-09-16 from a datacenter IP (this Cloud Agent). InstantSiteASGI / `
 | `POST ud.api.ulovdomov.cz/v1/offer/find` | **500** `udBe.internalServerError` (nationwide + Praha bounds, empty body) |
 | `POST /v2/offer/find` | 400/422/500 depending on `parameters` shape; rent+bounds still **500** |
 | `GET /v2/offer/latest` | 400/500 |
-| `GET /v2/offer/detail?offerId=` | **200** (detail only — not used on the list path) |
+| `GET /v2/offer/detail?offerId=` | **200** — worker hydrate only (price, photos, geo). Never on `/hry*` / InstantSiteASGI. |
 | HTML `/pronajem/byty` | 200, 94 KB, **0** listing hrefs; `__NEXT_DATA__` has `count` only |
 | `/_next/data/{buildId}/pronajem/byty.json` | 200, `count: 3293`, **0** offers |
 | `GET /sitemap-offers.xml` | **200**, 7635 `<loc>` (3295 `pronajem-*`, 47 coliving, ~4293 sale / leading-dash slugs) |
@@ -24,9 +24,19 @@ Live `scripts/measure_listing_yield.py` (this agent, 2026-09-16):
 |---|---|---|---|---|
 | UlovDomov rent | **20** | **3295** | 1.9 s (API 500 + 1.1 MB sitemap) | later pages hit the 8 min cache |
 | UlovDomov sale | **20** | **4293** | cached | leading-dash sitemap slugs |
-| M&M Reality | **0** | 0 | 52 ms | `blocked:cloudflare:403` hard — browser not launched |
+| M&M Reality | **0** | 0 | 105 ms | `blocked:cloudflare:403` hard — no fake listings |
 
-Limit: sitemap cards have URL, slug locality, disposition — not price/photos until a later detail pass (`v2/offer/detail` works). Follow-up: optional worker-only detail hydrate for the newest N, still off `/hry*`.
+Worker hydrate (`SCRAPE_ROLE!=web`, off InstantSiteASGI / `/hry*`): newest unpriced Ulov catalog rows (fallback: newest sitemap cards), `GET /v2/offer/detail?offerId=` batched (default 20, concurrency 4, 0.12 s spacing, 15 s deadline, fail-fast on 403/429 / 2 consecutive errors). `fetch_page` never calls detail. Thin sitemap upserts do not wipe a hydrated price/photo.
+
+Live hydrate of the same page-1 rent cards (this agent, 2026-09-16):
+
+| attempted | priced | imaged | gone | failed | success | time |
+|---|---|---|---|---|---|---|
+| **20** | **19** | **20** | 0 | 0 | **95%** | 3.2 s |
+
+Sample after detail: Olomouc 2+kk 17 900 Kč, Praha-Komořany 18 500 Kč, Sokolov 1+1 7 500 Kč — all with photos. One card had photos but no numeric rent (not invented). Sitemap list yield stayed 20/3295.
+
+Limit: M&M still has no listings from this datacenter IP. Residential-proxy follow-up unchanged.
 
 ## M&M Reality (documented limit)
 
@@ -45,6 +55,7 @@ Shipped incremental:
 - Portal cooldown already per-portal; **blocked shards no longer defer pages 2..N**.
 - Opt-in `SCRAPE_BROWSER_FETCH=1` **only** when `SCRAPE_ROLE` is `worker` or local `all` — never `web`. Default skips hard-blocks (`SCRAPE_BROWSER_ON_HARD_CF=0`) so Chrome is not launched for a known WAF deny.
 - Soft backends: `curl_cffi` → Playwright → system Chrome, each under `SCRAPE_BROWSER_TIMEOUT_SEC` (12s).
+- UlovDomov worker hydrate: `v2/offer/detail` for newest unpriced cards (batch 20, fail-fast). Off on `SCRAPE_ROLE=web`. Opt out with `SCRAPE_ULOV_HYDRATE=0`.
 
 ### Follow-up (exact)
 

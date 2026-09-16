@@ -1,0 +1,41 @@
+{
+  "success": true,
+  "data": {
+    "id": 3496443,
+    "offerTypeId": "rent",
+    "title": "Pronájem bytu 1+kk 18 m2",
+    "description": "Nabízíme Vám k pronájmu zařízenou bytovou jednotku o vel. 1+kk.",
+    "street": {"id": 86658, "name": "Tovární"},
+    "village": {"id": 5555, "name": "Ústí nad Labem"},
+    "villagePart": {"id": 13543, "name": "Předlice"},
+    "district": {"id": 73, "name": "Ústí nad Labem"},
+    "region": {"id": 13, "name": "Ústecký kraj"},
+    "geoCoordinates": {"lat": 50.65715, "lng": 14.00863},
+    "dispositionId": 1,
+    "seo": "pronajem-usti-nad-labem-predlice-tovarni-1-kk",
+    "rentalPrice": {"value": 6000, "currency": "CZK"},
+    "priceNote": "+ voda + elektřina",
+    "absoluteUrl": "https://www.ulovdomov.cz/i/3496443/pronajem-usti-nad-labem-predlice-tovarni-1-kk",
+    "status": "ACTIVE",
+    "photos": [
+      {
+        "id": 7518902,
+        "path": "https://storage.livendo.eu/cdn/image?id=019d552b-45a5-7312-aacd-5f97d2b1b096&size=large",
+        "alt": "Pronájem bytu 1+kk 18 m2"
+      },
+      {
+        "id": 7518903,
+        "path": "https://storage.livendo.eu/cdn/image?id=019d552b-4616-71fa-bdd0-fe18ec706f85&size=large",
+        "alt": "Pronájem bytu 1+kk 18 m2"
+      }
+    ],
+    "parameters": [
+      {"name": "offerType", "value": "rent"},
+      {"name": "disposition", "value": "onePlusKitchenette"},
+      {"name": "price", "value": 6000},
+      {"name": "priceCurrency", "value": "czk"},
+      {"name": "localityCity", "value": "Ústí nad Labem"},
+      {"name": "floorArea", "value": 18}
+    ]
+  }
+}

@@ -94,6 +94,15 @@ SCRAPE_BROWSER_PORTALS = frozenset(
 )
 
 
+# Worker-only UlovDomov detail hydrate (v2/offer/detail). Off on InstantSiteASGI / web.
+SCRAPE_ULOV_HYDRATE = _flag_env("SCRAPE_ULOV_HYDRATE", True)
+SCRAPE_ULOV_HYDRATE_BATCH = max(4, min(40, int(os.getenv("SCRAPE_ULOV_HYDRATE_BATCH", "20"))))
+SCRAPE_ULOV_HYDRATE_CONCURRENCY = max(1, min(8, int(os.getenv("SCRAPE_ULOV_HYDRATE_CONCURRENCY", "4"))))
+SCRAPE_ULOV_HYDRATE_DELAY_SEC = max(0.0, min(2.0, float(os.getenv("SCRAPE_ULOV_HYDRATE_DELAY_SEC", "0.12"))))
+SCRAPE_ULOV_HYDRATE_DEADLINE_SEC = max(3, min(40, int(os.getenv("SCRAPE_ULOV_HYDRATE_DEADLINE_SEC", "15"))))
+SCRAPE_ULOV_HYDRATE_LOOP_SEC = max(10, int(os.getenv("SCRAPE_ULOV_HYDRATE_LOOP_SEC", "45")))
+
+
 def browser_fetch_allowed(portal: str) -> bool:
     """True only for scrape worker (or local all) when the opt-in flag is on."""
     if not SCRAPE_BROWSER_FETCH:

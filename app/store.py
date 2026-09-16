@@ -89,6 +89,17 @@ def _is_rental_row(row: dict[str, Any]) -> bool:
     return rent and not sale
 
 
+def _is_thin_catalog_card(listing: Any) -> bool:
+    """Sitemap / list stub: must not overwrite a hydrated price or photo."""
+    extras = getattr(listing, "extras", None)
+    if isinstance(extras, dict) and extras.get("sitemap_card"):
+        return True
+    price = getattr(listing, "price_czk", None)
+    image = getattr(listing, "image_url", None)
+    photos = getattr(listing, "photos", None) or []
+    return price is None and not image and not photos
+
+
 def _is_game_rental(row: dict[str, Any]) -> bool:
     """Rent filter for games without reading extras (avoids huge JSON blobs)."""
     url = str(row.get("url") or "").lower()
@@ -2706,7 +2717,29 @@ class Store:
                 portal,
                 canon,
             )
-            if prev:
+            if prev and _is_thin_catalog_card(listing):
+                # Sitemap / list stubs must not wipe a worker detail hydrate.
+                conn.execute(
+                    """
+                    UPDATE catalog_listings SET
+                        name = CASE WHEN IFNULL(name, '') = '' THEN ? ELSE name END,
+                        disposition = CASE WHEN IFNULL(disposition, '') = '' THEN ? ELSE disposition END,
+                        locality = CASE WHEN IFNULL(locality, '') = '' THEN ? ELSE locality END,
+                        last_seen = ?,
+                        gone = 0,
+                        canonical_key = ?
+                    WHERE listing_key = ?
+                    """,
+                    (
+                        listing.name,
+                        listing.disposition,
+                        listing.locality,
+                        now,
+                        canon,
+                        prev["listing_key"],
+                    ),
+                )
+            elif prev:
                 extras_json = _extras_json(listing.extras)
                 conn.execute(
                     """
@@ -3198,6 +3231,46 @@ class Store:
         for monitor_id in hits:
             self.upsert_seen(monitor_id, listing, notified=False, kind="sold")
             self.mark_gone(monitor_id, listing.id)
+
+    def unpriced_ulov_listings(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Newest Ulov catalog rows missing price or image. WAL reader, bounded."""
+        cap = max(1, min(80, int(limit or 20)))
+        try:
+            with self.read(quick=True) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT listing_key, id, name, price_czk, price_label, disposition, area_m2,
+                           locality, url, image_url, lat, lon, extras, first_seen, last_seen
+                    FROM catalog_listings
+                    WHERE IFNULL(gone, 0) = 0
+                      AND portal = 'ulovdomov'
+                      AND (price_czk IS NULL OR price_czk <= 0 OR IFNULL(image_url, '') = '')
+                    ORDER BY CASE WHEN price_czk IS NULL OR price_czk <= 0 THEN 0 ELSE 1 END,
+                             id DESC
+                    LIMIT ?
+                    """,
+                    (cap,),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        return [dict(row) for row in rows]
+
+    def mark_catalog_listing_gone_id(self, listing_id: int, *, portal: str = "ulovdomov") -> None:
+        try:
+            number = int(listing_id)
+        except (TypeError, ValueError):
+            return
+        with self.read(quick=True) as conn:
+            row = conn.execute(
+                """
+                SELECT listing_key FROM catalog_listings
+                WHERE id = ? AND portal = ? AND IFNULL(gone, 0) = 0
+                LIMIT 1
+                """,
+                (number, portal),
+            ).fetchone()
+        if row:
+            self.mark_catalog_listing_gone(str(row["listing_key"] or ""))
 
     def stale_catalog_listings(self, days: int = 1, limit: int = 8) -> list[dict[str, Any]]:
         cutoff = datetime.now(timezone.utc).timestamp() - days * 86400

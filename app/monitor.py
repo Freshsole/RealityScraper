@@ -35,6 +35,7 @@ class Hub:
         self._discord_task: asyncio.Task[None] | None = None
         self._coords_task: asyncio.Task[None] | None = None
         self._dedupe_task: asyncio.Task[None] | None = None
+        self._ulov_hydrate_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.catalog_running_portals: set[str] = set()
         self._recent_shard_idx = 0
@@ -168,6 +169,7 @@ class Hub:
             )
             self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
             self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
+            self._ulov_hydrate_task = asyncio.create_task(self._ulov_hydrate_loop(), name="sreality-ulov-hydrate")
         elif role == "web":
             # Digests only — listing polls / catalog / sold run in scrape_worker.
             self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
@@ -205,6 +207,7 @@ class Hub:
                 self._discord_task,
                 self._coords_task,
                 self._dedupe_task,
+                self._ulov_hydrate_task,
             )
             if task is not None
         ]
@@ -221,6 +224,7 @@ class Hub:
         self._discord_task = None
         self._coords_task = None
         self._dedupe_task = None
+        self._ulov_hydrate_task = None
 
     async def close(self) -> None:
         await self.stop()
@@ -1633,6 +1637,12 @@ class Hub:
         if not sent_discord and not sent_push and not sent_mail:
             raise RuntimeError("Zapněte Discord, Push nebo e-mailové notifikace")
         return {"ok": True, "listing": listing.to_dict(), "monitor_id": monitor["id"], "discord": sent_discord, "push": bool(sent_push), "email": sent_mail}
+
+    async def _ulov_hydrate_loop(self) -> None:
+        # Lazy import so InstantSiteASGI / web request modules stay off this path.
+        from app import ulov_hydrate
+
+        await ulov_hydrate.loop(self)
 
     async def backfill_missing_coords(self) -> None:
         rows = self.store.missing_coords(notified_only=True)

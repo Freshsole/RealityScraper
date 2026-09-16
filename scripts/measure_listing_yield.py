@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.block_page import classify_block
-from app.ulovdomov import UlovdomovClient, reset_ulov_caches
+from app.ulovdomov import UlovdomovClient, needs_hydrate, reset_ulov_caches
 from app.mmreality import MmrealityClient
 
 
@@ -24,11 +24,21 @@ async def measure_ulov() -> dict:
     try:
         listings, total = await client.fetch_page(1)
         ms = (time.perf_counter() - started) * 1000
+        list_sample = [{"id": item.id, "url": item.url, "name": item.name, "price_czk": item.price_czk} for item in listings[:3]]
         sale = UlovdomovClient("https://www.ulovdomov.cz/prodej/byty")
         try:
             sales, sale_total = await sale.fetch_page(1)
         finally:
             await sale.aclose()
+        hydrate_started = time.perf_counter()
+        hydrate = await client.hydrate_listings(
+            [item for item in listings if needs_hydrate(item)][:20],
+            concurrency=4,
+            delay_sec=0.12,
+            deadline_sec=15,
+            fail_fast=True,
+        )
+        hydrate_ms = (time.perf_counter() - hydrate_started) * 1000
         return {
             "portal": "ulovdomov",
             "rent_page1": len(listings),
@@ -36,7 +46,20 @@ async def measure_ulov() -> dict:
             "sale_page1": len(sales),
             "sale_total": sale_total,
             "page1_ms": round(ms, 1),
-            "sample": [{"id": item.id, "url": item.url, "name": item.name} for item in listings[:3]],
+            "sample": list_sample,
+            "hydrate": {
+                **hydrate.as_dict(),
+                "ms": round(hydrate_ms, 1),
+                "priced_sample": [
+                    {
+                        "id": item.id,
+                        "price_czk": item.price_czk,
+                        "image": bool(item.image_url),
+                        "locality": item.locality,
+                    }
+                    for item in hydrate.listings[:3]
+                ],
+            },
         }
     finally:
         await client.aclose()
