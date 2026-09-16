@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -479,36 +479,111 @@ class Store:
         self._gone_fast_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._new_today_cache: tuple[float, int] | None = None
         self._landing_preview_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._hot_json_cache: dict[str, tuple[float, Any]] = {}
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._init()
 
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
-        on_loop = threading.current_thread() is threading.main_thread()
-        if quick:
-            # WAL-friendly read: do not use mode=ro (it can stall on -shm / checkpoint).
-            conn = sqlite3.connect(self.path, timeout=0.2)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=200")
-            try:
-                conn.execute("PRAGMA query_only=ON")
-            except sqlite3.OperationalError:
-                pass
-        elif readonly:
-            uri = f"file:{Path(self.path).resolve().as_posix()}?mode=ro"
-            conn = sqlite3.connect(uri, uri=True, timeout=5)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=250")
-        elif on_loop:
-            # Short wait for request handlers so UI fails fast under writer load.
-            conn = sqlite3.connect(self.path, timeout=0.08)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=80")
-        else:
-            conn = sqlite3.connect(self.path, timeout=30)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=30000")
+        """Open SQLite with a reader/writer split.
+
+        Readers never use mode=ro (it can stall on -shm / checkpoint). They take a
+        short busy_timeout so catalog/map/listings/search cannot sit behind a scrape
+        writer. Background scrape threads keep a long writer timeout; the web request
+        path and SCRAPE_ROLE=web stay fail-fast.
+        """
+        if readonly or quick:
+            return self._connect_reader(200 if quick else 250)
+        return self._connect_writer()
+
+    def _connect_reader(self, busy_ms: int) -> sqlite3.Connection:
+        wait = max(50, int(busy_ms))
+        conn = sqlite3.connect(self.path, timeout=wait / 1000)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={wait}")
+        try:
+            conn.execute("PRAGMA query_only=ON")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("PRAGMA temp_store=MEMORY")
+        except sqlite3.Error:
+            pass
         return conn
+
+    def _writer_busy_ms(self) -> int:
+        name = threading.current_thread().name or ""
+        requestish = (
+            threading.current_thread() is threading.main_thread()
+            or name.startswith("rf-ui")
+            or name.startswith("rf-auth")
+            or name.startswith("AnyIO")
+            or ("ThreadPoolExecutor" in name and not name.startswith("rf-job"))
+        )
+        if requestish:
+            return 80
+        if config.SCRAPE_ROLE == "web":
+            return 800
+        return 30_000
+
+    def _connect_writer(self) -> sqlite3.Connection:
+        wait = max(50, int(self._writer_busy_ms()))
+        conn = sqlite3.connect(self.path, timeout=wait / 1000)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={wait}")
+        return conn
+
+    @contextmanager
+    def read(self, *, quick: bool = False):
+        """WAL reader that always closes so checkpoints are not held open."""
+        conn = self.connect(readonly=True, quick=quick)
+        try:
+            yield conn
+        finally:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+            conn.close()
+
+    def _hot_json_key(self, kind: str, filters: dict[str, Any] | None = None, extra: str = "") -> str:
+        parts = [kind, extra]
+        if filters:
+            for key in sorted(filters):
+                if key in {"place_geoms"} or str(key).startswith("_"):
+                    continue
+                parts.append(f"{key}={filters[key]}")
+        return "|".join(parts)
+
+    def _hot_json_get(self, key: str, *, max_age: float) -> Any | None:
+        hit = self._hot_json_cache.get(key)
+        if not hit:
+            return None
+        at, payload = hit
+        if time.monotonic() - at <= max_age:
+            return payload
+        return None
+
+    def _hot_json_put(self, key: str, payload: Any) -> None:
+        self._hot_json_cache[key] = (time.monotonic(), payload)
+        if len(self._hot_json_cache) <= 48:
+            return
+        oldest = min(self._hot_json_cache, key=lambda item: self._hot_json_cache[item][0])
+        self._hot_json_cache.pop(oldest, None)
+
+    def _hot_json(self, key: str, fn):
+        try:
+            payload = fn()
+        except sqlite3.OperationalError:
+            stale = self._hot_json_get(key, max_age=60.0)
+            if stale is not None:
+                if isinstance(stale, dict):
+                    return {**stale, "stale": True}
+                return stale
+            raise
+        if payload is not None:
+            self._hot_json_put(key, payload)
+        return payload
 
     def _connect_bootstrap(self, timeout: float = 0.45) -> sqlite3.Connection:
         """Short wait so uvicorn --reload is not stuck behind a scrape writer."""
@@ -543,6 +618,11 @@ class Store:
                 with conn:
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute("PRAGMA temp_store=MEMORY")
+                    try:
+                        conn.execute("PRAGMA mmap_size=268435456")
+                    except sqlite3.Error:
+                        pass
                     conn.executescript(
                         """
                         CREATE TABLE IF NOT EXISTS listings (
@@ -2445,14 +2525,14 @@ class Store:
         token = (token or "").strip()
         if not token:
             return False
-        with self.connect(readonly=True) as conn:
+        with self.read() as conn:
             row = conn.execute("SELECT 1 FROM guest_searches WHERE token = ? LIMIT 1", (token,)).fetchone()
         return bool(row)
 
     def guest_search_used(self, ip: str, visitor_id: str) -> bool:
         ip = (ip or "").strip()
         visitor_id = (visitor_id or "").strip()
-        with self.connect() as conn:
+        with self.read() as conn:
             if visitor_id and conn.execute(
                 "SELECT 1 FROM guest_searches WHERE visitor_id = ? LIMIT 1", (visitor_id,)
             ).fetchone():
@@ -3306,6 +3386,26 @@ class Store:
         extras: bool = True,
         twins: bool = False,
     ) -> list[dict[str, Any]]:
+        key = self._hot_json_key(
+            "listings",
+            extra=f"{limit}:{monitor_id}:{since}:{int(extras)}:{int(twins)}",
+        )
+        return self._hot_json(
+            key,
+            lambda: self._recent_notified_query(
+                limit, monitor_id, since=since, extras=extras, twins=twins
+            ),
+        )
+
+    def _recent_notified_query(
+        self,
+        limit: int = 12,
+        monitor_id: str | None = None,
+        *,
+        since: str | None = None,
+        extras: bool = True,
+        twins: bool = False,
+    ) -> list[dict[str, Any]]:
         fetch_limit = max(limit * 4, limit)
         params: list[Any] = []
         if since:
@@ -3345,7 +3445,7 @@ class Store:
                 LIMIT ?
             """
             params.append(fetch_limit)
-        with self.connect() as conn:
+        with self.read() as conn:
             rows = conn.execute(sql, params).fetchall()
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -3802,6 +3902,9 @@ class Store:
                 row["_geo_approx"] = True
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
+        return self._hot_json(self._hot_json_key("catalog", filters), lambda: self._catalog_query(filters))
+
+    def _catalog_query(self, filters: dict[str, Any]) -> dict[str, Any]:
         from app.sources import PORTAL_IDS, url_likes
 
         where = ["1=1"]
@@ -4146,7 +4249,7 @@ class Store:
                 ORDER BY {order}
                 LIMIT 8000
             """
-            with self.connect(readonly=True) as conn:
+            with self.read() as conn:
                 fetched = [dict(row) for row in conn.execute(light_sql, params).fetchall()]
             seen_keys: set[str] = set()
             matched: list[dict[str, Any]] = []
@@ -4171,7 +4274,7 @@ class Store:
                     LEFT JOIN monitors ON monitors.id = listings.monitor_id
                     WHERE {holders}
                 """
-                with self.connect(readonly=True) as conn:
+                with self.read() as conn:
                     by_id = {
                         (row["monitor_id"], row["id"]): dict(row)
                         for row in conn.execute(full_sql, flat)
@@ -4188,12 +4291,12 @@ class Store:
                 LIMIT ?
             """
             if filters.get("_bbox") is not None:
-                with self.connect(readonly=True) as conn:
+                with self.read() as conn:
                     total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0])
                     fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
             else:
                 count_sql = f"SELECT COUNT(*) FROM listings WHERE {clause}"
-                with self.connect(readonly=True) as conn:
+                with self.read() as conn:
                     total = int(conn.execute(count_sql, params).fetchone()[0])
                     fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
             seen_keys = set()
@@ -4210,7 +4313,7 @@ class Store:
         if keys:
             holders = " OR ".join("(monitor_id = ? AND listing_id = ?)" for _ in keys)
             flat = [item for pair in keys for item in pair]
-            with self.connect(readonly=True) as conn:
+            with self.read() as conn:
                 for photo in conn.execute(
                     f"SELECT monitor_id, listing_id, url FROM listing_photos WHERE {holders} ORDER BY sort_order",
                     flat,
@@ -4283,7 +4386,7 @@ class Store:
                 filters["_pin_leftover"] = leftover
                 filters["_pin_leftover_sample"] = leftover_sample
         if not cache_hit:
-            with self.connect(readonly=True) as conn:
+            with self.read() as conn:
                 if anchors and not place_geoms and wide:
                     agg_sql = f"""
                     SELECT listings.locality AS locality, COUNT(*) AS n,
@@ -4434,7 +4537,7 @@ class Store:
         now = time.monotonic()
         if self._facets_cache is not None and now - self._facets_at < 30:
             return self._facets_cache
-        with self.connect(readonly=True) as conn:
+        with self.read() as conn:
             dispositions = [
                 row[0]
                 for row in conn.execute(
@@ -4473,13 +4576,28 @@ class Store:
         listing_key: str = "",
         url: str = "",
     ) -> dict[str, Any] | None:
+        key = self._hot_json_key(
+            "item", extra=f"{monitor_id}:{listing_id}:{listing_key}:{url}"
+        )
+        return self._hot_json(
+            key,
+            lambda: self._catalog_item_query(monitor_id, listing_id, listing_key, url),
+        )
+
+    def _catalog_item_query(
+        self,
+        monitor_id: str,
+        listing_id: int | str | None = None,
+        listing_key: str = "",
+        url: str = "",
+    ) -> dict[str, Any] | None:
         number: int | None = None
         try:
             if listing_id not in (None, ""):
                 number = int(listing_id)
         except (TypeError, ValueError):
             number = None
-        with self.connect() as conn:
+        with self.read() as conn:
             row = None
             if monitor_id and number is not None:
                 row = conn.execute(
@@ -5094,7 +5212,7 @@ class Store:
             return
         canons = [listing_identity(item) for item in items]
         urls = [item.get("url") for item in items if item.get("url")]
-        with self.connect(readonly=True) as conn:
+        with self.read() as conn:
             links_map = self._links_for(conn, canons)
             extra_urls = [
                 str(link.get("url") or "")

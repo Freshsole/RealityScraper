@@ -142,10 +142,10 @@ class Hub:
                         raise
                     time.sleep(0.1 * (attempt + 1))
 
-        # Coordinate with all in-process catalog writers. Without this gate a
-        # tick could lose every retry while deep batches continuously rotated.
+        # Tick metadata is a writer — keep it off ui_pool so catalog JSON is not queued
+        # behind scrape commits. job_pool already serializes with other catalog writes.
         async with self._catalog_write:
-            await asyncio.get_running_loop().run_in_executor(self.ui_pool, _call)
+            await asyncio.get_running_loop().run_in_executor(self.job_pool, _call)
 
     async def start(self) -> None:
         if self.running:
