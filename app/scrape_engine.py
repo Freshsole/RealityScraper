@@ -262,10 +262,12 @@ class ScrapeEngine:
                 deferred.append(1)
             elif first.error:
                 last_error = first.error
-                deferred.append(1)
                 if self._is_block_error(first.error):
-                    deferred.extend(pending)
+                    # Cooldown covers the portal — do not queue pages 2..N for a dead list.
                     pending = []
+                    deferred = []
+                else:
+                    deferred.append(1)
             else:
                 pages_ok += 1
                 total = first.total or total
@@ -295,9 +297,10 @@ class ScrapeEngine:
                     continue
                 if result.error:
                     last_error = result.error
-                    deferred.append(result.page)
                     if self._is_block_error(result.error):
                         blocked = True
+                    else:
+                        deferred.append(result.page)
                     continue
                 pages_ok += 1
                 total = result.total or total
@@ -308,8 +311,8 @@ class ScrapeEngine:
                     seen_ids.add(int(item_id))
                     listings.append(item)
             if blocked:
-                deferred.extend(pending)
                 pending = []
+                deferred = []
 
         deferred = sorted(set(deferred))
         self._store_deferred(shard_key, deferred)

@@ -29,12 +29,29 @@ _CF_HINTS = (
     "sorry, you have been blocked",
     "you are unable to access",
     "cf-error-details",
+    "cf-error-code",
     "cf-browser-verification",
     "just a moment...",
     "checking your browser before accessing",
     "cdn-cgi/challenge",
     "cf-challenge-running",
     "_cf_chl",
+    "cloudflare ray id",
+    "enable javascript and cookies to continue",
+)
+_CF_HARD_HINTS = (
+    "sorry, you have been blocked",
+    "you are unable to access",
+    "the action you just performed triggered the security solution",
+)
+_CF_CHALLENGE_HINTS = (
+    "just a moment...",
+    "checking your browser before accessing",
+    "cf-browser-verification",
+    "cf-challenge-running",
+    "cdn-cgi/challenge",
+    "_cf_chl",
+    "enable javascript and cookies to continue",
 )
 _MAINT_HINTS = (
     "údržba server",
@@ -131,10 +148,15 @@ def classify_block(
     if any(hint in folded for hint in _MAINT_HINTS):
         return BlockSignal(MAINTENANCE, status or 503, retry_after=retry_after)
     cf_html = any(hint in folded for hint in _CF_HINTS)
+    cf_detail = ""
+    if any(hint in folded for hint in _CF_HARD_HINTS):
+        cf_detail = "hard"
+    elif any(hint in folded for hint in _CF_CHALLENGE_HINTS):
+        cf_detail = "challenge"
     if status == 403 and (cf_html or cf_ray or "cloudflare" in server):
-        return BlockSignal(CLOUDFLARE, 403, retry_after=retry_after)
+        return BlockSignal(CLOUDFLARE, 403, retry_after=retry_after, detail=cf_detail or "cloudflare")
     if cf_html or (cf_ray and status in {0, 403, 503} and "cloudflare" in folded):
-        return BlockSignal(CLOUDFLARE, status or 403, retry_after=retry_after)
+        return BlockSignal(CLOUDFLARE, status or 403, retry_after=retry_after, detail=cf_detail or "cloudflare")
     if status == 403:
         return BlockSignal(FORBIDDEN, 403, retry_after=retry_after)
     if status in {503, 502, 500} and not folded.strip():

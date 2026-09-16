@@ -161,6 +161,7 @@ def test_portal_blocked_does_not_shrink_limiter_or_fetch_more_pages():
         assert limiter.limit == 16
         assert calls == [1]
         assert result.pages_ok == 0
+        assert result.deferred_pages == []
         assert result.error and result.error.startswith("blocked:cloudflare")
         assert limiter.cooldown.active("mmreality")
         assert not limiter.cooldown.active("sreality")

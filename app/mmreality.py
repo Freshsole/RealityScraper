@@ -1,9 +1,11 @@
-"""M&M Reality list/detail scraper. Live fetches may hit Cloudflare; parsers are fixture-tested.
+"""M&M Reality list/detail scraper. Live list pages are Cloudflare-gated.
 
-TODO: live M&M list/detail often returns Cloudflare 403. In-process httpx cannot
-pass JA3 / browser checks — needs a real browser or a JA3-impersonating client
-(curl_cffi / camoufox). Challenge HTML is classified and the portal is cooled
-down for the rest of the tick; do not retry other M&M shards after a block page.
+httpx, curl_cffi JA3, and headless Chrome from datacenter IPs all get a WAF
+hard-block (403 "Sorry, you have been blocked"). An optional worker-only
+browser/JA3 path exists behind SCRAPE_BROWSER_FETCH=1 — never on
+SCRAPE_ROLE=web / InstantSiteASGI. Follow-up: residential proxy + persistent
+Playwright on the scrape worker. Challenge HTML cools the portal for the rest
+of the tick; remaining M&M pages are not deferred.
 """
 
 from __future__ import annotations
@@ -11,6 +13,8 @@ from __future__ import annotations
 import json
 import re
 
+from app.block_page import PortalBlocked, classify_block
+from app.browser_fetch import fetch_html, should_try
 from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
 from app.portal_urls import mmreality_url
 from app.sreality import Listing
@@ -31,6 +35,45 @@ class MmrealityClient(HtmlPortalClient):
     def _context(self) -> str:
         raw = (self.search_url or "").lower()
         return "prodej" if "prodej" in raw else "pronajem"
+
+    async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
+        url = self._page_url(page, newest=newest)
+        response = await self._client.get(url, headers={"Accept": "text/html,application/json;q=0.9"})
+        if response.status_code in {404, 410}:
+            return [], 0
+        signal = classify_block(response.status_code, response.text, response.headers)
+        html = response.text
+        if signal is None:
+            response.raise_for_status()
+        elif should_try(self._portal_id(), signal):
+            fetched = await fetch_html(
+                url,
+                headers={"Accept": "text/html", "Referer": SITE + "/"},
+            )
+            retry = classify_block(fetched.status_code, fetched.text, fetched.headers)
+            if retry is not None or fetched.backend == "skipped" or not fetched.text:
+                raise PortalBlocked(
+                    signal.kind,
+                    signal.status_code or response.status_code,
+                    portal=self._portal_id(),
+                    retry_after=signal.retry_after,
+                    detail=signal.detail,
+                )
+            html = fetched.text
+        else:
+            raise PortalBlocked(
+                signal.kind,
+                signal.status_code or response.status_code,
+                portal=self._portal_id(),
+                retry_after=signal.retry_after,
+                detail=signal.detail,
+            )
+        if page <= 1:
+            self.search_url = str(getattr(response, "url", url)).split("#")[0]
+        listings = self._parse_list(html)
+        parsed_total = self._parse_total(html)
+        total = parsed_total or (len(listings) if page == 1 else 0)
+        return listings, total
 
     def _parse_list(self, html: str) -> list[Listing]:
         items: list[Listing] = []
