@@ -15,7 +15,13 @@ from app.portal_urls import (
 )
 from app.realitycz import RealityczClient
 from app.remax import RemaxClient
-from app.ulovdomov import UlovdomovClient, offers_from_payload
+from app.ulovdomov import (
+    UlovdomovClient,
+    fields_from_inzerat_slug,
+    offer_from_inzerat_slug,
+    offers_from_payload,
+    parse_sitemap_offers,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -214,6 +220,24 @@ class ExtraPortalTests(unittest.TestCase):
         listing = client.listing_from_offer(rows[0], "pronajem")
         self.assertEqual(listing.id, 77)
         self.assertEqual(listing.price_czk, 12000)
+
+    def test_ulovdomov_sitemap_slug_and_cards(self):
+        xml = (FIXTURES / "ulov_sitemap_offers.xml").read_text()
+        rows = parse_sitemap_offers(xml)
+        self.assertEqual(len(rows), 4)
+        by_id = {item[2]: item for item in rows}
+        self.assertEqual(by_id[2037015][1], "pronajem")
+        self.assertEqual(by_id[5669330][1], "prodej")
+        self.assertEqual(by_id[5446569][1], "spolubydleni")
+        self.assertEqual(offer_from_inzerat_slug("-hluboka-nad-vltavou-housing"), "prodej")
+        name, locality, disp = fields_from_inzerat_slug("pronajem-praha-liben-na-korabe-1-kk", "pronajem")
+        self.assertEqual(disp, "1+kk")
+        self.assertIn("Praha", locality)
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        listing = client.listing_from_sitemap_url(by_id[3496443][0], "pronajem", by_id[3496443][3], 3496443)
+        self.assertEqual(listing.id, 3496443)
+        self.assertEqual(listing.disposition, "2+kk")
+        self.assertTrue(listing.url.endswith("/3496443"))
 
     def test_measured_fixture_yield(self):
         """Before/after counts on recorded HTML. Old parsers missed vypis / used favorite URLs."""

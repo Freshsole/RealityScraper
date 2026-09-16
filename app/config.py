@@ -78,6 +78,31 @@ SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SH
 SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
 
 
+def _flag_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "1" if default else "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+# Worker-only opt-in. InstantSiteASGI / SCRAPE_ROLE=web never launch a browser.
+SCRAPE_BROWSER_FETCH = _flag_env("SCRAPE_BROWSER_FETCH")
+SCRAPE_BROWSER_ON_HARD_CF = _flag_env("SCRAPE_BROWSER_ON_HARD_CF")
+SCRAPE_BROWSER_TIMEOUT_SEC = max(2, min(25, int(os.getenv("SCRAPE_BROWSER_TIMEOUT_SEC", "12"))))
+SCRAPE_BROWSER_PORTALS = frozenset(
+    part.strip().lower()
+    for part in (os.getenv("SCRAPE_BROWSER_PORTALS", "mmreality") or "mmreality").split(",")
+    if part.strip()
+)
+
+
+def browser_fetch_allowed(portal: str) -> bool:
+    """True only for scrape worker (or local all) when the opt-in flag is on."""
+    if not SCRAPE_BROWSER_FETCH:
+        return False
+    if SCRAPE_ROLE == "web":
+        return False
+    return (portal or "").strip().lower() in SCRAPE_BROWSER_PORTALS
+
+
 def _hour_env(name: str, default: int) -> int:
     return max(0, min(23, int(os.getenv(name, str(default)))))
 

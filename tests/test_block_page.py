@@ -18,6 +18,7 @@ def test_classify_cloudflare_fixture():
     assert signal is not None
     assert signal.kind == CLOUDFLARE
     assert signal.status_code == 403
+    assert signal.detail == "hard"
 
 
 def test_classify_maintenance_fixture():
@@ -25,6 +26,14 @@ def test_classify_maintenance_fixture():
     signal = classify_block(200, html)
     assert signal is not None
     assert signal.kind == MAINTENANCE
+
+
+def test_classify_challenge_html():
+    html = "<html><title>Just a moment...</title><p>Checking your browser before accessing</p></html>"
+    signal = classify_block(403, html, {"server": "cloudflare"})
+    assert signal is not None
+    assert signal.kind == CLOUDFLARE
+    assert signal.detail == "challenge"
 
 
 def test_classify_healthy_listing_html_is_not_blocked():
