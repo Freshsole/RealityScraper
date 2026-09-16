@@ -13,8 +13,8 @@ from app import push as web_push
 from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
-from app.sources import client_for, source_name
-from app.catalog_sync import daily_shards, listing_is_new_for_monitor, sreality_recent_shards
+from app.sources import PORTAL_LABELS, client_for, source_name
+from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_shards
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
@@ -777,12 +777,7 @@ class Hub:
             if portal not in config.CATALOG_SYNC_HOURS:
                 return {"ok": False, "error": "Neznámý portál"}
             payload["portal"] = portal
-            payload["label"] = {
-                "sreality": "Sreality",
-                "bezrealitky": "Bezrealitky",
-                "idnes": "Reality.iDNES",
-                "bazos": "Bazoš",
-            }.get(portal, portal)
+            payload["label"] = PORTAL_LABELS.get(portal, portal)
         else:
             cleaned = normalize_search_url(str(job.get("url") or ""))
             if not cleaned:
@@ -889,8 +884,8 @@ class Hub:
         ), None
 
     def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
-        """Rotate through full Sreality shards without synchronous DB writes."""
-        deep = [item for item in daily_shards() if item.get("portal") == "sreality"]
+        """Rotate through full-market shards (all portals) without synchronous DB writes."""
+        deep = daily_shards()
         if not deep:
             return []
         n = max(1, min(len(deep), int(take or config.SCRAPE_DEEP_SHARDS_PER_TICK)))
@@ -904,7 +899,7 @@ class Hub:
         """High-priority NewDiscovery; never waits for rolling deep."""
         from app.scrape_engine import ScrapeEngine
 
-        recent = sreality_recent_shards()
+        recent = recent_shards()
         if not recent:
             return
 

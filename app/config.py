@@ -88,6 +88,12 @@ CATALOG_SYNC_HOURS = {
     "bezrealitky": _hour_env("CATALOG_SYNC_HOUR_BEZREALITKY", 2),
     "idnes": _hour_env("CATALOG_SYNC_HOUR_IDNES", 3),
     "bazos": _hour_env("CATALOG_SYNC_HOUR_BAZOS", 4),
+    "ceskereality": _hour_env("CATALOG_SYNC_HOUR_CESKEREALITY", 5),
+    "annonce": _hour_env("CATALOG_SYNC_HOUR_ANNONCE", 6),
+    "mmreality": _hour_env("CATALOG_SYNC_HOUR_MMREALITY", 7),
+    "ulovdomov": _hour_env("CATALOG_SYNC_HOUR_ULOVDOMOV", 8),
+    "remax": _hour_env("CATALOG_SYNC_HOUR_REMAX", 9),
+    "realitycz": _hour_env("CATALOG_SYNC_HOUR_REALITYCZ", 10),
 }
 IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
 BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")

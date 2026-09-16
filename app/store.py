@@ -3404,6 +3404,24 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_first_seen ON catalog_listings(first_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_portal_seen ON catalog_listings(portal, last_seen)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_portal ON catalog_listings(gone, portal)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_links_portal ON listing_links(portal, gone)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_gone_seen ON listings(gone, last_seen)")
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS game_rent_rounds (
+                id TEXT PRIMARY KEY,
+                player_name TEXT NOT NULL DEFAULT '',
+                score INTEGER NOT NULL DEFAULT 0,
+                accuracy REAL NOT NULL DEFAULT 0,
+                guesses_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_game_rent_score ON game_rent_rounds(score DESC, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_game_rent_created ON game_rent_rounds(created_at DESC);
+            """
+        )
         self._unify_listing_identities(conn)
         self._rekey_idnes_listing_ids(conn)
 
@@ -3666,10 +3684,14 @@ class Store:
                 row["_geo_approx"] = True
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
+        from app.sources import PORTAL_IDS, url_likes
+
         where = ["1=1"]
         params: list[Any] = []
         portal = (filters.get("portal") or "").strip()
-        if portal in {"sreality", "bezrealitky", "idnes", "bazos"}:
+        if portal in PORTAL_IDS:
+            likes = url_likes(portal) or (f"%{portal}.cz%",)
+            like_sql = " OR ".join("listings.url LIKE ?" for _ in likes)
             where.append(
                 f"""
                 (
@@ -3679,12 +3701,12 @@ class Store:
                       AND listing_links.portal = ?
                       AND IFNULL(listing_links.gone, 0) = 0
                   )
-                  OR listings.url LIKE ?
+                  OR {like_sql}
                 )
                 """
             )
             params.append(portal)
-            params.append({"idnes": "%idnes.cz%", "bazos": "%bazos.cz%"}.get(portal, f"%{portal}.cz%"))
+            params.extend(likes)
         monitor_id = (filters.get("monitor_id") or "").strip()
         if monitor_id:
             where.append(_monitor_hit_sql())
@@ -4312,14 +4334,15 @@ class Store:
                 )
             ]
             if not portals:
-                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%sreality.cz%' LIMIT 1").fetchone():
-                    portals.append("sreality")
-                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bezrealitky.cz%' LIMIT 1").fetchone():
-                    portals.append("bezrealitky")
-                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%idnes.cz%' LIMIT 1").fetchone():
-                    portals.append("idnes")
-                if conn.execute("SELECT 1 FROM listings WHERE url LIKE '%bazos.cz%' LIMIT 1").fetchone():
-                    portals.append("bazos")
+                from app.sources import PORTAL_IDS, url_likes
+
+                for portal_id in PORTAL_IDS:
+                    likes = url_likes(portal_id) or (f"%{portal_id}%",)
+                    if any(
+                        conn.execute("SELECT 1 FROM listings WHERE url LIKE ? LIMIT 1", (like,)).fetchone()
+                        for like in likes
+                    ):
+                        portals.append(portal_id)
         payload = {"dispositions": dispositions, "portals": portals, "monitors": monitors}
         self._facets_cache = payload
         self._facets_at = now
