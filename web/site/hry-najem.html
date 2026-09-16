@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tipněte nájem — REALITIFY</title>
-    <link rel="stylesheet" href="/static/site/games.css?v=5" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" /></noscript>
+    <link rel="preload" href="/static/site/games.css?v=6" as="style" />
+    <link rel="preload" href="/static/site/games.js?v=5" as="script" />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/games.css?v=6" />
   </head>
   <body class="game-page game-rent">
     <header class="navbar">
@@ -47,7 +49,19 @@
         </label>
         <a class="pill-ghost" href="/hry">Zpět na hry</a>
       </section>
-      <section class="converter" id="rent-board" aria-live="polite"></section>
+      <section class="converter" id="rent-board" aria-busy="true" aria-live="polite">
+        <div class="loc-chip">Načítám byt</div>
+        <div class="rent-hero-img is-skeleton" aria-hidden="true"></div>
+        <div class="flat-meta" style="margin-bottom:16px">
+          <div class="spec">2+kk · 54 m²</div>
+          <div class="portal">Čekám na katalog…</div>
+        </div>
+        <label class="rent-amount">
+          <input type="text" value="" placeholder="18 000" disabled />
+          <span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>
+        </label>
+        <p class="rent-unit">Kč / měsíc</p>
+      </section>
     </main>
     <section class="game-band">
       <div class="game-band-inner">
@@ -58,6 +72,6 @@
         <a class="pill pill-lg" href="/registrace">Hlídání zdarma</a>
       </div>
     </section>
-    <script src="/static/site/games.js?v=4"></script>
+    <script src="/static/site/games.js?v=5"></script>
   </body>
 </html>

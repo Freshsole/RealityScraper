@@ -4,9 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Hry — REALITIFY</title>
-    <link rel="stylesheet" href="/static/site/games.css?v=5" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;600;700&display=swap" /></noscript>
+    <link rel="preload" href="/static/site/games.css?v=6" as="style" />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/games.css?v=6" />
+    <link rel="prefetch" href="/static/site/games.js?v=5" />
+    <link rel="prefetch" href="/hry/vyssi-nizsi" />
+    <link rel="prefetch" href="/hry/najem" />
   </head>
   <body class="game-page">
     <header class="navbar">
