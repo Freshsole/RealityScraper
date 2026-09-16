@@ -536,6 +536,7 @@ def rent_round(store: Any) -> dict[str, Any]:
             picked.append(item)
             if len(picked) >= RENT_ROUND_SIZE:
                 break
+    random.shuffle(picked)
     return {
         "round_id": uuid.uuid4().hex,
         "items": [public_card(item, include_price=False) for item in picked[:RENT_ROUND_SIZE]],

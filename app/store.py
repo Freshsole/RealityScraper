@@ -118,7 +118,7 @@ def _game_vanish_hours(first_seen: Any, last_seen: Any) -> float:
 
 
 def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
-    if not _is_rental_row(row):
+    if not _is_game_rental(row):
         return None
     try:
         price = int(row["price_czk"]) if row.get("price_czk") is not None else 0
@@ -159,6 +159,21 @@ def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
         "_place": place or locality.lower(),
         "_gone": gone.strftime("%Y-%m-%d %H:%M"),
     }
+
+
+def catalog_item_needs_live_fetch(item: dict[str, Any] | None) -> bool:
+    """Skip portal scrape when the catalog row already has a usable gallery."""
+    if not item or item.get("gone"):
+        return False
+    photos = item.get("photos") or []
+    if len(photos) >= 2:
+        return False
+    extras = item.get("extras") if isinstance(item.get("extras"), dict) else {}
+    description = str(item.get("description") or "").strip()
+    address = str((extras or {}).get("address") or "").strip()
+    if photos and (description or address) and item.get("lat") is not None:
+        return False
+    return bool(item.get("url"))
 
 
 def _is_discord_webhook(url: str) -> bool:
@@ -461,6 +476,9 @@ class Store:
         self._facets_cache: dict[str, Any] | None = None
         self._facets_at = 0.0
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
+        self._gone_fast_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._new_today_cache: tuple[float, int] | None = None
+        self._landing_preview_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._init()
@@ -2355,17 +2373,28 @@ class Store:
             return int(conn.execute(sql, params).fetchone()[0])
 
     def catalog_new_today_count(self) -> int:
+        now = time.monotonic()
+        cached = self._new_today_cache
+        if cached and now - cached[0] < 15.0:
+            return cached[1]
         since = local_day_start()
-        with self.connect() as conn:
-            catalog = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
-            if catalog:
-                return int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM catalog_listings WHERE first_seen >= ?",
-                        (since,),
-                    ).fetchone()[0]
-                )
-        return self.new_today_count()
+        try:
+            with self.connect(quick=True) as conn:
+                exists = conn.execute("SELECT 1 FROM catalog_listings LIMIT 1").fetchone()
+                if exists:
+                    n = int(
+                        conn.execute(
+                            "SELECT COUNT(*) FROM catalog_listings WHERE first_seen >= ?",
+                            (since,),
+                        ).fetchone()[0]
+                    )
+                    self._new_today_cache = (now, n)
+                    return n
+        except sqlite3.OperationalError:
+            pass
+        n = self.new_today_count()
+        self._new_today_cache = (now, n)
+        return n
 
     def guest_search_has_access(self, token: str) -> bool:
         token = (token or "").strip()
@@ -2401,6 +2430,10 @@ class Store:
         return token
 
     def landing_preview_listings(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        cached = self._landing_preview_cache
+        if cached and now - cached[0] < 20.0:
+            return cached[1]
         data = self.catalog(
             {
                 "district": "Brno",
@@ -2454,7 +2487,9 @@ class Store:
             if len(picked) >= 3:
                 break
             take(item)
-        return [self._landing_card(item) for item in picked[:3]]
+        cards = [self._landing_card(item) for item in picked[:3]]
+        self._landing_preview_cache = (now, cards)
+        return cards
 
     def _landing_card(self, item: dict[str, Any]) -> dict[str, Any]:
         portal = str(item.get("portal") or "")
@@ -4819,21 +4854,35 @@ class Store:
         return rows
 
     def public_gone_fast_rentals(self, *, days: int = 3, limit: int = 4) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        cached = self._gone_fast_cache
+        if cached and now - cached[0] < 20.0:
+            return cached[1]
         since = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
-        with self.connect() as conn:
+        cap = max(24, min(200, int(limit or 4) * 40))
+        try:
+            conn = self.connect(quick=True)
+        except sqlite3.OperationalError:
+            return cached[1] if cached else []
+        try:
             rows = conn.execute(
                 """
                 SELECT locality, disposition, area_m2, price_czk, price_label, first_seen, last_seen,
-                       created_on, image_url, extras, url
+                       created_on, image_url, url
                 FROM listings
-                WHERE IFNULL(gone, 0) = 1
-                  AND IFNULL(image_url, '') != ''
+                WHERE gone = 1
+                  AND image_url != ''
                   AND last_seen IS NOT NULL
                   AND last_seen >= ?
                 ORDER BY last_seen DESC
+                LIMIT ?
                 """,
-                (since,),
+                (since, cap),
             ).fetchall()
+        except sqlite3.OperationalError:
+            return cached[1] if cached else []
+        finally:
+            conn.close()
         ranked: list[tuple[float, dict[str, Any], str, str, str]] = []
         seen_url: set[str] = set()
         for row in rows:
@@ -4860,6 +4909,7 @@ class Store:
             picked.append(item)
             if len(picked) >= limit:
                 break
+        self._gone_fast_cache = (now, picked)
         return picked
 
     def mark_sold_notified(self, monitor_id: str, listing_id: int) -> None:

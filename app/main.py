@@ -40,7 +40,7 @@ from app import agents as agent_hub
 from app import mcp_oauth
 from app import extension_score as ext_score
 from app.sreality import ListingGone
-from app.store import _listing_from_catalog_dict
+from app.store import _listing_from_catalog_dict, catalog_item_needs_live_fetch
 
 hub = Hub()
 monitor = hub
@@ -123,7 +123,6 @@ async def no_store_ui(request: Request, call_next):
         or path.startswith("/admin")
         or path.startswith("/uspechy")
         or path in {
-        "/",
         "/kontakt",
         "/obchodni-podminky",
         "/ochrana-soukromi",
@@ -245,8 +244,10 @@ def page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
-def landing() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+def landing() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("index.html")
 
 
 def byt_preview() -> FileResponse:
@@ -1256,7 +1257,8 @@ async def public_guest_search_start(request: Request) -> JSONResponse:
 
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
-    return {"items": hub.store.public_gone_fast_rentals(days=3, limit=4)}
+    items = await asyncio.to_thread(hub.store.public_gone_fast_rentals, days=3, limit=4)
+    return {"items": items}
 
 
 @app.get("/api/public/games/higher-lower")
@@ -1555,11 +1557,11 @@ async def catalog_item(
     listing_key: str = "",
     url: str = "",
 ) -> dict:
-    item = hub.store.catalog_item(monitor_id, id, listing_key=listing_key, url=url)
+    item = await asyncio.to_thread(hub.store.catalog_item, monitor_id, id, listing_key, url)
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
     source_url = item.get("url") or url
-    if source_url:
+    if source_url and catalog_item_needs_live_fetch(item):
         try:
             listing = _listing_from_catalog_dict(item)
             listing.photos = []
@@ -1567,11 +1569,19 @@ async def catalog_item(
             from app.places import refine_listing_location
 
             refine_listing_location(listing)
-            hub.store.save_listing_enrichment(item["monitor_id"], listing)
-            item = hub.store.catalog_item(item["monitor_id"], item["id"], listing_key=item.get("listing_key") or "", url=source_url) or item
+            await asyncio.to_thread(hub.store.save_listing_enrichment, item["monitor_id"], listing)
+            item = await asyncio.to_thread(
+                hub.store.catalog_item,
+                item["monitor_id"],
+                item["id"],
+                item.get("listing_key") or "",
+                source_url,
+            ) or item
         except ListingGone:
             await hub.notify_sold(hub.store.get_monitor(item["monitor_id"]), item["id"])
-            item = hub.store.catalog_item(item["monitor_id"], item["id"], url=source_url) or item
+            item = await asyncio.to_thread(
+                hub.store.catalog_item, item["monitor_id"], item["id"], "", source_url
+            ) or item
         except Exception:
             pass
     return item

@@ -1,4 +1,4 @@
-"""In-memory marketing HTML so /hry* never waits on disk or the default thread pool."""
+"""In-memory marketing HTML so / and /hry* never wait on disk."""
 
 from __future__ import annotations
 
