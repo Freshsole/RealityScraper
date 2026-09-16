@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
@@ -13,7 +14,7 @@ HREF_RE = re.compile(r'href="((?:https://www\.mmreality\.cz)?/nemovitosti/[^"]+)
 ID_RE = re.compile(r"/nemovitosti/(?:[^/]*-)?(\d{4,})")
 TITLE_RE = re.compile(r"<h[123][^>]*>(.*?)</h[123]>", re.S | re.I)
 IMG_RE = re.compile(r'(?:src|data-src)="(https://[^"]*mmreality[^"]+\.(?:jpg|jpeg|webp)[^"]*)"', re.I)
-CARD_SPLIT_RE = re.compile(r'(?:class="[^"]*(?:estate|property|item|card|offer)[^"]*")', re.I)
+JSONLD_RE = re.compile(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
 
 
 class MmrealityClient(HtmlPortalClient):
@@ -29,6 +30,12 @@ class MmrealityClient(HtmlPortalClient):
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
+        for listing in self._parse_jsonld(html or "", offer):
+            if listing.url not in seen:
+                seen.add(listing.url)
+                items.append(listing)
+        if items:
+            return items
         # Prefer per-link cards; M&M markup varies and is often JS-hydrated.
         for href in HREF_RE.findall(html or ""):
             url = abs_url(href.split("?")[0], SITE)
@@ -61,6 +68,63 @@ class MmrealityClient(HtmlPortalClient):
                     locality=locality,
                     image_url=img,
                     photos=[img] if img else [],
+                    offer=offer,
+                )
+            )
+        return items
+
+    def _parse_jsonld(self, html: str, offer: str) -> list[Listing]:
+        items: list[Listing] = []
+        for raw in JSONLD_RE.findall(html or ""):
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            rows = payload if isinstance(payload, list) else [payload]
+            for row in rows:
+                items.extend(self._listings_from_jsonld(row, offer))
+        return items
+
+    def _listings_from_jsonld(self, row: object, offer: str) -> list[Listing]:
+        if not isinstance(row, dict):
+            return []
+        items: list[Listing] = []
+        graph = row.get("@graph")
+        if isinstance(graph, list):
+            for node in graph:
+                items.extend(self._listings_from_jsonld(node, offer))
+        elements = row.get("itemListElement")
+        if isinstance(elements, list):
+            for node in elements:
+                if isinstance(node, dict):
+                    items.extend(self._listings_from_jsonld(node.get("item") or node, offer))
+        url = str(row.get("url") or row.get("@id") or "")
+        if "/nemovitosti/" in url and ID_RE.search(url):
+            name = str(row.get("name") or row.get("headline") or "")
+            offers = row.get("offers") if isinstance(row.get("offers"), dict) else {}
+            price_raw = offers.get("price") if offers else row.get("price")
+            price_czk = None
+            try:
+                if price_raw not in (None, ""):
+                    price_czk = int(round(float(str(price_raw).replace(" ", "").replace(",", "."))))
+            except (TypeError, ValueError):
+                price_czk = None
+            locality = ""
+            address = row.get("address")
+            if isinstance(address, dict):
+                locality = str(address.get("addressLocality") or address.get("name") or "")
+            image = row.get("image")
+            img = image if isinstance(image, str) else (image[0] if isinstance(image, list) and image else "")
+            items.append(
+                listing_from_card(
+                    listing_id=numeric_id(ID_RE.search(url).group(1), url),
+                    name=clean(name) or url.rstrip("/").split("/")[-1].replace("-", " "),
+                    url=abs_url(url, SITE),
+                    price_czk=price_czk,
+                    price_label="",
+                    locality=locality,
+                    image_url=str(img or ""),
+                    photos=[str(img)] if img else [],
                     offer=offer,
                 )
             )

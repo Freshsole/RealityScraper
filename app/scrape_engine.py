@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from app import config
+from app.block_page import PortalBlocked, PortalCooldown
 
 
 @dataclass
@@ -72,6 +73,7 @@ class AdaptiveLimiter:
         self._cond = asyncio.Condition()
         self.metrics = metrics or ScrapeMetrics()
         self._ok_streak = 0
+        self.cooldown = PortalCooldown()
 
     async def acquire(self, priority: int = 1) -> None:
         async with self._cond:
@@ -162,13 +164,39 @@ class ScrapeEngine:
         self.deferred[shard_key] = merged
         self.metrics.tick_deferred_pages += len(pages)
 
-    async def fetch_one_page(self, fetch_page: FetchPageFn, page: int) -> PageResult:
+    def _cooldown(self) -> PortalCooldown:
+        cooldown = getattr(self.limiter, "cooldown", None)
+        if isinstance(cooldown, PortalCooldown):
+            return cooldown
+        if not hasattr(self, "_local_cooldown"):
+            self._local_cooldown = PortalCooldown()
+        return self._local_cooldown
+
+    @staticmethod
+    def _is_block_error(error: str | None) -> bool:
+        raw = (error or "").lower()
+        return raw.startswith("blocked:") or raw.startswith("cooling:")
+
+    async def fetch_one_page(self, fetch_page: FetchPageFn, page: int, *, portal: str = "") -> PageResult:
         await self.limiter.acquire(self.priority)
         try:
             batch, total = await fetch_page(page)
             self.metrics.record("ok")
             await self.limiter.release(ok=True)
             return PageResult(page=page, listings=list(batch or []), total=int(total or 0))
+        except PortalBlocked as exc:
+            if not exc.portal and portal:
+                exc.portal = portal
+            if exc.kind == "cloudflare" or exc.status_code == 403:
+                self.metrics.record("403")
+            elif exc.kind == "rate_limit" or exc.status_code == 429:
+                self.metrics.record("429")
+            else:
+                self.metrics.record("fail")
+            # Per-portal skip only — do not shrink the shared limiter or sleep the tick.
+            await self.limiter.release(ok=False)
+            self._cooldown().note_block(exc)
+            return PageResult(page=page, listings=[], total=0, error=str(exc)[:240])
         except Exception as exc:
             code = _status_from_exc(exc)
             if code == 403:
@@ -190,6 +218,7 @@ class ScrapeEngine:
         max_pages: int,
         deadline_monotonic: float,
         prioritize_first: bool = True,
+        portal: str = "",
     ) -> ShardFetchResult:
         """Fetch pages 1..max_pages (plus deferred) until deadline; leftover → deferred queue."""
         pending = list(range(1, max(1, max_pages) + 1))
@@ -208,10 +237,22 @@ class ScrapeEngine:
         deferred: list[int] = []
         last_error: str | None = None
 
+        if portal and self._cooldown().active(portal):
+            reason = self._cooldown().reason(portal) or "blocked"
+            return ShardFetchResult(
+                shard_key=shard_key,
+                search_url="",
+                listings=[],
+                total=0,
+                pages_ok=0,
+                deferred_pages=[],
+                error=f"cooling:{reason}:{portal}",
+            )
+
         async def run_page(page: int) -> PageResult:
             if time.monotonic() >= deadline_monotonic:
                 return PageResult(page=page, listings=[], total=0, deferred=True)
-            return await self.fetch_one_page(fetch_page, page)
+            return await self.fetch_one_page(fetch_page, page, portal=portal)
 
         # Always try page 1 first when present (alpha SLA).
         if pending and pending[0] == 1:
@@ -222,6 +263,9 @@ class ScrapeEngine:
             elif first.error:
                 last_error = first.error
                 deferred.append(1)
+                if self._is_block_error(first.error):
+                    deferred.extend(pending)
+                    pending = []
             else:
                 pages_ok += 1
                 total = first.total or total
@@ -244,6 +288,7 @@ class ScrapeEngine:
             chunk = pending[:batch_n]
             pending = pending[batch_n:]
             results = await asyncio.gather(*(run_page(page) for page in chunk))
+            blocked = False
             for result in results:
                 if result.deferred:
                     deferred.append(result.page)
@@ -251,6 +296,8 @@ class ScrapeEngine:
                 if result.error:
                     last_error = result.error
                     deferred.append(result.page)
+                    if self._is_block_error(result.error):
+                        blocked = True
                     continue
                 pages_ok += 1
                 total = result.total or total
@@ -260,6 +307,9 @@ class ScrapeEngine:
                         continue
                     seen_ids.add(int(item_id))
                     listings.append(item)
+            if blocked:
+                deferred.extend(pending)
+                pending = []
 
         deferred = sorted(set(deferred))
         self._store_deferred(shard_key, deferred)
@@ -287,6 +337,7 @@ class ScrapeEngine:
 
         async def one(shard: dict[str, str]) -> ShardFetchResult:
             url = shard["search_url"]
+            portal = (shard.get("portal") or "").strip().lower()
             client = client_factory(url)
 
             async def fetch_page(page: int) -> tuple[list[Any], int]:
@@ -297,6 +348,7 @@ class ScrapeEngine:
                 fetch_page=fetch_page,
                 max_pages=max_pages,
                 deadline_monotonic=deadline,
+                portal=portal,
             )
             result.search_url = url
             return result

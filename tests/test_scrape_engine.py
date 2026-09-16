@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+from app.block_page import PortalBlocked
 from app.monitor_index import MonitorIndex
 from app.scrape_engine import AdaptiveLimiter, ScrapeEngine, ScrapeMetrics
 from app.sreality import Listing
@@ -138,6 +139,75 @@ def test_monitor_index_buckets_not_all_monitors():
     assert "m-praha-rent" in ids
     # Brno sale should not be in the tight candidate set for Praha rent 2+kk.
     assert "m-brno-sale" not in ids or len(candidates) < len(monitors)
+
+
+def test_portal_blocked_does_not_shrink_limiter_or_fetch_more_pages():
+    async def _run() -> None:
+        limiter = AdaptiveLimiter(initial=16, floor=4, ceiling=16)
+        engine = ScrapeEngine(limiter)
+        calls: list[int] = []
+
+        async def fetch_page(page: int):
+            calls.append(page)
+            raise PortalBlocked("cloudflare", 403, portal="mmreality")
+
+        result = await engine.fetch_pages_parallel(
+            shard_key="mmreality:recent:pronajem:byty",
+            fetch_page=fetch_page,
+            max_pages=4,
+            deadline_monotonic=asyncio.get_running_loop().time() + 2.0,
+            portal="mmreality",
+        )
+        assert limiter.limit == 16
+        assert calls == [1]
+        assert result.pages_ok == 0
+        assert result.error and result.error.startswith("blocked:cloudflare")
+        assert limiter.cooldown.active("mmreality")
+        assert not limiter.cooldown.active("sreality")
+
+        skipped = await engine.fetch_pages_parallel(
+            shard_key="mmreality:recent:prodej:byty",
+            fetch_page=fetch_page,
+            max_pages=4,
+            deadline_monotonic=asyncio.get_running_loop().time() + 2.0,
+            portal="mmreality",
+        )
+        assert skipped.error and skipped.error.startswith("cooling:")
+        assert calls == [1]
+
+        healthy_calls: list[int] = []
+
+        async def healthy(page: int):
+            healthy_calls.append(page)
+            return (
+                [
+                    Listing(
+                        id=page,
+                        name="Byt",
+                        price_czk=10000,
+                        price_label="10 000 Kč",
+                        disposition="2+kk",
+                        area_m2=40,
+                        locality="Praha",
+                        url=f"https://www.sreality.cz/detail/{page}",
+                        image_url=None,
+                    )
+                ],
+                1,
+            )
+
+        ok = await engine.fetch_pages_parallel(
+            shard_key="sreality:recent",
+            fetch_page=healthy,
+            max_pages=1,
+            deadline_monotonic=asyncio.get_running_loop().time() + 2.0,
+            portal="sreality",
+        )
+        assert ok.pages_ok == 1
+        assert healthy_calls == [1]
+        assert limiter.limit == 16
+
+    asyncio.run(_run())
 
 
 def test_batch_commit_constant_from_config():
