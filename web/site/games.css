@@ -622,6 +622,11 @@ button {
   padding: 0;
 }
 
+.rent-amount input::placeholder {
+  color: var(--faint);
+  font-weight: 600;
+}
+
 .rent-amount input::-webkit-outer-spin-button,
 .rent-amount input::-webkit-inner-spin-button {
   -webkit-appearance: none;

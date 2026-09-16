@@ -191,14 +191,14 @@
       }
       renderScore();
       board.innerHTML = `
-        <div class="loc-chip">${escapeHtml(item.locality || "Lokalita")}</div>
+        <div class="loc-chip">${escapeHtml(item.locality || item.name || "Byt")}</div>
         <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" />
         <div class="flat-meta" style="margin-bottom:16px">
           <div class="spec">${escapeHtml(specText(item))}</div>
           <div class="portal">${escapeHtml(item.portal_label || "")}</div>
         </div>
         <label class="rent-amount">
-          <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="0" required autofocus />
+          <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="18000" required autofocus />
           <span class="unit">Kč / měsíc</span>
         </label>
         <div class="mint-banner">
