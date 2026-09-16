@@ -10,13 +10,17 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from app.block_page import PortalBlocked, classify_block
 from app.sreality import Listing, ListingGone, format_price
 
 JS_SAFE_ID = (1 << 53) - 1
 AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*m", re.I)
 PRICE_RE = re.compile(r"(\d{1,3}(?:[\s\u00a0.]\d{3})+|\d{4,8})\s*Kč", re.I)
 DISP_RE = re.compile(r"(\d+)\s*\+\s*(kk|1)|(\d+)\s*kk|garson|atyp|pokoj", re.I)
-COUNT_RE = re.compile(r"([\d\s\u00a0]+)\s+(?:inzerát|nemovitost|nabídek|výsled)", re.I)
+COUNT_RE = re.compile(
+    r"([\d\s\u00a0]+)\s+(?:inzerát|nemovitost|nabídek|výsled|byt)",
+    re.I,
+)
 GONE_HINTS = (
     "inzerát byl stažen",
     "inzerát neexistuje",
@@ -289,11 +293,38 @@ class HtmlPortalClient:
         folded = (html or "").casefold()
         return any(hint in folded for hint in GONE_HINTS)
 
+    def _portal_id(self) -> str:
+        host = (self.SITE or "").lower()
+        for needle, name in (
+            ("mmreality", "mmreality"),
+            ("ceskereality", "ceskereality"),
+            ("ulovdomov", "ulovdomov"),
+            ("reality.cz", "realitycz"),
+            ("remax", "remax"),
+            ("annonce", "annonce"),
+        ):
+            if needle in host:
+                return name
+        return ""
+
+    def _raise_if_blocked(self, response: httpx.Response) -> None:
+        signal = classify_block(response.status_code, response.text, response.headers)
+        if signal is None:
+            return
+        raise PortalBlocked(
+            signal.kind,
+            signal.status_code or response.status_code,
+            portal=self._portal_id(),
+            retry_after=signal.retry_after,
+            detail=signal.detail,
+        )
+
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         url = self._page_url(page, newest=newest)
         response = await self._client.get(url, headers={"Accept": "text/html,application/json;q=0.9"})
-        if response.status_code in {403, 404, 410, 429, 503}:
+        if response.status_code in {404, 410}:
             return [], 0
+        self._raise_if_blocked(response)
         response.raise_for_status()
         html = response.text
         if page <= 1:
@@ -308,7 +339,10 @@ class HtmlPortalClient:
         seen: set[int] = set()
         total = 0
         for page in range(1, max(1, int(pages or 1)) + 1):
-            batch, page_total = await self.fetch_page(page, newest=newest)
+            try:
+                batch, page_total = await self.fetch_page(page, newest=newest)
+            except PortalBlocked:
+                break
             total = page_total or total
             if not batch:
                 break
@@ -327,7 +361,10 @@ class HtmlPortalClient:
         while True:
             if max_pages is not None and page > max_pages:
                 break
-            batch, page_total = await self.fetch_page(page, newest=newest)
+            try:
+                batch, page_total = await self.fetch_page(page, newest=newest)
+            except PortalBlocked:
+                break
             total = page_total or total
             if not batch:
                 break

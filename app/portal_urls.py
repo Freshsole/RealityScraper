@@ -106,6 +106,8 @@ class CeskerealityUrls:
         path = f"/{offer}/byty/"
         if region and re_slug(region):
             path = f"/{offer}/byty/{re_slug(region)}/"
+        elif (filters.get("sort") or "nejnovejsi") == "nejnovejsi":
+            path = f"/{offer}/byty/nejnovejsi/"
         query: dict[str, str] = {}
         if filters.get("price_from"):
             query["cena-od"] = str(int(filters["price_from"]))
@@ -246,7 +248,11 @@ class RealityczUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        return f"{self.site}/{offer}/byty/"
+        districts = [str(item) for item in (filters.get("districts") or []) if item]
+        region = districts[0] if len(districts) == 1 else ""
+        if region:
+            return f"{self.site}/{offer}/byty/{region}/"
+        return f"{self.site}/{offer}/byty/Ceska-republika/"
 
     def parse_url(self, url: str) -> dict:
         return _parse_common(url, self.source)

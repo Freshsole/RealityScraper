@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
 
 from app.annonce import AnnonceClient
+from app.block_page import classify_block
 from app.ceskereality import CeskerealityClient
 from app.mmreality import MmrealityClient
 from app.portal_urls import (
@@ -14,6 +16,8 @@ from app.portal_urls import (
 from app.realitycz import RealityczClient
 from app.remax import RemaxClient
 from app.ulovdomov import UlovdomovClient, offers_from_payload
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 CESKE = """
@@ -75,7 +79,8 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
-        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/"))
+        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/Ceska-republika/"))
+        self.assertIn("/pronajem/byty/nejnovejsi/", ceskereality_url.build_url({"offers": ["pronajem"]}))
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
         self.assertEqual(remax_url.parse_url("https://www.remax-czech.cz/reality/byty/?sale=1")["offers"], ["prodej"])
@@ -134,6 +139,96 @@ class ExtraPortalTests(unittest.TestCase):
         listing = client.listing_from_offer(rows[0], "pronajem")
         self.assertEqual(listing.id, 42)
         self.assertEqual(listing.price_czk, 15000)
+
+    def test_ceskereality_live_cards_use_listing_id_not_favorite_url(self):
+        html = (FIXTURES / "ceskereality_cards.html").read_text()
+        client = CeskerealityClient("https://www.ceskereality.cz/pronajem/byty/nejnovejsi/")
+        items = client._parse_list(html)
+        self.assertGreaterEqual(len(items), 2)
+        self.assertEqual(items[0].id, 2432970)
+        self.assertTrue(items[0].url.endswith("2432970.html"))
+        self.assertNotIn("muj-profil", items[0].url)
+        self.assertEqual(items[1].id, 3895290)
+        self.assertEqual(items[1].price_czk, 23000)
+        self.assertEqual(client._parse_total(html), 4779)
+
+    def test_realitycz_vypis_and_novinky_yield(self):
+        client = RealityczClient("https://www.reality.cz/pronajem/byty/Ceska-republika/")
+        vypis = client._parse_list((FIXTURES / "realitycz_vypis.html").read_text())
+        novinky = client._parse_list((FIXTURES / "realitycz_novinky.html").read_text())
+        self.assertGreaterEqual(len(vypis), 2, vypis)
+        self.assertTrue(any(item.advert_code == "DMQ-003729" for item in vypis))
+        self.assertTrue(any("Troja" in f"{item.locality} {item.name}" for item in vypis))
+        self.assertGreaterEqual(len(novinky), 2)
+        self.assertTrue(all(item.url.startswith("https://www.reality.cz/") for item in vypis + novinky))
+
+    def test_mmreality_jsonld_and_cloudflare_not_listings(self):
+        client = MmrealityClient("https://www.mmreality.cz/nemovitosti/?typ-nabidky=pronajem")
+        cloudflare = (FIXTURES / "mm_cloudflare.html").read_text()
+        self.assertEqual(client._parse_list(cloudflare), [])
+        self.assertIsNotNone(classify_block(403, cloudflare, {"server": "cloudflare"}))
+        html = """
+        <script type="application/ld+json">
+        {"@type":"ItemList","itemListElement":[
+          {"@type":"ListItem","item":{"@type":"Offer","name":"Pronájem 2+kk Praha",
+           "url":"https://www.mmreality.cz/nemovitosti/pronajem-bytu-2kk-praha-445566",
+           "offers":{"price":18500},"address":{"addressLocality":"Praha 5"}}}
+        ]}
+        </script>
+        """
+        items = client._parse_list(html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, 445566)
+        self.assertEqual(items[0].price_czk, 18500)
+
+    def test_ulovdomov_empty_ssr_and_nested_payload(self):
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        empty = client._parse_list((FIXTURES / "ulov_empty_ssr.html").read_text())
+        self.assertEqual(empty, [])
+        nested = {
+            "props": {
+                "pageProps": {
+                    "dehydratedState": {
+                        "queries": [
+                            {
+                                "state": {
+                                    "data": {
+                                        "offers": [
+                                            {
+                                                "id": 77,
+                                                "title": "Nested",
+                                                "price": {"amount": 12000},
+                                                "seoUrl": "/pronajem/byt/77",
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        rows, total = offers_from_payload(nested)
+        self.assertEqual(total, 1)
+        listing = client.listing_from_offer(rows[0], "pronajem")
+        self.assertEqual(listing.id, 77)
+        self.assertEqual(listing.price_czk, 12000)
+
+    def test_measured_fixture_yield(self):
+        """Before/after counts on recorded HTML. Old parsers missed vypis / used favorite URLs."""
+        ceske_html = (FIXTURES / "ceskereality_cards.html").read_text()
+        rcz_html = (FIXTURES / "realitycz_vypis.html").read_text()
+        ceske = CeskerealityClient("https://www.ceskereality.cz/pronajem/byty/")._parse_list(ceske_html)
+        rcz = RealityczClient("https://www.reality.cz/pronajem/byty/Ceska-republika/")._parse_list(rcz_html)
+        report = {
+            "ceskereality_cards": {"before": "20 live cards, but favorite URL + firm id", "after": len(ceske)},
+            "realitycz_vypis": {"before": 0, "after": len(rcz)},
+        }
+        self.assertGreaterEqual(report["ceskereality_cards"]["after"], 2)
+        self.assertGreaterEqual(report["realitycz_vypis"]["after"], 2)
+        self.assertTrue(all("nemovitosti" in item.url or item.url.endswith(".html") for item in ceske))
+        self.assertTrue(all(item.id in {2432970, 3895290} for item in ceske))
 
 
 if __name__ == "__main__":

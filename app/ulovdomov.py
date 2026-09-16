@@ -6,6 +6,7 @@ import json
 import re
 from typing import Any
 
+from app.block_page import PortalBlocked
 from app.html_listing import HtmlPortalClient, abs_url, listing_from_card, numeric_id, parse_price
 from app.portal_urls import ulovdomov_url
 from app.sreality import Listing
@@ -18,6 +19,9 @@ HREF_RE = re.compile(
     re.I,
 )
 HREF2_RE = re.compile(r'href="((?:https://www\.ulovdomov\.cz)?/inzerat/[^"]+)"', re.I)
+NEXT_DATA_RE = re.compile(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.S)
+BUILD_ID_RE = re.compile(r'"buildId"\s*:\s*"([^"]+)"')
+OFFER_KEYS = ("offers", "results", "items", "list", "adverts", "estates", "hits")
 
 
 def _as_int(value: Any) -> int | None:
@@ -38,15 +42,65 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _looks_like_offer(item: dict[str, Any]) -> bool:
+    if not item:
+        return False
+    if item.get("id") or item.get("offerId") or item.get("seoId"):
+        return True
+    slug = str(item.get("seoUrl") or item.get("slug") or item.get("url") or "")
+    return bool(slug) and ("/" in slug or slug.isdigit())
+
+
+def _collect_rows(payload: Any, acc: list[dict[str, Any]] | None = None, depth: int = 0) -> list[dict[str, Any]]:
+    rows = acc if acc is not None else []
+    if depth > 6:
+        return rows
+    if isinstance(payload, list):
+        dicts = [item for item in payload if isinstance(item, dict)]
+        if dicts and sum(1 for item in dicts if _looks_like_offer(item)) >= max(1, len(dicts) // 2):
+            rows.extend(item for item in dicts if _looks_like_offer(item))
+            return rows
+        for item in payload[:40]:
+            _collect_rows(item, rows, depth + 1)
+        return rows
+    if not isinstance(payload, dict):
+        return rows
+    for key in OFFER_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            _collect_rows(value, rows, depth + 1)
+        elif isinstance(value, dict):
+            _collect_rows(value, rows, depth + 1)
+    data = payload.get("data")
+    if data is not None:
+        _collect_rows(data, rows, depth + 1)
+    props = payload.get("pageProps") or payload.get("props")
+    if props is not None and props is not payload:
+        _collect_rows(props, rows, depth + 1)
+    state = payload.get("dehydratedState") or payload.get("initialState")
+    if isinstance(state, dict):
+        queries = state.get("queries")
+        if isinstance(queries, list):
+            for query in queries:
+                if isinstance(query, dict):
+                    _collect_rows(query.get("state") or query.get("data") or query, rows, depth + 1)
+        else:
+            _collect_rows(state, rows, depth + 1)
+    return rows
+
+
 def offers_from_payload(payload: Any) -> tuple[list[dict[str, Any]], int]:
     if not isinstance(payload, dict):
+        if isinstance(payload, list):
+            rows = [item for item in payload if isinstance(item, dict) and _looks_like_offer(item)]
+            return rows, len(rows)
         return [], 0
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if isinstance(payload.get("data"), list):
-        rows = payload["data"]
+        rows = [item for item in payload["data"] if isinstance(item, dict)]
         total = _as_int(payload.get("total") or payload.get("count")) or len(rows)
-        return [item for item in rows if isinstance(item, dict)], total
-    for key in ("offers", "results", "items", "list"):
+        return rows, total
+    for key in OFFER_KEYS:
         rows = data.get(key) if isinstance(data, dict) else None
         if isinstance(rows, dict):
             nested = rows.get("offers") or rows.get("items") or rows.get("results")
@@ -60,6 +114,18 @@ def offers_from_payload(payload: Any) -> tuple[list[dict[str, Any]], int]:
                 or (data.get("count") if isinstance(data, dict) else None)
             ) or len(rows)
             return [item for item in rows if isinstance(item, dict)], total
+    collected = _collect_rows(payload)
+    if collected:
+        seen: set[str] = set()
+        unique: list[dict[str, Any]] = []
+        for item in collected:
+            key = str(item.get("id") or item.get("seoUrl") or item.get("url") or len(unique))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        total = _as_int(payload.get("total") or payload.get("count") or (data.get("count") if isinstance(data, dict) else None)) or len(unique)
+        return unique, total
     return [], _as_int(payload.get("count") or (data.get("count") if isinstance(data, dict) else None)) or 0
 
 
@@ -158,23 +224,31 @@ class UlovdomovClient(HtmlPortalClient):
             lon=lon,
         )
 
+    def _listings_from_rows(self, rows: list[dict[str, Any]], offer: str) -> list[Listing]:
+        listings: list[Listing] = []
+        seen: set[str] = set()
+        for raw in rows:
+            listing = self.listing_from_offer(raw, offer)
+            if listing and listing.url not in seen:
+                seen.add(listing.url)
+                listings.append(listing)
+        return listings
+
     def _parse_list(self, html: str) -> list[Listing]:
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
+        match = NEXT_DATA_RE.search(html or "")
         if match:
             try:
                 payload = json.loads(match.group(1))
             except json.JSONDecodeError:
                 payload = {}
-            props = payload.get("props", {}).get("pageProps", payload.get("pageProps") or {})
-            rows, _total = offers_from_payload(props)
-            for raw in rows:
-                listing = self.listing_from_offer(raw, offer)
-                if listing and listing.url not in seen:
-                    seen.add(listing.url)
-                    items.append(listing)
+            props = payload.get("props", {}).get("pageProps", payload.get("pageProps") or payload)
+            rows, _total = offers_from_payload(props if isinstance(props, dict) else {})
+            if not rows and isinstance(payload, dict):
+                rows, _total = offers_from_payload(payload)
+            items.extend(self._listings_from_rows(rows, offer))
         if items:
             return items
         hrefs = HREF_RE.findall(html or "") + HREF2_RE.findall(html or "")
@@ -200,27 +274,74 @@ class UlovdomovClient(HtmlPortalClient):
             )
         return items
 
+    async def _fetch_next_data(self, page: int, html: str = "") -> tuple[list[Listing], int]:
+        offer = self._context()
+        build_id = ""
+        match = BUILD_ID_RE.search(html or "")
+        if match:
+            build_id = match.group(1)
+        if not build_id:
+            return [], 0
+        path = "prodej/byty" if offer == "prodej" else "pronajem/byty"
+        url = f"{SITE}/_next/data/{build_id}/{path}.json"
+        try:
+            response = await self._client.get(
+                url,
+                params={"page": page} if page > 1 else None,
+                headers={"Accept": "application/json", "x-nextjs-data": "1"},
+            )
+        except Exception:
+            return [], 0
+        if response.status_code != 200:
+            return [], 0
+        try:
+            payload = response.json()
+        except ValueError:
+            return [], 0
+        rows, total = offers_from_payload(payload)
+        listings = self._listings_from_rows(rows, offer)
+        return listings, total or len(listings)
+
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         offer = self._context()
         body = self._find_body(page)
+        api_blocked: PortalBlocked | None = None
         try:
             response = await self._client.post(
                 API,
                 params={"page": page, "perPage": self.PAGE_SIZE, "sorting": "latest"},
                 json=body,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Origin": SITE,
+                    "Referer": f"{SITE}/{offer}/byty",
+                },
             )
             if response.status_code == 200:
                 rows, total = offers_from_payload(response.json())
-                listings = []
-                seen: set[str] = set()
-                for raw in rows:
-                    listing = self.listing_from_offer(raw, offer)
-                    if listing and listing.url not in seen:
-                        seen.add(listing.url)
-                        listings.append(listing)
+                listings = self._listings_from_rows(rows, offer)
                 if listings:
                     return listings, total or len(listings)
+            elif response.status_code in {403, 429}:
+                api_blocked = PortalBlocked(
+                    "rate_limit" if response.status_code == 429 else "forbidden",
+                    response.status_code,
+                    portal="ulovdomov",
+                )
+            elif response.status_code >= 500:
+                api_blocked = PortalBlocked("server_error", response.status_code, portal="ulovdomov")
         except Exception:
             pass
-        return await super().fetch_page(page, newest=newest)
+        try:
+            listings, total = await super().fetch_page(page, newest=newest)
+        except PortalBlocked:
+            raise
+        if listings:
+            return listings, total
+        next_listings, next_total = await self._fetch_next_data(page)
+        if next_listings:
+            return next_listings, next_total
+        if api_blocked:
+            raise api_blocked
+        return listings, total
