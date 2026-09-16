@@ -2445,37 +2445,42 @@
       </div>`;
     const play = (item) => {
       const details = (item.items || [])
-        .map(
-          (part) =>
-            `${esc(part.locality || part.name || "")}: tip ${esc(fmtN(part.guess || 0))} / ${esc(fmtN(part.actual || 0))} (${esc(part.points || 0)} b)`,
-        )
-        .join("<br />");
-      return `<article class="ad-card" style="margin-bottom:12px">
-        <div class="ad-utbl-row" style="border:0">
-          <span><strong>${esc(item.player_name || "Anonym")}</strong></span>
-          <span class="num">${esc(fmtN(item.score || 0))}</span>
-          <span class="num">${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
+        .map((part) => {
+          const pts = Number(part.points || 0);
+          return `<div class="ad-game-guess">
+            <div>
+              <strong>${esc(part.locality || part.name || "Byt")}</strong>
+              <span>tip ${esc(fmtN(part.guess || 0))} Kč · realita ${esc(fmtN(part.actual || 0))} Kč</span>
+            </div>
+            <em class="${pts >= 400 ? "is-ok" : ""}">${esc(part.points || 0)} b</em>
+          </div>`;
+        })
+        .join("");
+      return `<article class="ad-game-play">
+        <div class="ad-game-play-head">
+          <span class="ad-game-chip">${esc(item.player_name || "Anonym")}</span>
+          <strong>${esc(fmtN(item.score || 0))}</strong>
+          <span>${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
           <span class="muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
         </div>
-        <p class="muted" style="padding:0 16px 12px">${details || "Bez detailu tipů"}</p>
+        ${details || '<p class="muted">Bez detailu tipů</p>'}
       </article>`;
     };
     main.innerHTML = `
       <header class="ad-pagehead">
-        <h1 class="ad-h">Hry</h1>
-        <p class="ad-lead">Žebříček tipů nájmu z marketingového webu — top skóre, poslední hry a přesnost kola.</p>
+        <p class="ad-eyebrow">TIP NÁJMU · ŽEBŘÍČEK</p>
+        <h1 class="ad-h">HRY</h1>
+        <p class="ad-lead">Skóre z /hry/najem. Hráči ho nevidí — jen admin. Pět bytů, tisíc bodů za přesný tip.</p>
       </header>
-      <section class="ad-nsec">
-        <div class="ad-scrape-kpis">
-          <article class="ad-mini"><div class="lbl">Odehraných kol</div><strong>${esc(fmtN(stats.n || 0))}</strong></article>
-          <article class="ad-mini"><div class="lbl">Nejlepší skóre</div><strong>${esc(fmtN(stats.best || 0))}</strong></article>
-          <article class="ad-mini"><div class="lbl">Průměr skóre</div><strong>${esc(fmtN(Math.round(stats.avg_score || 0)))}</strong></article>
-          <article class="ad-mini"><div class="lbl">Průměrná přesnost</div><strong>${esc(String(stats.avg_accuracy ?? 0).replace(".", ","))} %</strong></article>
-        </div>
+      <section class="ad-game-kpis">
+        <article class="ad-game-kpi"><span>Odehraných kol</span><strong>${esc(fmtN(stats.n || 0))}</strong></article>
+        <article class="ad-game-kpi"><span>Nejlepší skóre</span><strong>${esc(fmtN(stats.best || 0))}</strong></article>
+        <article class="ad-game-kpi"><span>Průměr skóre</span><strong>${esc(fmtN(Math.round(stats.avg_score || 0)))}</strong></article>
+        <article class="ad-game-kpi"><span>Průměrná přesnost</span><strong>${esc(String(stats.avg_accuracy ?? 0).replace(".", ","))} %</strong></article>
       </section>
       <section class="ad-nsec">
         <h2 class="ad-kicker">Top skóre</h2>
-        <article class="ad-card">
+        <article class="ad-card ad-game-board">
           <div class="ad-utbl-wrap">
             <div class="ad-utbl">
               <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span>Kdy</span></div>
@@ -2486,7 +2491,7 @@
         </article>
       </section>
       <section class="ad-nsec">
-        <h2 class="ad-kicker">Poslední hry a přesnost kola</h2>
+        <h2 class="ad-kicker">Poslední hry</h2>
         ${recent.map(play).join("") || '<p class="muted">Nikdo ještě nehrál tip nájmu.</p>'}
       </section>
     `;

@@ -30,8 +30,14 @@ def main() -> None:
         "data/*",
         "--reload-exclude",
         "extension/*",
+        "--reload-exclude",
+        "*.sqlite",
+        "--reload-exclude",
+        "*.sqlite-*",
+        "--reload-delay",
+        "0.4",
         "--timeout-graceful-shutdown",
-        "15",
+        "4",
     ]
     proc = subprocess.Popen(cmd, start_new_session=True)
 

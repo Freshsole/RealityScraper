@@ -22,7 +22,7 @@ from app.games import (
     wait_refresh,
 )
 from app.sreality import Listing
-from app.site_pages import site_html, site_page
+from app.site_pages import site_body, site_html, site_page
 from app.store import Store
 
 
@@ -279,6 +279,7 @@ def test_game_listing_pool_stays_fast_on_fat_catalog(tmp_path: Path):
 
 def test_hry_html_is_memory_fast_and_nonblocking():
     site_html.cache_clear()
+    site_body.cache_clear()
     t0 = time.perf_counter()
     html = site_html("hry-vyssi-nizsi.html")
     cold_ms = (time.perf_counter() - t0) * 1000
@@ -300,3 +301,27 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "HIGHER / LOWER" in hub
     assert "KOLIK STOJÍ MĚSÍC" in rent
     assert "games.css" in hub and "games.css" in rent
+    assert "rent-board" in rent
+    assert 'id="rent-board"' in rent
+    assert "site.css" not in rent
+
+
+def test_homepage_html_is_memory_fast_and_uses_webp():
+    site_html.cache_clear()
+    site_body.cache_clear()
+    t0 = time.perf_counter()
+    html = site_html("index.html")
+    cold_ms = (time.perf_counter() - t0) * 1000
+    t0 = time.perf_counter()
+    again = site_html("index.html")
+    warm_ms = (time.perf_counter() - t0) * 1000
+    assert "NEJLEPŠÍ BYTY ZMIZÍ" in html
+    assert html == again
+    assert ".png" not in html
+    assert "hero-apart.webp" in html
+    assert "sold-1.webp" in html
+    assert 'media="print"' in html
+    assert cold_ms < 80, f"cold homepage HTML {cold_ms:.1f}ms"
+    assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
+    response = site_page("index.html")
+    assert response.headers["cache-control"].startswith("public")

@@ -99,69 +99,157 @@
   }
 
   async function loadRent() {
-    const grid = document.getElementById("rent-grid");
-    if (!grid) return;
-    const form = document.getElementById("rent-form");
-    const result = document.getElementById("rent-result");
-    const res = await fetch("/api/public/games/rent-round");
-    const data = await res.json();
-    grid.innerHTML = (data.items || [])
-      .map(
-        (item) => `
-        <article class="rent-card">
-          <img src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" alt="" width="300" height="140" decoding="async" />
-          <div class="meta">
-            <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
-            <div class="spec">${escapeHtml(specText(item))}</div>
-            <div class="portal">${escapeHtml(item.portal_label || "")}</div>
-            <label>Tip nájmu / měsíc
-              <input type="number" min="1000" step="100" name="guess" data-id="${escapeHtml(item.id)}" required />
-            </label>
-          </div>
-        </article>
-      `,
-      )
-      .join("");
-    form?.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const guesses = [...grid.querySelectorAll("input[name='guess']")].map((input) => ({
-        id: input.dataset.id,
-        guess: Number(input.value || 0),
-      }));
-      const name = document.getElementById("player-name")?.value || "";
-      const submit = form.querySelector("button[type='submit']");
-      if (submit) submit.disabled = true;
+    const board = document.getElementById("rent-board");
+    if (!board) return;
+    const scoreEl = document.getElementById("rent-score");
+    const stepsEl = document.getElementById("rent-steps");
+    const nameInput = document.getElementById("player-name");
+    let items = [];
+    let index = 0;
+    const guesses = [];
+
+    const renderScore = () => {
+      const total = items.length || 5;
+      const shown = Math.min(index + 1, total);
+      if (scoreEl) {
+        scoreEl.innerHTML = `
+          <span class="score-chip">Byt <strong>${shown} / ${total}</strong></span>
+          <span class="score-chip">Tipy <strong>${guesses.length}</strong></span>
+        `;
+      }
+      if (stepsEl) {
+        stepsEl.innerHTML = Array.from({ length: total }, (_, i) => {
+          const state = i < index ? "is-done" : i === index ? "is-on" : "";
+          return `<span class="step-dot ${state}"></span>`;
+        }).join("");
+      }
+    };
+
+    const fail = (msg) => {
+      board.innerHTML = `<div class="mint-banner"><strong>${escapeHtml(msg)}</strong></div>`;
+    };
+
+    const showResult = (scored) => {
+      index = items.length;
+      renderScore();
+      const rows = (scored.items || [])
+        .map((item) => {
+          const low = Number(item.points || 0) < 400;
+          return `
+            <div class="rent-result-row">
+              <div>
+                <div class="spec">${escapeHtml(item.locality || item.name || "")} · ${escapeHtml(specText(item))}</div>
+                <div class="portal">Tip ${escapeHtml(fmt(item.guess))} · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
+              </div>
+              <div class="flat-price">${escapeHtml(fmt(item.actual))}<span class="rent-pts${low ? " is-low" : ""}">${escapeHtml(item.points)} b</span></div>
+            </div>
+          `;
+        })
+        .join("");
+      board.innerHTML = `
+        <div class="loc-chip">Žebříček u admina</div>
+        <div class="mint-banner">
+          <strong>Skóre ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</strong>
+          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat pět inzerátů ručně.</span>
+        </div>
+        ${rows}
+        <div class="converter-actions">
+          <button class="pill pill-lg" type="button" id="rent-again">Další kolo</button>
+          <a class="pill pill-lg" href="/registrace" style="text-align:center">Hlídat podobné byty</a>
+        </div>
+      `;
+      document.getElementById("rent-again")?.addEventListener("click", () => {
+        guesses.length = 0;
+        index = 0;
+        start().catch(() => fail("Hru se teď nepodařilo načíst. Zkuste to za chvíli."));
+      });
+    };
+
+    const submitRound = async () => {
+      board.innerHTML = `<p class="lead">Počítám skóre…</p>`;
       try {
         const scored = await fetch("/api/public/games/rent-score", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, guesses }),
+          body: JSON.stringify({ name: nameInput?.value || "", guesses }),
         }).then((row) => row.json());
-        result.hidden = false;
-        result.innerHTML = `
-          <h2 class="display">SKÓRE ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</h2>
-          <p>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat 5 inzerátů ručně.</p>
-          <div class="rent-grid" style="margin-top:16px">
-            ${(scored.items || [])
-              .map(
-                (item) => `
-                <article class="rent-card">
-                  <div class="meta">
-                    <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
-                    <div class="flat-price">${escapeHtml(fmt(item.actual))}</div>
-                    <div class="spec">Tip ${escapeHtml(fmt(item.guess))} · ${escapeHtml(item.points)} b · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
-                  </div>
-                </article>
-              `,
-              )
-              .join("")}
-          </div>
-          <a class="pill" href="/registrace">Hlídat podobné byty</a>
-        `;
-      } finally {
-        if (submit) submit.disabled = false;
+        if (!scored || scored.score == null) {
+          fail("Skóre se nepodařilo uložit. Zkuste to znovu.");
+          return;
+        }
+        showResult(scored);
+      } catch {
+        fail("Skóre se nepodařilo uložit. Zkuste to znovu.");
       }
-    });
+    };
+
+    const showItem = () => {
+      const item = items[index];
+      if (!item) {
+        submitRound();
+        return;
+      }
+      renderScore();
+      board.innerHTML = `
+        <div class="loc-chip">${escapeHtml(item.locality || item.name || "Byt")}</div>
+        <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" />
+        <div class="flat-meta" style="margin-bottom:16px">
+          <div class="spec">${escapeHtml(specText(item))}</div>
+          <div class="portal">${escapeHtml(item.portal_label || "")}</div>
+        </div>
+        <label class="rent-amount">
+          <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="18000" required autofocus />
+          <span class="unit">Kč / měsíc</span>
+        </label>
+        <div class="mint-banner">
+          <strong>Tipněte měsíční nájem.</strong>
+          <span>Enter nebo tlačítko — další byt za vteřinu.</span>
+        </div>
+        <div class="converter-actions">
+          <button class="pill pill-lg" type="button" id="rent-next">${index + 1 >= items.length ? "Odeslat tipy" : "Další byt"}</button>
+        </div>
+      `;
+      const input = document.getElementById("rent-guess");
+      const next = document.getElementById("rent-next");
+      const advance = () => {
+        const value = Number(input?.value || 0);
+        if (!value || value < 1000) {
+          input?.focus();
+          input?.reportValidity?.();
+          return;
+        }
+        guesses.push({ id: item.id, guess: value });
+        index += 1;
+        if (index >= items.length) {
+          submitRound();
+          return;
+        }
+        showItem();
+      };
+      next?.addEventListener("click", advance);
+      input?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          advance();
+        }
+      });
+      input?.focus();
+    };
+
+    async function start() {
+      board.innerHTML = `<p class="lead">Načítám pět nabídek…</p>`;
+      const res = await fetch("/api/public/games/rent-round");
+      const data = await res.json();
+      items = data.items || [];
+      if (items.length < 1) {
+        fail("Hru se teď nepodařilo načíst. Zkuste to za chvíli.");
+        return;
+      }
+      index = 0;
+      showItem();
+    }
+
+    start().catch(() => fail("Hru se teď nepodařilo načíst. Zkuste to za chvíli."));
   }
 
   if (document.body.classList.contains("game-higher")) loadHigherLower();
