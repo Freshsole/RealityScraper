@@ -14,6 +14,27 @@
   const specText = (item) =>
     [item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" · ");
 
+  const ccyPill = () =>
+    `<span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>`;
+
+  const vanishText = (hours, fallback) => {
+    if (fallback) return fallback;
+    const value = Number(hours || 0);
+    if (!value) return "v řádu minut";
+    if (value < 1) return `za ${Math.max(8, Math.round(value * 60))} min`;
+    if (value < 24) return `za ${String(value.toFixed(1)).replace(".", ",")} h`;
+    return `za ${Math.round(value)} h`;
+  };
+
+  const infoRows = (rows) =>
+    `<div class="info-rows">${rows
+      .filter((row) => row && row[1])
+      .map(
+        ([label, value]) =>
+          `<div class="info-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`
+      )
+      .join("")}</div>`;
+
   const rowHtml = (item, { revealed = false, state = "" } = {}) => `
     <button type="button" class="flat-row${state ? ` ${state}` : ""}${revealed ? "" : " pickable"}" data-side="${escapeHtml(item.side || "")}" ${revealed ? "disabled" : 'tabindex="0"'}>
       <img class="flat-thumb" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="96" height="96" alt="" decoding="async" />
@@ -21,7 +42,10 @@
         <div class="spec">${escapeHtml(specText(item))}</div>
         <div class="portal">${escapeHtml(item.portal_label || "")}</div>
       </div>
-      <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmt(item.price_czk)}` : "???"}</div>
+      <div class="amount-stack">
+        <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmt(item.price_czk)}` : "— — —"}</div>
+        ${ccyPill()}
+      </div>
     </button>
   `;
 
@@ -47,11 +71,16 @@
       const left = { ...data.left, side: "left" };
       const right = { ...data.right, side: "right" };
       const locality = data.locality_label || left.locality || right.locality || "Stejná lokalita";
+      const vanish = vanishText(data.vanish_hours, data.vanish_label);
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(locality)}</div>
         ${rowHtml(left)}
         <div class="vs-row">VS</div>
         ${rowHtml(right)}
+        ${infoRows([
+          ["Stejná lokalita", locality],
+          ["Takové nabídky mizí", vanish],
+        ])}
         <div class="mint-banner">
           <strong>${escapeHtml(data.copy || "Oba byty jsou ve stejné lokalitě.")}</strong>
         </div>
@@ -72,13 +101,17 @@
             ${rowHtml(left, { revealed: true, state: data.cheaper === "left" ? "win" : "lose" })}
             <div class="vs-row">VS</div>
             ${rowHtml(right, { revealed: true, state: data.cheaper === "right" ? "win" : "lose" })}
+            ${infoRows([
+              ["Stejná lokalita", locality],
+              ["Takové nabídky mizí", vanish],
+            ])}
             <div class="mint-banner">
               <strong>${correct ? "Správně." : "Špatně."}</strong>
               <span>${escapeHtml(message || "Dobré byty mizí rychle.")}</span>
             </div>
             <div class="converter-actions">
               <button class="pill pill-lg" type="button" id="hl-next">Další dvojice</button>
-              <a class="pill pill-lg" href="/registrace" style="text-align:center">Hlídat podobné byty</a>
+              <a class="pill-ghost" href="/registrace">Hlídat podobné byty</a>
             </div>
           `;
           renderScore();
@@ -155,7 +188,7 @@
         ${rows}
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-again">Další kolo</button>
-          <a class="pill pill-lg" href="/registrace" style="text-align:center">Hlídat podobné byty</a>
+          <a class="pill-ghost" href="/registrace">Hlídat podobné byty</a>
         </div>
       `;
       document.getElementById("rent-again")?.addEventListener("click", () => {
@@ -199,8 +232,12 @@
         </div>
         <label class="rent-amount">
           <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="18000" required autofocus />
-          <span class="unit">Kč / měsíc</span>
+          ${ccyPill()}
         </label>
+        ${infoRows([
+          ["Lokalita", item.locality || item.name || "Byt"],
+          ["Portál", item.portal_label || ""],
+        ])}
         <div class="mint-banner">
           <strong>Tipněte měsíční nájem.</strong>
           <span>Enter nebo tlačítko — další byt za vteřinu.</span>

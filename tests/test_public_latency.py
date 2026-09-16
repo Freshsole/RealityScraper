@@ -173,6 +173,27 @@ def test_hry_html_bypasses_blocked_inner_app():
         assert int(headers[b"content-length"]) == len(site_body("hry-vyssi-nizsi.html"))
         assert hit["n"] == 0
 
+        for path in ("/hry/vyssi-nizsi/", "/hry/najem/"):
+            status, _headers, body = await _asgi_get(app, path)
+            assert status == 200, path
+            assert body
+
+        for path in ("/api/public/games/higher-lower", "/api/public/games/rent-round"):
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            payload = json.loads(body)
+            assert headers[b"content-type"].startswith(b"application/json")
+            assert headers[b"cache-control"] == b"no-store"
+            assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
+            if path.endswith("higher-lower"):
+                assert payload["left"]["locality_key"] == payload["right"]["locality_key"]
+                assert payload["cheaper"] in {"left", "right"}
+            else:
+                assert len(payload["items"]) == 5
+        assert hit["n"] == 0
+
     asyncio.run(run())
 
 
@@ -347,4 +368,175 @@ def test_catalog_serves_stale_json_when_writer_locks_sqlite(tmp_path: Path, monk
     assert again.get("stale") is True
     assert again["items"] == first["items"]
     assert ms < 15, f"stale catalog {ms:.1f}ms"
+
+
+def _percentile(samples: list[float], q: float) -> float:
+    ordered = sorted(samples)
+    if not ordered:
+        return 0.0
+    return ordered[max(0, min(len(ordered) - 1, int(round(q * (len(ordered) - 1)))))]
+
+
+async def _asgi_post(app, path: str, payload: dict) -> tuple[int, dict[bytes, bytes], bytes]:
+    sent: list[dict] = []
+    raw = json.dumps(payload).encode()
+    received = {"done": False}
+
+    async def receive() -> dict:
+        if received["done"]:
+            return {"type": "http.disconnect"}
+        received["done"] = True
+        return {"type": "http.request", "body": raw, "more_body": False}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    await app(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode(),
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+            "client": ("127.0.0.1", 1),
+            "server": ("127.0.0.1", 80),
+        },
+        receive,
+        send,
+    )
+    start = next(item for item in sent if item["type"] == "http.response.start")
+    body = b"".join(item.get("body") or b"" for item in sent if item["type"] == "http.response.body")
+    headers = {key: value for key, value in start.get("headers") or []}
+    return int(start["status"]), headers, body
+
+
+def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
+    store = Store(tmp_path / "game-scrape.sqlite")
+    seed = [_latency_listing(i) for i in range(80)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=20, fast=True)
+    stop = threading.Event()
+    hit = {"n": 0}
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_latency_listing(400 + (n + k) % 50) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            if n % 3 == 0:
+                store.record_scrape_tick({"kind": "new_discovery", "n": n, "role": "all"})
+            n += 1
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    thread = threading.Thread(target=writer, name="rf-job-sim", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+
+    html_paths = ("/", "/hry", "/hry/vyssi-nizsi", "/hry/najem")
+    json_paths = ("/api/public/games/higher-lower", "/api/public/games/rent-round")
+    samples = {path: [] for path in (*html_paths, *json_paths, "/api/public/games/rent-score")}
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        for _ in range(24):
+            for path in html_paths:
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                samples[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+            for path in json_paths:
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                samples[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                payload = json.loads(body)
+                if path.endswith("higher-lower"):
+                    assert payload["left"]["locality_key"] == payload["right"]["locality_key"]
+                else:
+                    assert payload["items"]
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_post(
+                app,
+                "/api/public/games/rent-score",
+                {
+                    "name": "TTFB",
+                    "guesses": [
+                        {"id": "seed-zizkov-2kk", "guess": 16500},
+                        {"id": "seed-zizkov-1kk", "guess": 18900},
+                    ],
+                },
+            )
+            samples["/api/public/games/rent-score"].append((time.perf_counter() - t0) * 1000)
+            assert status == 200
+            scored = json.loads(body)
+            assert scored["score"] >= 0
+            assert "items" in scored
+
+        burst = await asyncio.gather(
+            *[_asgi_get(app, path) for path in (*html_paths, *json_paths) * 4]
+        )
+        assert all(status == 200 for status, _headers, _body in burst)
+
+    try:
+        asyncio.run(run())
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+
+    assert hit["n"] == 0
+    report = []
+    for path, values in samples.items():
+        p50 = _percentile(values, 0.50)
+        p95 = _percentile(values, 0.95)
+        report.append(f"{path} n={len(values)} p50={p50:.2f}ms p95={p95:.2f}ms")
+        html = path in html_paths
+        assert p50 < (8 if html else 15), f"{path} p50 {p50:.1f}ms {values}"
+        assert p95 < (25 if html else 40), f"{path} p95 {p95:.1f}ms {values}"
+    print("game TTFB under scrape:\n  " + "\n  ".join(report))
+
+
+def test_rent_score_stays_fast_when_writer_locks_sqlite(tmp_path: Path):
+    store = Store(tmp_path / "rent-lock.sqlite")
+    locker = sqlite3.connect(store.path, timeout=30)
+    locker.execute("PRAGMA busy_timeout=30000")
+    locker.execute("BEGIN IMMEDIATE")
+    locker.execute("UPDATE meta SET value = value")
+    hit = {"n": 0}
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        t0 = time.perf_counter()
+        status, _headers, body = await _asgi_post(
+            app,
+            "/api/public/games/rent-score",
+            {"name": "Eva", "guesses": [{"id": "seed-zizkov-2kk", "guess": 16500}]},
+        )
+        ms = (time.perf_counter() - t0) * 1000
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["ok"] is True
+        assert payload["score"] == 1000
+        assert ms < 40, f"rent-score under lock {ms:.1f}ms"
+        assert hit["n"] == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        locker.rollback()
+        locker.close()
 

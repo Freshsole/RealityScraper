@@ -13,6 +13,9 @@ from app.games import (
     leaderboard,
     locality_key,
     pick_same_locality_pair,
+    public_higher_lower,
+    public_rent_round,
+    public_rent_score,
     refresh_pool_now,
     rent_round,
     reset_pool_cache,
@@ -118,7 +121,7 @@ def test_higher_lower_seed_pair(tmp_path: Path):
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
     assert pair["locality_key"]
     assert pair["pair_kind"] in {"teaching", "random"}
-    assert {"cheaper", "copy", "copy_ok", "copy_miss", "left", "right", "seeded", "vanish_hours"} <= set(pair)
+    assert {"cheaper", "copy", "copy_ok", "copy_miss", "left", "right", "seeded", "vanish_hours", "vanish_label"} <= set(pair)
 
 
 def test_pairs_never_mix_cities():
@@ -304,6 +307,19 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "rent-board" in rent
     assert 'id="rent-board"' in rent
     assert "site.css" not in rent
+    css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
+    js = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.js").read_text(encoding="utf-8")
+    assert "#163300" in css
+    assert "#9fe870" in css
+    assert "text-transform: uppercase" in css
+    assert "font-weight: 900" in css
+    assert ".converter" in css
+    assert ".ccy-pill" in css
+    assert ".info-row" in css
+    assert "ccy-pill" in js
+    assert "info-rows" in js
+    assert "pill-ghost" in js
+    assert "TEACHING_RATIO" not in js
 
 
 def test_homepage_html_is_memory_fast_and_uses_webp():
@@ -325,3 +341,28 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
     response = site_page("index.html")
     assert response.headers["cache-control"].startswith("public")
+
+
+def test_public_game_helpers_are_memory_only():
+    class Boom:
+        def game_listing_pool(self, **kwargs):
+            raise AssertionError("game JSON must not scan catalog on the request path")
+
+        def connect(self, *args, **kwargs):
+            raise AssertionError("game JSON must not open SQLite on the request path")
+
+    store = Boom()
+    t0 = time.perf_counter()
+    pair = public_higher_lower(store)
+    round_payload = public_rent_round(store)
+    scored = public_rent_score(
+        store,
+        {"name": "Eva", "guesses": [{"id": "seed-zizkov-2kk", "guess": 16500}]},
+        allow_db=False,
+    )
+    ms = (time.perf_counter() - t0) * 1000
+    assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
+    assert len(round_payload["items"]) == 5
+    assert scored["ok"] is True
+    assert scored["score"] == 1000
+    assert ms < 40, f"public game helpers {ms:.1f}ms"

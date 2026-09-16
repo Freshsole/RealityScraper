@@ -127,6 +127,10 @@ _CACHE_TTL = 45.0
 _SEED_CACHE_TTL = 3.0
 _REFRESH_LOCK = threading.Lock()
 _REFRESHING = False
+# Short-lived prices for InstantSiteASGI rent-score — never wait on SQLite.
+_PRICE_HINTS: dict[str, tuple[float, dict[str, Any]]] = {}
+_HINT_TTL = 1800.0
+_HINT_CAP = 600
 
 _INTRO_COPY = (
     "Oba byty jsou ve stejné lokalitě. Který je levnější? "
@@ -274,6 +278,29 @@ def reset_pool_cache() -> None:
     with _REFRESH_LOCK:
         _CACHE = None
         _REFRESHING = False
+    _PRICE_HINTS.clear()
+
+
+def _remember_price(item: dict[str, Any]) -> None:
+    key = str(item.get("id") or "")
+    if not key or not _as_int(item.get("price_czk")):
+        return
+    _PRICE_HINTS[key] = (time.monotonic(), dict(item))
+    if len(_PRICE_HINTS) <= _HINT_CAP:
+        return
+    oldest = min(_PRICE_HINTS, key=lambda name: _PRICE_HINTS[name][0])
+    _PRICE_HINTS.pop(oldest, None)
+
+
+def _hint_item(key: str) -> dict[str, Any] | None:
+    hit = _PRICE_HINTS.get(key)
+    if not hit:
+        return None
+    at, item = hit
+    if time.monotonic() - at > _HINT_TTL:
+        _PRICE_HINTS.pop(key, None)
+        return None
+    return item
 
 
 def wait_refresh(timeout: float = 1.0) -> None:
@@ -469,6 +496,7 @@ def _pair_payload(
         "copy": _INTRO_COPY,
         "copy_ok": (_TEACH_OK if pair_kind == "teaching" else _RANDOM_OK).format(vanish=vanish_text),
         "copy_miss": (_TEACH_MISS if pair_kind == "teaching" else _RANDOM_MISS).format(vanish=vanish_text),
+        "vanish_label": vanish_text,
         "seeded": all(str(item.get("id") or "").startswith("seed-") for item in (left, right)),
     }
 
@@ -537,27 +565,88 @@ def rent_round(store: Any) -> dict[str, Any]:
             if len(picked) >= RENT_ROUND_SIZE:
                 break
     random.shuffle(picked)
+    chosen = picked[:RENT_ROUND_SIZE]
+    for item in chosen:
+        _remember_price(item)
     return {
         "round_id": uuid.uuid4().hex,
-        "items": [public_card(item, include_price=False) for item in picked[:RENT_ROUND_SIZE]],
-        "hidden": {str(item["id"]): int(item["price_czk"]) for item in picked[:RENT_ROUND_SIZE]},
-        "pool": picked[:RENT_ROUND_SIZE],
+        "items": [public_card(item, include_price=False) for item in chosen],
+        "hidden": {str(item["id"]): int(item["price_czk"]) for item in chosen},
+        "pool": chosen,
     }
 
 
-def lookup_prices(store: Any, ids: list[str]) -> dict[str, dict[str, Any]]:
+def public_higher_lower(store: Any = None) -> dict[str, Any]:
+    """Memory/seed Higher/Lower payload. Catalog refresh is background-only."""
+    schedule_pool_refresh(store)
+    return higher_lower_pair(store)
+
+
+def public_rent_round(store: Any = None) -> dict[str, Any]:
+    """Memory/seed rent-round cards. Prices stay in the in-memory hint map."""
+    schedule_pool_refresh(store)
+    payload = rent_round(store)
+    return {"round_id": payload["round_id"], "items": payload["items"]}
+
+
+def public_rent_score(
+    store: Any,
+    body: dict[str, Any] | None,
+    *,
+    allow_db: bool = True,
+) -> dict[str, Any]:
+    """Score a rent round without blocking the request on a scrape writer."""
+    payload = body or {}
+    guesses = payload.get("guesses") or []
+    if not isinstance(guesses, list) or len(guesses) < 1:
+        return {"error": "Chybí tipy", "status": 400}
+    ids = [str(item.get("id") or "") for item in guesses if isinstance(item, dict)]
+    found = lookup_prices(store, ids, allow_db=allow_db)
+    items = [found[key] for key in ids if key in found]
+    if len(items) < 1:
+        return {"error": "Neznámé byty", "status": 400}
+    scored = score_round(items, [item for item in guesses if isinstance(item, dict)])
+    name = str(payload.get("name") or "")
+    round_id = uuid.uuid4().hex
+    player = (name or "").strip()[:64] or "Anonym"
+    if store is not None:
+        threading.Thread(
+            target=_save_rent_round_safe,
+            args=(store, name, scored, round_id),
+            name="rf-ui-game-save",
+            daemon=True,
+        ).start()
+    return {
+        "ok": True,
+        "id": round_id,
+        "player_name": player,
+        "score": scored["score"],
+        "max_score": scored["max_score"],
+        "accuracy": scored["accuracy"],
+        "items": scored["items"],
+        "status": 200,
+    }
+
+
+def lookup_prices(store: Any, ids: list[str], *, allow_db: bool = True) -> dict[str, dict[str, Any]]:
     wanted = {str(item) for item in ids if item}
     found: dict[str, dict[str, Any]] = {}
     for item in SEED:
         if item["id"] in wanted:
             found[item["id"]] = item
+    for key in list(wanted):
+        if key in found:
+            continue
+        hint = _hint_item(key)
+        if hint:
+            found[key] = hint
     cached = _CACHE[1] if _CACHE else []
     for item in cached:
         key = str(item.get("id") or "")
         if key in wanted and key not in found:
             found[key] = item
     missing = wanted - set(found)
-    if not missing:
+    if not missing or not allow_db or store is None:
         return found
     try:
         holders = ",".join("?" * len(missing))
@@ -589,33 +678,48 @@ def lookup_prices(store: Any, ids: list[str]) -> dict[str, dict[str, Any]]:
     return found
 
 
-def save_rent_round(store: Any, *, player_name: str, scored: dict[str, Any]) -> dict[str, Any]:
-    round_id = uuid.uuid4().hex
+def _save_rent_round_safe(
+    store: Any, player_name: str, scored: dict[str, Any], round_id: str
+) -> None:
+    try:
+        save_rent_round(store, player_name=player_name, scored=scored, round_id=round_id)
+    except Exception:
+        return
+
+
+def save_rent_round(
+    store: Any, *, player_name: str, scored: dict[str, Any], round_id: str | None = None
+) -> dict[str, Any]:
     name = (player_name or "").strip()[:64] or "Anonym"
     payload = {
-        "id": round_id,
+        "id": (round_id or uuid.uuid4().hex),
         "player_name": name,
         "score": int(scored.get("score") or 0),
         "accuracy": float(scored.get("accuracy") or 0),
         "guesses_json": json.dumps(scored.get("items") or [], ensure_ascii=False),
         "created_at": utc_now(),
+        "saved": False,
     }
-    with store.connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO game_rent_rounds(id, player_name, score, accuracy, guesses_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload["id"],
-                payload["player_name"],
-                payload["score"],
-                payload["accuracy"],
-                payload["guesses_json"],
-                payload["created_at"],
-            ),
-        )
-        conn.commit()
+    try:
+        with store.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO game_rent_rounds(id, player_name, score, accuracy, guesses_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["id"],
+                    payload["player_name"],
+                    payload["score"],
+                    payload["accuracy"],
+                    payload["guesses_json"],
+                    payload["created_at"],
+                ),
+            )
+            conn.commit()
+        payload["saved"] = True
+    except Exception:
+        payload["saved"] = False
     return payload
 
 

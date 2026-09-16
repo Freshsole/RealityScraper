@@ -136,7 +136,7 @@ button {
 .display {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight: 900;
   letter-spacing: -0.03em;
   text-transform: uppercase;
   color: var(--ink);
@@ -401,6 +401,67 @@ button {
   gap: 0;
 }
 
+.ccy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--forest);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px 6px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ccy-flag {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--forest);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.amount-stack {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 168px;
+}
+
+.info-rows {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--gray);
+}
+
+.info-row:last-child {
+  border-bottom: 0;
+}
+
+.info-row strong {
+  color: var(--forest);
+  font-weight: 600;
+  text-align: right;
+}
+
 .loc-chip {
   display: inline-flex;
   align-items: center;
@@ -476,16 +537,19 @@ button {
 
 .flat-price {
   font-variant-numeric: tabular-nums;
-  font-size: 28px;
+  font-size: 40px;
   font-weight: 700;
   color: var(--forest);
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   white-space: nowrap;
+  line-height: 1;
+  min-width: 6.5ch;
+  text-align: right;
 }
 
 .flat-price.is-hidden {
   color: var(--faint);
-  font-size: 22px;
+  font-size: 32px;
   font-weight: 600;
 }
 
@@ -602,7 +666,7 @@ button {
 
 .rent-amount {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   padding: 8px 0 16px;
   border-bottom: 1px solid var(--line);
@@ -613,10 +677,10 @@ button {
   min-width: 0;
   border: 0;
   background: transparent;
-  font-size: 40px;
+  font-size: 48px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   color: var(--ink);
   outline: none;
   padding: 0;
@@ -719,10 +783,6 @@ button {
     height: 140px;
   }
 
-  .rent-amount input {
-    font-size: 32px;
-  }
-
   .flat-row {
     grid-template-columns: 72px minmax(0, 1fr);
   }
@@ -732,9 +792,17 @@ button {
     height: 72px;
   }
 
-  .flat-price {
+  .amount-stack {
     grid-column: 2;
-    font-size: 24px;
+    justify-content: flex-start;
+  }
+
+  .flat-price {
+    font-size: 32px;
+  }
+
+  .rent-amount input {
+    font-size: 36px;
   }
 }
 
