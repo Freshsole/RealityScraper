@@ -331,6 +331,7 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "info-rows" in js
     assert "pill-ghost" in js
     assert "rent-unit" in js
+    assert "replace(/[^\\d]/g, \"\")" in js
     assert "TEACHING_RATIO" not in js
 
 

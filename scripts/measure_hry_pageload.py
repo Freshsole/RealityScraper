@@ -42,8 +42,9 @@ new PerformanceObserver((list) => {
 def _metrics(page, path: str, url: str) -> dict:
     page.goto(url, wait_until="domcontentloaded", timeout=20_000)
     page.wait_for_selector(READY[path], timeout=15_000)
+    guess_ms = page.evaluate("() => performance.now()")
     page.wait_for_timeout(250)
-    return page.evaluate(
+    row = page.evaluate(
         """() => {
           const nav = performance.getEntriesByType("navigation")[0];
           const paints = window.__rfPaint || {};
@@ -74,6 +75,8 @@ def _metrics(page, path: str, url: str) -> dict:
           };
         }"""
     )
+    row["interactive_guess_ms"] = guess_ms
+    return row
 
 
 def measure(base: str, repeats: int, warm: bool) -> dict:

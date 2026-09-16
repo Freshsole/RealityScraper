@@ -181,7 +181,7 @@ def test_hry_html_bypasses_blocked_inner_app():
         css = site_asset("site/games.css")[0]
         for path, needle in (
             ("/static/site/games.css", b"@font-face"),
-            ("/static/site/games.js", b"rent-unit"),
+            ("/static/site/games.js", b"[^\\d]"),
             ("/static/site/fonts/archivo-black-latin.woff2", b"wOF2"),
         ):
             t0 = time.perf_counter()

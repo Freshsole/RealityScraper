@@ -240,7 +240,7 @@
           <div class="portal">${escapeHtml(item.portal_label || "")}</div>
         </div>
         <label class="rent-amount">
-          <input id="rent-guess" type="number" min="1000" step="100" inputmode="numeric" placeholder="18000" required autofocus />
+          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus />
           ${ccyPill()}
         </label>
         <p class="rent-unit">Kč / měsíc</p>
@@ -258,11 +258,14 @@
       `;
       const input = document.getElementById("rent-guess");
       const next = document.getElementById("rent-next");
+      const parseGuess = (raw) => Number(String(raw || "").replace(/[^\d]/g, "") || 0);
       const advance = () => {
-        const value = Number(input?.value || 0);
+        const value = parseGuess(input?.value);
         if (!value || value < 1000) {
           input?.focus();
+          input?.setCustomValidity("Zadejte nájem aspoň 1 000 Kč.");
           input?.reportValidity?.();
+          input?.setCustomValidity("");
           return;
         }
         guesses.push({ id: item.id, guess: value });
