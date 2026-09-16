@@ -122,7 +122,6 @@ async def no_store_ui(request: Request, call_next):
         path.startswith("/nastaveni")
         or path.startswith("/admin")
         or path.startswith("/uspechy")
-        or path.startswith("/hry")
         or path in {
         "/",
         "/kontakt",
@@ -274,16 +273,22 @@ def stories() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
-def games_hub() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "hry.html", headers={"Cache-Control": "no-store, max-age=0"})
+def games_hub() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry.html")
 
 
-def game_higher() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "hry-vyssi-nizsi.html", headers={"Cache-Control": "no-store, max-age=0"})
+def game_higher() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-vyssi-nizsi.html")
 
 
-def game_rent() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "hry-najem.html", headers={"Cache-Control": "no-store, max-age=0"})
+def game_rent() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-najem.html")
 
 
 def story_article() -> FileResponse:
