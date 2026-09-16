@@ -62,6 +62,9 @@ async def maybe_auto_update() -> None:
 async def lifespan(_app: FastAPI):
     print(f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE}", flush=True)
     await hub.start()
+    from app import games as marketing_games
+
+    marketing_games.schedule_pool_refresh(hub.store)
     if config.ON_RAILWAY and not config.PERSISTENT_STORAGE:
         hub.last_error = (
             "Databáze není na Railway Volume. Po každém deployi se smaže účet. "
@@ -1255,14 +1258,17 @@ async def public_gone_fast() -> dict:
 async def public_game_higher_lower() -> dict:
     from app import games as marketing_games
 
-    return await asyncio.to_thread(marketing_games.higher_lower_pair, hub.store)
+    # Memory/seed only — catalog refresh is background and must not delay the response.
+    marketing_games.schedule_pool_refresh(hub.store)
+    return marketing_games.higher_lower_pair(hub.store)
 
 
 @app.get("/api/public/games/rent-round")
 async def public_game_rent_round() -> dict:
     from app import games as marketing_games
 
-    payload = await asyncio.to_thread(marketing_games.rent_round, hub.store)
+    marketing_games.schedule_pool_refresh(hub.store)
+    payload = marketing_games.rent_round(hub.store)
     return {"round_id": payload["round_id"], "items": payload["items"]}
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 import time
 import uuid
 from typing import Any
@@ -128,8 +129,12 @@ SEED: list[dict[str, Any]] = [
 POINTS_PER_PROPERTY = 1000
 ERROR_ZERO_AT = 0.5  # 50 % odchylka = 0 bodů
 RENT_ROUND_SIZE = 5
-_CACHE: tuple[float, list[dict[str, Any]]] | None = None
+# (monotonic_ts, items, seed_only)
+_CACHE: tuple[float, list[dict[str, Any]], bool] | None = None
 _CACHE_TTL = 45.0
+_SEED_CACHE_TTL = 3.0
+_REFRESH_LOCK = threading.Lock()
+_REFRESHING = False
 
 
 def score_guess(actual: int, guess: int) -> dict[str, Any]:
@@ -209,91 +214,114 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def _catalog_pool(store: Any) -> list[dict[str, Any]]:
-    global _CACHE
-    now = time.monotonic()
-    if _CACHE and now - _CACHE[0] < _CACHE_TTL:
-        return _CACHE[1]
-    rows: list[dict[str, Any]] = []
-    try:
-        with store.connect(readonly=True) as conn:
-            fetched = conn.execute(
-                """
-                SELECT listing_key, name, locality, disposition, area_m2, price_czk, price_label,
-                       image_url, url, portal, first_seen, last_seen, extras
-                FROM catalog_listings
-                WHERE IFNULL(gone, 0) = 0
-                  AND price_czk BETWEEN 6000 AND 90000
-                  AND IFNULL(image_url, '') != ''
-                ORDER BY last_seen DESC
-                LIMIT 160
-                """
-            ).fetchall()
-        for row in fetched:
-            item = dict(row)
-            extras = item.get("extras")
-            if isinstance(extras, str):
-                try:
-                    extras = json.loads(extras) if extras else {}
-                except json.JSONDecodeError:
-                    extras = {}
-            offer = str((extras or {}).get("offer") or "")
-            url = str(item.get("url") or "").lower()
-            label = str(item.get("price_label") or "")
-            rent = (
-                "pronáj" in offer.casefold()
-                or "pronaj" in offer.casefold()
-                or "měsíc" in label.casefold()
-                or "/pronajem/" in url
-                or "/pronajmu/" in url
-                or "byty-k-pronajmu" in url
-            )
-            if not rent:
-                continue
-            vanish = 8.0
-            try:
-                from datetime import datetime, timezone
+def reset_pool_cache() -> None:
+    global _CACHE, _REFRESHING
+    with _REFRESH_LOCK:
+        _CACHE = None
+        _REFRESHING = False
 
-                first = datetime.fromisoformat(str(item.get("first_seen") or "").replace("Z", "+00:00"))
-                last = datetime.fromisoformat(str(item.get("last_seen") or "").replace("Z", "+00:00"))
-                if first.tzinfo is None:
-                    first = first.replace(tzinfo=timezone.utc)
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                hours = max(0.2, (last - first).total_seconds() / 3600.0)
-                vanish = round(min(48.0, hours), 1)
-            except Exception:
-                pass
-            rows.append(
-                {
-                    "id": str(item.get("listing_key") or item.get("url") or ""),
-                    "name": item.get("name") or "",
-                    "locality": item.get("locality") or "",
-                    "disposition": item.get("disposition") or "",
-                    "area_m2": _as_int(item.get("area_m2")),
-                    "price_czk": _as_int(item.get("price_czk")),
-                    "price_label": item.get("price_label") or _price_label(item.get("price_czk")),
-                    "image_url": item.get("image_url"),
-                    "url": item.get("url"),
-                    "portal": item.get("portal") or portal_from_url(str(item.get("url") or "")),
-                    "vanish_hours": vanish,
-                }
-            )
-    except Exception:
-        rows = []
-    if len(rows) < 6:
-        rows = list(SEED) + rows
+
+def wait_refresh(timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        with _REFRESH_LOCK:
+            busy = _REFRESHING
+        if not busy:
+            return
+        time.sleep(0.01)
+
+
+def _seed_pool() -> list[dict[str, Any]]:
+    return list(SEED)
+
+
+def _finalize_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged = list(rows or [])
+    if len(merged) < 6:
+        merged = _seed_pool() + merged
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for item in rows:
+    for item in merged:
         key = str(item.get("id") or "")
         price = _as_int(item.get("price_czk"))
         if not key or key in seen or not price:
             continue
         seen.add(key)
         unique.append(item)
-    _CACHE = (now, unique)
     return unique
+
+
+def _cache_fresh(now: float) -> list[dict[str, Any]] | None:
+    cached = _CACHE
+    if not cached:
+        return None
+    at, items, seed_only = cached
+    ttl = _SEED_CACHE_TTL if seed_only else _CACHE_TTL
+    if now - at < ttl:
+        return items
+    return None
+
+
+def schedule_pool_refresh(store: Any) -> None:
+    """Kick a single background catalog refresh. Never waits for scrape/DB."""
+    global _REFRESHING
+    if store is None:
+        return
+    if _cache_fresh(time.monotonic()) is not None:
+        return
+    with _REFRESH_LOCK:
+        if _REFRESHING:
+            return
+        if _cache_fresh(time.monotonic()) is not None:
+            return
+        _REFRESHING = True
+    threading.Thread(target=_refresh_pool, args=(store,), name="game-pool", daemon=True).start()
+
+
+def refresh_pool_now(store: Any) -> list[dict[str, Any]]:
+    """Synchronous refresh for tests / startup warmup with a tight DB budget."""
+    return _refresh_pool(store, background=False)
+
+
+def _refresh_pool(store: Any, *, background: bool = True) -> list[dict[str, Any]]:
+    global _CACHE, _REFRESHING
+    unique: list[dict[str, Any]] = []
+    try:
+        rows: list[dict[str, Any]] = []
+        method = getattr(store, "game_listing_pool", None)
+        if callable(method):
+            rows = method(limit=240, budget_sec=0.2) or []
+        unique = _finalize_pool(rows)
+        seed_only = bool(unique) and all(str(item.get("id") or "").startswith("seed-") for item in unique)
+        if unique:
+            _CACHE = (time.monotonic(), unique, seed_only)
+        elif _CACHE is None:
+            unique = _seed_pool()
+            _CACHE = (time.monotonic(), unique, True)
+        else:
+            unique = _CACHE[1]
+    except Exception:
+        unique = _CACHE[1] if _CACHE else _seed_pool()
+        if _CACHE is None:
+            _CACHE = (time.monotonic(), unique, True)
+    finally:
+        if background:
+            with _REFRESH_LOCK:
+                _REFRESHING = False
+    return unique
+
+
+def _catalog_pool(store: Any) -> list[dict[str, Any]]:
+    """Memory-only on the request path. Catalog I/O happens in the background."""
+    now = time.monotonic()
+    cached = _CACHE
+    fresh = _cache_fresh(now)
+    if fresh is not None:
+        return fresh
+    schedule_pool_refresh(store)
+    if cached:
+        return cached[1]
+    return _seed_pool()
 
 
 def higher_lower_pair(store: Any) -> dict[str, Any]:
@@ -360,12 +388,17 @@ def lookup_prices(store: Any, ids: list[str]) -> dict[str, dict[str, Any]]:
     for item in SEED:
         if item["id"] in wanted:
             found[item["id"]] = item
+    cached = _CACHE[1] if _CACHE else []
+    for item in cached:
+        key = str(item.get("id") or "")
+        if key in wanted and key not in found:
+            found[key] = item
     missing = wanted - set(found)
     if not missing:
         return found
     try:
         holders = ",".join("?" * len(missing))
-        with store.connect(readonly=True) as conn:
+        with store.connect(quick=True) as conn:
             rows = conn.execute(
                 f"""
                 SELECT listing_key, name, locality, disposition, area_m2, price_czk, price_label,

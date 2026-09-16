@@ -89,6 +89,34 @@ def _is_rental_row(row: dict[str, Any]) -> bool:
     return rent and not sale
 
 
+def _is_game_rental(row: dict[str, Any]) -> bool:
+    """Rent filter for games without reading extras (avoids huge JSON blobs)."""
+    url = str(row.get("url") or "").lower()
+    label = str(row.get("price_label") or "").casefold()
+    name = str(row.get("name") or "").casefold()
+    if "/prodej/" in url or "kč/ks" in label or "kc/ks" in label:
+        return False
+    return (
+        "měsíc" in label
+        or "mesic" in label
+        or "/pronajem/" in url
+        or "/pronajmu/" in url
+        or "byty-k-pronajmu" in url
+        or "pronáj" in name
+        or "pronajem" in name
+        or "pronajmu" in name
+    )
+
+
+def _game_vanish_hours(first_seen: Any, last_seen: Any) -> float:
+    first = _parse_iso(first_seen)
+    last = _parse_iso(last_seen)
+    if not first or not last:
+        return 8.0
+    hours = max(0.2, (last - first).total_seconds() / 3600.0)
+    return round(min(48.0, hours), 1)
+
+
 def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
     if not _is_rental_row(row):
         return None
@@ -437,9 +465,18 @@ class Store:
         self._monitor_index_at = 0.0
         self._init()
 
-    def connect(self, readonly: bool = False) -> sqlite3.Connection:
+    def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         on_loop = threading.current_thread() is threading.main_thread()
-        if readonly:
+        if quick:
+            # WAL-friendly read: do not use mode=ro (it can stall on -shm / checkpoint).
+            conn = sqlite3.connect(self.path, timeout=0.2)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=200")
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except sqlite3.OperationalError:
+                pass
+        elif readonly:
             uri = f"file:{Path(self.path).resolve().as_posix()}?mode=ro"
             conn = sqlite3.connect(uri, uri=True, timeout=5)
             conn.row_factory = sqlite3.Row
@@ -3406,6 +3443,7 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_portal_seen ON catalog_listings(portal, last_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_portal ON catalog_listings(gone, portal)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_last_seen ON catalog_listings(gone, last_seen DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_links_portal ON listing_links(portal, gone)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_gone_seen ON listings(gone, last_seen)")
         conn.executescript(
@@ -4713,6 +4751,72 @@ class Store:
             data["gone_at"] = now
             data["last_kind"] = "sold"
             return data
+
+    def game_listing_pool(self, *, limit: int = 240, budget_sec: float = 0.2) -> list[dict[str, Any]]:
+        """Newest priced catalog rows for marketing games. Bounded, extras-free, interruptible."""
+        cap = max(12, min(400, int(limit or 240)))
+        deadline = time.monotonic() + max(0.05, float(budget_sec or 0.2))
+        try:
+            conn = self.connect(quick=True)
+        except sqlite3.OperationalError:
+            return []
+        fetched: list[Any] = []
+        try:
+            def _abort() -> int:
+                return 1 if time.monotonic() >= deadline else 0
+
+            conn.set_progress_handler(_abort, 20_000)
+            fetched = conn.execute(
+                """
+                SELECT listing_key, name, locality, disposition, area_m2, price_czk, price_label,
+                       image_url, url, portal, first_seen, last_seen
+                FROM catalog_listings
+                WHERE gone = 0
+                  AND price_czk BETWEEN 6000 AND 90000
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (cap,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        finally:
+            try:
+                conn.set_progress_handler(None, 0)
+            except Exception:
+                pass
+            conn.close()
+        rows: list[dict[str, Any]] = []
+        for row in fetched:
+            item = dict(row)
+            if not _is_game_rental(item):
+                continue
+            image = str(item.get("image_url") or "").strip()
+            if not image:
+                continue
+            price = item.get("price_czk")
+            try:
+                price_n = int(price) if price not in (None, "") else 0
+            except (TypeError, ValueError):
+                price_n = 0
+            if price_n < 6000:
+                continue
+            rows.append(
+                {
+                    "id": str(item.get("listing_key") or item.get("url") or ""),
+                    "name": item.get("name") or "",
+                    "locality": item.get("locality") or "",
+                    "disposition": item.get("disposition") or "",
+                    "area_m2": item.get("area_m2"),
+                    "price_czk": price_n,
+                    "price_label": item.get("price_label") or "",
+                    "image_url": image,
+                    "url": item.get("url"),
+                    "portal": item.get("portal") or portal_from_url(str(item.get("url") or "")),
+                    "vanish_hours": _game_vanish_hours(item.get("first_seen"), item.get("last_seen")),
+                }
+            )
+        return rows
 
     def public_gone_fast_rentals(self, *, days: int = 3, limit: int = 4) -> list[dict[str, Any]]:
         since = (datetime.now(timezone.utc) - timedelta(days=max(1, days))).isoformat()
