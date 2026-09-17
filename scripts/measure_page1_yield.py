@@ -25,8 +25,10 @@ def _kind(shard: dict[str, str]) -> str:
     url = (shard.get("search_url") or "").lower()
     if (
         key.endswith(":domy")
+        or ":dum:" in key.casefold()
         or "/domy" in url
         or "/dum/" in url
+        or "estatetype=dum" in url
         or "domy-a-vily" in url
         or "domy-k-" in url
         or "domy-na-" in url

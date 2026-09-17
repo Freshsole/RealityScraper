@@ -173,6 +173,18 @@ Worker tick now round-robins rent / sale / houses, prefers catalog rows missing 
 
 Synthetic page-1-across with two extra UlovDomov house shards: **21→58** page-1 shards / **900→2900** listings under a 0.7 s contention deadline (was 56/2800 after ČeskéReality houses).
 
+After this branch (Bezrealitky houses/sale page-1: newest `estateType=DUM` shards, list `surfaceLand` + extras, canonical listing URLs, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Bezrealitky rent byty | **20** | **2280** CZ OSM | 1.1 s | already 20/20 price+image+locality+GPS. GraphQL `limit` 15/20/30/50 all work (50 cards in 0.3 s); kept **20** to match peers. Unscoped nationwide rent is 4292 |
+| Bezrealitky sale byty | **20** | **879** | 1.0 s | 20/20 price+image+locality+GPS; detail `/nemovitosti-byty-domy/{uri}` **200** |
+| Bezrealitky houses | **20** | **50** rent / **342** sale | 1.1 s | new newest shards `estateType=DUM` (were missing — only BYT recent/daily). Path `/vyhledat/prodej/dum` **404**; query-string search is live. List now keeps `surfaceLand` (Pozemek) + condition/ownership/equipped; `houseType` is GraphQL access-denied so it stays off the list query. `UNDEFINED` disposition is blank, not the token. Name fallback uses *domu*, not *nemovitosti*. Absolute/`nemovitosti-byty-domy/` `uri` values are not double-prefixed |
+
+List path still does not call Photon/Nominatim: GraphQL `gps` on every live card. InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and ČeskéReality/iDNES/Bazoš/Sreality/REMAX/Reality.cz/Annonce page-1 wins are unchanged.
+
+Synthetic page-1-across with two extra Bezrealitky house shards: **21→60** page-1 shards / **900→3000** listings under a 0.7 s contention deadline (was 58/2900 after UlovDomov houses).
+
 Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
 
 ## M&M Reality (documented limit)
