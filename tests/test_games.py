@@ -778,6 +778,20 @@ def test_preferred_game_pool_is_memory_fast():
     assert ms < 80, f"preferred_game_pool loop {ms:.1f}ms"
 
 
+def test_seed_only_pool_skips_live_catalog_scan():
+    from app.games import SEED
+
+    empty = preferred_game_pool([])
+    seeded = preferred_game_pool(list(SEED))
+    assert {item["id"] for item in empty} == {item["id"] for item in SEED}
+    assert {item["id"] for item in seeded} == {item["id"] for item in SEED}
+    pair = pick_same_locality_pair(list(SEED), rng=random.Random(3), teaching_ratio=1.0)
+    assert pair["seeded"] is True
+    assert pair["pair_kind"] == "teaching"
+    assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
+    assert is_teaching_pair(pair["left"], pair["right"])
+
+
 def _noisy_live_pool():
     return [
         _flat("live-z1", "Praha 3 – Žižkov", "3+kk", 76, 17800, portal="ulovdomov"),

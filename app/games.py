@@ -492,6 +492,14 @@ def _is_seed_id(key: Any) -> bool:
     return str(key or "").startswith("seed-")
 
 
+def _pool_is_seed_only(pool: list[dict[str, Any]] | None) -> bool:
+    """True when there is no live catalog to consider — empty or hard-coded seed."""
+    rows = pool or []
+    if not rows:
+        return True
+    return all(_is_seed_id(item.get("id")) for item in rows)
+
+
 def _annotate(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
     loc = str(row.get("locality") or "")
@@ -575,12 +583,15 @@ def preferred_game_pool(
     estate: str | None = None,
 ) -> list[dict[str, Any]]:
     """Catalog when it can pair same-locality flats; seed otherwise. Memory-only."""
-    live = live_pairable_pool(pool, estate=estate)
+    rows = pool or []
+    if _pool_is_seed_only(rows):
+        return _seed_pool()
+    live = live_pairable_pool(rows, estate=estate)
     if live is not None:
         return live
     priced = [
         _annotate(item)
-        for item in (pool or [])
+        for item in rows
         if _as_int(item.get("price_czk")) and _allows_game_estate(item, estate)
     ]
     if priced and _groups_by_locality(priced):
@@ -708,6 +719,19 @@ def _locality_buckets(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, An
 
 def _groups_by_locality(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     return {key: items for key, items in _locality_buckets(pool).items() if _pairable(items)}
+
+
+_SEED_GROUPS: dict[str, list[dict[str, Any]]] | None = None
+
+
+def _seed_groups() -> dict[str, list[dict[str, Any]]]:
+    """Same-locality seed buckets, built once. Teaching contrast is unchanged."""
+    global _SEED_GROUPS
+    cached = _SEED_GROUPS
+    if cached is None:
+        cached = _groups_by_locality(_seed_pool())
+        _SEED_GROUPS = cached
+    return cached
 
 
 def _pairable(items: list[dict[str, Any]]) -> bool:
@@ -918,19 +942,22 @@ def pick_same_locality_pair(
     Default estate is flats so land/houses do not pollute apartment rounds.
     """
     rng = rng or random.Random()
-    usable = preferred_game_pool(pool, estate=estate)
-    groups = _groups_by_locality(usable)
-    if not groups:
-        usable = _seed_pool()
+    if _pool_is_seed_only(pool) and _estate_mode(estate) == "byty":
+        groups = _seed_groups()
+    else:
+        usable = preferred_game_pool(pool, estate=estate)
         groups = _groups_by_locality(usable)
-    teaching_groups = {key: items for key, items in groups.items() if _has_teaching_pair(items)}
+        if not groups:
+            groups = _seed_groups()
     want_teaching = rng.random() < max(0.0, min(1.0, float(teaching_ratio)))
     pair_kind = "teaching"
     picked: tuple[dict[str, Any], dict[str, Any]] | None = None
-    if want_teaching and teaching_groups:
-        key = rng.choice(list(teaching_groups))
-        picked = _pick_teaching_pair(teaching_groups[key], rng)
-        pair_kind = "teaching"
+    if want_teaching:
+        teaching_groups = {key: items for key, items in groups.items() if _has_teaching_pair(items)}
+        if teaching_groups:
+            key = rng.choice(list(teaching_groups))
+            picked = _pick_teaching_pair(teaching_groups[key], rng)
+            pair_kind = "teaching"
     if picked is None:
         key = rng.choice(list(groups))
         candidates = _candidate_pairs(groups[key])
