@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import html as html_lib
 import re
@@ -132,23 +131,29 @@ def parse_photos(html: str) -> list[str]:
 class IdnesClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
-        self._client = httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30.0)
+        self._client = httpx.AsyncClient(
+            headers=HEADERS,
+            follow_redirects=True,
+            timeout=20.0,
+            limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+        )
 
-    async def _attach_coords(self, listings: list[Listing]) -> None:
+    async def _attach_coords(self, listings: list[Listing], *, network: bool = False) -> None:
+        """Pin list cards from local city centers. Network geocode belongs on detail, not page-1."""
         missing = [item for item in listings if item.lat is None or item.lon is None]
         if not missing:
             return
-        from app.places import geocode_locality
+        from app.places import approx_point_from_locality, geocode_locality
 
         keys = list(dict.fromkeys((item.locality or "").strip() for item in missing if (item.locality or "").strip()))
         found: dict[str, tuple[float, float] | None] = {}
-        lock = asyncio.Semaphore(4)
-
-        async def locate(key: str) -> None:
-            async with lock:
+        for key in keys:
+            found[key] = approx_point_from_locality(key)
+        if network:
+            for key in keys:
+                if found.get(key):
+                    continue
                 found[key] = await geocode_locality(key)
-
-        await asyncio.gather(*(locate(key) for key in keys))
         for item in missing:
             point = found.get((item.locality or "").strip())
             if point:

@@ -73,8 +73,17 @@ Live page-1 from this datacenter (2026-09-17, 12 s cap, worker clients, not `/hr
 | Reality.cz | **24** | 841 | 1.6 s |
 | RE/MAX | **20** | 20 | list ok |
 | Annonce | **10** | 10 | 0.3 s |
-| iDNES | 0 | 0 | timeout 12 s |
-| ČeskéReality | 0 | 0 | 0.6 s empty (no block raised) |
+| iDNES | 0 | 0 | timeout 12 s — list HTML was fine (~26 cards / 1.3 s); `fetch_page` then geocoded every locality via Photon/Nominatim |
+| ČeskéReality | 0 | 0 | 0.6 s empty in PR #13; live `/nejnovejsi/` now ships cards without `id-nemovitosti` (IDs live in `*.html`) |
+
+After this branch (same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time |
+|---|---|---|---|
+| iDNES | **26** | **8519** | 1.3 s |
+| ČeskéReality | **20** | **4782** | 0.9 s |
+
+iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Synthetic page-1-across is unchanged (**21→42** shards / **900→2100** listings under a 0.7 s contention deadline). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged. No M&M residential proxy.
 
 ## M&M Reality (documented limit)
 

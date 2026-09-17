@@ -239,6 +239,49 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(listing.disposition, "2+kk")
         self.assertTrue(listing.url.endswith("/3496443"))
 
+    def test_ceskereality_live_nejnovejsi_uses_html_id_not_firm_image(self):
+        html = (FIXTURES / "ceskereality_nejnovejsi.html").read_text()
+        client = CeskerealityClient("https://www.ceskereality.cz/pronajem/byty/nejnovejsi/")
+        items = client._parse_list(html)
+        self.assertEqual([item.id for item in items], [3895307, 3895297])
+        self.assertTrue(items[0].url.endswith("3895307.html"))
+        self.assertTrue(items[1].url.endswith("3895297.html"))
+        self.assertIn("/nejnovejsi/", items[1].url)
+        self.assertNotIn("muj-profil", items[0].url)
+        self.assertEqual(items[0].price_czk, 16000)
+        self.assertEqual(items[1].price_czk, 22000)
+        self.assertEqual(client._parse_total(html), 4782)
+        self.assertFalse(any(item.id in {200631, 5025350} for item in items))
+
+    def test_ceskereality_empty_nejnovejsi_falls_back_to_base_list(self):
+        import asyncio
+
+        import httpx
+
+        empty = "<html><body>Hledáte nové byty k pronájmu? Máme tady 4 782 bytů.</body></html>"
+        cards = (FIXTURES / "ceskereality_nejnovejsi.html").read_text()
+        hits: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            hits.append(str(request.url.path))
+            if "/nejnovejsi/" in request.url.path:
+                return httpx.Response(200, text=empty)
+            return httpx.Response(200, text=cards)
+
+        async def _run() -> None:
+            client = CeskerealityClient("https://www.ceskereality.cz/pronajem/byty/nejnovejsi/")
+            await client.aclose()
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                listings, total = await client.fetch_page(1, newest=True)
+            finally:
+                await client.aclose()
+            self.assertEqual([item.id for item in listings], [3895307, 3895297])
+            self.assertEqual(total, 4782)
+            self.assertEqual(hits, ["/pronajem/byty/nejnovejsi/", "/pronajem/byty/"])
+
+        asyncio.run(_run())
+
     def test_measured_fixture_yield(self):
         """Before/after counts on recorded HTML. Old parsers missed vypis / used favorite URLs."""
         ceske_html = (FIXTURES / "ceskereality_cards.html").read_text()
