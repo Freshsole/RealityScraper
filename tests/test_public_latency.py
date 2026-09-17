@@ -1091,17 +1091,19 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
     print("fat catalog JSON under scrape:\n  " + "\n  ".join(report))
 
     assert _p95(col(quiet_miss, "catalog")) < 45, col(quiet_miss, "catalog")
-    assert _p95(col(quiet_miss, "search")) < 45, col(quiet_miss, "search")
+    assert _p95(col(quiet_miss, "search")) < 25, col(quiet_miss, "search")
     assert _p95(col(quiet_miss, "pins")) < 50, col(quiet_miss, "pins")
     assert _p95(col(quiet_miss, "listings")) < 20, col(quiet_miss, "listings")
     assert _p95(col(quiet_miss, "item")) < 12, col(quiet_miss, "item")
     assert _p95(col(quiet_miss, "watch")) < 12, col(quiet_miss, "watch")
     assert _p95(col(writer_miss, "catalog")) < 50, col(writer_miss, "catalog")
-    assert _p95(col(writer_miss, "search")) < 50, col(writer_miss, "search")
+    assert _p95(col(writer_miss, "search")) < 35, col(writer_miss, "search")
     assert _p95(col(writer_miss, "pins")) < 50, col(writer_miss, "pins")
     assert _p95(col(writer_miss, "listings")) < 25, col(writer_miss, "listings")
     assert _p95(col(writer_miss, "item")) < 12, col(writer_miss, "item")
-    assert _p95(col(writer_hit, "catalog")) < 20, col(writer_hit, "catalog")
+    # 2s hot JSON can expire during writer_miss; first cached sample may recompute.
+    assert _p95(col(writer_hit, "catalog")) < 25, col(writer_hit, "catalog")
+    assert _p95(col(writer_hit, "search")) < 25, col(writer_hit, "search")
     assert _p95(col(writer_hit, "item")) < 12, col(writer_hit, "item")
     assert _p95(col(writer_hit, "listings")) < 15, col(writer_hit, "listings")
 
