@@ -808,7 +808,8 @@ label .optional {
   width: 100%;
 }
 
-.step-panel[hidden] {
+.step-panel[hidden],
+.auth-card[hidden] {
   display: none;
 }
 

@@ -480,6 +480,7 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "font-weight: 900" in css
     assert "var(--pale)" in css
     assert "var(--radius-pill)" in css
+    assert ".auth-card[hidden]" in css
 
 
 def test_public_game_helpers_are_memory_only():
