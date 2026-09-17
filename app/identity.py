@@ -53,6 +53,120 @@ def _fold(value: str) -> str:
     return "".join(ch for ch in raw if not unicodedata.combining(ch)).casefold().strip()
 
 
+_ESTATE_LAND = {
+    "pozemek",
+    "pozemky",
+    "pozemku",
+    "land",
+    "plot",
+    "housing",
+    "parcela",
+}
+_ESTATE_HOUSE = {
+    "dum",
+    "domy",
+    "domu",
+    "house",
+    "vila",
+    "villa",
+    "chalupa",
+    "chata",
+    "statek",
+}
+_ESTATE_FLAT = {"byt", "byty", "bytu", "apartment", "flat"}
+_LAND_PATH_RE = re.compile(r"/(?:pozemek|pozemky|pozemku)(?:/|$|\.)", re.I)
+_HOUSE_PATH_RE = re.compile(r"/(?:dum|domy|rodinne-domy|domy-a-vily)(?:/|$|\.)", re.I)
+_FLAT_PATH_RE = re.compile(r"/(?:byt|byty)(?:/|$|\.)", re.I)
+_LAND_SLUG_RE = re.compile(r"(?:^|-)(?:housing|pozemek|pozemky|pozemku|parcela)(?:-|$)", re.I)
+_HOUSE_SLUG_RE = re.compile(r"(?:^|-)(?:dum|vila|vilach|chalupa|chata|statek|rodinn)(?:-|$)", re.I)
+_FALSE_HOUSE_SLUG_RE = re.compile(r"(?:^|-)(?:u-[a-z0-9-]*domu|koldum)(?:-|$)", re.I)
+
+
+def _estate_token(value: str) -> str:
+    token = _fold(value)
+    if not token:
+        return ""
+    if token in _ESTATE_LAND or "pozem" in token:
+        return "pozemek"
+    if token in _ESTATE_HOUSE or token.startswith("dom"):
+        return "dum"
+    if token in _ESTATE_FLAT:
+        return "byt"
+    return ""
+
+
+def estate_kind(
+    url: str = "",
+    extras: Any = None,
+    name: str = "",
+    disposition: str = "",
+) -> str:
+    """byt / dum / pozemek from extras, URL, title, or disposition. Default byt.
+
+    Marketing games keep apartment rounds on flats unless the caller asked for mixed.
+    Land/plots never look like a pedagogical 2+kk vs 1+kk contrast.
+    """
+    extras = extras if isinstance(extras, dict) else parse_extras(extras)
+    mapped = _estate_token(str(extras.get("estate") or extras.get("estateType") or ""))
+    if mapped:
+        return mapped
+
+    raw_url = str(url or "")
+    path, _, query = raw_url.lower().partition("?")
+    query = query.casefold()
+    if "estatetype=pozemek" in query or "estatetype=plot" in query:
+        return "pozemek"
+    if "estatetype=dum" in query or "estatetype=house" in query:
+        return "dum"
+    if "estatetype=byt" in query or "estatetype=flat" in query:
+        return "byt"
+
+    clipped = path.replace("/nemovitosti-byty-domy/", "/")
+    if _LAND_PATH_RE.search(clipped) or "pozemky.html" in clipped:
+        return "pozemek"
+    if (
+        _HOUSE_PATH_RE.search(clipped)
+        or "domy-k-pronajmu" in clipped
+        or "domy-na-prodej" in clipped
+        or "/pronajmu/dum" in clipped
+        or "/prodam/dum" in clipped
+    ):
+        return "dum"
+    if (
+        _FLAT_PATH_RE.search(clipped)
+        or "byty-k-pronajmu" in clipped
+        or "byty-na-prodej" in clipped
+        or "/pronajmu/byt" in clipped
+        or "/prodam/byt" in clipped
+    ):
+        return "byt"
+
+    slug = clipped.rstrip("/").rsplit("/", 1)[-1]
+    if _LAND_SLUG_RE.search(slug):
+        return "pozemek"
+    if _HOUSE_SLUG_RE.search(slug) and not _FALSE_HOUSE_SLUG_RE.search(slug):
+        return "dum"
+
+    folded_name = _fold(name)
+    if any(token in folded_name for token in ("pozemek", "pozemku", "pozemky", "parcela")):
+        return "pozemek"
+    if "byt" in folded_name:
+        return "byt"
+    if (
+        any(token in folded_name for token in ("rodinn", "vila", "chalup", "chata"))
+        or "domu" in folded_name
+        or re.search(r"(?:^|\b)dum(?:\b|$)", folded_name)
+    ):
+        return "dum"
+
+    disp = _fold(disposition)
+    if any(token in disp for token in ("pozem", "housing", "parcela")):
+        return "pozemek"
+    if disp in {"familyhouse", "villa", "dum", "vila"} or "rodinn" in disp:
+        return "dum"
+    return "byt"
+
+
 def offer_kind(url: str = "", extras: Any = None, price_label: str = "") -> str:
     extras = extras if isinstance(extras, dict) else {}
     offer = str(extras.get("offer") or "").casefold()

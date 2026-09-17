@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.identity import portal_from_url, portal_label
+from app.identity import estate_kind, portal_from_url, portal_label
 from app.localities import slugify
 from app.sources import PORTAL_LABELS
 from app.store import utc_now
@@ -138,6 +138,8 @@ POINTS_PER_PROPERTY = 1000
 ERROR_ZERO_AT = 0.5  # 50 % odchylka = 0 bodů
 RENT_ROUND_SIZE = 5
 TEACHING_RATIO = 0.8
+# Pedagogical rounds stay on flats. "mixed" allows houses; land/plots never teach.
+DEFAULT_GAME_ESTATE = "byty"
 # Prefer live catalog once at least one locality has two priced, distinct listings.
 MIN_LIVE_LOCALITY_PAIRS = 1
 # Live cards are noisy: ignore missing fields and tiny gaps so "teaching" still means
@@ -465,21 +467,66 @@ def _is_live_game_item(item: dict[str, Any]) -> bool:
     return bool(loc)
 
 
-def live_pairable_pool(pool: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+def item_estate_kind(item: dict[str, Any]) -> str:
+    extras = item.get("extras") if isinstance(item.get("extras"), dict) else None
+    return estate_kind(
+        url=str(item.get("url") or ""),
+        extras=extras,
+        name=str(item.get("name") or ""),
+        disposition=str(item.get("disposition") or ""),
+    )
+
+
+def _estate_mode(estate: str | None) -> str:
+    token = str(estate or DEFAULT_GAME_ESTATE).casefold().strip()
+    if token in {"mixed", "mix", "all", "any"}:
+        return "mixed"
+    return "byty"
+
+
+def _allows_game_estate(item: dict[str, Any], estate: str | None) -> bool:
+    """Default apartment rounds; mixed keeps houses but still drops land/plots."""
+    kind = item_estate_kind(item)
+    if _estate_mode(estate) == "mixed":
+        return kind != "pozemek"
+    return kind == "byt"
+
+
+def filter_game_estate(pool: list[dict[str, Any]] | None, estate: str | None = None) -> list[dict[str, Any]]:
+    return [item for item in (pool or []) if _allows_game_estate(item, estate)]
+
+
+def live_pairable_pool(
+    pool: list[dict[str, Any]] | None,
+    *,
+    estate: str | None = None,
+) -> list[dict[str, Any]] | None:
     """Live same-locality listings when the catalog has enough pairs; else None."""
-    live = [_annotate(item) for item in (pool or []) if _is_live_game_item(item)]
+    live = [
+        _annotate(item)
+        for item in (pool or [])
+        if _is_live_game_item(item) and _allows_game_estate(item, estate)
+    ]
     groups = _groups_by_locality(live)
     if len(groups) >= MIN_LIVE_LOCALITY_PAIRS:
         return live
     return None
 
 
-def preferred_game_pool(pool: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+def preferred_game_pool(
+    pool: list[dict[str, Any]] | None,
+    *,
+    estate: str | None = None,
+) -> list[dict[str, Any]]:
     """Catalog when it can pair same-locality flats; seed otherwise. Memory-only."""
-    live = live_pairable_pool(pool)
+    live = live_pairable_pool(pool, estate=estate)
     if live is not None:
         return live
-    priced = [_annotate(item) for item in (pool or []) if _as_int(item.get("price_czk"))]
+    priced = [
+        _annotate(item)
+        for item in (pool or [])
+        if _as_int(item.get("price_czk")) and _allows_game_estate(item, estate)
+    ]
     if priced and _groups_by_locality(priced):
         return priced
     return _seed_pool()
@@ -764,13 +811,15 @@ def pick_same_locality_pair(
     *,
     rng: random.Random | None = None,
     teaching_ratio: float = TEACHING_RATIO,
+    estate: str | None = None,
 ) -> dict[str, Any]:
     """Always same locality_key. ~80 % pedagogical, ~20 % any same-place pair.
 
     Live hydrated catalog wins over seed whenever it has same-locality pairs.
+    Default estate is flats so land/houses do not pollute apartment rounds.
     """
     rng = rng or random.Random()
-    usable = preferred_game_pool(pool)
+    usable = preferred_game_pool(pool, estate=estate)
     groups = _groups_by_locality(usable)
     if not groups:
         usable = _seed_pool()
@@ -798,9 +847,10 @@ def higher_lower_pair(
     rng: random.Random | None = None,
     pool: list[dict[str, Any]] | None = None,
     teaching_ratio: float = TEACHING_RATIO,
+    estate: str | None = None,
 ) -> dict[str, Any]:
     source = pool if pool is not None else _catalog_pool(store)
-    return pick_same_locality_pair(source, rng=rng, teaching_ratio=teaching_ratio)
+    return pick_same_locality_pair(source, rng=rng, teaching_ratio=teaching_ratio, estate=estate)
 
 
 def _unit_price(item: dict[str, Any]) -> float:
@@ -941,14 +991,16 @@ def pick_rent_round(
     *,
     rng: random.Random | None = None,
     teaching_ratio: float = TEACHING_RATIO,
+    estate: str | None = None,
 ) -> dict[str, Any]:
     """Five flats, one district. ~80 % include a pedagogical deal-vs-overpriced contrast.
 
     Live catalog listings in that district win; same-district seed only pads a
     thin live group. Never mix Vinohrady with Žižkov. Cold path uses seed.
+    Land/plots stay out of apartment rounds unless estate=mixed (houses only).
     """
     rng = rng or random.Random()
-    live = live_pairable_pool(pool)
+    live = live_pairable_pool(pool, estate=estate)
     seed = _seed_pool()
     buckets = _locality_buckets([*(live or []), *seed])
     groups = {key: items for key, items in buckets.items() if _pairable(items)}
@@ -1025,9 +1077,10 @@ def rent_round(
     rng: random.Random | None = None,
     pool: list[dict[str, Any]] | None = None,
     teaching_ratio: float = TEACHING_RATIO,
+    estate: str | None = None,
 ) -> dict[str, Any]:
     source = pool if pool is not None else _catalog_pool(store)
-    return pick_rent_round(source, rng=rng, teaching_ratio=teaching_ratio)
+    return pick_rent_round(source, rng=rng, teaching_ratio=teaching_ratio, estate=estate)
 
 
 def public_higher_lower(store: Any = None) -> dict[str, Any]:

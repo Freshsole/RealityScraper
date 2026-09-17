@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from app import config, localities, places
 from app.identity import (
+    estate_kind,
     fingerprint,
     link_payload,
     listing_identity,
@@ -159,6 +160,22 @@ def _is_game_rental(row: dict[str, Any]) -> bool:
         or "pronáj" in name
         or "pronajem" in name
         or "pronajmu" in name
+    )
+
+
+def _is_game_flat(row: dict[str, Any]) -> bool:
+    """Apartment-only game cards. Houses and land/plots stay out of /hry rounds."""
+    if not _is_game_rental(row):
+        return False
+    extras = row.get("extras") if isinstance(row.get("extras"), dict) else None
+    return (
+        estate_kind(
+            url=str(row.get("url") or ""),
+            extras=extras,
+            name=str(row.get("name") or ""),
+            disposition=str(row.get("disposition") or ""),
+        )
+        == "byt"
     )
 
 
@@ -5393,10 +5410,14 @@ class Store:
                   AND price_czk BETWEEN 6000 AND 90000
                   AND IFNULL(image_url, '') != ''
                   AND IFNULL(locality, '') != ''
+                  AND IFNULL(url, '') NOT LIKE '%/pozemek/%'
+                  AND IFNULL(url, '') NOT LIKE '%/pozemky%'
+                  AND IFNULL(name, '') NOT LIKE '%pozemek%'
+                  AND IFNULL(name, '') NOT LIKE '%Pozemek%'
                 ORDER BY last_seen DESC
                 LIMIT ?
                 """,
-                (cap,),
+                (cap * 3,),
             ).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -5409,7 +5430,7 @@ class Store:
         rows: list[dict[str, Any]] = []
         for row in fetched:
             item = dict(row)
-            if not _is_game_rental(item):
+            if not _is_game_flat(item):
                 continue
             image = str(item.get("image_url") or "").strip()
             if not image:
@@ -5437,6 +5458,8 @@ class Store:
                     "last_seen": item.get("last_seen"),
                 }
             )
+            if len(rows) >= cap:
+                break
         return rows
 
     def public_gone_fast_rentals(self, *, days: int = 3, limit: int = 4) -> list[dict[str, Any]]:

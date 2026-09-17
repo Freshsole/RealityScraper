@@ -10,9 +10,11 @@ from app.games import (
     TEACHING_RATIO,
     TYPICAL_VANISH_LABEL,
     disposition_rank,
+    filter_game_estate,
     game_vanish_hours,
     higher_lower_pair,
     is_teaching_pair,
+    item_estate_kind,
     leaderboard,
     live_pairable_pool,
     locality_key,
@@ -48,7 +50,7 @@ def _reset_game_pool_cache():
 def _flat(key, locality, disposition, area, price, **extra):
     row = {
         "id": key,
-        "name": f"{disposition} {locality}",
+        "name": extra.pop("name", None) or f"{disposition} {locality}",
         "locality": locality,
         "disposition": disposition,
         "area_m2": area,
@@ -57,6 +59,7 @@ def _flat(key, locality, disposition, area, price, **extra):
         "portal": "sreality",
         "vanish_hours": 2.0,
         "locality_key": locality_key(locality),
+        "url": extra.pop("url", None) or f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{key}",
     }
     row.update(extra)
     return row
@@ -404,6 +407,11 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "white-space: normal" in phone
     assert ".game-card" in phone
     assert "max-width: 100%" in phone
+    assert "overflow-wrap: anywhere" in css
+    assert "overflow-wrap: anywhere" in phone
+    assert "padding: 16px var(--gutter) 40px" in phone
+    assert "justify-content: space-between" in css.split(".game-card {", 1)[1].split("}", 1)[0]
+    assert "max-width: 36rem" in css.split(".game-hero .lead {", 1)[1].split("}", 1)[0]
 
 
 def test_admin_games_leaderboard_uses_five_column_wise_grid():
@@ -1028,3 +1036,154 @@ def test_pick_rent_round_is_memory_fast():
         pick_rent_round([], rng=random.Random(index))
     ms = (time.perf_counter() - t0) * 1000
     assert ms < 80, f"pick_rent_round loop {ms:.1f}ms"
+
+
+def _house(key, locality, disposition, area, price, **extra):
+    extra.setdefault("name", f"Pronájem domu {disposition}, {locality}")
+    extra.setdefault("url", f"https://www.sreality.cz/detail/pronajem/dum/{disposition}/praha/{key}")
+    extra.setdefault("extras", {"estate": "Dům", "offer": "Pronájem"})
+    return _flat(key, locality, disposition, area, price, **extra)
+
+
+def _plot(key, locality, area, price, **extra):
+    extra.setdefault("name", f"Pronájem pozemku {area} m², {locality}")
+    extra.setdefault("url", f"https://www.sreality.cz/detail/pronajem/pozemek/zahrada/praha/{key}")
+    extra.setdefault("extras", {"estate": "Pozemek", "offer": "Pronájem"})
+    extra.setdefault("disposition", "")
+    return _flat(key, locality, extra.pop("disposition"), area, price, **extra)
+
+
+def _polluted_live_pool():
+    return [
+        *_noisy_live_pool(),
+        _house("house-z", "Praha 3 – Žižkov", "5+1", 180, 12000),
+        _plot("plot-z", "Praha 3 – Žižkov", 820, 8000),
+        _house("house-v", "Praha 2 – Vinohrady", "6+1", 210, 14500),
+        _plot("plot-v", "Praha 2 – Vinohrady", 640, 9500),
+        _house("house-b", "Bedihošť", "4+1", 150, 11000),
+        _plot("plot-b", "Bedihošť", 900, 7000),
+    ]
+
+
+def test_games_prefer_flats_when_catalog_has_houses_and_land():
+    pool = _polluted_live_pool()
+    preferred = preferred_game_pool(pool)
+    ids = {item["id"] for item in preferred}
+    assert "house-z" not in ids
+    assert "plot-z" not in ids
+    assert all(item_estate_kind(item) == "byt" for item in preferred)
+    filtered = filter_game_estate(pool)
+    assert {item["id"] for item in filtered} == {item["id"] for item in _noisy_live_pool()}
+    mixed = preferred_game_pool(pool, estate="mixed")
+    mixed_ids = {item["id"] for item in mixed}
+    assert "house-z" in mixed_ids
+    assert "plot-z" not in mixed_ids
+    assert all(item_estate_kind(item) != "pozemek" for item in mixed)
+
+
+def test_live_teaching_rate_holds_when_land_and_houses_pollute_catalog():
+    pool = _polluted_live_pool()
+    n = 400
+    rng = random.Random(11)
+    kinds = []
+    for _ in range(n):
+        pair = pick_same_locality_pair(pool, rng=rng, teaching_ratio=TEACHING_RATIO)
+        ids = {pair["left"]["id"], pair["right"]["id"]}
+        assert not any(str(item).startswith("house-") or str(item).startswith("plot-") for item in ids)
+        assert item_estate_kind(pair["left"]) == item_estate_kind(pair["right"]) == "byt"
+        if pair["pair_kind"] == "teaching":
+            assert is_teaching_pair(pair["left"], pair["right"])
+        kinds.append(pair["pair_kind"])
+    rate = kinds.count("teaching") / n
+    assert 0.72 <= rate <= 0.88, f"polluted-pool teaching rate {rate:.3f}"
+    rent_kinds = []
+    rng = random.Random(7)
+    for _ in range(n):
+        row = pick_rent_round(pool, rng=rng, teaching_ratio=TEACHING_RATIO)
+        for item in row["items"]:
+            assert not str(item["id"]).startswith("house-")
+            assert not str(item["id"]).startswith("plot-")
+        rent_kinds.append(row["round_kind"])
+    rent_rate = rent_kinds.count("teaching") / n
+    assert 0.72 <= rent_rate <= 0.88, f"polluted rent teaching rate {rent_rate:.3f}"
+
+
+def test_mixed_estate_keeps_houses_but_still_drops_plots():
+    pool = _polluted_live_pool()
+    seen_house = False
+    for seed in range(120):
+        pair = pick_same_locality_pair(pool, rng=random.Random(seed), estate="mixed")
+        ids = {pair["left"]["id"], pair["right"]["id"]}
+        assert not any(str(item).startswith("plot-") for item in ids)
+        if any(str(item).startswith("house-") for item in ids):
+            seen_house = True
+    assert seen_house
+    for seed in range(80):
+        row = pick_rent_round(pool, rng=random.Random(seed), estate="mixed")
+        ids = {item["id"] for item in row["items"]}
+        assert not any(str(item).startswith("plot-") for item in ids)
+
+
+def test_game_listing_pool_skips_houses_and_land(tmp_path: Path):
+    store = Store(tmp_path / "estate-pool.sqlite")
+    listings = []
+    for i in range(4):
+        listings.append(
+            Listing(
+                id=7000 + i,
+                name=f"Pronájem bytu {i}",
+                price_czk=16000 + i * 1500,
+                price_label=f"{16000 + i * 1500} Kč/měsíc",
+                disposition="2+kk" if i % 2 == 0 else "1+kk",
+                area_m2=58 - i * 4,
+                locality="Praha 3 – Žižkov",
+                url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{7000 + i}",
+                image_url=f"https://img.example/flat-{i}.jpg",
+                extras={"estate": "Byt", "offer": "Pronájem"},
+            )
+        )
+        listings.append(
+            Listing(
+                id=7100 + i,
+                name=f"Pronájem domu {i}",
+                price_czk=18000 + i * 1200,
+                price_label=f"{18000 + i * 1200} Kč/měsíc",
+                disposition="5+1",
+                area_m2=160 + i * 10,
+                locality="Praha 3 – Žižkov",
+                url=f"https://www.sreality.cz/detail/pronajem/dum/5+1/praha/{7100 + i}",
+                image_url=f"https://img.example/house-{i}.jpg",
+                extras={"estate": "Dům", "offer": "Pronájem"},
+            )
+        )
+        listings.append(
+            Listing(
+                id=7200 + i,
+                name=f"Pronájem pozemku {i}",
+                price_czk=9000 + i * 500,
+                price_label=f"{9000 + i * 500} Kč/měsíc",
+                disposition="",
+                area_m2=700 + i * 40,
+                locality="Praha 3 – Žižkov",
+                url=f"https://www.sreality.cz/detail/pronajem/pozemek/zahrada/praha/{7200 + i}",
+                image_url=f"https://img.example/plot-{i}.jpg",
+                extras={"estate": "Pozemek", "offer": "Pronájem"},
+            )
+        )
+    store.upsert_catalog_listings_batch(listings, kind="seeded")
+    rows = store.game_listing_pool(limit=240, budget_sec=0.2)
+    assert len(rows) == 4
+    assert all("/byt/" in str(item.get("url") or "") for item in rows)
+    assert all("pozemek" not in str(item.get("name") or "").casefold() for item in rows)
+    assert all("domu" not in str(item.get("name") or "").casefold() for item in rows)
+    pool = refresh_pool_now(store)
+    live = [item for item in pool if not str(item["id"]).startswith("seed-")]
+    assert len(live) == 4
+    pair = higher_lower_pair(store, rng=random.Random(3), teaching_ratio=1.0)
+    assert pair["seeded"] is False
+    assert "/byt/" in str(pair["left"].get("id") or pair["left"].get("url") or "") or "byt" in str(
+        pair["left"].get("name") or ""
+    ).casefold()
+    for side in (pair["left"], pair["right"]):
+        assert "pozemek" not in str(side.get("name") or "").casefold()
+        assert "domu" not in str(side.get("name") or "").casefold()

@@ -1,6 +1,6 @@
 import unittest
 
-from app.identity import fingerprint, floor_token, same_listing
+from app.identity import estate_kind, fingerprint, floor_token, same_listing
 
 
 def row(**kwargs):
@@ -83,6 +83,67 @@ class IdentityTests(unittest.TestCase):
             extras={"offer": "Prodej", "specs": [{"label": "Podlaží", "value": "3/5"}]},
         )
         self.assertFalse(same_listing(rent, sale))
+
+    def test_estate_kind_prefers_flats_and_drops_land(self):
+        self.assertEqual(
+            estate_kind("https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/1", name="Pronájem bytu 2+kk"),
+            "byt",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.sreality.cz/detail/pronajem/dum/5+1/praha/2",
+                extras={"estate": "Dům"},
+                name="Pronájem domu 5+1",
+            ),
+            "dum",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.sreality.cz/detail/pronajem/pozemek/zahrada/praha/3",
+                extras={"estate": "Pozemek"},
+                name="Pronájem pozemku 800 m²",
+            ),
+            "pozemek",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.bezrealitky.cz/vyhledat?offerType=PRONAJEM&estateType=POZEMEK",
+                name="Zahrada",
+            ),
+            "pozemek",
+        )
+        self.assertEqual(
+            estate_kind("https://www.annonce.cz/domy-k-pronajmu.html", name="Pronájem rodinného domu"),
+            "dum",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.bezrealitky.cz/nemovitosti-byty-domy/pronajem-bytu-praha-zizkov",
+                name="Pronájem bytu 2+kk",
+            ),
+            "byt",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.ulovdomov.cz/inzerat/pronajem-troubsko-troubsko-troubsko-dum",
+                name="Rodinný dům",
+            ),
+            "dum",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.ulovdomov.cz/inzerat/-hluboka-nad-vltavou-zahradni-housing",
+                name="Stavební parcela",
+            ),
+            "pozemek",
+        )
+        self.assertEqual(
+            estate_kind(
+                "https://www.sreality.cz/detail/pronajem/byt/2+kk/praha-u-novych-domu/9",
+                name="Pronájem bytu 2+kk, U Nových domů",
+            ),
+            "byt",
+        )
 
 
 if __name__ == "__main__":
