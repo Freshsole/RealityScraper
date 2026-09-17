@@ -108,9 +108,11 @@ def clear_session(store: Store) -> None:
 
 
 def user_from_session(store: Store, token: str | None) -> dict[str, Any] | None:
-    stored = store.get_meta("auth_session") or ""
     given = token or ""
-    if not stored or not given or len(stored) != len(given):
+    if not given:
+        return None
+    stored = store.get_meta("auth_session") or ""
+    if not stored or len(stored) != len(given):
         return None
     if not secrets.compare_digest(given, stored):
         return None

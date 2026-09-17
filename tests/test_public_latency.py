@@ -510,6 +510,14 @@ def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
     store = Store(tmp_path / "scrape-load.sqlite")
     seed = [_latency_listing(i) for i in range(60)]
     store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=20, fast=True)
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+            VALUES ('m1', 'Praha', 'https://www.sreality.cz/hledani/pronajem/byty', '', 'default', 1, 1, ?)
+            """,
+            ("2020-01-01T00:00:00+00:00",),
+        )
     stop = threading.Event()
 
     def writer() -> None:
@@ -528,8 +536,11 @@ def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
     item_ms: list[float] = []
     search_ms: list[float] = []
     guest_ms: list[float] = []
+    monitor_ms: list[float] = []
+    fresh_ms: list[float] = []
+    first: dict[str, float] = {}
     try:
-        for _ in range(10):
+        for i in range(10):
             t0 = time.perf_counter()
             catalog = store.catalog({"limit": 24, "include_pins": "0", "q": "Praha"})
             catalog_ms.append((time.perf_counter() - t0) * 1000)
@@ -559,6 +570,21 @@ def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
             t0 = time.perf_counter()
             store.guest_search_used("127.0.0.1", "visitor-1")
             guest_ms.append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            monitors = store.list_monitors()
+            monitor_ms.append((time.perf_counter() - t0) * 1000)
+            assert monitors
+            t0 = time.perf_counter()
+            fresh = store.catalog_freshness()
+            fresh_ms.append((time.perf_counter() - t0) * 1000)
+            assert fresh.get("listing_key")
+            if i == 0:
+                first["catalog"] = catalog_ms[-1]
+                first["pins"] = pin_ms[-1]
+                first["search"] = search_ms[-1]
+                first["guest"] = guest_ms[-1]
+                first["monitors"] = monitor_ms[-1]
+                first["fresh"] = fresh_ms[-1]
     finally:
         stop.set()
         thread.join(timeout=8)
@@ -573,6 +599,19 @@ def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
     assert p95(item_ms) < 40, f"item p95 {p95(item_ms):.1f}ms {item_ms}"
     assert p95(search_ms) < 80, f"search p95 {p95(search_ms):.1f}ms {search_ms}"
     assert p95(guest_ms) < 20, f"guest p95 {p95(guest_ms):.1f}ms {guest_ms}"
+    assert p95(monitor_ms) < 40, f"monitors p95 {p95(monitor_ms):.1f}ms {monitor_ms}"
+    assert p95(fresh_ms) < 20, f"fresh p95 {p95(fresh_ms):.1f}ms {fresh_ms}"
+    assert catalog_ms[1:] and p95(catalog_ms[1:]) < 15, f"cached catalog p95 {p95(catalog_ms[1:]):.1f}ms"
+    assert pin_ms[1:] and p95(pin_ms[1:]) < 10, f"cached pins p95 {p95(pin_ms[1:]):.1f}ms"
+    report = [
+        f"catalog first={first['catalog']:.2f}ms p95={p95(catalog_ms):.2f}ms",
+        f"pins first={first['pins']:.2f}ms p95={p95(pin_ms):.2f}ms",
+        f"search first={first['search']:.2f}ms p95={p95(search_ms):.2f}ms",
+        f"guest first={first['guest']:.2f}ms p95={p95(guest_ms):.2f}ms",
+        f"monitors first={first['monitors']:.2f}ms p95={p95(monitor_ms):.2f}ms",
+        f"fresh first={first['fresh']:.2f}ms p95={p95(fresh_ms):.2f}ms",
+    ]
+    print("product JSON TTFB under scrape:\n  " + "\n  ".join(report))
 
 
 def test_catalog_serves_stale_json_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
@@ -586,12 +625,103 @@ def test_catalog_serves_stale_json_when_writer_locks_sqlite(tmp_path: Path, monk
         raise sqlite3.OperationalError("database is locked")
 
     monkeypatch.setattr(store, "_catalog_query", boom)
+    for key, (at, payload) in list(store._hot_json_cache.items()):
+        store._hot_json_cache[key] = (at - 5.0, payload)
     t0 = time.perf_counter()
     again = store.catalog(filters)
     ms = (time.perf_counter() - t0) * 1000
     assert again.get("stale") is True
     assert again["items"] == first["items"]
     assert ms < 15, f"stale catalog {ms:.1f}ms"
+
+
+def test_monitors_serve_stale_json_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "mon-stale.sqlite")
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+            VALUES ('m1', 'Praha', 'https://www.sreality.cz/hledani/pronajem/byty', '', 'default', 1, 1, ?)
+            """,
+            ("2020-01-01T00:00:00+00:00",),
+        )
+    first = store.list_monitors()
+    assert any(item["id"] == "m1" for item in first)
+
+    def boom():
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_list_monitors_query", boom)
+    for key, (at, payload) in list(store._hot_json_cache.items()):
+        store._hot_json_cache[key] = (at - 5.0, payload)
+    t0 = time.perf_counter()
+    again = store.list_monitors()
+    ms = (time.perf_counter() - t0) * 1000
+    assert [item["id"] for item in again] == [item["id"] for item in first]
+    assert ms < 15, f"stale monitors {ms:.1f}ms"
+
+
+def test_guest_search_serves_stale_used_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "guest-stale.sqlite")
+    assert store.guest_search_used("127.0.0.1", "visitor-1") is False
+    assert store.grant_guest_search("127.0.0.1", "visitor-1")
+    assert store.guest_search_used("127.0.0.1", "visitor-1") is True
+
+    def boom(_ip, _visitor):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_guest_search_used_query", boom)
+    for key, (at, payload) in list(store._hot_json_cache.items()):
+        store._hot_json_cache[key] = (at - 5.0, payload)
+    t0 = time.perf_counter()
+    assert store.guest_search_used("127.0.0.1", "visitor-1") is True
+    ms = (time.perf_counter() - t0) * 1000
+    assert ms < 15, f"stale guest {ms:.1f}ms"
+
+
+def test_catalog_freshness_tracks_newest_listing(tmp_path: Path):
+    store = Store(tmp_path / "fresh.sqlite")
+    store.upsert_catalog_listings_batch([_latency_listing(1)], kind="seeded", fast=True)
+    first = store.catalog_freshness()
+    assert first.get("listing_key")
+    assert first.get("id")
+    store.upsert_catalog_listings_batch([_latency_listing(2)], kind="seeded", fast=True)
+    again = store.catalog_freshness()
+    assert again.get("id") != first.get("id")
+    assert again.get("listing_key")
+
+
+def test_list_monitors_light_skips_aggregate_counts(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "light.sqlite")
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+            VALUES ('m1', 'Praha', 'https://www.sreality.cz/hledani/pronajem/byty', '', 'default', 1, 1, ?)
+            """,
+            ("2020-01-01T00:00:00+00:00",),
+        )
+    called = {"n": 0}
+    monkeypatch.setattr(store, "count", lambda *_a, **_k: called.__setitem__("n", called["n"] + 1) or 0)
+    monkeypatch.setattr(store, "new_today_count", lambda *_a, **_k: called.__setitem__("n", called["n"] + 1) or 0)
+    items = store.list_monitors_light()
+    ours = next(item for item in items if item["id"] == "m1")
+    assert ours["tracked"] == 0
+    assert ours["new_today"] == 0
+    assert called["n"] == 0
+
+
+def test_user_from_session_skips_sqlite_without_cookie(tmp_path: Path, monkeypatch):
+    from app.account import user_from_session
+
+    store = Store(tmp_path / "session.sqlite")
+
+    def boom(*_a, **_k):
+        raise AssertionError("get_meta should not run without a session cookie")
+
+    monkeypatch.setattr(store, "get_meta", boom)
+    assert user_from_session(store, None) is None
+    assert user_from_session(store, "") is None
 
 
 def _percentile(samples: list[float], q: float) -> float:
