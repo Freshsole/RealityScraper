@@ -1,4 +1,4 @@
-"""In-memory marketing/auth HTML + game JSON + hot assets served without FastAPI/SQLite."""
+"""In-memory marketing/auth/app HTML + game JSON + hot assets served without FastAPI/SQLite."""
 
 from __future__ import annotations
 
@@ -6,17 +6,39 @@ import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 
 from fastapi.responses import HTMLResponse
 
 from app import config
 from app import games as marketing_games
+from app.account import SESSION_COOKIE
 
 _CACHE_HEADERS = {"Cache-Control": "public, max-age=120"}
 _CACHE_CONTROL = b"public, max-age=120"
+_NO_STORE = b"no-store, max-age=0"
 _ASSET_CACHE_CONTROL = b"public, max-age=2592000"
 _JSON_NO_STORE = b"no-store"
 _ACAO = b"*"
+_GUEST_SEARCH_COOKIE = "rf_guest_search"
+_APP_SHELL_REL = "index.html"
+_ADMIN_SHELL_REL = "admin/index.html"
+_APP_SHELL_PATHS = frozenset(
+    {
+        "/prehled",
+        "/prehled/",
+        "/nabidka",
+        "/nabidka/",
+        "/monitory",
+        "/monitory/",
+        "/filtry",
+        "/filtry/",
+        "/zprava",
+        "/zprava/",
+        "/nastaveni",
+        "/nastaveni/",
+    }
+)
 INSTANT_ROUTES: dict[str, str] = {
     "/": "index.html",
     "/hry": "hry.html",
@@ -70,6 +92,8 @@ INSTANT_ASSET_FILES = (
     "site/assets/db-1.webp",
     "site/assets/db-2.webp",
     "site/assets/db-3.webp",
+    "styles.css",
+    "admin/admin.css",
 )
 INSTANT_ASSETS: dict[str, str] = {f"/static/{rel}": rel for rel in INSTANT_ASSET_FILES}
 INSTANT_GAME_GET = {
@@ -113,11 +137,19 @@ def instant_asset_rel(path: str) -> str | None:
     return INSTANT_ASSETS.get(path)
 
 
+@lru_cache(maxsize=8)
+def web_body(rel: str) -> bytes:
+    path = Path(config.WEB_DIR) / rel
+    return path.read_bytes()
+
+
 def preload_site_pages() -> None:
     names = list(dict.fromkeys(INSTANT_ROUTES.values()))
     names.extend(html_name for _prefix, html_name in INSTANT_PREFIX_ROUTES if html_name not in names)
     for name in names:
         site_body(name)
+    web_body(_APP_SHELL_REL)
+    web_body(_ADMIN_SHELL_REL)
     for rel in INSTANT_ASSET_FILES:
         site_asset(rel)
 
@@ -153,6 +185,49 @@ def instant_game_kind(path: str) -> str | None:
     if normalized == "/api/public/games/rent-score":
         return "rent-score"
     return None
+
+
+def instant_app_shell(path: str) -> str | None:
+    if path in _APP_SHELL_PATHS or path.startswith("/nastaveni/"):
+        return _APP_SHELL_REL
+    return None
+
+
+def instant_admin_shell(path: str) -> str | None:
+    if path == "/admin" or path.startswith("/admin/"):
+        return _ADMIN_SHELL_REL
+    return None
+
+
+def _cookie_value(scope: dict[str, Any], name: str) -> str:
+    raw = b""
+    for key, value in scope.get("headers") or []:
+        if key == b"cookie":
+            raw = (raw + b"; " if raw else b"") + (value or b"")
+    if not raw:
+        return ""
+    prefix = name + "="
+    for part in raw.decode("latin-1").split(";"):
+        item = part.strip()
+        if item.startswith(prefix):
+            return item[len(prefix) :].strip().strip('"')
+    return ""
+
+
+def app_shell_redirect(path: str, scope: dict[str, Any]) -> str | None:
+    """303 target when the app shell has no session/guest cookie. Never touches SQLite."""
+    if _cookie_value(scope, SESSION_COOKIE):
+        return None
+    normalized = path[:-1] if path.endswith("/") and path != "/" else path
+    if normalized == "/nabidka":
+        if _cookie_value(scope, _GUEST_SEARCH_COOKIE):
+            return None
+        nxt = path
+        query = scope.get("query_string") or b""
+        if query:
+            nxt = f"{path}?{query.decode('latin-1')}"
+        return f"/registrace?next={quote(nxt, safe='')}"
+    return "/prihlaseni"
 
 
 async def _read_body(receive: Receive) -> bytes:
@@ -199,14 +274,31 @@ async def _send_bytes(
     )
 
 
+async def _send_redirect(send: Send, *, location: str, method: str) -> None:
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 303,
+            "headers": [
+                (b"location", location.encode("ascii")),
+                (b"cache-control", _NO_STORE),
+                (b"content-length", b"0"),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": b""})
+
+
 def _json_bytes(payload: dict[str, Any]) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 class InstantSiteASGI:
-    """Outer ASGI app: GET/HEAD marketing/auth HTML, game JSON, and hot assets skip Hub/SQLite.
+    """Outer ASGI app: GET/HEAD marketing/auth/app HTML, game JSON, and hot assets skip Hub/SQLite.
 
-    POST /api/auth/* and other APIs always fall through to the inner FastAPI app.
+    Dashboard HTML is served from memory. A missing session cookie 303s to /prihlaseni
+    (guest /nabidka uses rf_guest_search) without SQLite. Cookie presence is not a
+    session check — /api/auth/me and other dashboard APIs still fall through to FastAPI.
     """
 
     def __init__(self, app: App, store: Any | None = None) -> None:
@@ -240,6 +332,32 @@ class InstantSiteASGI:
                         body=site_body(name),
                         content_type=b"text/html; charset=utf-8",
                         cache_control=_CACHE_CONTROL,
+                        method=method,
+                    )
+                    return
+                app_rel = instant_app_shell(path)
+                if app_rel:
+                    redirect = app_shell_redirect(path, scope)
+                    if redirect:
+                        await _send_redirect(send, location=redirect, method=method)
+                        return
+                    await _send_bytes(
+                        send,
+                        status=200,
+                        body=web_body(app_rel),
+                        content_type=b"text/html; charset=utf-8",
+                        cache_control=_NO_STORE,
+                        method=method,
+                    )
+                    return
+                admin_rel = instant_admin_shell(path)
+                if admin_rel:
+                    await _send_bytes(
+                        send,
+                        status=200,
+                        body=web_body(admin_rel),
+                        content_type=b"text/html; charset=utf-8",
+                        cache_control=_NO_STORE,
                         method=method,
                     )
                     return
