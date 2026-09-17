@@ -13,10 +13,24 @@ def test_sreality_shards_split_praha():
 def test_annonce_house_shards_are_offer_only():
     daily = [item for item in daily_shards() if item["portal"] == "annonce"]
     recent = [item for item in extra_portal_recent_shards() if item["portal"] == "annonce"]
-    assert any(item["shard_key"] == "annonce:domy:pronajem:cz" for item in daily)
+    assert {item["shard_key"] for item in recent} >= {
+        "annonce:recent:pronajem:byty",
+        "annonce:recent:prodej:byty",
+        "annonce:recent:pronajem:domy",
+        "annonce:recent:prodej:domy",
+    }
+    assert {item["shard_key"] for item in daily} >= {
+        "annonce:byty:pronajem:cz",
+        "annonce:byty:prodej:cz",
+        "annonce:domy:pronajem:cz",
+        "annonce:domy:prodej:cz",
+    }
     assert any("domy-k-pronajmu.html" in item["search_url"] for item in daily)
-    assert any(item["shard_key"] == "annonce:recent:pronajem:domy" for item in recent)
+    assert any("domy-na-prodej.html" in item["search_url"] for item in daily + recent)
+    assert any("byty-na-prodej.html" in item["search_url"] for item in recent)
     assert all("nabidkovy=1" in item["search_url"] for item in daily + recent)
+    assert all("sort=ageasc" in item["search_url"] for item in daily + recent)
+    assert all("/rodinne-domy.html" not in item["search_url"] for item in daily + recent)
 
 
 def test_remax_newest_and_house_shards():
