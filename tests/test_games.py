@@ -6,13 +6,17 @@ from pathlib import Path
 import pytest
 
 from app.games import (
+    DEFAULT_VANISH_HOURS,
     TEACHING_RATIO,
+    TYPICAL_VANISH_LABEL,
     disposition_rank,
+    game_vanish_hours,
     higher_lower_pair,
     is_teaching_pair,
     leaderboard,
     live_pairable_pool,
     locality_key,
+    pair_locality_key,
     pick_same_locality_pair,
     preferred_game_pool,
     public_card,
@@ -110,6 +114,23 @@ def test_teaching_pair_better_and_cheaper():
     normal_cheap = _flat("small", "Praha 2 – Vinohrady", "1+kk", 32, 14200)
     normal_big = _flat("big", "Praha 2 – Vinohrady", "3+kk", 82, 21900)
     assert is_teaching_pair(normal_cheap, normal_big) is False
+    missing_area = _flat("gap", "Praha 2 – Vinohrady", "2+kk", None, 31000)
+    same_disp = _flat("ok", "Praha 2 – Vinohrady", "2+kk", 48, 19600)
+    assert is_teaching_pair(missing_area, same_disp) is False
+    tiny = _flat("tiny-a", "Praha 2 – Vinohrady", "2+kk", 48, 19600)
+    tiny_dear = _flat("tiny-b", "Praha 2 – Vinohrady", "2+kk", 49, 19700)
+    assert is_teaching_pair(tiny, tiny_dear) is False
+
+
+def test_pair_locality_key_aliases_prague_district():
+    assert pair_locality_key("Praha 3 – Žižkov") == "praha-3"
+    assert pair_locality_key("Praha 3") == "praha-3"
+    assert pair_locality_key("Žižkov, Praha 3") == "praha-3"
+    assert pair_locality_key("Praha 2 – Vinohrady") == "praha-2"
+    assert pair_locality_key("Vinohrady, Praha 2") == "praha-2"
+    assert pair_locality_key("Praha 2 – Vinohrady") != pair_locality_key("Praha 3 – Žižkov")
+    assert pair_locality_key("Brno – střed") == "brno-stred"
+    assert pair_locality_key("Bedihošť") == "bedihost"
 
 
 def test_higher_lower_seed_pair(tmp_path: Path):
@@ -345,7 +366,7 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "rent-unit" in js
     assert "replace(/[^\\d]/g, \"\")" in js
     assert "Takové nabídky mizí" in js
-    assert "vanishText(item.vanish_hours)" in js
+    assert "vanishText(item.vanish_hours, item.vanish_label)" in js
     assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
     assert ".converter-actions .pill" in css
@@ -510,3 +531,176 @@ def test_preferred_game_pool_is_memory_fast():
         preferred_game_pool([])
     ms = (time.perf_counter() - t0) * 1000
     assert ms < 40, f"preferred_game_pool loop {ms:.1f}ms"
+
+
+def _noisy_live_pool():
+    return [
+        _flat("live-z1", "Praha 3 – Žižkov", "3+kk", 76, 17800, portal="ulovdomov"),
+        _flat("live-z2", "Praha 3", "1+kk", 30, 22900, portal="annonce"),
+        _flat("live-z3", "Žižkov, Praha 3", "2+kk", 48, 19600, portal="idnes"),
+        _flat("live-z4", "Praha 3 – Žižkov", "2+kk", 49, 19700, portal="sreality"),
+        _flat("live-z-miss", "Praha 3 – Žižkov", "2+kk", None, 31000, portal="bezrealitky"),
+        _flat("live-v1", "Praha 2 – Vinohrady", "3+kk", 80, 21900, portal="ulovdomov"),
+        _flat("live-v2", "Vinohrady, Praha 2", "1+kk", 31, 26800, portal="idnes"),
+        _flat("live-b1", "Bedihošť", "1+kk", 28, 9000, portal="annonce"),
+        _flat("live-b2", "Bedihošť", "3+kk", 70, 16000, portal="annonce"),
+        _flat("live-praha", "Praha", "2+kk", 50, 20000, portal="sreality"),
+        _flat("live-brno", "Brno – střed", "2+kk", 50, 15000, portal="ulovdomov"),
+    ]
+
+
+def test_live_noisy_pool_keeps_teaching_rate_and_same_place():
+    pool = _noisy_live_pool()
+    n = 400
+    rng = random.Random(11)
+    kinds = []
+    for _ in range(n):
+        pair = pick_same_locality_pair(pool, rng=rng, teaching_ratio=TEACHING_RATIO)
+        left_pair = pair["left"].get("pair_key") or pair.get("pair_key")
+        right_pair = pair["right"].get("pair_key")
+        assert left_pair == right_pair == pair.get("pair_key")
+        ids = {pair["left"]["id"], pair["right"]["id"]}
+        zizkov = {item for item in ids if item.startswith("live-z")}
+        vinohrady = {item for item in ids if item.startswith("live-v")}
+        assert not (zizkov and vinohrady)
+        assert "live-praha" not in ids or "live-brno" not in ids
+        assert pair["seeded"] is False
+        if pair["pair_kind"] == "teaching":
+            assert is_teaching_pair(pair["left"], pair["right"])
+        kinds.append(pair["pair_kind"])
+    rate = kinds.count("teaching") / n
+    assert 0.72 <= rate <= 0.88, f"live-pool teaching rate {rate:.3f}"
+    forced = [
+        pick_same_locality_pair(pool, rng=random.Random(i), teaching_ratio=1.0)
+        for i in range(80)
+    ]
+    assert all(row["pair_kind"] == "teaching" for row in forced)
+    assert all(is_teaching_pair(row["left"], row["right"]) for row in forced)
+
+
+def test_live_locality_aliases_pair_same_district():
+    pool = [
+        _flat("z-full", "Praha 3 – Žižkov", "3+kk", 76, 17800),
+        _flat("z-district", "Praha 3", "1+kk", 30, 22900),
+        _flat("v-full", "Praha 2 – Vinohrady", "3+kk", 80, 20000),
+        _flat("v-alias", "Vinohrady, Praha 2", "1+kk", 32, 25000),
+    ]
+    for seed in range(80):
+        pair = pick_same_locality_pair(pool, rng=random.Random(seed), teaching_ratio=1.0)
+        assert pair["pair_key"] in {"praha-3", "praha-2"}
+        assert pair["left"]["pair_key"] == pair["right"]["pair_key"]
+        ids = {pair["left"]["id"], pair["right"]["id"]}
+        if pair["pair_key"] == "praha-3":
+            assert ids == {"z-full", "z-district"}
+        else:
+            assert ids == {"v-full", "v-alias"}
+
+
+def test_vanish_hours_from_last_seen_is_honest():
+    hours, observed = game_vanish_hours("2026-09-17T10:00:00+00:00", "2026-09-17T10:00:00+00:00")
+    assert observed is False
+    assert hours == DEFAULT_VANISH_HOURS
+    hours, observed = game_vanish_hours("2026-09-17T07:00:00+00:00", "2026-09-17T10:00:00+00:00")
+    assert observed is True
+    assert hours == 3.0
+    hours, observed = game_vanish_hours("2026-09-15T10:00:00+00:00", "2026-09-17T10:00:00+00:00")
+    assert observed is True
+    assert hours == 24.0
+    observed_pair = pick_same_locality_pair(
+        [
+            _flat(
+                "a",
+                "Praha 3 – Žižkov",
+                "3+kk",
+                76,
+                17800,
+                first_seen="2026-09-17T07:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "b",
+                "Praha 3 – Žižkov",
+                "1+kk",
+                30,
+                22900,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+        ],
+        rng=random.Random(1),
+        teaching_ratio=1.0,
+    )
+    assert observed_pair["vanish_hours"] == 3.0
+    assert observed_pair["vanish_label"] == "za 3,0 h"
+    assert "za 3,0 h" in observed_pair["copy_ok"]
+    fresh = pick_same_locality_pair(
+        [
+            _flat(
+                "a",
+                "Praha 3 – Žižkov",
+                "3+kk",
+                76,
+                17800,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "b",
+                "Praha 3 – Žižkov",
+                "1+kk",
+                30,
+                22900,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+        ],
+        rng=random.Random(1),
+        teaching_ratio=1.0,
+    )
+    assert fresh["vanish_label"] == TYPICAL_VANISH_LABEL
+    assert TYPICAL_VANISH_LABEL in fresh["copy_ok"]
+    card = public_card(
+        {
+            "id": "live-1",
+            "locality": "Praha 3 – Žižkov",
+            "first_seen": "2026-09-17T10:00:00+00:00",
+            "last_seen": "2026-09-17T10:00:00+00:00",
+            "portal": "ulovdomov",
+        }
+    )
+    assert card["vanish_hours"] == DEFAULT_VANISH_HOURS
+    assert card["vanish_label"] == TYPICAL_VANISH_LABEL
+
+
+def test_live_catalog_vanish_uses_last_seen(tmp_path: Path):
+    store = Store(tmp_path / "vanish-live.sqlite")
+    listings = [
+        Listing(
+            id=5100 + i,
+            name=f"Pronájem bytu {i}",
+            price_czk=16000 + i * 4000,
+            price_label=f"{16000 + i * 4000} Kč/měsíc",
+            disposition="3+kk" if i == 0 else "1+kk",
+            area_m2=78 - i * 40,
+            locality="Praha 3 – Žižkov",
+            url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{5100 + i}",
+            image_url=f"https://img.example/vanish-{i}.jpg",
+        )
+        for i in range(2)
+    ]
+    store.upsert_catalog_listings_batch(listings, kind="seeded")
+    first = "2026-09-17T07:00:00+00:00"
+    last = "2026-09-17T10:00:00+00:00"
+    with store.connect() as conn:
+        conn.execute("UPDATE catalog_listings SET first_seen = ?, last_seen = ?", (first, last))
+        conn.commit()
+    pool = refresh_pool_now(store)
+    live = [item for item in pool if not str(item["id"]).startswith("seed-")]
+    assert live
+    assert all(item.get("last_seen") == last for item in live)
+    assert all(item.get("vanish_label") == "za 3,0 h" for item in live)
+    pair = higher_lower_pair(store, rng=random.Random(3), teaching_ratio=1.0)
+    assert pair["seeded"] is False
+    assert pair["vanish_hours"] == 3.0
+    assert pair["vanish_label"] == "za 3,0 h"
+    assert "za 3,0 h" in pair["copy_ok"]

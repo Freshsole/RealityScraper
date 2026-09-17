@@ -150,13 +150,8 @@ def _is_game_rental(row: dict[str, Any]) -> bool:
     )
 
 
-def _game_vanish_hours(first_seen: Any, last_seen: Any) -> float:
-    first = _parse_iso(first_seen)
-    last = _parse_iso(last_seen)
-    if not first or not last:
-        return 8.0
-    hours = max(0.2, (last - first).total_seconds() / 3600.0)
-    return round(min(48.0, hours), 1)
+# Vanish copy for games is computed in app.games from first_seen/last_seen.
+# last_seen on a live catalog row means "still listed", not vanish time.
 
 
 def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
@@ -5194,7 +5189,8 @@ class Store:
                     "image_url": image,
                     "url": item.get("url"),
                     "portal": item.get("portal") or portal_from_url(str(item.get("url") or "")),
-                    "vanish_hours": _game_vanish_hours(item.get("first_seen"), item.get("last_seen")),
+                    "first_seen": item.get("first_seen"),
+                    "last_seen": item.get("last_seen"),
                 }
             )
         return rows

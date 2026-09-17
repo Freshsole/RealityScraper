@@ -8,6 +8,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from app.identity import portal_from_url, portal_label
@@ -133,6 +134,15 @@ RENT_ROUND_SIZE = 5
 TEACHING_RATIO = 0.8
 # Prefer live catalog once at least one locality has two priced, distinct listings.
 MIN_LIVE_LOCALITY_PAIRS = 1
+# Live cards are noisy: ignore missing fields and tiny gaps so "teaching" still means
+# worse = dearer AND (clearly smaller OR worse disposition).
+MIN_TEACH_PRICE_GAP = 800
+MIN_TEACH_PRICE_RATIO = 0.04
+MIN_TEACH_AREA_GAP = 6
+DEFAULT_VANISH_HOURS = 8.0
+# first_seen == last_seen on ingest is not a vanish time.
+MIN_OBSERVED_VANISH_HOURS = 0.75
+TYPICAL_VANISH_LABEL = "v řádu hodin"
 # (monotonic_ts, items, seed_only)
 _CACHE: tuple[float, list[dict[str, Any]], bool] | None = None
 _CACHE_TTL = 45.0
@@ -163,6 +173,7 @@ _RANDOM_MISS = (
 )
 
 _DISP_RE = re.compile(r"(\d+)\s*\+?\s*(kk|1)?", re.I)
+_NUM_RE = re.compile(r"[-+]?\d+(?:[.,]\d+)?")
 
 
 def disposition_rank(value: str | None) -> int:
@@ -176,22 +187,85 @@ def disposition_rank(value: str | None) -> int:
     return rooms * 2 - (1 if kind == "kk" else 0)
 
 
+def pair_locality_key(value: str | None) -> str:
+    """Same-place bucket for pairing noisy live labels.
+
+    ``Praha 3``, ``Praha 3 – Žižkov`` and ``Žižkov, Praha 3`` share ``praha-3``.
+    Numbered Praha districts never mix (Vinohrady ≠ Žižkov). Other cities keep
+    the full neighborhood key so Brno-střed does not pair with Brno-Bystrc.
+    """
+    key = locality_key(value)
+    if not key:
+        return ""
+    tokens = [token for token in key.split("-") if token]
+    if tokens and tokens[0] in {"praha", "prague"} and len(tokens) >= 2 and tokens[1].isdigit():
+        return f"praha-{tokens[1]}"
+    return key
+
+
+def _neighborhood_from_key(key: str) -> str | None:
+    tokens = [token for token in str(key or "").split("-") if token]
+    if not tokens:
+        return None
+    if tokens[0] in {"praha", "prague"} and len(tokens) >= 3 and tokens[1].isdigit():
+        return "-".join(tokens[2:])
+    if tokens[0] not in {"praha", "prague"}:
+        return None
+    if len(tokens) == 1:
+        return None
+    return None
+
+
 def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
     """True when the dearer flat is also worse (smaller and/or worse disposition).
 
     Pedagogical lesson: a clearly better flat can still be cheaper — and those
-    vanish first.
+    vanish first. Missing area/disposition and tiny live-data gaps do not count.
     """
     cheap, dear = _price_order(left, right)
     if cheap is None:
         return False
-    cheap_area = _as_int(cheap.get("area_m2")) or 0
-    dear_area = _as_int(dear.get("area_m2")) or 0
+    cheap_price = _as_int(cheap.get("price_czk"))
+    dear_price = _as_int(dear.get("price_czk"))
+    if not cheap_price or not dear_price:
+        return False
+    gap = dear_price - cheap_price
+    if gap < MIN_TEACH_PRICE_GAP and gap / cheap_price < MIN_TEACH_PRICE_RATIO:
+        return False
+    cheap_area = _as_int(cheap.get("area_m2"))
+    dear_area = _as_int(dear.get("area_m2"))
     cheap_disp = disposition_rank(str(cheap.get("disposition") or ""))
     dear_disp = disposition_rank(str(dear.get("disposition") or ""))
-    worse_area = dear_area < cheap_area
-    worse_disp = dear_disp < cheap_disp
+    worse_area = (
+        cheap_area is not None
+        and dear_area is not None
+        and cheap_area > 0
+        and dear_area > 0
+        and dear_area + MIN_TEACH_AREA_GAP <= cheap_area
+    )
+    worse_disp = cheap_disp > 0 and dear_disp > 0 and dear_disp < cheap_disp
     return bool(worse_area or worse_disp)
+
+
+def _teaching_contrast(left: dict[str, Any], right: dict[str, Any]) -> float:
+    """Larger = clearer lesson. Used to prefer obvious live pairs."""
+    cheap, dear = _price_order(left, right)
+    if cheap is None:
+        return 0.0
+    cheap_price = _as_int(cheap.get("price_czk")) or 0
+    dear_price = _as_int(dear.get("price_czk")) or 0
+    if not cheap_price or not dear_price:
+        return 0.0
+    score = (dear_price - cheap_price) / cheap_price
+    cheap_area = _as_int(cheap.get("area_m2"))
+    dear_area = _as_int(dear.get("area_m2"))
+    if cheap_area and dear_area and cheap_area > dear_area:
+        score += (cheap_area - dear_area) / cheap_area
+    cheap_disp = disposition_rank(str(cheap.get("disposition") or ""))
+    dear_disp = disposition_rank(str(dear.get("disposition") or ""))
+    if cheap_disp and dear_disp and cheap_disp > dear_disp:
+        score += (cheap_disp - dear_disp) / 6.0
+    return score
 
 
 def _price_order(
@@ -251,17 +325,20 @@ def score_round(items: list[dict[str, Any]], guesses: list[dict[str, Any]]) -> d
 def public_card(item: dict[str, Any], *, include_price: bool = False) -> dict[str, Any]:
     portal = str(item.get("portal") or portal_from_url(str(item.get("url") or "")))
     loc = item.get("locality") or ""
+    hours, vanish_label = _item_vanish(item)
     card = {
         "id": str(item.get("id") or ""),
         "name": item.get("name") or "",
         "locality": loc,
         "locality_key": item.get("locality_key") or locality_key(str(loc)),
+        "pair_key": item.get("pair_key") or pair_locality_key(str(loc)),
         "disposition": item.get("disposition") or "",
         "area_m2": item.get("area_m2"),
         "image_url": _fast_game_image(item.get("image_url"), str(item.get("id") or "")),
         "portal": portal,
         "portal_label": PORTAL_LABELS.get(portal, portal_label(portal)),
-        "vanish_hours": item.get("vanish_hours"),
+        "vanish_hours": hours,
+        "vanish_label": vanish_label,
     }
     if include_price:
         card["price_czk"] = item.get("price_czk")
@@ -277,10 +354,17 @@ def _price_label(price: Any) -> str:
 
 
 def _as_int(value: Any) -> int | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
     try:
-        if value in (None, ""):
-            return None
         return int(value)
+    except (TypeError, ValueError):
+        pass
+    match = _NUM_RE.search(str(value).replace("\xa0", " "))
+    if not match:
+        return None
+    try:
+        return int(float(match.group(0).replace(",", ".")))
     except (TypeError, ValueError):
         return None
 
@@ -336,8 +420,19 @@ def _is_seed_id(key: Any) -> bool:
 def _annotate(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
     loc = str(row.get("locality") or "")
-    row["locality_key"] = row.get("locality_key") or locality_key(loc)
+    full = str(row.get("locality_key") or locality_key(loc))
+    row["locality_key"] = full
+    if not row.get("pair_key"):
+        tokens = [token for token in full.split("-") if token]
+        if tokens and tokens[0] in {"praha", "prague"} and len(tokens) >= 2 and tokens[1].isdigit():
+            row["pair_key"] = f"praha-{tokens[1]}"
+        else:
+            row["pair_key"] = pair_locality_key(loc) or full
     row["image_url"] = _fast_game_image(row.get("image_url"), str(row.get("id") or ""))
+    if row.get("first_seen") or row.get("last_seen"):
+        hours, label = _item_vanish(row)
+        row["vanish_hours"] = hours
+        row["vanish_label"] = label
     return row
 
 
@@ -467,14 +562,26 @@ def _catalog_pool(store: Any) -> list[dict[str, Any]]:
 
 def _groups_by_locality(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     groups: dict[str, list[dict[str, Any]]] = {}
+    homes: dict[str, str] = {}
     for item in pool:
         price = _as_int(item.get("price_czk"))
         if not price:
             continue
-        key = str(item.get("locality_key") or locality_key(str(item.get("locality") or "")))
-        if not key:
+        loc = str(item.get("locality") or "")
+        full = str(item.get("locality_key") or locality_key(loc))
+        if not full:
             continue
-        groups.setdefault(key, []).append(item)
+        bucket = str(item.get("pair_key") or pair_locality_key(loc) or full)
+        item["locality_key"] = full
+        item["pair_key"] = bucket
+        groups.setdefault(bucket, []).append(item)
+        hood = _neighborhood_from_key(full)
+        if hood and bucket.startswith("praha-"):
+            homes[hood] = bucket
+    for key in list(groups):
+        home = homes.get(key)
+        if home and home != key and key in groups:
+            groups.setdefault(home, []).extend(groups.pop(key))
     return {key: items for key, items in groups.items() if _pairable(items)}
 
 
@@ -504,8 +611,66 @@ def _teaching_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], d
     return [pair for pair in _candidate_pairs(items) if is_teaching_pair(*pair)]
 
 
+def _pick_teaching_pair(
+    items: list[dict[str, Any]], rng: random.Random
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    pairs = _teaching_pairs(items)
+    if not pairs:
+        return None
+    if len(pairs) == 1:
+        return pairs[0]
+    ranked = sorted(pairs, key=lambda pair: _teaching_contrast(*pair), reverse=True)
+    keep = max(1, min(4, (len(ranked) + 2) // 3))
+    return rng.choice(ranked[:keep])
+
+
+def _parse_stamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def game_vanish_hours(first_seen: Any, last_seen: Any) -> tuple[float, bool]:
+    """Vanish window from live first/last_seen. last_seen means still listed.
+
+    A just-ingested row has first_seen == last_seen — that is not FOMO evidence.
+    Observed spans (last - first) become the copy when they are real.
+    """
+    first = _parse_stamp(first_seen)
+    last = _parse_stamp(last_seen)
+    if not first or not last:
+        return DEFAULT_VANISH_HOURS, False
+    if last < first:
+        first, last = last, first
+    observed = (last - first).total_seconds() / 3600.0
+    if observed < MIN_OBSERVED_VANISH_HOURS:
+        return DEFAULT_VANISH_HOURS, False
+    return round(min(24.0, max(0.8, observed)), 1), True
+
+
+def _item_vanish(item: dict[str, Any]) -> tuple[float, str]:
+    if item.get("first_seen") or item.get("last_seen"):
+        hours, observed = game_vanish_hours(item.get("first_seen"), item.get("last_seen"))
+        if observed:
+            return hours, _vanish_label(hours)
+        return hours, TYPICAL_VANISH_LABEL
+    if item.get("vanish_hours") is not None:
+        hours = float(item.get("vanish_hours") or DEFAULT_VANISH_HOURS)
+        return hours, str(item.get("vanish_label") or _vanish_label(hours))
+    return DEFAULT_VANISH_HOURS, TYPICAL_VANISH_LABEL
+
+
 def _vanish_label(hours: float) -> str:
     value = float(hours or 0)
+    if value <= 0:
+        return TYPICAL_VANISH_LABEL
     if value < 1:
         minutes = max(8, int(round(value * 60)))
         return f"za {minutes} minut"
@@ -513,6 +678,20 @@ def _vanish_label(hours: float) -> str:
         pretty = f"{value:.1f}".replace(".", ",")
         return f"za {pretty} h"
     return f"za {int(round(value))} h"
+
+
+def _pair_vanish(left: dict[str, Any], right: dict[str, Any]) -> tuple[float, str]:
+    left_hours, left_label = _item_vanish(left)
+    right_hours, right_label = _item_vanish(right)
+    observed = {
+        label: hours
+        for hours, label in ((left_hours, left_label), (right_hours, right_label))
+        if label != TYPICAL_VANISH_LABEL
+    }
+    if observed:
+        hours = min(observed.values())
+        return hours, _vanish_label(hours)
+    return min(left_hours, right_hours), TYPICAL_VANISH_LABEL
 
 
 def _pair_payload(
@@ -524,21 +703,18 @@ def _pair_payload(
 ) -> dict[str, Any]:
     if rng.random() < 0.5:
         left, right = right, left
-    vanish = min(
-        float(left.get("vanish_hours") or 8),
-        float(right.get("vanish_hours") or 8),
-    )
+    vanish, vanish_text = _pair_vanish(left, right)
     cheaper = "left" if int(left["price_czk"]) <= int(right["price_czk"]) else "right"
-    vanish_text = _vanish_label(vanish)
-    teaching = pair_kind == "teaching" or is_teaching_pair(left, right)
     loc = left.get("locality") or right.get("locality") or ""
+    pair_key = left.get("pair_key") or right.get("pair_key") or pair_locality_key(str(loc))
     return {
         "left": public_card(left, include_price=True),
         "right": public_card(right, include_price=True),
         "cheaper": cheaper,
         "vanish_hours": vanish,
-        "pair_kind": "teaching" if teaching and pair_kind == "teaching" else pair_kind,
+        "pair_kind": pair_kind,
         "locality_key": left.get("locality_key") or locality_key(str(loc)),
+        "pair_key": pair_key,
         "locality_label": loc,
         "copy": _INTRO_COPY,
         "copy_ok": (_TEACH_OK if pair_kind == "teaching" else _RANDOM_OK).format(vanish=vanish_text),
@@ -570,7 +746,7 @@ def pick_same_locality_pair(
     picked: tuple[dict[str, Any], dict[str, Any]] | None = None
     if want_teaching and teaching_groups:
         key = rng.choice(list(teaching_groups))
-        picked = rng.choice(_teaching_pairs(teaching_groups[key]))
+        picked = _pick_teaching_pair(teaching_groups[key], rng)
         pair_kind = "teaching"
     if picked is None:
         key = rng.choice(list(groups))
