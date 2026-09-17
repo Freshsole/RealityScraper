@@ -252,13 +252,13 @@
       const vanish = vanishText(item.vanish_hours, item.vanish_label || roundMeta.vanish_label);
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(locality)}</div>
-        <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" fetchpriority="high" />
+        <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="390" height="180" alt="" decoding="async" fetchpriority="high" />
         <div class="flat-meta" style="margin-bottom:16px">
           <div class="spec">${escapeHtml(specText(item))}</div>
           <div class="portal">${escapeHtml(item.portal_label || "")}</div>
         </div>
         <label class="rent-amount">
-          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus />
+          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus size="8" />
           ${ccyPill()}
         </label>
         <p class="rent-unit">Kč / měsíc</p>
