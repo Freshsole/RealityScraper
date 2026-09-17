@@ -93,6 +93,17 @@ After this branch (Annonce parser + `nabidkovy=1` + local city pins, same 12 s c
 
 iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Annonce no longer skips every other slideshow card, defaults to offer-only list URLs, paginates with `?page=`, and HTML list clients pin local city centers (no Photon on page-1). Catalog writes still clear `_city_pin_cache` and now also drop landing / new-today snapshots; `_hot_json_cache` stays as the WAL-busy fallback. Synthetic page-1-across with two extra Annonce house shards: **21→44** page-1 shards / **900→2200** listings under a 0.7 s contention deadline (was 42/2100 before the house shards). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged.
 
+After this branch (Reality.cz newest/`g=` pagination + house shards + Bezrealitky `limit: 20`, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Reality.cz rent | **25** | **841** | 1.2 s | was **24** on best-match `/Ceska-republika/` (letter-only codes dropped); now `?s=2`, 25/25 price+image, 24/25 locality, 22/25 GPS or city pin, page 2 via `g=1-2` is 25 cards / 1 overlap |
+| Reality.cz houses | **25** | **41** | 0.8 s | new newest shard `/pronajem/domy/Ceska-republika/?s=2`; 25/25 locality, 24/25 price, 23/25 coords |
+| Reality.cz sale | **25** | **1000** cap | 1.0 s | nationwide hits “prvních 1.000 nabídek”; page 2 is 25 / 0 overlap |
+| Bezrealitky | **20** | **4369** | 1.1 s | was **15** / 2278; GraphQL `limit` 20 matches peers (API also accepts 30; kept 20) |
+
+List path still does not call Photon/Nominatim: card `gpsx`/`gpsy` when present, otherwise local city pins. Reality.cz pagination is `g={page-1}-2` (not `strana`). Synthetic page-1-across with two extra Reality.cz house shards: **21→46** page-1 shards / **900→2300** listings under a 0.7 s contention deadline (was 44/2200 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, and map freshness polling are unchanged.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

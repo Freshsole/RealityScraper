@@ -12,7 +12,7 @@ from app.sreality import Listing, format_price
 
 GRAPHQL_URL = "https://api.bezrealitky.cz/graphql/"
 SITE = "https://www.bezrealitky.cz"
-PAGE_SIZE = 15
+PAGE_SIZE = 20
 
 HEADERS = {
     "User-Agent": (

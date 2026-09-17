@@ -53,6 +53,14 @@ def test_recent_shards_cover_all_portals():
         "annonce:recent:prodej:domy",
     }
     assert all("nabidkovy=1" in item["search_url"] for item in annonce)
+    realitycz = [item for item in extra if item["portal"] == "realitycz"]
+    assert {item["shard_key"] for item in realitycz} >= {
+        "realitycz:recent:pronajem:byty",
+        "realitycz:recent:prodej:byty",
+        "realitycz:recent:pronajem:domy",
+        "realitycz:recent:prodej:domy",
+    }
+    assert all("s=2" in item["search_url"] for item in realitycz)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

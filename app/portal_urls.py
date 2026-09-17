@@ -255,14 +255,24 @@ class RealityczUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
+        category = str(filters.get("category") or "byty").casefold()
+        kind = "domy" if "dom" in category else "byty"
         districts = [str(item) for item in (filters.get("districts") or []) if item]
         region = districts[0] if len(districts) == 1 else ""
-        if region:
-            return f"{self.site}/{offer}/byty/{region}/"
-        return f"{self.site}/{offer}/byty/Ceska-republika/"
+        path = f"/{offer}/{kind}/{region}/" if region else f"/{offer}/{kind}/Ceska-republika/"
+        query: dict[str, str] = {}
+        if (filters.get("sort") or "nejnovejsi") == "nejnovejsi":
+            query["s"] = "2"
+        return _join(self.site + path, query)
 
     def parse_url(self, url: str) -> dict:
-        return _parse_common(url, self.source)
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        if "/domy/" in raw or "/dum/" in raw:
+            filters["category"] = "domy"
+        else:
+            filters["category"] = "byty"
+        return filters
 
 
 def re_slug(value: str) -> str:
