@@ -433,10 +433,53 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".ccy-pill" in css
     assert ".mint-banner" in css
     assert "fonts.googleapis" not in css
+    assert "--font-ui: system-ui" in css
     assert cold_ms < 80, f"cold homepage HTML {cold_ms:.1f}ms"
     assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
     response = site_page("index.html")
     assert response.headers["cache-control"].startswith("public")
+
+
+def test_auth_and_marketing_html_is_self_hosted_wise():
+    site_html.cache_clear()
+    site_body.cache_clear()
+    pages = {
+        "prihlaseni.html": "PŘIHLÁŠENÍ",
+        "registrace.html": "VYTVOŘTE SI ÚČET",
+        "heslo.html": "OBNOVTE SI HESLO",
+        "kontakt.html": "OZVĚTE SE NÁM",
+        "uspechy.html": "NAŠLI SI VYSNĚNÉ BYDLENÍ",
+        "clanek.html": "Vyzkoušet zdarma",
+        "obchodni-podminky.html": "OBCHODNÍ PODMÍNKY",
+        "ochrana-soukromi.html": "OCHRANA SOUKROMÍ",
+        "nastaveni-cookies.html": "NASTAVENÍ COOKIES",
+        "byt.html": "Začít hlídat zdarma",
+    }
+    for name, needle in pages.items():
+        html = site_html(name)
+        assert needle in html, name
+        assert "fonts.googleapis" not in html, name
+        assert "fonts.gstatic" not in html, name
+        assert "archivo-black-latin.woff2" in html, name
+        assert 'rel="preload"' in html, name
+        assert "/static/site/site.css" in html, name
+    login = site_html("prihlaseni.html")
+    register = site_html("registrace.html")
+    forgot = site_html("heslo.html")
+    assert "/static/site/auth.css" in login and "/static/site/auth.js" in login
+    assert "/api/auth/login" not in login
+    assert 'id="login-form"' in login
+    assert 'id="register-flow"' in register
+    assert 'id="forgot-form"' in forgot
+    css = (Path(__file__).resolve().parents[1] / "web" / "site" / "auth.css").read_text(encoding="utf-8")
+    assert "fonts.googleapis" not in css
+    assert "text-transform: uppercase" in css
+    assert "var(--forest)" in css
+    assert "var(--green)" in css
+    assert "var(--green-hover)" in css
+    assert "font-weight: 900" in css
+    assert "var(--pale)" in css
+    assert "var(--radius-pill)" in css
 
 
 def test_public_game_helpers_are_memory_only():

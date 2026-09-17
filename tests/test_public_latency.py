@@ -109,7 +109,9 @@ def test_catalog_new_today_skips_full_table_count(tmp_path: Path):
     assert (time.perf_counter() - t0) * 1000 < 8
 
 
-async def _asgi_get(app, path: str, method: str = "GET") -> tuple[int, dict[bytes, bytes], bytes]:
+async def _asgi_get(
+    app, path: str, method: str = "GET", query_string: bytes = b""
+) -> tuple[int, dict[bytes, bytes], bytes]:
     sent: list[dict] = []
 
     async def receive() -> dict:
@@ -127,7 +129,7 @@ async def _asgi_get(app, path: str, method: str = "GET") -> tuple[int, dict[byte
             "scheme": "http",
             "path": path,
             "raw_path": path.encode(),
-            "query_string": b"",
+            "query_string": query_string,
             "headers": [],
             "client": ("127.0.0.1", 1),
             "server": ("127.0.0.1", 80),
@@ -216,6 +218,112 @@ def test_hry_html_bypasses_blocked_inner_app():
                 assert payload.get("pair_key")
                 assert "v řádu minut" not in (payload.get("vanish_label") or "")
         assert hit["n"] == 0
+
+    asyncio.run(run())
+
+
+def test_marketing_auth_html_bypasses_blocked_inner_app():
+    hit = {"n": 0}
+
+    async def inner(scope, receive, send):
+        if scope.get("type") != "http":
+            return
+        hit["n"] += 1
+        await asyncio.sleep(8)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner)
+        for path, needle in (
+            ("/prihlaseni", "PŘIHLÁŠENÍ".encode()),
+            ("/registrace", "VYTVOŘTE SI ÚČET".encode()),
+            ("/heslo", "OBNOVTE SI HESLO".encode()),
+            ("/kontakt", "OZVĚTE SE NÁM".encode()),
+            ("/uspechy", "NAŠLI SI VYSNĚNÉ BYDLENÍ".encode()),
+            ("/uspechy/martina-tomas", b"article-page"),
+            ("/obchodni-podminky", "OBCHODNÍ PODMÍNKY".encode()),
+            ("/ochrana-soukromi", "OCHRANA SOUKROMÍ".encode()),
+            ("/nastaveni-cookies", "NASTAVENÍ COOKIES".encode()),
+            ("/byt", b"Začít hlídat zdarma"),
+        ):
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert needle in body, path
+            assert headers[b"cache-control"].startswith(b"public")
+            assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
+        status, headers, body = await _asgi_get(
+            app, "/prihlaseni", query_string=b"next=%2Fprehled"
+        )
+        assert status == 200
+        assert "PŘIHLÁŠENÍ".encode() in body
+        assert b"fonts.googleapis" not in body
+        assert int(headers[b"content-length"]) == len(site_body("prihlaseni.html"))
+        status, _headers, body = await _asgi_get(app, "/registrace/")
+        assert status == 200
+        assert "VYTVOŘTE SI ÚČET".encode() in body
+        t0 = time.perf_counter()
+        status, headers, body = await _asgi_get(app, "/static/site/auth.css")
+        ms = (time.perf_counter() - t0) * 1000
+        assert status == 200
+        assert b"text-transform: uppercase" in body
+        assert b"fonts.googleapis" not in body
+        assert headers[b"access-control-allow-origin"] == b"*"
+        assert ms < 40, f"auth.css {ms:.1f}ms while inner would block"
+        status, _headers, body = await _asgi_get(app, "/static/site/auth.js")
+        assert status == 200
+        assert b"/api/auth/login" in body
+        assert hit["n"] == 0
+
+    asyncio.run(run())
+
+
+def test_auth_apis_and_app_pages_still_hit_inner_app():
+    hit: list[tuple[str, str]] = []
+
+    async def inner(scope, receive, send):
+        if scope.get("type") != "http":
+            return
+        hit.append((str(scope.get("method")), str(scope.get("path"))))
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner)
+        status, _headers, body = await _asgi_get(app, "/prihlaseni")
+        assert status == 200
+        assert body
+        status, _headers, body = await _asgi_get(app, "/registrace")
+        assert status == 200
+        for method, path in (
+            ("POST", "/api/auth/login"),
+            ("POST", "/api/auth/register"),
+            ("POST", "/api/auth/logout"),
+            ("GET", "/api/auth/me"),
+            ("POST", "/api/inquiries"),
+            ("GET", "/prehled"),
+            ("POST", "/prihlaseni"),
+            ("POST", "/registrace"),
+        ):
+            if method == "GET":
+                status, _headers, _body = await _asgi_get(app, path)
+            else:
+                status, _headers, _body = await _asgi_post(app, path, {"email": "a@b.cz"})
+            assert status == 204, path
+        assert ("GET", "/prihlaseni") not in hit
+        assert ("GET", "/registrace") not in hit
+        assert hit == [
+            ("POST", "/api/auth/login"),
+            ("POST", "/api/auth/register"),
+            ("POST", "/api/auth/logout"),
+            ("GET", "/api/auth/me"),
+            ("POST", "/api/inquiries"),
+            ("GET", "/prehled"),
+            ("POST", "/prihlaseni"),
+            ("POST", "/registrace"),
+        ]
 
     asyncio.run(run())
 
@@ -463,11 +571,28 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
     thread.start()
     time.sleep(0.05)
 
-    html_paths = ("/", "/hry", "/hry/vyssi-nizsi", "/hry/najem")
+    html_paths = (
+        "/",
+        "/hry",
+        "/hry/vyssi-nizsi",
+        "/hry/najem",
+        "/prihlaseni",
+        "/registrace",
+        "/heslo",
+        "/kontakt",
+        "/uspechy",
+        "/uspechy/martina-tomas",
+        "/obchodni-podminky",
+        "/ochrana-soukromi",
+        "/nastaveni-cookies",
+        "/byt",
+    )
     asset_paths = (
         "/static/site/games.css",
         "/static/site/games.js",
         "/static/site/fonts/archivo-black-latin.woff2",
+        "/static/site/auth.css",
+        "/static/site/site.css",
     )
     json_paths = ("/api/public/games/higher-lower", "/api/public/games/rent-round")
     samples = {path: [] for path in (*html_paths, *asset_paths, *json_paths, "/api/public/games/rent-score")}

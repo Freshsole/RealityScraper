@@ -1,7 +1,7 @@
 .auth-page {
   min-height: 100vh;
   min-height: 100dvh;
-  background: #f7f9f6;
+  background: var(--pale);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -55,7 +55,9 @@
   gap: 8px;
   font-family: var(--font-display);
   font-size: 22px;
-  letter-spacing: -1px;
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  text-transform: uppercase;
   color: var(--forest);
   white-space: nowrap;
 }
@@ -87,9 +89,11 @@
 .auth-h {
   margin: 0;
   font-family: var(--font-display);
+  font-weight: 900;
   font-size: 32px;
-  line-height: 1.1;
-  letter-spacing: -1px;
+  line-height: 0.92;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
   color: var(--forest);
 }
 
@@ -119,6 +123,8 @@
   justify-content: space-between;
   font-size: 12px;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .step-ind-top .muted {
@@ -362,17 +368,24 @@ label .optional {
   justify-content: center;
   gap: 8px;
   width: 100%;
+  min-height: 48px;
   padding: 14px 28px;
   background: var(--green);
   color: var(--forest);
-  border-radius: 9999px;
-  font-size: 15px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-ui);
+  font-size: 16px;
   font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
   text-align: center;
+  transition: background 0.15s ease;
 }
 
-.auth-btn:hover {
-  filter: brightness(0.96);
+.auth-btn:hover,
+.auth-btn:focus-visible {
+  background: var(--green-hover);
+  filter: none;
 }
 
 .divider {
@@ -492,7 +505,7 @@ label .optional {
   gap: 4px;
   width: 100%;
   padding: 4px;
-  background: #f7f9f6;
+  background: var(--pale);
   border: 1px solid var(--surface);
   border-radius: 12px;
 }
@@ -527,7 +540,7 @@ label .optional {
   font-size: 12px;
   font-weight: 600;
   color: var(--body);
-  background: #f7f9f6;
+  background: var(--pale);
   border: 1px solid var(--surface);
 }
 
@@ -681,7 +694,7 @@ label .optional {
   padding: 10px 16px;
   border-radius: 9999px;
   border: 1px solid var(--surface);
-  background: #f7f9f6;
+  background: var(--pale);
   font-size: 13px;
   font-weight: 500;
   color: var(--forest);
@@ -710,7 +723,7 @@ label .optional {
   gap: 12px;
   width: 100%;
   padding: 16px;
-  background: #f7f9f6;
+  background: var(--pale);
   border: 1px solid var(--surface);
   border-radius: 12px;
   font-size: 12px;

@@ -1,4 +1,4 @@
-"""In-memory marketing HTML + game JSON + /hry* assets served without FastAPI/SQLite."""
+"""In-memory marketing/auth HTML + game JSON + hot assets served without FastAPI/SQLite."""
 
 from __future__ import annotations
 
@@ -25,7 +25,27 @@ INSTANT_ROUTES: dict[str, str] = {
     "/hry/vyssi-nizsi/": "hry-vyssi-nizsi.html",
     "/hry/najem": "hry-najem.html",
     "/hry/najem/": "hry-najem.html",
+    "/prihlaseni": "prihlaseni.html",
+    "/prihlaseni/": "prihlaseni.html",
+    "/registrace": "registrace.html",
+    "/registrace/": "registrace.html",
+    "/heslo": "heslo.html",
+    "/heslo/": "heslo.html",
+    "/kontakt": "kontakt.html",
+    "/kontakt/": "kontakt.html",
+    "/obchodni-podminky": "obchodni-podminky.html",
+    "/obchodni-podminky/": "obchodni-podminky.html",
+    "/ochrana-soukromi": "ochrana-soukromi.html",
+    "/ochrana-soukromi/": "ochrana-soukromi.html",
+    "/nastaveni-cookies": "nastaveni-cookies.html",
+    "/nastaveni-cookies/": "nastaveni-cookies.html",
+    "/uspechy": "uspechy.html",
+    "/uspechy/": "uspechy.html",
+    "/byt": "byt.html",
+    "/byt/": "byt.html",
 }
+# Same static article shell FastAPI serves for every /uspechy/{slug}.
+INSTANT_PREFIX_ROUTES: tuple[tuple[str, str], ...] = (("/uspechy/", "clanek.html"),)
 _ASSET_TYPES = {
     ".css": b"text/css; charset=utf-8",
     ".js": b"text/javascript; charset=utf-8",
@@ -37,6 +57,8 @@ INSTANT_ASSET_FILES = (
     "site/site.css",
     "site/games.css",
     "site/games.js",
+    "site/auth.css",
+    "site/auth.js",
     "site/assets/logo.svg",
     "site/fonts/archivo-black-latin.woff2",
     "site/fonts/archivo-black-latin-ext.woff2",
@@ -92,7 +114,9 @@ def instant_asset_rel(path: str) -> str | None:
 
 
 def preload_site_pages() -> None:
-    for name in dict.fromkeys(INSTANT_ROUTES.values()):
+    names = list(dict.fromkeys(INSTANT_ROUTES.values()))
+    names.extend(html_name for _prefix, html_name in INSTANT_PREFIX_ROUTES if html_name not in names)
+    for name in names:
         site_body(name)
     for rel in INSTANT_ASSET_FILES:
         site_asset(rel)
@@ -106,8 +130,17 @@ def instant_page_name(path: str) -> str | None:
     name = INSTANT_ROUTES.get(path)
     if name:
         return name
-    if path != "/" and path.endswith("/"):
-        return INSTANT_ROUTES.get(path[:-1])
+    normalized = path[:-1] if path != "/" and path.endswith("/") else path
+    if normalized != path:
+        name = INSTANT_ROUTES.get(normalized)
+        if name:
+            return name
+    for prefix, html_name in INSTANT_PREFIX_ROUTES:
+        if not normalized.startswith(prefix):
+            continue
+        slug = normalized[len(prefix) :]
+        if slug and "/" not in slug:
+            return html_name
     return None
 
 
@@ -171,7 +204,10 @@ def _json_bytes(payload: dict[str, Any]) -> bytes:
 
 
 class InstantSiteASGI:
-    """Outer ASGI app: GET/HEAD `/`, `/hry*`, game JSON, and game assets skip Hub/SQLite."""
+    """Outer ASGI app: GET/HEAD marketing/auth HTML, game JSON, and hot assets skip Hub/SQLite.
+
+    POST /api/auth/* and other APIs always fall through to the inner FastAPI app.
+    """
 
     def __init__(self, app: App, store: Any | None = None) -> None:
         self.app = app

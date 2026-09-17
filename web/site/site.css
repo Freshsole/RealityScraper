@@ -36,7 +36,7 @@
   --radius-card: 24px;
   --radius-pill: 9999px;
   --font-display: "Archivo Black", "Arial Black", Impact, sans-serif;
-  --font-ui: Inter, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-ui: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --shadow-card: 0 18px 50px rgba(14, 15, 12, 0.08);
 }
 
