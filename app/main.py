@@ -290,10 +290,12 @@ def story_article() -> FileResponse:
 
 
 def auth_login() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves this path from memory first.
     return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 def auth_register() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves this path from memory first.
     return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
