@@ -245,7 +245,7 @@ def test_marketing_auth_html_bypasses_blocked_inner_app():
             ("/obchodni-podminky", "OBCHODNÍ PODMÍNKY".encode()),
             ("/ochrana-soukromi", "OCHRANA SOUKROMÍ".encode()),
             ("/nastaveni-cookies", "NASTAVENÍ COOKIES".encode()),
-            ("/byt", b"Začít hlídat zdarma"),
+            ("/byt", "Začít hlídat zdarma".encode()),
         ):
             t0 = time.perf_counter()
             status, headers, body = await _asgi_get(app, path)
