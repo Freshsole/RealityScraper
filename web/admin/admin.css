@@ -4506,6 +4506,54 @@ img {
 .ad-game-board {
   border-radius: 24px;
   box-shadow: 0 18px 50px rgba(14, 15, 12, 0.08);
+  overflow: hidden;
+}
+
+.ad-game-tbl .ad-utbl-head,
+.ad-game-tbl .ad-utbl-row {
+  grid-template-columns: 36px minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.8fr) minmax(0, 1fr);
+}
+
+.ad-game-tbl .ad-utbl-head {
+  background: #e2f6d5;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 12px;
+  color: var(--forest);
+}
+
+.ad-game-tbl .ad-game-score {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: -0.03em;
+  color: #0e0f0c;
+}
+
+.ad-ccy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #e8ebe6;
+  color: var(--forest);
+  border-radius: 9999px;
+  padding: 4px 10px 4px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ad-ccy-pill span {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #163300;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  letter-spacing: 0.04em;
 }
 
 .ad-game-play {
@@ -4549,6 +4597,12 @@ img {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+}
+
+.ad-game-guess-amt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .ad-game-guess strong {
