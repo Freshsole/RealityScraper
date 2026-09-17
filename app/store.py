@@ -447,9 +447,9 @@ def _or_likes(where: list[str], params: list[Any], column: str, patterns: list[s
 
 # Catalog q= uses FTS5 on name/locality/disposition only (no extras/description blobs).
 # Token/prefix match, diacritics folded. Narrower than LIKE %q% for interior substrings.
-LISTINGS_FTS_EXISTS_SQL = (
-    "EXISTS (SELECT 1 FROM listings_fts "
-    "WHERE listings_fts.rowid = listings.rowid AND listings_fts MATCH ?)"
+# IN (FTS MATCH) + first_seen beats correlated EXISTS, which probes FTS per listing row.
+LISTINGS_FTS_MATCH_SQL = (
+    "listings.rowid IN (SELECT rowid FROM listings_fts WHERE listings_fts MATCH ?)"
 )
 _FTS_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -4583,7 +4583,7 @@ class Store:
         if query and not place_geoms:
             fts_match = listings_fts_match_query(query) if self._listings_fts else None
             if fts_match:
-                where.append(LISTINGS_FTS_EXISTS_SQL)
+                where.append(LISTINGS_FTS_MATCH_SQL)
                 params.append(fts_match)
             else:
                 where.append(
@@ -4898,7 +4898,7 @@ class Store:
         limit = min(max(int(filters.get("limit") or 36), 1), 120)
         offset = max(int(filters.get("offset") or 0), 0)
         clause = " AND ".join(where)
-        fts_q_only = bool(fts_match) and where == ["1=1", LISTINGS_FTS_EXISTS_SQL]
+        fts_q_only = bool(fts_match) and where == ["1=1", LISTINGS_FTS_MATCH_SQL]
         identity = listing_identity_sql()
         if place_geoms:
             light_sql = f"""

@@ -23,7 +23,7 @@ from app.site_pages import (
     web_page,
 )
 from app.store import (
-    LISTINGS_FTS_EXISTS_SQL,
+    LISTINGS_FTS_MATCH_SQL,
     Store,
     catalog_item_needs_live_fetch,
     listings_fts_match_query,
@@ -866,7 +866,7 @@ def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
     assert match
     sql = f"""
         SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
-        WHERE {LISTINGS_FTS_EXISTS_SQL}
+        WHERE {LISTINGS_FTS_MATCH_SQL}
         ORDER BY listings.first_seen DESC LIMIT 96
     """
     with store.read() as conn:
@@ -897,6 +897,7 @@ def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
     assert "listings_fts" in tables
     assert "listings_fts" in plan
     assert "idx_listings_first_seen" in plan
+    assert "CORRELATED" not in plan
     assert "LIKE" not in plan
     assert "listings_fts" in count_plan
     assert "LIKE" not in count_plan

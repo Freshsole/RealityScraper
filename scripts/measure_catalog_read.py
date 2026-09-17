@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.sreality import Listing
-from app.store import LISTINGS_FTS_EXISTS_SQL, Store, listings_fts_match_query
+from app.store import LISTINGS_FTS_MATCH_SQL, Store, listings_fts_match_query
 
 
 def _listing(i: int, *, blob: str) -> Listing:
@@ -168,7 +168,7 @@ def _plans(store: Store) -> None:
         "catalog-q-praha": (
             f"""
             SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
-            WHERE {LISTINGS_FTS_EXISTS_SQL}
+            WHERE {LISTINGS_FTS_MATCH_SQL}
             ORDER BY listings.first_seen DESC LIMIT 96
             """,
             (praha,),
