@@ -8,7 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from app.site_pages import InstantSiteASGI, site_asset, site_body, web_body
+from app.site_pages import (
+    InstantSiteASGI,
+    app_shell_redirect,
+    app_shell_redirect_for_cookies,
+    site_asset,
+    site_body,
+    web_body,
+    web_page,
+)
 from app.store import Store, catalog_item_needs_live_fetch
 
 
@@ -409,6 +417,11 @@ def test_dashboard_html_bypasses_blocked_inner_app():
         assert "ADMIN PŘIHLÁŠENÍ".encode() in body
         assert headers[b"cache-control"] == b"no-store, max-age=0"
         assert ms < 40, f"/admin/prehled {ms:.1f}ms while inner would block"
+        assert b"fonts.googleapis" not in shell
+        assert b"fonts.gstatic" not in shell
+        assert b"archivo-black-latin.woff2" in shell
+        assert b"fonts.googleapis" not in admin
+        assert b"archivo-black-latin.woff2" in admin
         t0 = time.perf_counter()
         status, headers, body = await _asgi_get(app, "/static/styles.css")
         ms = (time.perf_counter() - t0) * 1000
@@ -722,6 +735,46 @@ def test_user_from_session_skips_sqlite_without_cookie(tmp_path: Path, monkeypat
     monkeypatch.setattr(store, "get_meta", boom)
     assert user_from_session(store, None) is None
     assert user_from_session(store, "") is None
+
+
+def test_app_shell_redirect_is_cookie_presence_only():
+    assert app_shell_redirect_for_cookies("/prehled", {}) == "/prihlaseni"
+    assert app_shell_redirect_for_cookies("/prehled", {"realitify_session": "tok"}) is None
+    assert app_shell_redirect_for_cookies("/nabidka", {}) == "/registrace?next=%2Fnabidka"
+    assert (
+        app_shell_redirect_for_cookies("/nabidka", {}, "listing_key=abc")
+        == "/registrace?next=%2Fnabidka%3Flisting_key%3Dabc"
+    )
+    assert app_shell_redirect_for_cookies("/nabidka", {"rf_guest_search": "guest"}) is None
+    scope = {
+        "headers": [(b"cookie", b"realitify_session=tok")],
+        "query_string": b"",
+    }
+    assert app_shell_redirect("/prehled", scope) is None
+    empty = {"headers": [], "query_string": b""}
+    assert app_shell_redirect("/prehled", empty) == "/prihlaseni"
+
+
+def test_fastapi_html_fallbacks_stay_memory_and_skip_sqlite():
+    src = Path(__file__).resolve().parents[1].joinpath("app", "main.py").read_text(encoding="utf-8")
+    start = src.index("async def require_account")
+    end = src.index("def _extension_cors_origin")
+    guard = src[start:end]
+    assert "user_from_session" not in guard
+    assert "guest_search_has_access" not in guard
+    assert "app_shell_redirect_for_cookies" in guard
+    assert "hub.store" not in guard
+    assert "FileResponse(config.WEB_DIR / \"index.html\"" not in src
+    assert "FileResponse(config.WEB_DIR / \"admin\" / \"index.html\"" not in src
+    assert "return web_page(\"index.html\")" in src
+    assert "return web_page(\"admin/index.html\")" in src
+    assert "return site_page(\"prihlaseni.html\")" in src
+    assert "return site_page(\"kontakt.html\")" in src
+    web_body.cache_clear()
+    page = web_page("admin/index.html")
+    assert page.body == web_body("admin/index.html")
+    assert b"fonts.googleapis" not in page.body
+    assert page.headers["cache-control"] == "no-store, max-age=0"
 
 
 def _percentile(samples: list[float], q: float) -> float:

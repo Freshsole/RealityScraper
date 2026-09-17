@@ -33,7 +33,7 @@ from app.games import (
     wait_refresh,
 )
 from app.sreality import Listing
-from app.site_pages import site_body, site_html, site_page
+from app.site_pages import site_body, site_html, site_page, web_body, web_page
 from app.store import Store
 
 
@@ -520,6 +520,39 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "padding: 24px 16px 40px" in phone
     assert "min-height: 48px" in phone
     assert "max-width: 100%" in phone
+
+
+def test_dashboard_and_admin_shells_are_self_hosted_wise():
+    web_body.cache_clear()
+    root = Path(__file__).resolve().parents[1]
+    shell = web_body("index.html").decode("utf-8")
+    admin = web_body("admin/index.html").decode("utf-8")
+    leftover = (root / "byt.html").read_text(encoding="utf-8")
+    styles = (root / "web" / "styles.css").read_text(encoding="utf-8")
+    admin_css = (root / "web" / "admin" / "admin.css").read_text(encoding="utf-8")
+    for name, html in (
+        ("index.html", shell),
+        ("admin/index.html", admin),
+        ("byt.html", leftover),
+    ):
+        assert "fonts.googleapis" not in html, name
+        assert "fonts.gstatic" not in html, name
+        assert "archivo-black-latin.woff2" in html, name
+        assert 'rel="preload"' in html, name
+    assert 'id="view-overview"' in shell
+    assert "ADMIN PŘIHLÁŠENÍ" in admin
+    assert "styles.css?v=1.2.0-n81" in shell
+    assert "admin.css?v=44" in admin
+    for name, css in (("styles.css", styles), ("admin.css", admin_css)):
+        assert "@font-face" in css, name
+        assert "font-display: optional" in css, name
+        assert "fonts.googleapis" not in css, name
+        assert "--font-ui: system-ui" in css, name
+        assert "archivo-black-latin.woff2" in css, name
+        assert "Inter" not in css, name
+    response = web_page("index.html")
+    assert response.body == web_body("index.html")
+    assert response.headers["cache-control"] == "no-store, max-age=0"
 
 
 def test_public_game_helpers_are_memory_only():

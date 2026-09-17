@@ -41,7 +41,7 @@ from app import mcp_oauth
 from app import extension_score as ext_score
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict, catalog_item_needs_live_fetch
-from app.site_pages import InstantSiteASGI, preload_site_pages, site_page
+from app.site_pages import InstantSiteASGI, app_shell_redirect_for_cookies, preload_site_pages, site_page, web_page
 
 hub = Hub()
 monitor = hub
@@ -159,29 +159,16 @@ def _client_ip(request: Request) -> str:
 
 @app.middleware("http")
 async def require_account(request: Request, call_next):
+    # Cookie presence only — InstantSiteASGI already 303s guests the same way.
+    # Do not wait on SQLite here; /api/auth/me and catalog APIs still validate.
     if request.method == "GET" and _is_app_page(request.url.path):
-        user = await asyncio.get_running_loop().run_in_executor(
-            hub.auth_pool,
-            user_account.user_from_session,
-            hub.store,
-            request.cookies.get(user_account.SESSION_COOKIE),
+        redirect = app_shell_redirect_for_cookies(
+            request.url.path,
+            request.cookies,
+            request.url.query or "",
         )
-        guest_ok = False
-        if not user and request.url.path == "/nabidka":
-            guest_ok = await asyncio.get_running_loop().run_in_executor(
-                hub.auth_pool,
-                hub.store.guest_search_has_access,
-                request.cookies.get("rf_guest_search") or "",
-            )
-        if not user:
-            if request.url.path == "/nabidka" and guest_ok:
-                return await call_next(request)
-            if request.url.path == "/nabidka":
-                nxt = request.url.path
-                if request.url.query:
-                    nxt = f"{nxt}?{request.url.query}"
-                return RedirectResponse(f"/registrace?next={quote(nxt, safe='')}", status_code=303)
-            return RedirectResponse("/prihlaseni", status_code=303)
+        if redirect:
+            return RedirectResponse(redirect, status_code=303)
     return await call_next(request)
 
 
@@ -241,37 +228,37 @@ async def agent_cors(request: Request, call_next):
     return await call_next(request)
 
 
-def page() -> FileResponse:
+def page() -> HTMLResponse:
     # Fallback only — InstantSiteASGI serves /prehled and other app shells from memory first.
-    return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return web_page("index.html")
 
 
 async def landing() -> HTMLResponse:
     return site_page("index.html")
 
 
-def byt_preview() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "byt.html", headers={"Cache-Control": "no-store, max-age=0"})
+def byt_preview() -> HTMLResponse:
+    return site_page("byt.html")
 
 
-def contact() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": "no-store, max-age=0"})
+def contact() -> HTMLResponse:
+    return site_page("kontakt.html")
 
 
-def terms() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "obchodni-podminky.html", headers={"Cache-Control": "no-store, max-age=0"})
+def terms() -> HTMLResponse:
+    return site_page("obchodni-podminky.html")
 
 
-def privacy() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "ochrana-soukromi.html", headers={"Cache-Control": "no-store, max-age=0"})
+def privacy() -> HTMLResponse:
+    return site_page("ochrana-soukromi.html")
 
 
-def cookies_page() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "nastaveni-cookies.html", headers={"Cache-Control": "no-store, max-age=0"})
+def cookies_page() -> HTMLResponse:
+    return site_page("nastaveni-cookies.html")
 
 
-def stories() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
+def stories() -> HTMLResponse:
+    return site_page("uspechy.html")
 
 
 async def games_hub() -> HTMLResponse:
@@ -286,27 +273,27 @@ async def game_rent() -> HTMLResponse:
     return site_page("hry-najem.html")
 
 
-def story_article() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": "no-store, max-age=0"})
+def story_article() -> HTMLResponse:
+    return site_page("clanek.html")
 
 
-def auth_login() -> FileResponse:
+def auth_login() -> HTMLResponse:
     # Fallback only — InstantSiteASGI serves this path from memory first.
-    return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return site_page("prihlaseni.html")
 
 
-def auth_register() -> FileResponse:
+def auth_register() -> HTMLResponse:
     # Fallback only — InstantSiteASGI serves this path from memory first.
-    return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return site_page("registrace.html")
 
 
-def auth_forgot() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": "no-store, max-age=0"})
+def auth_forgot() -> HTMLResponse:
+    return site_page("heslo.html")
 
 
-def admin_page() -> FileResponse:
+def admin_page() -> HTMLResponse:
     # Fallback only — InstantSiteASGI serves /admin* HTML from memory first.
-    return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return web_page("admin/index.html")
 
 
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
