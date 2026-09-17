@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
@@ -21,7 +23,34 @@ BROWSER_HEADERS = {
 }
 
 IMAGE_TRANSFORM = "fl=res,800,600,3|shr,,20|jpg,80"
-AREA_RE = re.compile(r"(\d+)\s*m", re.IGNORECASE)
+AREA_RE = re.compile(r"(\d{1,6})\s*m", re.IGNORECASE)
+log = logging.getLogger(__name__)
+
+
+def _next_data_json(html: str) -> dict[str, Any]:
+    marker = '<script id="__NEXT_DATA__"'
+    start = html.find(marker)
+    if start < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    gt = html.find(">", start)
+    if gt < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    end = html.find("</script>", gt)
+    if end < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    return json.loads(html[gt + 1 : end])
+
+
+def _build_id_from_html(html: str) -> str:
+    marker = '"buildId":"'
+    start = html.find(marker)
+    if start < 0:
+        raise RuntimeError("Could not resolve Sreality buildId")
+    start += len(marker)
+    end = html.find('"', start)
+    if end < 0:
+        raise RuntimeError("Could not resolve Sreality buildId")
+    return html[start:end]
 
 
 class ListingGone(Exception):
@@ -116,10 +145,12 @@ _SHARED_BUILD_ID: str | None = None
 class SrealityClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
+        from app.scrape_http import scrape_timeout
+
         self._client = httpx.AsyncClient(
             headers=BROWSER_HEADERS,
             follow_redirects=True,
-            timeout=25.0,
+            timeout=scrape_timeout(),
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
         )
 
@@ -168,7 +199,10 @@ class SrealityClient:
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         try:
             return await self._fetch_next_data(page, newest)
-        except Exception:
+        except httpx.TimeoutException:
+            raise
+        except Exception as exc:
+            log.warning("sreality JSON API failed page=%s: %s; falling back to __NEXT_DATA__", page, exc)
             return await self._fetch_html(page, newest)
 
     async def _fetch_next_data(self, page: int, newest: bool) -> tuple[list[Listing], int]:
@@ -177,8 +211,12 @@ class SrealityClient:
         if page > 1:
             query["strana"] = str(page)
         data_path = f"/_next/data/{build_id}/cs/hledani/{path}.json"
+        from app.scrape_http import bounded_request
+
         url = urljoin("https://www.sreality.cz", data_path) + "?" + urlencode(query, doseq=True)
-        response = await self._client.get(
+        response = await bounded_request(
+            self._client,
+            "GET",
             url,
             headers={"Accept": "application/json", "x-nextjs-data": "1"},
         )
@@ -187,31 +225,46 @@ class SrealityClient:
             build_id = await self._resolve_build_id()
             data_path = f"/_next/data/{build_id}/cs/hledani/{path}.json"
             url = urljoin("https://www.sreality.cz", data_path) + "?" + urlencode(query, doseq=True)
-            response = await self._client.get(
+            response = await bounded_request(
+                self._client,
+                "GET",
                 url,
                 headers={"Accept": "application/json", "x-nextjs-data": "1"},
             )
         response.raise_for_status()
-        payload = response.json()
-        return parse_search_payload(payload.get("pageProps") or payload)
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
+        parse_started = time.monotonic()
+        payload = await asyncio.to_thread(json.loads, response.content)
+        listings, total = await asyncio.to_thread(parse_search_payload, payload.get("pageProps") or payload)
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
+        return listings, total
 
     async def _fetch_html(self, page: int, newest: bool) -> tuple[list[Listing], int]:
-        url = self._html_url(page, newest)
-        response = await self._client.get(url, headers={"Accept": "text/html"})
-        response.raise_for_status()
-        match = re.search(
-            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
-            response.text,
-        )
-        if not match:
-            raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
-        import json
+        from app.scrape_http import bounded_request
 
-        data = json.loads(match.group(1))
-        build_id = data.get("buildId")
+        url = self._html_url(page, newest)
+        response = await bounded_request(self._client, "GET", url, headers={"Accept": "text/html"})
+        response.raise_for_status()
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
+        raw = response.content
+
+        def _parse(blob: bytes) -> tuple[list[Listing], int, str | None]:
+            html = blob.decode("utf-8", "replace")
+            data = _next_data_json(html)
+            listings, total = parse_search_payload(data.get("props", {}).get("pageProps", {}))
+            build_id = data.get("buildId")
+            return listings, total, str(build_id) if build_id else None
+
+        parse_started = time.monotonic()
+        listings, total, build_id = await asyncio.to_thread(_parse, raw)
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         if build_id:
-            self._set_build_id(str(build_id))
-        return parse_search_payload(data.get("props", {}).get("pageProps", {}))
+            self._set_build_id(build_id)
+        return listings, total
 
     def _set_build_id(self, value: str | None) -> None:
         global _SHARED_BUILD_ID
@@ -221,15 +274,20 @@ class SrealityClient:
         self._set_build_id(None)
 
     async def _resolve_build_id(self) -> str:
+        from app.scrape_http import bounded_request
+
         if _SHARED_BUILD_ID:
             return _SHARED_BUILD_ID
-        response = await self._client.get(self._html_url(1, True), headers={"Accept": "text/html"})
+        response = await bounded_request(
+            self._client, "GET", self._html_url(1, True), headers={"Accept": "text/html"}
+        )
         response.raise_for_status()
-        match = re.search(r'"buildId":"([^"]+)"', response.text)
-        if not match:
-            raise RuntimeError("Could not resolve Sreality buildId")
-        self._set_build_id(match.group(1))
-        return match.group(1)
+        raw = response.content
+        build_id = await asyncio.to_thread(
+            lambda blob: _build_id_from_html(blob.decode("utf-8", "replace")), raw
+        )
+        self._set_build_id(build_id)
+        return build_id
 
     def _search_parts(self, newest: bool) -> tuple[str, dict[str, str]]:
         split = urlsplit(self.search_url)
@@ -292,7 +350,11 @@ class SrealityClient:
         if response.status_code == 404:
             raise ListingGone(listing.url)
         response.raise_for_status()
-        return apply_detail(listing, response.json())
+        payload = await asyncio.to_thread(json.loads, response.content)
+        listing = await asyncio.to_thread(apply_detail, listing, payload)
+        from app.places import refine_listing_location_async
+
+        return await refine_listing_location_async(listing)
 
 
 def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:

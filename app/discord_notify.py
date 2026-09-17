@@ -17,6 +17,22 @@ PLACEHOLDER_WEBHOOK_ERROR = (
     "Discord webhook je jen ukázka ID/TOKEN. V Discordu použij /link, nebo do Railway vlož skutečnou DISCORD_WEBHOOK_URL."
 )
 
+_HTTP: httpx.AsyncClient | None = None
+
+
+def _http() -> httpx.AsyncClient:
+    global _HTTP
+    if _HTTP is None or _HTTP.is_closed:
+        _HTTP = httpx.AsyncClient(timeout=30.0)
+    return _HTTP
+
+
+async def aclose() -> None:
+    global _HTTP
+    if _HTTP is not None and not _HTTP.is_closed:
+        await _HTTP.aclose()
+    _HTTP = None
+
 
 def _require_webhook(webhook_url: str) -> str:
     usable = usable_discord_webhook(webhook_url)
@@ -118,22 +134,22 @@ async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "
     if url.startswith("http://") or url.startswith("https://"):
         payload["embeds"][0]["url"] = url
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        image = None
-        if row.get("image_url"):
-            image = await download_image(client, row["image_url"])
-        if image:
-            data, content_type = image
-            filename = "listing.jpg" if "jpeg" in content_type or "jpg" in content_type else "listing.webp"
-            payload["embeds"][0]["image"] = {"url": f"attachment://{filename}"}
-            response = await client.post(
-                webhook_url,
-                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-                files={"files[0]": (filename, data, content_type)},
-            )
-        else:
-            response = await client.post(webhook_url, json=payload)
-        _raise_for_discord(response, webhook_url)
+    client = _http()
+    image = None
+    if row.get("image_url"):
+        image = await download_image(client, row["image_url"])
+    if image:
+        data, content_type = image
+        filename = "listing.jpg" if "jpeg" in content_type or "jpg" in content_type else "listing.webp"
+        payload["embeds"][0]["image"] = {"url": f"attachment://{filename}"}
+        response = await client.post(
+            webhook_url,
+            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+            files={"files[0]": (filename, data, content_type)},
+        )
+    else:
+        response = await client.post(webhook_url, json=payload)
+    _raise_for_discord(response, webhook_url)
 
 
 async def send_listing(
@@ -153,23 +169,23 @@ async def send_listing(
     payload = render_payload(config, variables, prefix=prefix)
     show_image = payload.pop("show_image", True)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        image = None
-        if show_image and listing.image_url:
-            image = await download_image(client, listing.image_url)
-        if image:
-            data, content_type = image
-            filename = "listing.jpg" if "jpeg" in content_type or "jpg" in content_type else "listing.webp"
-            if payload["embeds"]:
-                payload["embeds"][0]["image"] = {"url": f"attachment://{filename}"}
-            response = await client.post(
-                webhook_url,
-                data={"payload_json": json.dumps(payload, ensure_ascii=False)},
-                files={"files[0]": (filename, data, content_type)},
-            )
-        else:
-            response = await client.post(webhook_url, json=payload)
-        _raise_for_discord(response, webhook_url)
+    client = _http()
+    image = None
+    if show_image and listing.image_url:
+        image = await download_image(client, listing.image_url)
+    if image:
+        data, content_type = image
+        filename = "listing.jpg" if "jpeg" in content_type or "jpg" in content_type else "listing.webp"
+        if payload["embeds"]:
+            payload["embeds"][0]["image"] = {"url": f"attachment://{filename}"}
+        response = await client.post(
+            webhook_url,
+            data={"payload_json": json.dumps(payload, ensure_ascii=False)},
+            files={"files[0]": (filename, data, content_type)},
+        )
+    else:
+        response = await client.post(webhook_url, json=payload)
+    _raise_for_discord(response, webhook_url)
 
 
 DISCORD_CONTENT_LIMIT = 1900
@@ -222,12 +238,12 @@ async def send_text(webhook_url: str, content: str) -> None:
     chunks = _split_discord(content)
     if not chunks:
         raise RuntimeError("Prázdná Discord zpráva")
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        for chunk in chunks:
-            response = await client.post(
-                webhook_url,
-                json={"username": "Sreality Monitor", "content": chunk},
-            )
-            _raise_for_discord(response, webhook_url)
-            if len(chunks) > 1:
-                await asyncio.sleep(0.35)
+    client = _http()
+    for chunk in chunks:
+        response = await client.post(
+            webhook_url,
+            json={"username": "Sreality Monitor", "content": chunk},
+        )
+        _raise_for_discord(response, webhook_url)
+        if len(chunks) > 1:
+            await asyncio.sleep(0.35)

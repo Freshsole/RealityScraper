@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -93,6 +94,7 @@ def normalize_search_url(url: str) -> str:
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query, doseq=True), ""))
 
 
+@lru_cache(maxsize=1)
 def daily_shards() -> list[dict[str, str]]:
     shards: list[dict[str, str]] = []
     # Sreality: never crawl whole Praha as one shard (portal page depth cannot cover it).

@@ -15,7 +15,7 @@ from app.catalog_sync import (
 )
 from app.monitor import Hub
 from app.monitor_index import MonitorIndex
-from app.scrape_engine import ScrapeEngine, ScrapeMetrics
+from app.scrape_engine import ScrapeEngine
 from app.sreality import Listing, ListingGone
 from app.store import utc_now
 
@@ -25,7 +25,7 @@ class ScrapeWorker:
 
     def __init__(self) -> None:
         self.hub = Hub()
-        self.engine = ScrapeEngine()
+        self.engine = ScrapeEngine(registry=self.hub._scrape_registry, pipeline="worker")
         self.monitor_index = MonitorIndex()
         self.running = False
         self.last_tick: dict[str, Any] = {}
@@ -35,6 +35,7 @@ class ScrapeWorker:
         self.hub.running = True
         print(
             f"scrape_worker start concurrency={config.SCRAPE_CONCURRENCY} "
+            f"overrides={config.SCRAPE_CONCURRENCY_OVERRIDES or '{}'} "
             f"recent_pages={config.SCRAPE_RECENT_PAGES}",
             flush=True,
         )
@@ -51,6 +52,7 @@ class ScrapeWorker:
         self.hub._sold_task = asyncio.create_task(self.hub._sold_loop(), name="worker-sold")
         self.hub._coords_task = asyncio.create_task(self.hub.backfill_missing_coords(), name="worker-coords")
         self.hub._dedupe_task = asyncio.create_task(self.hub._dedupe_loop(), name="worker-dedupe")
+        watch = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -58,6 +60,7 @@ class ScrapeWorker:
                     await self._maybe_scrape_url_request()
                     await self._maybe_forced_catalog()
                     await self.hub.maybe_run_catalog_sync(force=False)
+                    await self.hub._flush_scrape_metrics()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -66,14 +69,36 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
+            watch.cancel()
+            try:
+                await self.hub._flush_scrape_metrics()
+            except Exception:
+                pass
             await self.hub.close()
+
+    async def _watchdog_loop(self) -> None:
+        from app.scrape_timing import watchdog_sample, watchdog_snapshot
+
+        while self.running:
+            try:
+                lag = await watchdog_sample()
+                if lag >= 0.5:
+                    print(f"scrape watchdog lag_ms={lag * 1000:.0f}", flush=True)
+                snap = watchdog_snapshot()
+                if snap.get("n") and snap["n"] % 100 == 0:
+                    await self.hub._job_db(
+                        self.hub.store.set_meta, "scrape_watchdog", json.dumps(snap)
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(1)
 
     async def minute_tick(self) -> dict[str, Any]:
         started = time.monotonic()
         discovery = await self.run_new_discovery()
         refresh = await self.run_monitor_refresh()
-        snap = self.engine.metrics.snapshot()
-        snap["limit"] = self.engine.limiter.limit
+        snap = self.engine.metrics_snapshot()
         self.last_tick = {
             "at": utc_now(),
             "kind": "minute",

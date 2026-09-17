@@ -37,7 +37,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Lokálně default `SCRAPE_ROLE=all` (web + scrape v jednom procesu). Na Railway startuje `supervisord` (`railpack.toml`) se dvěma procesy: `web` (`SCRAPE_ROLE=web`) a `worker` (`python -m app.scrape_worker`). Pád scrapru neshodí web a naopak (`autorestart` per proces).
+`make dev` spouští dva procesy: uvicorn `SCRAPE_ROLE=web` a `python -m app.scrape_worker`. Scrape tak nedrží GIL HTTP loopu (jinak TTFB stránky skáče na desítky sekund). Jednoprocesový režim: `SCRAPE_ROLE=all make dev`. Na Railway totéž řeší `supervisord` (`railpack.toml`).
 
 Dashboard: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 
@@ -46,6 +46,8 @@ Webhook a výchozí URL hledání jsou v `.env`. Další hledání, Discord šab
 Výchozí interval je 60 s. Dashboard umí víc monitorů najednou, start/stop, ruční kontrolu a testovací zprávu.
 
 Marketing: `/` landing, hry `/hry` (Higher/Lower + tip nájmu), admin žebříček `/admin/hry`.
+
+Kompletní mapa scrapingu (procesy, HTTP, SQLite, rate limity, napojení na appku): [`docs/scraping.md`](docs/scraping.md).
 
 ### Scrape worker (minutové SLA)
 
