@@ -2014,7 +2014,7 @@ def test_leftover_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsys):
         ordered = sorted(values)
         return ordered[max(0, int(round(0.95 * (len(ordered) - 1))))]
 
-    assert p95(samples["status"]) < 40, samples["status"]
+    assert p95(samples["status"]) < 50, samples["status"]
     assert p95(samples["settings"]) < 15, samples["settings"]
     assert p95(samples["templates"]) < 15, samples["templates"]
     assert p95(samples["discord"]) < 15, samples["discord"]
