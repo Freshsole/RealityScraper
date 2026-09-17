@@ -53,6 +53,9 @@ def test_recent_shards_cover_all_portals():
         "annonce:recent:prodej:domy",
     }
     assert all("nabidkovy=1" in item["search_url"] for item in annonce)
+    assert all("sort=ageasc" in item["search_url"] for item in annonce)
+    assert any("/domy-na-prodej.html" in item["search_url"] for item in annonce)
+    assert any("/byty-na-prodej.html" in item["search_url"] for item in annonce)
     realitycz = [item for item in extra if item["portal"] == "realitycz"]
     assert {item["shard_key"] for item in realitycz} >= {
         "realitycz:recent:pronajem:byty",

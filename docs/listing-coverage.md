@@ -187,6 +187,18 @@ Synthetic page-1-across with two extra Bezrealitky house shards: **21→60** pag
 
 Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
 
+After this branch (Annonce sale/houses page-1 audit: newest `sort=ageasc`, house estate, Frýdek Místek pin, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Annonce rent byty | **20** | page-size (no list count) | 0.3 s | already 20/20 price+image+locality; GPS **20/20** (was 19; `Frýdek Místek` pins). `sort=ageasc` is the live “od nejnovějšího” control |
+| Annonce sale byty | **20** | page-size | 0.4 s | 19/20 price (`Cena neuvedena` kept), 19/20 image (one card is icon-only), 20/20 locality+GPS. Detail `/inzerat/…-id-….html` **200**. One newest sale is a house mixed into `/byty-na-prodej.html` (estate from title) |
+| Annonce houses | **24** rent / **20** sale | page-size | 0.3–0.4 s | newest shards already present (`/domy-k-pronajmu.html` + `/domy-na-prodej.html`). Estate **Dům** (was **Byt**). Dummy `-` / `ostatní` disposition blanked so title `5+kk` fills. Sale 20/20 price+image+locality, GPS **20/20**. Bare `/rodinne-domy.html` is the live sale-house index (offer used to be tagged Pronájem) and `/rodinne-domy-na-prodej.html` is empty — both rewrite to `/domy-na-prodej.html`. `?page=2` is 20–24 cards / 0 overlap |
+
+List path still does not call Photon/Nominatim: local city pins only (`Frýdek Místek` matches `Frýdek-Místek`). Newest shards send `nabidkovy=1&sort=ageasc` so a price-sorted saved URL cannot starve NewDiscovery. InstantSiteASGI `/hry*`, games mobile 390px, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Bezrealitky/ČeskéReality/iDNES/Bazoš/Sreality/REMAX/Reality.cz page-1 wins are unchanged.
+
+Synthetic page-1-across stays **21→60** page-1 shards / **900→3000** listings under a 0.7 s contention deadline (Annonce house shards were already counted).
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

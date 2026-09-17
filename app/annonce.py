@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price, with_page
+from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
 from app.portal_urls import annonce_url
+from app.sreality import Listing
 
 SITE = annonce_url.site
 # Lookahead so the next card opener is not consumed (apartments: ext-item; houses: slideshow item).
@@ -32,6 +34,14 @@ CITY_RE = re.compile(
     re.S | re.I,
 )
 DEMAND_RE = re.compile(r'class="request-type"[^>]*>\s*Poptávka', re.S | re.I)
+# $18 in /byty-na-prodej$18.html is a category encoding, not a different list.
+DOLLAR_ID_RE = re.compile(r"\$\d+")
+HOUSE_HINT_RE = re.compile(
+    r"(?:rodinn\w*\s+dom|domu|dům|dum|domy|domů|vila|chalup|chata|\brd\b)",
+    re.I,
+)
+BLANK_DISP = {"", "-", "–", "—", "ostatní", "ostatni", "n/a", "neuvedeno", "undefined"}
+BARE_HOUSE_PATHS = {"/domy.html", "/domy", "/rodinne-domy.html", "/rodinne-domy"}
 
 
 def parse_annonce_date(text: str) -> str | None:
@@ -45,17 +55,48 @@ def parse_annonce_date(text: str) -> str | None:
         return None
 
 
+def canonical_annonce_url(url: str) -> str:
+    """Map live Annonce aliases onto offer-only apartment/house lists."""
+    split = urlsplit(url or "")
+    path = DOLLAR_ID_RE.sub("", split.path or "/")
+    raw = path.casefold()
+    if "rodinne-domy" in raw or raw.rstrip("/") in BARE_HOUSE_PATHS:
+        path = "/domy-k-pronajmu.html" if "pronaj" in raw else "/domy-na-prodej.html"
+    return urlunsplit((split.scheme or "https", split.netloc or "www.annonce.cz", path, split.query, ""))
+
+
 class AnnonceClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "page"
     PAGE_SIZE = 20
 
     def _context(self) -> str:
-        path = (self.search_url or "").lower()
-        return "prodej" if "prodej" in path else "pronajem"
+        path = canonical_annonce_url(self.search_url or "").lower()
+        if "prodej" in path or "prodam" in path:
+            return "prodej"
+        return "pronajem"
+
+    def _estate(self, title: str = "", url: str = "") -> str:
+        path = canonical_annonce_url(self.search_url or "").lower()
+        if "domy" in path or "dum" in path:
+            return "dum"
+        if HOUSE_HINT_RE.search(f"{title} {url}"):
+            return "dum"
+        return "byt"
 
     def _page_url(self, page: int, newest: bool = True) -> str:
-        return with_page(self.search_url, page, self.PAGE_PARAM)
+        split = urlsplit(canonical_annonce_url(self.search_url))
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        query["nabidkovy"] = "1"
+        if newest:
+            query["sort"] = "ageasc"
+        if page <= 1:
+            query.pop(self.PAGE_PARAM, None)
+        else:
+            query[self.PAGE_PARAM] = str(page)
+        return urlunsplit(
+            (split.scheme or "https", split.netloc or "www.annonce.cz", split.path, urlencode(query), "")
+        )
 
     def _parse_list(self, html: str) -> list[Listing]:
         blocks = CARD_RE.findall(html or "") or CARD2_RE.findall(html or "")
@@ -111,6 +152,8 @@ class AnnonceClient(HtmlPortalClient):
             city_m = CITY_RE.search(html)
             locality = clean(city_m.group(1) if city_m else "")
         disp = attrs.get("dispozice") or ""
+        if disp.casefold() in BLANK_DISP:
+            disp = ""
         area = None
         area_raw = attrs.get("plocha") or attrs.get("výměra") or attrs.get("vymera") or ""
         if area_raw:
@@ -134,6 +177,10 @@ class AnnonceClient(HtmlPortalClient):
             image_url=img,
             photos=[img] if img else [],
             offer=offer,
+            estate=self._estate(title, url),
             created_on=created,
-            extras={"agency": attrs.get("inzerent") or attrs.get("firma") or ""},
+            extras={
+                "agency": attrs.get("inzerent") or attrs.get("firma") or "",
+                "ownership": attrs.get("vlastnictví") or attrs.get("vlastnictvi") or "",
+            },
         )

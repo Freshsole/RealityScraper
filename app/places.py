@@ -209,6 +209,11 @@ def _fold_label(value: str) -> str:
     return re.sub(r"\s*[-–—]\s*", "-", text)
 
 
+def _fold_hyphen(value: str) -> str:
+    """Treat spaces and hyphens the same so Annonce 'Frýdek Místek' pins."""
+    return re.sub(r"[\s\-–—]+", "-", value or "").strip("-")
+
+
 def locality_anchors() -> list[tuple[str, float, float]]:
     global _ANCHORS
     if _ANCHORS is not None:
@@ -337,14 +342,17 @@ _MATCH_CACHE: dict[tuple[str, bool], tuple[str, float, float] | None] = {}
 def _anchor_from_folded(folded: str, collapse_prague: bool = False) -> tuple[str, float, float] | None:
     if not folded:
         return None
+    loose = _fold_hyphen(folded)
     best: tuple[str, float, float] | None = None
     best_len = 0
     praha: tuple[str, float, float] | None = None
     for label, lat, lon in locality_anchors():
         needle = _fold_label(label)
+        needle_loose = _fold_hyphen(needle)
         if needle == "praha":
             praha = (label, lat, lon)
-        if len(needle) < 4 or len(needle) <= best_len or needle not in folded:
+        hit = needle in folded or (needle_loose and needle_loose in loose)
+        if len(needle) < 4 or len(needle) <= best_len or not hit:
             continue
         if len(needle) <= 4:
             padded = f" {folded} "
