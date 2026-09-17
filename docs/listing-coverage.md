@@ -2,6 +2,18 @@
 
 Measured 2026-09-16 from a datacenter IP (this Cloud Agent). InstantSiteASGI / `/hry*` is unchanged — browser/JA3 code is not on that path.
 
+## Web vs worker (`SCRAPE_ROLE`)
+
+InstantSite TTFB stays off the scrape writer by process split, not just timeouts.
+
+| Role | How it starts | Owns |
+|---|---|---|
+| `web` | `Procfile` / supervisord `web`: `uvicorn app.asgi:app` (`app/asgi.py` forces `SCRAPE_ROLE=web`) | InstantSite HTML/JSON, games `/hry*`, dashboard shells, API. Digest + Discord ping dequeue. **Never** constructs `ScrapeEngine`, never schedules NewDiscovery / rolling-deep / Ulov hydrate / catalog / dedupe / sold ticks. Admin scrape/dedupe buttons queue meta for the worker. SQLite writer timeout 800 ms. |
+| `worker` | `Procfile` / supervisord `worker`: `python -m app.scrape_worker` (`main()` forces `SCRAPE_ROLE=worker`) | NewDiscovery, rolling deep, Ulov hydrate, denní katalog, pozemky shards, M&M `SCRAPE_HTTP_PROXY` / `SCRAPE_BROWSER_FETCH`. Consumes `catalog_sync_request`, `scrape_url_request`, `dedupe_request`. |
+| `all` | Local `uvicorn app.main:app` (default) | Both in one process. Do not use `app.asgi:app` for this. |
+
+Do not point the web dyno at `app.main:app` without `SCRAPE_ROLE=web` — that default `all` would start scrape engines next to InstantSite. This slice does not require a residential proxy.
+
 ## UlovDomov (yield)
 
 | Path | Result |

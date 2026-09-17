@@ -602,7 +602,7 @@ class Store:
     def _writer_busy_ms(self) -> int:
         if _is_request_thread():
             return 80
-        if config.SCRAPE_ROLE == "web":
+        if not config.scrape_owned_here():
             return 800
         return 30_000
 

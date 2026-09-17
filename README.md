@@ -37,7 +37,14 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Lokálně default `SCRAPE_ROLE=all` (web + scrape v jednom procesu). Na Railway startuje `supervisord` (`railpack.toml`) se dvěma procesy: `web` (`SCRAPE_ROLE=web`) a `worker` (`python -m app.scrape_worker`). Pád scrapru neshodí web a naopak (`autorestart` per proces).
+Lokálně default `SCRAPE_ROLE=all` (`uvicorn app.main:app` — web + scrape v jednom procesu). Na Railway `supervisord` (`railpack.toml` + `supervisord.conf`) a `Procfile` drží dva procesy; pád scrapru neshodí InstantSite a naopak (`autorestart` per proces).
+
+| proces | entry | `SCRAPE_ROLE` | co běží |
+|---|---|---|---|
+| **web** | `uvicorn app.asgi:app` | `web` (vynuceno v `app/asgi.py`) | InstantSite, hry `/hry*`, dashboard, API. **Žádný** NewDiscovery / rolling-deep / Ulov hydrate / `ScrapeEngine`. Writer timeout 800 ms. |
+| **worker** | `python -m app.scrape_worker` | `worker` (vynuceno v `main()`) | NewDiscovery, rolling deep, Ulov hydrate, denní katalog, pozemky shards, M&M `SCRAPE_HTTP_PROXY`. |
+
+`Procfile` nastavuje env u obou řádků. Lokálně **nepoužívej** `app.asgi:app`, pokud chceš scrape ve stejném procesu — to je jen web dyno.
 
 Dashboard: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 

@@ -62,6 +62,24 @@ SCRAPE_DEEP_LOOP_SEC = max(1, int(os.getenv("SCRAPE_DEEP_LOOP_SEC", "2")))
 SCRAPE_ROLE = (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower()
 if SCRAPE_ROLE not in {"all", "web", "worker"}:
     SCRAPE_ROLE = "all"
+
+
+def scrape_owned_here() -> bool:
+    """True when this process may run NewDiscovery / rolling deep / Ulov hydrate.
+
+    InstantSiteASGI / SCRAPE_ROLE=web is API + HTML only. Worker and local `all`
+    own the scrape engines. Used at runtime so tests can monkeypatch SCRAPE_ROLE.
+    """
+    return SCRAPE_ROLE != "web"
+
+
+def ensure_worker_role() -> None:
+    """scrape_worker entry: this process always owns the scrape engines."""
+    global SCRAPE_ROLE
+    os.environ["SCRAPE_ROLE"] = "worker"
+    SCRAPE_ROLE = "worker"
+
+
 SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
 SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))
 SCRAPE_RECENT_PAGES = max(1, min(10, int(os.getenv("SCRAPE_RECENT_PAGES", "4"))))
@@ -125,7 +143,7 @@ def browser_fetch_allowed(portal: str) -> bool:
     """True only for scrape worker (or local all) when the opt-in flag is on."""
     if not SCRAPE_BROWSER_FETCH:
         return False
-    if SCRAPE_ROLE == "web":
+    if not scrape_owned_here():
         return False
     return (portal or "").strip().lower() in SCRAPE_BROWSER_PORTALS
 
@@ -147,7 +165,7 @@ def scrape_proxy_allowed(portal: str) -> bool:
     """True only for scrape worker (or local all) when a proxy URL is set."""
     if not scrape_proxy_url():
         return False
-    if SCRAPE_ROLE == "web":
+    if not scrape_owned_here():
         return False
     return (portal or "").strip().lower() in SCRAPE_PROXY_PORTALS
 
