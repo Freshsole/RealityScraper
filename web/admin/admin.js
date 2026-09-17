@@ -2431,6 +2431,67 @@
     });
   }
 
+  async function pageGames() {
+    const data = await api("/api/admin/games");
+    const stats = data.stats || {};
+    const top = data.top || [];
+    const recent = data.recent || [];
+    const row = (item, rank) => `<div class="ad-utbl-row">
+        <span class="num">${rank != null ? rank : ""}</span>
+        <span>${esc(item.player_name || "Anonym")}</span>
+        <span class="num">${esc(fmtN(item.score || 0))}</span>
+        <span class="num">${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
+        <span class="muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
+      </div>`;
+    const play = (item) => {
+      const details = (item.items || [])
+        .map(
+          (part) =>
+            `${esc(part.locality || part.name || "")}: tip ${esc(fmtN(part.guess || 0))} / ${esc(fmtN(part.actual || 0))} (${esc(part.points || 0)} b)`,
+        )
+        .join("<br />");
+      return `<article class="ad-card" style="margin-bottom:12px">
+        <div class="ad-utbl-row" style="border:0">
+          <span><strong>${esc(item.player_name || "Anonym")}</strong></span>
+          <span class="num">${esc(fmtN(item.score || 0))}</span>
+          <span class="num">${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
+          <span class="muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
+        </div>
+        <p class="muted" style="padding:0 16px 12px">${details || "Bez detailu tipů"}</p>
+      </article>`;
+    };
+    main.innerHTML = `
+      <header class="ad-pagehead">
+        <h1 class="ad-h">Hry</h1>
+        <p class="ad-lead">Žebříček tipů nájmu z marketingového webu — top skóre, poslední hry a přesnost kola.</p>
+      </header>
+      <section class="ad-nsec">
+        <div class="ad-scrape-kpis">
+          <article class="ad-mini"><div class="lbl">Odehraných kol</div><strong>${esc(fmtN(stats.n || 0))}</strong></article>
+          <article class="ad-mini"><div class="lbl">Nejlepší skóre</div><strong>${esc(fmtN(stats.best || 0))}</strong></article>
+          <article class="ad-mini"><div class="lbl">Průměr skóre</div><strong>${esc(fmtN(Math.round(stats.avg_score || 0)))}</strong></article>
+          <article class="ad-mini"><div class="lbl">Průměrná přesnost</div><strong>${esc(String(stats.avg_accuracy ?? 0).replace(".", ","))} %</strong></article>
+        </div>
+      </section>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">Top skóre</h2>
+        <article class="ad-card">
+          <div class="ad-utbl-wrap">
+            <div class="ad-utbl">
+              <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span>Kdy</span></div>
+              <div>${top.map((item, idx) => row(item, idx + 1)).join("") || ""}</div>
+              <div class="ad-utbl-empty" ${top.length ? "hidden" : ""}>Zatím žádné kolo.</div>
+            </div>
+          </div>
+        </article>
+      </section>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">Poslední hry a přesnost kola</h2>
+        ${recent.map(play).join("") || '<p class="muted">Nikdo ještě nehrál tip nájmu.</p>'}
+      </section>
+    `;
+  }
+
   const cmsPages =
     typeof window.AdCms === "function"
       ? window.AdCms({ api, esc, ico, $, main, fmtN, getMe: () => me })
@@ -2443,6 +2504,7 @@
     monitory: pageMonitors,
     notifikace: pageNotify,
     provoz: pageOps,
+    hry: pageGames,
     fakturace: pageBilling,
     promo: pagePromo,
     ...cmsPages,
@@ -2481,6 +2543,7 @@
     main.classList.toggle("ad-monitors", route === "monitory");
     main.classList.toggle("ad-notify", route === "notifikace");
     main.classList.toggle("ad-ops", route === "provoz");
+    main.classList.toggle("ad-games", route === "hry");
     main.classList.toggle("ad-bill", route === "fakturace");
     main.classList.toggle("ad-promo", route === "promo");
     const cms = String(route).startsWith("cms");

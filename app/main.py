@@ -62,6 +62,9 @@ async def maybe_auto_update() -> None:
 async def lifespan(_app: FastAPI):
     print(f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE}", flush=True)
     await hub.start()
+    from app import games as marketing_games
+
+    marketing_games.schedule_pool_refresh(hub.store)
     if config.ON_RAILWAY and not config.PERSISTENT_STORAGE:
         hub.last_error = (
             "Databáze není na Railway Volume. Po každém deployi se smaže účet. "
@@ -270,6 +273,24 @@ def stories() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+def games_hub() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry.html")
+
+
+def game_higher() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-vyssi-nizsi.html")
+
+
+def game_rent() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-najem.html")
+
+
 def story_article() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -298,6 +319,9 @@ app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_sche
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry", games_hub, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry/vyssi-nizsi", game_higher, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry/najem", game_rent, methods=["GET"], include_in_schema=False)
 app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
 app.add_api_route("/registrace", auth_register, methods=["GET"], include_in_schema=False)
 app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=False)
@@ -650,6 +674,14 @@ async def admin_broadcast(
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     await asyncio.to_thread(_admin_user, realitify_admin)
     return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+
+
+@app.get("/api/admin/games")
+async def admin_games(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    from app import games as marketing_games
+
+    await asyncio.to_thread(_admin_user, realitify_admin)
+    return await asyncio.to_thread(marketing_games.leaderboard, hub.store)
 
 
 @app.post("/api/admin/scrape-url")
@@ -1227,6 +1259,55 @@ async def public_gone_fast() -> dict:
     return {"items": hub.store.public_gone_fast_rentals(days=3, limit=4)}
 
 
+@app.get("/api/public/games/higher-lower")
+async def public_game_higher_lower() -> dict:
+    from app import games as marketing_games
+
+    # Memory/seed only — catalog refresh is background and must not delay the response.
+    marketing_games.schedule_pool_refresh(hub.store)
+    return marketing_games.higher_lower_pair(hub.store)
+
+
+@app.get("/api/public/games/rent-round")
+async def public_game_rent_round() -> dict:
+    from app import games as marketing_games
+
+    marketing_games.schedule_pool_refresh(hub.store)
+    payload = marketing_games.rent_round(hub.store)
+    return {"round_id": payload["round_id"], "items": payload["items"]}
+
+
+@app.post("/api/public/games/rent-score")
+async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) -> dict:
+    from app import games as marketing_games
+
+    body = payload or {}
+    guesses = body.get("guesses") or []
+    if not isinstance(guesses, list) or len(guesses) < 1:
+        raise HTTPException(400, "Chybí tipy")
+    ids = [str(item.get("id") or "") for item in guesses if isinstance(item, dict)]
+    found = await asyncio.to_thread(marketing_games.lookup_prices, hub.store, ids)
+    items = [found[key] for key in ids if key in found]
+    if len(items) < 1:
+        raise HTTPException(400, "Neznámé byty")
+    scored = marketing_games.score_round(items, [item for item in guesses if isinstance(item, dict)])
+    saved = await asyncio.to_thread(
+        marketing_games.save_rent_round,
+        hub.store,
+        player_name=str(body.get("name") or ""),
+        scored=scored,
+    )
+    return {
+        "ok": True,
+        "id": saved["id"],
+        "player_name": saved["player_name"],
+        "score": scored["score"],
+        "max_score": scored["max_score"],
+        "accuracy": scored["accuracy"],
+        "items": scored["items"],
+    }
+
+
 @app.get("/api/listings")
 async def listings() -> dict:
     return {"items": hub.store.recent_notified(24)}
@@ -1591,46 +1672,29 @@ async def delete_template(template_id: str) -> dict:
 
 
 def _filter_mod(source: str | None = None, url: str = ""):
-    raw = (source or "").lower()
-    lowered = (url or "").lower()
-    if raw == "idnes" or "idnes.cz" in lowered:
-        return idnes_url
-    if raw == "bazos" or "bazos" in lowered:
-        return bazos_url
-    if raw == "bezrealitky" or "bezrealitky.cz" in lowered:
-        return bezrealitky_url
-    return url_builder
+    from app.sources import url_mod_for
+
+    return url_mod_for(source, url or "")
 
 
 @app.get("/api/filters/catalog")
 async def filter_catalog() -> dict:
+    from app.sources import PORTALS
+
+    sources = {}
+    for spec in PORTALS:
+        sources[spec.id] = {
+            "catalog": spec.urls.catalog(),
+            "defaults": spec.urls.default_filters(),
+            "sample": spec.urls.sample_filters(),
+        }
     payload = {
         "locality_map": localities.catalog_map(),
         "catalog": url_builder.catalog(),
         "defaults": url_builder.default_filters(),
         "sample": url_builder.sample_filters(),
-        "sources": {
-            "sreality": {
-                "catalog": url_builder.catalog(),
-                "defaults": url_builder.default_filters(),
-                "sample": url_builder.sample_filters(),
-            },
-            "bezrealitky": {
-                "catalog": bezrealitky_url.catalog(),
-                "defaults": bezrealitky_url.default_filters(),
-                "sample": bezrealitky_url.sample_filters(),
-            },
-            "idnes": {
-                "catalog": idnes_url.catalog(),
-                "defaults": idnes_url.default_filters(),
-                "sample": idnes_url.sample_filters(),
-            },
-            "bazos": {
-                "catalog": bazos_url.catalog(),
-                "defaults": bazos_url.default_filters(),
-                "sample": bazos_url.sample_filters(),
-            },
-        },
+        "sources": sources,
+        "portals": [{"id": spec.id, "label": spec.label} for spec in PORTALS],
     }
     return payload
 
