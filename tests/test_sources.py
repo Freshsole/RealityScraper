@@ -1,4 +1,11 @@
-from app.catalog_sync import extra_portal_recent_shards, recent_shards
+from app.block_page import PortalCooldown
+from app.catalog_sync import (
+    HEALTHY_DISCOVERY_PORTALS,
+    extra_portal_recent_shards,
+    order_recent_shards,
+    prepare_discovery_shards,
+    recent_shards,
+)
 from app.filter_bridge import search_urls_for_portals
 from app.sources import PORTAL_IDS, PORTAL_LABELS, PORTAL_ORDER, portal_of, registered_portals, source_name
 
@@ -38,6 +45,25 @@ def test_recent_shards_cover_all_portals():
     extra = extra_portal_recent_shards()
     assert {item["portal"] for item in extra} == set(PORTAL_IDS) - {"sreality"}
     assert all(item["kind"] == "catalog_recent" for item in shards)
+
+
+def test_prepare_discovery_shards_extras_first_and_skips_cooldown():
+    shards = recent_shards()
+    ordered = order_recent_shards(shards)
+    assert ordered[0]["portal"] != "sreality"
+    assert ordered[-1]["portal"] == "sreality"
+    assert {item["portal"] for item in ordered} == set(PORTAL_IDS)
+    assert HEALTHY_DISCOVERY_PORTALS == set(PORTAL_IDS) - {"mmreality"}
+
+    ready = prepare_discovery_shards(None)
+    assert any(item["portal"] == "mmreality" for item in ready)
+    assert ready[0]["portal"] != "sreality"
+
+    cooldown = PortalCooldown()
+    cooldown.note("mmreality", "cloudflare")
+    filtered = prepare_discovery_shards(cooldown)
+    assert all(item["portal"] != "mmreality" for item in filtered)
+    assert {item["portal"] for item in filtered} == HEALTHY_DISCOVERY_PORTALS
 
 
 def test_search_urls_for_all_portals():

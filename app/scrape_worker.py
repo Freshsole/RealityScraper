@@ -11,11 +11,10 @@ from app.catalog_sync import (
     daily_shards,
     listing_is_new_for_monitor,
     monitor_search_targets,
-    recent_shards,
+    prepare_discovery_shards,
 )
 from app.monitor import Hub
 from app.monitor_index import MonitorIndex
-from app.scrape_engine import ScrapeEngine, ScrapeMetrics
 from app.sreality import Listing, ListingGone
 from app.store import utc_now
 
@@ -25,7 +24,7 @@ class ScrapeWorker:
 
     def __init__(self) -> None:
         self.hub = Hub()
-        self.engine = ScrapeEngine()
+        self.engine = self.hub._discovery_engine
         self.monitor_index = MonitorIndex()
         self.running = False
         self.last_tick: dict[str, Any] = {}
@@ -102,7 +101,7 @@ class ScrapeWorker:
         return self.last_tick
 
     async def run_new_discovery(self) -> dict[str, Any]:
-        shards = recent_shards()
+        shards = prepare_discovery_shards(self.hub._scrape_limiter.cooldown)
         results = await self.engine.fetch_shards(
             shards,
             client_factory=self.hub.client_for,

@@ -101,6 +101,39 @@ def test_fetch_page_does_not_call_detail():
     assert not any("offer/detail" in path for path in hits)
 
 
+def test_sitemap_single_flight_and_cache_fresh():
+    from app.ulovdomov import sitemap_cache_fresh
+
+    reset_ulov_caches()
+    assert sitemap_cache_fresh() is False
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url.path))
+        return httpx.Response(200, text=SITEMAP, headers={"content-type": "application/xml"})
+
+    async def _run() -> None:
+        rent = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        sale = UlovdomovClient("https://www.ulovdomov.cz/prodej/byty")
+        await rent.aclose()
+        await sale.aclose()
+        transport = httpx.MockTransport(handler)
+        rent._client = httpx.AsyncClient(transport=transport)
+        sale._client = httpx.AsyncClient(transport=transport)
+        try:
+            rows_a, rows_b = await asyncio.gather(rent._load_sitemap_rows(), sale._load_sitemap_rows())
+            assert rows_a and rows_b
+            assert sitemap_cache_fresh() is True
+            await rent._load_sitemap_rows()
+        finally:
+            await rent.aclose()
+            await sale.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()
+    assert hits.count("/sitemap-offers.xml") == 1
+
+
 def test_hydrate_batch_fills_price_and_is_fail_fast():
     reset_ulov_caches()
     hits: list[str] = []

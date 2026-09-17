@@ -38,6 +38,21 @@ Sample after detail: Olomouc 2+kk 17 900 Kč, Praha-Komořany 18 500 Kč, So
 
 Limit: M&M still has no listings from this datacenter IP. Residential-proxy follow-up unchanged.
 
+## Healthy-portal NewDiscovery throughput
+
+Goal: more freshest listings/min from portals that already return cards (Sreality, iDNES, Bazoš, Bezrealitky, Annonce, RE/MAX, ČeskéReality, Reality.cz, Ulov sitemap+hydrate). InstantSiteASGI `/hry*`, WAL stale readers, live-catalog games, and worker-only Ulov hydrate are unchanged. No M&M residential proxy in this slice.
+
+Shipped:
+
+- Persist Hub `_discovery_engine` / `_deep_engine` so `SCRAPE_RECENT_PAGES` deferred leftovers actually run next minute.
+- `prepare_discovery_shards`: nationwide extras first, skip portals already on per-portal cooldown (M&M still retried after cooldown — not permanently disabled).
+- `fetch_shards(page1_across=True)`: page 1 of every ready shard before pages 2..N, so a slow HTML shard cannot hold the shard gate through 4 pages and starve later page-1s.
+- Ulov `sitemap-offers.xml` single-flight + warmup once per discovery tick (rent+sale share the 8 min cache).
+- Rolling deep yields while NewDiscovery is in-flight (limiter priority was not enough for work already started).
+- Catalog upsert busy: keep fetched listings in `_pending_discovery` for the next tick instead of dropping them.
+
+Measure: `scripts/measure_discovery_tick.py` (synthetic held-gate vs page-1-across; `--live` for healthy page-1 probes). M&M proxy remain the documented follow-up below.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

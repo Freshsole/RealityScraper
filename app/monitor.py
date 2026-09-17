@@ -14,7 +14,12 @@ from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
 from app.sources import PORTAL_LABELS, client_for, source_name
-from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_shards
+from app.catalog_sync import (
+    daily_shards,
+    listing_is_new_for_monitor,
+    prepare_discovery_shards,
+    recent_shards,
+)
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
@@ -51,6 +56,10 @@ class Hub:
 
         self._scrape_limiter = AdaptiveLimiter()
         self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
+        self._discovery_engine = ScrapeEngine(self._scrape_limiter, priority=1)
+        self._deep_engine = ScrapeEngine(self._scrape_limiter, priority=2)
+        self._discovery_inflight = False
+        self._pending_discovery: list[Listing] = []
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
@@ -713,9 +722,18 @@ class Hub:
 
     async def _deep_catalog_loop(self) -> None:
         """Continuously consume low-priority full-market shards."""
+        from app.scrape_engine import should_yield_deep
+
         await asyncio.sleep(4)
         while self.running:
             try:
+                if should_yield_deep(
+                    discovery_inflight=self._discovery_inflight,
+                    waiting_below=self._scrape_limiter.waiting_below(2),
+                    enabled=bool(config.SCRAPE_DEEP_YIELD_TO_DISCOVERY),
+                ):
+                    await asyncio.sleep(0.25)
+                    continue
                 await self._deep_catalog_tick()
             except asyncio.CancelledError:
                 raise
@@ -893,29 +911,66 @@ class Hub:
         if not deep:
             return []
         n = max(1, min(len(deep), int(take or config.SCRAPE_DEEP_SHARDS_PER_TICK)))
+        cooldown = getattr(self._scrape_limiter, "cooldown", None)
         picked: list[dict[str, str]] = []
-        for _ in range(n):
-            picked.append(deep[self._deep_shard_idx % len(deep)])
+        scanned = 0
+        while len(picked) < n and scanned < len(deep):
+            shard = deep[self._deep_shard_idx % len(deep)]
             self._deep_shard_idx = (self._deep_shard_idx + 1) % len(deep)
+            scanned += 1
+            portal = (shard.get("portal") or "").strip().lower()
+            if cooldown is not None and portal and cooldown.active(portal):
+                continue
+            picked.append(shard)
         return picked
+
+    def _merge_pending_discovery(self, listings: list[Listing]) -> list[Listing]:
+        pending = list(getattr(self, "_pending_discovery", None) or [])
+        self._pending_discovery = []
+        if not pending:
+            return listings
+        seen = {item.id for item in listings}
+        merged = list(listings)
+        for item in pending:
+            if item.id in seen:
+                continue
+            seen.add(item.id)
+            merged.append(item)
+        return merged[:2500]
+
+    async def _warmup_ulov_sitemap(self, shards: list[dict[str, str]]) -> None:
+        """One sitemap GET per discovery tick so rent+sale shards share the 8 min cache."""
+        from app.ulovdomov import sitemap_cache_fresh
+
+        if sitemap_cache_fresh():
+            return
+        url = next((item.get("search_url") or "" for item in shards if (item.get("portal") or "") == "ulovdomov"), "")
+        if not url:
+            return
+        client = self.client_for(url)
+        loader = getattr(client, "_load_sitemap_rows", None)
+        if loader is None:
+            return
+        await loader()
 
     async def _recent_catalog_tick(self) -> None:
         """High-priority NewDiscovery; never waits for rolling deep."""
-        from app.scrape_engine import ScrapeEngine
-
-        recent = recent_shards()
+        recent_all = recent_shards()
+        recent = prepare_discovery_shards(self._scrape_limiter.cooldown)
         if not recent:
             return
 
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=1)
+        engine = self._discovery_engine
         disc_stats = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
         disc_listings: list[Listing] = []
         disc_pages = 0
         disc_deferred = 0
         error: str | None = None
         write_note: str | None = None
+        self._discovery_inflight = True
         try:
+            await self._warmup_ulov_sitemap(recent)
             results = await engine.fetch_shards(
                 recent,
                 client_factory=self.client_for,
@@ -931,6 +986,7 @@ class Hub:
                         continue
                     seen.add(listing.id)
                     disc_listings.append(listing)
+            disc_listings = self._merge_pending_discovery(disc_listings)
             if disc_listings:
                 written, write_note = await self._try_catalog_upsert(
                     disc_listings,
@@ -941,11 +997,15 @@ class Hub:
                 if written is not None:
                     disc_stats = written
                     disc_deferred += int(written.get("deferred_write") or 0)
+                    self._pending_discovery = []
                 else:
+                    self._pending_discovery = disc_listings[:2500]
                     disc_deferred += len(disc_listings)
         except Exception as exc:
             error = str(exc)[:240]
             self.last_error = f"recent-catalog: {error}"
+        finally:
+            self._discovery_inflight = False
 
         tick = {
             "at": utc_now(),
@@ -956,9 +1016,12 @@ class Hub:
             "note": write_note,
             "discovery": {
                 "shards": len(recent),
+                "shards_all": len(recent_all),
+                "shards_cooling": max(0, len(recent_all) - len(recent)),
                 "listings": len(disc_listings),
                 "pages_ok": disc_pages,
                 "deferred": disc_deferred,
+                "deferred_engine": len(engine.deferred),
                 "new": int(disc_stats.get("new") or 0),
                 "updated": int(disc_stats.get("updated") or 0),
                 "same": int(disc_stats.get("same") or 0),
@@ -971,7 +1034,7 @@ class Hub:
             await self._record_tick(tick)
             print(
                 f"new_discovery listings={len(disc_listings)} new={disc_stats.get('new')} "
-                f"ms={tick['ms']}"
+                f"shards={len(recent)}/{len(recent_all)} ms={tick['ms']}"
                 + (f" note={write_note}" if write_note else ""),
                 flush=True,
             )
@@ -981,13 +1044,19 @@ class Hub:
 
     async def _deep_catalog_tick(self) -> None:
         """Low-priority rolling crawl; monitor and discovery requests preempt its queue."""
-        from app.scrape_engine import ScrapeEngine
+        from app.scrape_engine import should_yield_deep
 
+        if should_yield_deep(
+            discovery_inflight=self._discovery_inflight,
+            waiting_below=self._scrape_limiter.waiting_below(2),
+            enabled=bool(config.SCRAPE_DEEP_YIELD_TO_DISCOVERY),
+        ):
+            return
         deep = self.next_deep_shards()
         if not deep:
             return
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=2)
+        engine = self._deep_engine
         listings: list[Listing] = []
         pages_ok = 0
         deferred = 0

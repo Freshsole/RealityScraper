@@ -59,7 +59,19 @@ DISPOSITION_NAMES = {
 _sitemap_rows: list[tuple[str, str, int, str]] | None = None
 _sitemap_at = 0.0
 _sitemap_ok = False
+_sitemap_lock: asyncio.Lock | None = None
 _build_id = ""
+
+
+def sitemap_cache_fresh() -> bool:
+    return bool(_sitemap_ok and _sitemap_rows is not None and (time.monotonic() - _sitemap_at) < SITEMAP_TTL_SEC)
+
+
+def _sitemap_guard() -> asyncio.Lock:
+    global _sitemap_lock
+    if _sitemap_lock is None:
+        _sitemap_lock = asyncio.Lock()
+    return _sitemap_lock
 
 
 def _as_int(value: Any) -> int | None:
@@ -609,33 +621,36 @@ class UlovdomovClient(HtmlPortalClient):
 
     async def _load_sitemap_rows(self) -> list[tuple[str, str, int, str]]:
         global _sitemap_rows, _sitemap_at, _sitemap_ok
-        now = time.monotonic()
-        if _sitemap_ok and _sitemap_rows is not None and now - _sitemap_at < SITEMAP_TTL_SEC:
-            return _sitemap_rows
-        try:
-            response = await self._client.get(
-                SITEMAP_OFFERS,
-                headers={"Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8"},
-                timeout=15.0,
-            )
-        except Exception:
-            _sitemap_ok = False
+        if sitemap_cache_fresh():
             return _sitemap_rows or []
-        if response.status_code != 200:
-            _sitemap_ok = False
+        async with _sitemap_guard():
+            if sitemap_cache_fresh():
+                return _sitemap_rows or []
+            now = time.monotonic()
+            try:
+                response = await self._client.get(
+                    SITEMAP_OFFERS,
+                    headers={"Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8"},
+                    timeout=15.0,
+                )
+            except Exception:
+                _sitemap_ok = False
+                return _sitemap_rows or []
+            if response.status_code != 200:
+                _sitemap_ok = False
+                _sitemap_at = now
+                return []
+            text = response.text or ""
+            folded = text.casefold()
+            if "<urlset" not in folded and "<loc>" not in folded:
+                _sitemap_ok = False
+                _sitemap_at = now
+                return []
+            rows = parse_sitemap_offers(text)
+            _sitemap_rows = rows
             _sitemap_at = now
-            return []
-        text = response.text or ""
-        folded = text.casefold()
-        if "<urlset" not in folded and "<loc>" not in folded:
-            _sitemap_ok = False
-            _sitemap_at = now
-            return []
-        rows = parse_sitemap_offers(text)
-        _sitemap_rows = rows
-        _sitemap_at = now
-        _sitemap_ok = True
-        return rows
+            _sitemap_ok = True
+            return rows
 
     async def _fetch_sitemap_page(self, page: int) -> tuple[list[Listing], int]:
         offer = self._context()
