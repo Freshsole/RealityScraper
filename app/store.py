@@ -353,6 +353,19 @@ def _monitor_hit_sql() -> str:
 
 CATALOG_MONITOR_ID = "__catalog__"
 
+# List/map over-fetch stays off description blobs. Page hydrate still needs extras for flags.
+_LISTING_LIGHT_COLS = (
+    "listings.id, listings.monitor_id, listings.name, listings.price_czk, listings.price_label, "
+    "listings.disposition, listings.area_m2, listings.locality, listings.url, listings.image_url, "
+    "listings.first_seen, listings.notified, listings.lat, listings.lon, listings.last_seen, "
+    "listings.gone, listings.listing_key, listings.canonical_key, listings.old_price_czk"
+)
+_LISTING_CARD_COLS = (
+    f"{_LISTING_LIGHT_COLS}, listings.extras, listings.created_on, listings.edited_on, "
+    "listings.views, listings.last_kind"
+)
+_LISTING_DETAIL_COLS = f"{_LISTING_CARD_COLS}, listings.description"
+
 
 def channel_key(webhook_url: str) -> str:
     parsed = urlparse((webhook_url or "").strip())
@@ -437,11 +450,39 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
                 labels = [name for name, key in zip(labels, folded) if key != "brno"]
         text_sql, text_params = places.locality_match_sql("listings.locality", labels)
         # Locality match platí i když má inzerát GPS jinde (centroid dump / špatný approx).
-        where.append(f"(({gps}) OR {text_sql})")
+        compound = f"(({gps}) OR {text_sql})"
+        where.append(compound)
         params.extend([south, north, west, east, *text_params])
+        filters["_bbox_sql"] = compound
+        filters["_bbox_param_count"] = 4 + len(text_params)
+        filters["_gps_sql"] = gps
+        filters["_gps_params"] = [south, north, west, east]
+        filters["_text_sql"] = text_sql
+        filters["_text_params"] = list(text_params)
     else:
         where.append(gps)
         params.extend([south, north, west, east])
+        filters["_bbox_sql"] = gps
+        filters["_bbox_param_count"] = 4
+        filters["_gps_sql"] = gps
+        filters["_gps_params"] = [south, north, west, east]
+        filters["_text_sql"] = ""
+        filters["_text_params"] = []
+
+
+def _without_map_bbox(
+    where: list[str], params: list[Any], filters: dict[str, Any]
+) -> tuple[list[str], list[Any]]:
+    """Drop the GPS-OR-locality clause so pin GPS reads can use lat/lon indexes."""
+    compound = filters.get("_bbox_sql")
+    count = int(filters.get("_bbox_param_count") or 0)
+    if not compound or compound not in where:
+        return list(where), list(params)
+    idx = where.index(compound)
+    before = sum(item.count("?") for item in where[:idx])
+    stripped = where[:idx] + where[idx + 1 :]
+    stripped_params = list(params[:before]) + list(params[before + count :])
+    return stripped, stripped_params
 
 
 def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
@@ -546,6 +587,7 @@ class Store:
         self._new_today_cache: tuple[float, int] | None = None
         self._landing_preview_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._hot_json_cache: dict[str, tuple[float, Any]] = {}
+        self._listing_user_status_cache: dict[str, bool] = {}
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._init()
@@ -576,12 +618,13 @@ class Store:
         """Open SQLite with a reader/writer split.
 
         Readers never use mode=ro (it can stall on -shm / checkpoint). They take a
-        short busy_timeout so catalog/map/listings/search cannot sit behind a scrape
-        writer. Background scrape threads keep a long writer timeout; the web request
-        path and SCRAPE_ROLE=web stay fail-fast.
+        short busy_timeout so catalog/map/listings/search cannot sit behind an
+        exclusive scrape writer; WAL readers otherwise proceed against the last
+        snapshot. Background scrape threads keep a long writer timeout; the web
+        request path and SCRAPE_ROLE=web stay fail-fast.
         """
         if readonly or quick:
-            return self._connect_reader(200 if quick else 250)
+            return self._connect_reader(50 if quick else 80)
         return self._connect_writer()
 
     def _connect_reader(self, busy_ms: int) -> sqlite3.Connection:
@@ -595,6 +638,14 @@ class Store:
             pass
         try:
             conn.execute("PRAGMA temp_store=MEMORY")
+        except sqlite3.Error:
+            pass
+        try:
+            conn.execute("PRAGMA mmap_size=268435456")
+        except sqlite3.Error:
+            pass
+        try:
+            conn.execute("PRAGMA cache_size=-8000")
         except sqlite3.Error:
             pass
         return conn
@@ -625,6 +676,52 @@ class Store:
             except sqlite3.Error:
                 pass
             conn.close()
+
+    def _listing_user_has_status(self, status: str) -> bool:
+        """Skip correlated listing_user EXISTS on the public catalog when unused."""
+        cached = self._listing_user_status_cache.get(status)
+        if cached is not None:
+            return cached
+        try:
+            with self.read(quick=True) as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM listing_user WHERE status = ? LIMIT 1", (status,)
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return False
+        present = bool(row)
+        self._listing_user_status_cache[status] = present
+        return present
+
+    def _listing_cards_by_ids(
+        self,
+        pairs: list[tuple[Any, Any]],
+        *,
+        conn: sqlite3.Connection | None = None,
+        detail: bool = False,
+    ) -> dict[tuple[Any, Any], dict[str, Any]]:
+        if not pairs:
+            return {}
+        cols = _LISTING_DETAIL_COLS if detail else _LISTING_CARD_COLS
+        holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in pairs)
+        flat = [item for pair in pairs for item in pair]
+        sql = f"""
+            SELECT {cols}, monitors.name AS monitor_name, monitors.search_url AS search_url
+            FROM listings
+            LEFT JOIN monitors ON monitors.id = listings.monitor_id
+            WHERE {holders}
+        """
+
+        def fetch(db: sqlite3.Connection) -> dict[tuple[Any, Any], dict[str, Any]]:
+            return {
+                (row["monitor_id"], row["id"]): dict(row)
+                for row in db.execute(sql, flat)
+            }
+
+        if conn is not None:
+            return fetch(conn)
+        with self.read() as db:
+            return fetch(db)
 
     def _hot_json_key(self, kind: str, filters: dict[str, Any] | None = None, extra: str = "") -> str:
         parts = [kind, extra]
@@ -3757,6 +3854,7 @@ class Store:
             lambda: self._recent_notified_query(
                 limit, monitor_id, since=since, extras=extras, twins=twins
             ),
+            fresh_age=2.0,
         )
 
     def _recent_notified_query(
@@ -3771,8 +3869,8 @@ class Store:
         fetch_limit = max(limit * 4, limit)
         params: list[Any] = []
         if since:
-            sql = """
-                SELECT listings.*, monitors.name AS monitor_name, hits.hit_at
+            sql = f"""
+                SELECT {_LISTING_LIGHT_COLS}, monitors.name AS monitor_name, hits.hit_at
                 FROM (
                     SELECT listing_id, monitor_id, MAX(created_at) AS hit_at
                     FROM events
@@ -3793,8 +3891,8 @@ class Store:
             """
             params.append(fetch_limit)
         else:
-            sql = """
-                SELECT listings.*, monitors.name AS monitor_name
+            sql = f"""
+                SELECT {_LISTING_LIGHT_COLS}, monitors.name AS monitor_name
                 FROM listings
                 LEFT JOIN monitors ON monitors.id = listings.monitor_id
                 WHERE listings.notified = 1
@@ -3808,18 +3906,24 @@ class Store:
             """
             params.append(fetch_limit)
         with self.read() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        items: list[dict[str, Any]] = []
+            rows = [dict(row) for row in conn.execute(sql, params)]
+        picked: list[dict[str, Any]] = []
         seen: set[str] = set()
         for row in rows:
-            item = public_listing(dict(row))
-            key = listing_identity(item)
+            key = listing_identity(row)
             if key in seen:
                 continue
             seen.add(key)
-            items.append(item)
-            if len(items) >= limit:
+            picked.append(row)
+            if len(picked) >= limit:
                 break
+        cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in picked])
+        items: list[dict[str, Any]] = []
+        for row in picked:
+            data = cards.get((row["monitor_id"], row["id"]), row)
+            if row.get("hit_at") is not None:
+                data = {**data, "hit_at": row["hit_at"]}
+            items.append(public_listing(data))
         if extras:
             self._attach_catalog_extras(items, twins=twins)
         return items
@@ -3988,6 +4092,12 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_last_seen ON catalog_listings(gone, last_seen DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listing_links_portal ON listing_links(portal, gone)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_gone_seen ON listings(gone, last_seen)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_url ON listings(url)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_id ON listings(id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_disposition ON listings(disposition)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_geo_notified ON listings(lat, lon, notified)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor ON listings(monitor_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_url ON catalog_listings(url)")
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS game_rent_rounds (
@@ -4267,7 +4377,7 @@ class Store:
         return self._hot_json(
             self._hot_json_key("catalog", filters),
             lambda: self._catalog_query(filters),
-            fresh_age=1.2,
+            fresh_age=2.0,
         )
 
     def catalog_freshness(self) -> dict[str, Any]:
@@ -4280,8 +4390,8 @@ class Store:
     def _catalog_freshness_query(self) -> dict[str, Any]:
         with self.read(quick=True) as conn:
             row = conn.execute(
-                """
-                SELECT listings.*, monitors.name AS monitor_name
+                f"""
+                SELECT {_LISTING_LIGHT_COLS}, listings.extras, monitors.name AS monitor_name
                 FROM listings
                 LEFT JOIN monitors ON monitors.id = listings.monitor_id
                 ORDER BY listings.first_seen DESC
@@ -4340,10 +4450,10 @@ class Store:
             return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets()}
         if query and not place_geoms:
             where.append(
-                "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ? OR IFNULL(listings.description, '') LIKE ?)"
+                "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ?)"
             )
             like = f"%{query}%"
-            params.extend([like, like, like, like])
+            params.extend([like, like, like])
         disposition = filters.get("disposition") or []
         if isinstance(disposition, str):
             disposition = [item for item in disposition.split(",") if item]
@@ -4581,11 +4691,26 @@ class Store:
         _apply_circle(where, params, filters)
         status = (filters.get("status") or "").strip()
         if status == "saved":
-            where.append(_saved_listing_sql())
+            if self._listing_user_has_status("saved"):
+                where.append(_saved_listing_sql())
+            else:
+                if filters.get("pins_only"):
+                    return {"items": []}
+                limit = min(max(int(filters.get("limit") or 36), 1), 120)
+                offset = max(int(filters.get("offset") or 0), 0)
+                return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets()}
         elif status == "hidden":
-            where.append(_hidden_listing_sql())
+            if self._listing_user_has_status("hidden"):
+                where.append(_hidden_listing_sql())
+            else:
+                if filters.get("pins_only"):
+                    return {"items": []}
+                limit = min(max(int(filters.get("limit") or 36), 1), 120)
+                offset = max(int(filters.get("offset") or 0), 0)
+                return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets()}
         elif status != "all":
-            where.append(f"NOT {_hidden_listing_sql()}")
+            if self._listing_user_has_status("hidden"):
+                where.append(f"NOT {_hidden_listing_sql()}")
         hits = (filters.get("hits") or "").strip()
         if hits in {"today", "day"}:
             where.append("listings.notified = 1")
@@ -4667,7 +4792,7 @@ class Store:
                 holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in page)
                 flat = [item for row in page for item in (row["monitor_id"], row["id"])]
                 full_sql = f"""
-                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    SELECT {_LISTING_CARD_COLS}, monitors.name AS monitor_name, monitors.search_url AS search_url
                     FROM listings
                     LEFT JOIN monitors ON monitors.id = listings.monitor_id
                     WHERE {holders}
@@ -4681,9 +4806,8 @@ class Store:
         else:
             fetch_limit = min((offset + limit) * 4, 2000)
             sql = f"""
-                SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+                SELECT {_LISTING_LIGHT_COLS}
                 FROM listings
-                LEFT JOIN monitors ON monitors.id = listings.monitor_id
                 WHERE {clause}
                 ORDER BY {order}
                 LIMIT ?
@@ -4714,6 +4838,9 @@ class Store:
                 total = unique_n
                 if len(fetched) >= fetch_limit:
                     total = max(unique_n, offset + len(rows) + (limit if len(rows) >= limit else 0))
+            if rows:
+                cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in rows])
+                rows = [cards[key] for row in rows if (key := (row["monitor_id"], row["id"])) in cards]
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:
@@ -4861,42 +4988,44 @@ class Store:
                     # Piny jen se souřadnicemi ve viewportu — dřívější LIMIT 400
                     # z celého locality-match setu podvzorkoval čtvrti (11→22 při zoomu).
                     pin_cap = max(int(pin_limit), 8000)
-                    if isinstance(bbox, tuple) and len(bbox) == 4:
-                        b_south, b_north, b_west, b_east = bbox
-                        gps_sql = f"""
-                        {select}
-                        WHERE {clause}
-                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                          AND listings.lat BETWEEN ? AND ?
-                          AND listings.lon BETWEEN ? AND ?
-                        ORDER BY listings.notified DESC, listings.rowid ASC
-                        LIMIT {pin_cap}
-                        """
-                        gps_rows = [
-                            dict(row)
-                            for row in conn.execute(
-                                gps_sql, (*params, b_south, b_north, b_west, b_east)
-                            ).fetchall()
-                        ]
-                    else:
-                        gps_sql = f"""
-                        {select}
-                        WHERE {clause}
-                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                        ORDER BY listings.notified DESC, listings.rowid ASC
-                        LIMIT {pin_cap}
-                        """
-                        gps_rows = [dict(row) for row in conn.execute(gps_sql, params).fetchall()]
+                    base_where, base_params = _without_map_bbox(where, params, filters)
+                    gps_sql_frag = filters.get("_gps_sql") or (
+                        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+                        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+                    )
+                    gps_params = list(filters.get("_gps_params") or [])
+                    if not gps_params and isinstance(bbox, tuple) and len(bbox) == 4:
+                        gps_params = [bbox[0], bbox[1], bbox[2], bbox[3]]
+                    gps_clause = " AND ".join([*base_where, gps_sql_frag])
+                    gps_sql = f"""
+                    {select}
+                    WHERE {gps_clause}
+                    ORDER BY listings.notified DESC
+                    LIMIT {pin_cap}
+                    """
+                    gps_rows = [
+                        dict(row)
+                        for row in conn.execute(gps_sql, (*base_params, *gps_params)).fetchall()
+                    ]
                     fetched.extend(gps_rows)
+                    text_sql = str(filters.get("_text_sql") or "").strip()
+                    text_params = list(filters.get("_text_params") or [])
+                    null_parts = [
+                        *base_where,
+                        "(listings.lat IS NULL OR listings.lon IS NULL)",
+                    ]
+                    null_params = list(base_params)
+                    if text_sql:
+                        null_parts.append(f"({text_sql})")
+                        null_params.extend(text_params)
                     null_sql = f"""
                     {select}
-                    WHERE {clause}
-                      AND (listings.lat IS NULL OR listings.lon IS NULL)
+                    WHERE {" AND ".join(null_parts)}
                     ORDER BY listings.first_seen DESC
                     LIMIT 2000
                     """
                     buckets: dict[str, list[dict[str, Any]]] = {}
-                    for row in conn.execute(null_sql, params).fetchall():
+                    for row in conn.execute(null_sql, null_params).fetchall():
                         item = dict(row)
                         loc = str(item.get("locality") or "")
                         point = places.approx_point_from_locality(loc)
@@ -4997,6 +5126,7 @@ class Store:
         return self._hot_json(
             key,
             lambda: self._catalog_item_query(monitor_id, listing_id, listing_key, url),
+            fresh_age=2.0,
         )
 
     def _catalog_item_query(
@@ -5013,53 +5143,64 @@ class Store:
         except (TypeError, ValueError):
             number = None
         with self.read() as conn:
+            detail_sql = f"""
+                SELECT {_LISTING_DETAIL_COLS}, monitors.name AS monitor_name, monitors.search_url AS search_url
+                FROM listings
+                LEFT JOIN monitors ON monitors.id = listings.monitor_id
+            """
             row = None
             if monitor_id and number is not None:
                 row = conn.execute(
-                    """
-                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                    FROM listings
-                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                    WHERE listings.monitor_id = ? AND listings.id = ?
-                    """,
+                    detail_sql + " WHERE listings.monitor_id = ? AND listings.id = ?",
                     (monitor_id, number),
                 ).fetchone()
-            if row is None and (listing_key or url):
+            look_key = (listing_key or url or "").strip()
+            look_url = (url or listing_key or "").strip()
+            if row is None and look_key:
                 row = conn.execute(
-                    """
-                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                    FROM listings
-                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                    WHERE listings.listing_key = ? OR listings.canonical_key = ? OR listings.url = ?
-                    ORDER BY listings.last_seen DESC
-                    LIMIT 1
-                    """,
-                    (listing_key or url, listing_key or url, url or listing_key),
+                    detail_sql + " WHERE listings.listing_key = ? ORDER BY listings.last_seen DESC LIMIT 1",
+                    (look_key,),
+                ).fetchone()
+            if row is None and look_key:
+                row = conn.execute(
+                    detail_sql + " WHERE listings.canonical_key = ? ORDER BY listings.last_seen DESC LIMIT 1",
+                    (look_key,),
+                ).fetchone()
+            if row is None and look_url:
+                row = conn.execute(
+                    detail_sql + " WHERE listings.url = ? ORDER BY listings.last_seen DESC LIMIT 1",
+                    (look_url,),
                 ).fetchone()
             if row is None and number is not None:
                 row = conn.execute(
-                    """
-                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                    FROM listings
-                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                    WHERE listings.id = ?
-                    ORDER BY listings.last_seen DESC
-                    LIMIT 1
-                    """,
+                    detail_sql + " WHERE listings.id = ? ORDER BY listings.last_seen DESC LIMIT 1",
                     (number,),
                 ).fetchone()
             # Extension-ingested rows may live only in catalog_listings briefly / primarily
-            if row is None and (listing_key or url or number is not None):
+            if row is None and (look_key or look_url or number is not None):
                 cat = None
-                if listing_key or url:
+                if look_key:
+                    cat = conn.execute(
+                        "SELECT * FROM catalog_listings WHERE listing_key = ? LIMIT 1",
+                        (look_key,),
+                    ).fetchone()
+                if cat is None and look_key:
                     cat = conn.execute(
                         """
                         SELECT * FROM catalog_listings
-                        WHERE listing_key = ? OR canonical_key = ? OR url = ?
-                        ORDER BY last_seen DESC
-                        LIMIT 1
+                        WHERE canonical_key = ?
+                        ORDER BY last_seen DESC LIMIT 1
                         """,
-                        (listing_key or url, listing_key or url, url or listing_key),
+                        (look_key,),
+                    ).fetchone()
+                if cat is None and look_url:
+                    cat = conn.execute(
+                        """
+                        SELECT * FROM catalog_listings
+                        WHERE url = ?
+                        ORDER BY last_seen DESC LIMIT 1
+                        """,
+                        (look_url,),
                     ).fetchone()
                 if cat is None and number is not None:
                     cat = conn.execute(
@@ -5093,16 +5234,32 @@ class Store:
                 look_key = str(data.get("listing_key") or data.get("canonical_key") or listing_key or "")
                 look_url = str(data.get("url") or url or "")
                 if look_key or look_url:
-                    cat = conn.execute(
-                        """
-                        SELECT price_czk, price_label, image_url, lat, lon, locality
-                        FROM catalog_listings
-                        WHERE listing_key = ? OR canonical_key = ? OR url = ?
-                        ORDER BY last_seen DESC
-                        LIMIT 1
-                        """,
-                        (look_key or look_url, look_key or look_url, look_url or look_key),
-                    ).fetchone()
+                    if look_key:
+                        cat = conn.execute(
+                            """
+                            SELECT price_czk, price_label, image_url, lat, lon, locality
+                            FROM catalog_listings WHERE listing_key = ? LIMIT 1
+                            """,
+                            (look_key,),
+                        ).fetchone()
+                    if cat is None and look_key:
+                        cat = conn.execute(
+                            """
+                            SELECT price_czk, price_label, image_url, lat, lon, locality
+                            FROM catalog_listings
+                            WHERE canonical_key = ? ORDER BY last_seen DESC LIMIT 1
+                            """,
+                            (look_key,),
+                        ).fetchone()
+                    if cat is None and look_url:
+                        cat = conn.execute(
+                            """
+                            SELECT price_czk, price_label, image_url, lat, lon, locality
+                            FROM catalog_listings
+                            WHERE url = ? ORDER BY last_seen DESC LIMIT 1
+                            """,
+                            (look_url,),
+                        ).fetchone()
                 if cat is not None:
                     _overlay_hydrated_fields(data, dict(cat))
             item = public_listing(data)
@@ -5150,6 +5307,7 @@ class Store:
         with self.connect() as conn:
             if not next_status and not (next_note or "").strip():
                 conn.execute("DELETE FROM listing_user WHERE url = ?", (url,))
+                self._listing_user_status_cache.clear()
                 return {"url": url, "status": "", "note": ""}
             conn.execute(
                 """
@@ -5158,6 +5316,7 @@ class Store:
                 """,
                 (url, next_status, next_note or "", now),
             )
+        self._listing_user_status_cache.clear()
         return {"url": url, "status": next_status, "note": next_note or ""}
 
     def get_listing_user(self, url: str) -> dict[str, Any]:

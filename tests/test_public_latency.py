@@ -541,7 +541,7 @@ def test_readonly_connect_is_wal_query_only_not_mode_ro(tmp_path: Path, monkeypa
     conn = store.connect(readonly=True)
     try:
         assert conn.execute("PRAGMA query_only").fetchone()[0] == 1
-        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 250
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 80
         with pytest.raises(sqlite3.OperationalError):
             conn.execute("UPDATE meta SET value = value")
     finally:
@@ -684,6 +684,264 @@ def test_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path):
         f"fresh first={first['fresh']:.2f}ms p95={p95(fresh_ms):.2f}ms",
     ]
     print("product JSON TTFB under scrape:\n  " + "\n  ".join(report))
+
+
+def _seed_fat_listings(store: Store, n: int, blob_bytes: int = 2500) -> str:
+    blob = "x" * blob_bytes
+    now = datetime.now(timezone.utc).isoformat()
+    extras = json.dumps(
+        {"offer": "Pronájem", "estate": "Byt", "portal": "sreality", "flags": ["pets"], "blob": blob},
+        ensure_ascii=False,
+    )
+    rows = []
+    for i in range(n):
+        disposition = ("1+kk", "2+kk", "3+kk", "4+kk")[i % 4]
+        url = f"https://www.sreality.cz/detail/pronajem/byt/{disposition}/praha/{90_000 + i}"
+        key = f"www.sreality.cz/detail/pronajem/byt/{disposition}/praha/{90_000 + i}"
+        rows.append(
+            (
+                key,
+                90_000 + i,
+                f"Pronájem bytu {disposition}",
+                12_000 + (i % 40) * 450,
+                f"{12_000 + (i % 40) * 450} Kč/měsíc",
+                disposition,
+                32 + (i % 9) * 6,
+                f"Praha {(i % 8) + 1}",
+                url,
+                f"https://img.example/fat-{i}.jpg",
+                now,
+                extras,
+                now,
+                blob,
+                50.08 + (i % 40) * 0.001,
+                14.42 + (i % 40) * 0.001,
+                1 if i % 5 == 0 else 0,
+            )
+        )
+    with store.connect() as conn:
+        conn.executemany(
+            """
+            INSERT INTO catalog_listings(
+                listing_key, id, name, price_czk, price_label, disposition, area_m2,
+                locality, url, image_url, first_seen, extras, last_seen, gone, portal,
+                description, lat, lon, canonical_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'sreality', ?, ?, ?, ?)
+            """,
+            [(*row[:13], row[13], row[14], row[15], row[0]) for row in rows],
+        )
+        conn.executemany(
+            """
+            INSERT INTO listings(
+                id, monitor_id, name, price_czk, price_label, disposition, area_m2,
+                locality, url, image_url, first_seen, extras, last_seen, gone,
+                description, lat, lon, listing_key, canonical_key, notified
+            ) VALUES (?, '__catalog__', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    row[6],
+                    row[7],
+                    row[8],
+                    row[9],
+                    row[10],
+                    row[11],
+                    row[12],
+                    row[13],
+                    row[14],
+                    row[15],
+                    row[0],
+                    row[0],
+                    row[16],
+                )
+                for row in rows
+            ],
+        )
+        conn.execute(
+            """
+            INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+            VALUES ('m1', 'Praha', 'https://www.sreality.cz/hledani/pronajem/byty', '', 'default', 1, 1, ?)
+            """,
+            (now,),
+        )
+        conn.commit()
+    return rows[0][8]
+
+
+def _flush_hot_json(store: Store) -> None:
+    store._hot_json_cache.clear()
+    store._facets_cache = None
+    store._facets_at = 0.0
+    store._city_pin_cache.clear()
+    store._listing_user_status_cache.clear()
+
+
+def _p95(samples: list[float]) -> float:
+    ordered = sorted(samples)
+    return ordered[max(0, int(round(0.95 * (len(ordered) - 1))))]
+
+
+def _p50(samples: list[float]) -> float:
+    ordered = sorted(samples)
+    return ordered[len(ordered) // 2]
+
+
+def test_catalog_item_url_uses_listings_url_index(tmp_path: Path):
+    store = Store(tmp_path / "item-idx.sqlite")
+    url = _seed_fat_listings(store, 80, blob_bytes=80)
+    with store.read() as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(listings)")}
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT listings.id FROM listings
+                WHERE listings.url = ?
+                ORDER BY listings.last_seen DESC LIMIT 1
+                """,
+                (url,),
+            )
+        )
+    assert "idx_listings_url" in indexes
+    assert "idx_listings_id" in indexes
+    assert "idx_listings_disposition" in indexes
+    assert "idx_listings_geo_notified" in indexes
+    assert "idx_listings_url" in plan
+    assert "SCAN listings" not in plan or "USING INDEX" in plan
+    item = store.catalog_item("", None, "", url)
+    assert item and item["url"] == url
+    assert "pets" in (item.get("flags") or [])
+
+
+def test_catalog_hidden_filter_stays_off_until_listing_user_exists(tmp_path: Path):
+    store = Store(tmp_path / "hidden.sqlite")
+    url = _seed_fat_listings(store, 12, blob_bytes=40)
+    assert store._listing_user_has_status("hidden") is False
+    page = store.catalog({"limit": 12, "include_pins": "0"})
+    assert any(item["url"] == url for item in page["items"])
+    store.set_listing_user(url, status="hidden")
+    assert store._listing_user_has_status("hidden") is True
+    _flush_hot_json(store)
+    hidden = store.catalog({"limit": 12, "include_pins": "0"})
+    assert all(item["url"] != url for item in hidden["items"])
+
+
+def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsys):
+    store = Store(tmp_path / "fat-scrape.sqlite")
+    url = _seed_fat_listings(store, 8000, blob_bytes=2500)
+    pin_filters = {
+        "pins_only": True,
+        "south": "49.90",
+        "north": "50.25",
+        "west": "14.10",
+        "east": "14.75",
+    }
+
+    def sample(*, flush: bool) -> dict[str, float]:
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        catalog = store.catalog({"limit": 24, "include_pins": "0"})
+        catalog_ms = (time.perf_counter() - t0) * 1000
+        assert catalog["items"]
+        assert catalog["items"][0].get("extras")
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        search = store.catalog({"q": "Praha", "limit": 24, "include_pins": "0"})
+        search_ms = (time.perf_counter() - t0) * 1000
+        assert search["items"]
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        pins = store.catalog(pin_filters)
+        pin_ms = (time.perf_counter() - t0) * 1000
+        assert pins["items"]
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        listings = store.recent_notified(24)
+        list_ms = (time.perf_counter() - t0) * 1000
+        assert listings
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        monitors = store.list_monitors()
+        watch_ms = (time.perf_counter() - t0) * 1000
+        assert monitors
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        item = store.catalog_item("", None, "", url)
+        item_ms = (time.perf_counter() - t0) * 1000
+        assert item and item.get("url")
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        fresh = store.catalog_freshness()
+        fresh_ms = (time.perf_counter() - t0) * 1000
+        assert fresh.get("listing_key")
+        return {
+            "catalog": catalog_ms,
+            "search": search_ms,
+            "pins": pin_ms,
+            "listings": list_ms,
+            "watch": watch_ms,
+            "item": item_ms,
+            "fresh": fresh_ms,
+        }
+
+    sample(flush=True)
+    quiet_miss = [sample(flush=True) for _ in range(8)]
+    stop = threading.Event()
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_latency_listing(400 + (n + k) % 80) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=500, fast=True)
+            n += 1
+
+    thread = threading.Thread(target=writer, name="rf-job-sim", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    try:
+        writer_miss = [sample(flush=True) for _ in range(8)]
+        writer_hit = [sample(flush=False) for _ in range(8)]
+    finally:
+        stop.set()
+        thread.join(timeout=12)
+
+    def col(rows: list[dict[str, float]], key: str) -> list[float]:
+        return [row[key] for row in rows]
+
+    report = []
+    for label, rows in (("quiet", quiet_miss), ("writer", writer_miss), ("writer-cached", writer_hit)):
+        for key in ("catalog", "search", "pins", "listings", "watch", "item", "fresh"):
+            values = col(rows, key)
+            report.append(f"{label} {key} p50={_p50(values):.2f}ms p95={_p95(values):.2f}ms")
+    print("fat catalog JSON under scrape:\n  " + "\n  ".join(report))
+
+    assert _p95(col(quiet_miss, "catalog")) < 45, col(quiet_miss, "catalog")
+    assert _p95(col(quiet_miss, "search")) < 45, col(quiet_miss, "search")
+    assert _p95(col(quiet_miss, "pins")) < 90, col(quiet_miss, "pins")
+    assert _p95(col(quiet_miss, "listings")) < 20, col(quiet_miss, "listings")
+    assert _p95(col(quiet_miss, "item")) < 12, col(quiet_miss, "item")
+    assert _p95(col(quiet_miss, "watch")) < 12, col(quiet_miss, "watch")
+    assert _p95(col(writer_miss, "catalog")) < 50, col(writer_miss, "catalog")
+    assert _p95(col(writer_miss, "search")) < 50, col(writer_miss, "search")
+    assert _p95(col(writer_miss, "pins")) < 90, col(writer_miss, "pins")
+    assert _p95(col(writer_miss, "listings")) < 25, col(writer_miss, "listings")
+    assert _p95(col(writer_miss, "item")) < 12, col(writer_miss, "item")
+    assert _p95(col(writer_hit, "catalog")) < 20, col(writer_hit, "catalog")
+    assert _p95(col(writer_hit, "item")) < 12, col(writer_hit, "item")
+    assert _p95(col(writer_hit, "listings")) < 15, col(writer_hit, "listings")
 
 
 def test_catalog_serves_stale_json_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
