@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -111,14 +112,31 @@ def user_from_session(store: Store, token: str | None) -> dict[str, Any] | None:
     given = token or ""
     if not given:
         return None
-    stored = store.get_meta("auth_session") or ""
-    if not stored or len(stored) != len(given):
-        return None
-    if not secrets.compare_digest(given, stored):
-        return None
-    public = public_account(store)
-    if not public.get("email"):
-        return None
+    key = store._hot_json_key("session", extra=given)
+    cached = store._hot_json_get(key, max_age=8.0)
+    if cached is not None:
+        return cached or None
+
+    def _load() -> dict[str, Any] | None:
+        stored = store.get_meta("auth_session") or ""
+        if not stored or len(stored) != len(given):
+            return None
+        if not secrets.compare_digest(given, stored):
+            return None
+        public = public_account(store)
+        if not public.get("email"):
+            return None
+        return public
+
+    try:
+        public = _load()
+    except sqlite3.OperationalError:
+        stale = store._hot_json_get(key, max_age=60.0)
+        if stale is not None:
+            return stale or None
+        raise
+    if public is not None:
+        store._hot_json_put(key, public)
     return public
 
 
@@ -251,13 +269,20 @@ def _link_payload(store: Store) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
     if expires_at <= time.time():
-        store.set_meta("discord_link_code", None)
         return None
     data["expires_at"] = expires_at
     return data
 
 
 def discord_status(store: Store) -> dict[str, Any]:
+    return store._hot_json(
+        store._hot_json_key("discord-status"),
+        lambda: _discord_status_query(store),
+        fresh_age=2.0,
+    )
+
+
+def _discord_status_query(store: Store) -> dict[str, Any]:
     data = account_record(store)
     linked = bool(discord_webhook_url(store) and data.get("discord_channel_id"))
     pending = _link_payload(store)

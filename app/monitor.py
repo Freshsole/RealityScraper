@@ -23,7 +23,7 @@ from app.catalog_sync import (
 )
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
-from app.billing import billing_state, settle_pending_if_due
+from app.billing import billing_state
 
 
 class Hub:
@@ -1752,7 +1752,6 @@ class Hub:
             recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
             templates = self.store.list_templates()
             settings = self.store.app_settings()
-            settle_pending_if_due(self.store)
             scrape_tick = None
             raw_tick = self.store.get_meta("scrape_worker_tick")
             if raw_tick:

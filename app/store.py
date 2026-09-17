@@ -40,6 +40,18 @@ def local_day_start() -> str:
     return start.astimezone(timezone.utc).isoformat()
 
 
+def _is_request_thread() -> bool:
+    """Web/UI threads stay fail-fast; scrape worker threads may wait on WAL."""
+    name = threading.current_thread().name or ""
+    return (
+        threading.current_thread() is threading.main_thread()
+        or name.startswith("rf-ui")
+        or name.startswith("rf-auth")
+        or name.startswith("AnyIO")
+        or ("ThreadPoolExecutor" in name and not name.startswith("rf-job"))
+    )
+
+
 def _parse_iso(value: Any) -> datetime | None:
     if not value:
         return None
@@ -534,6 +546,15 @@ class Store:
     def _invalidate_monitors(self) -> None:
         self._hot_json_cache.pop(self._hot_json_key("monitors"), None)
 
+    def _invalidate_settings(self) -> None:
+        self._hot_json_cache.pop(self._hot_json_key("settings"), None)
+        self._hot_json_cache.pop(self._hot_json_key("discord-status"), None)
+        self._hot_json_cache.pop(self._hot_json_key("extension-account"), None)
+        self._hot_json_cache.pop(self._hot_json_key("push-vapid"), None)
+        for key in list(self._hot_json_cache):
+            if key.startswith("session|") or key.startswith("meta|"):
+                self._hot_json_cache.pop(key, None)
+
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         """Open SQLite with a reader/writer split.
 
@@ -562,15 +583,7 @@ class Store:
         return conn
 
     def _writer_busy_ms(self) -> int:
-        name = threading.current_thread().name or ""
-        requestish = (
-            threading.current_thread() is threading.main_thread()
-            or name.startswith("rf-ui")
-            or name.startswith("rf-auth")
-            or name.startswith("AnyIO")
-            or ("ThreadPoolExecutor" in name and not name.startswith("rf-job"))
-        )
-        if requestish:
+        if _is_request_thread():
             return 80
         if config.SCRAPE_ROLE == "web":
             return 800
@@ -638,6 +651,18 @@ class Store:
         if payload is not None:
             self._hot_json_put(key, payload)
         return payload
+
+    def _meta_many(self, keys: list[str]) -> dict[str, str | None]:
+        if not keys:
+            return {}
+        with self.read() as conn:
+            placeholders = ",".join("?" * len(keys))
+            rows = conn.execute(
+                f"SELECT key, value FROM meta WHERE key IN ({placeholders})",
+                keys,
+            ).fetchall()
+        found = {str(row["key"]): row["value"] for row in rows}
+        return {key: found.get(key) for key in keys}
 
     def _connect_bootstrap(self, timeout: float = 0.45) -> sqlite3.Connection:
         """Short wait so uvicorn --reload is not stuck behind a scrape writer."""
@@ -2049,7 +2074,14 @@ class Store:
         )
 
     def list_templates(self) -> list[dict[str, Any]]:
-        with self.connect() as conn:
+        return self._hot_json(
+            self._hot_json_key("templates"),
+            self._list_templates_query,
+            fresh_age=4.0,
+        )
+
+    def _list_templates_query(self) -> list[dict[str, Any]]:
+        with self.read() as conn:
             rows = conn.execute("SELECT * FROM templates ORDER BY created_at").fetchall()
         return [self._template_row(row) for row in rows]
 
@@ -2072,6 +2104,7 @@ class Store:
                 """,
                 (template_id, name, json.dumps(cfg, ensure_ascii=False), now),
             )
+        self._hot_json_cache.pop(self._hot_json_key("templates"), None)
         saved = self.get_template(template_id)
         assert saved
         return saved
@@ -2084,6 +2117,7 @@ class Store:
             if used:
                 raise ValueError("Šablona je přiřazená k monitoru")
             conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
+        self._hot_json_cache.pop(self._hot_json_key("templates"), None)
 
     def list_monitors(self) -> list[dict[str, Any]]:
         return self._hot_json(
@@ -2254,6 +2288,22 @@ class Store:
             )
 
     def get_meta(self, key: str) -> str | None:
+        cache_key = self._hot_json_key("meta", extra=key)
+        if _is_request_thread():
+            cached = self._hot_json_get(cache_key, max_age=2.0)
+            if cached is not None:
+                return cached or None
+            try:
+                with self.read() as conn:
+                    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+                value = row["value"] if row else None
+                self._hot_json_put(cache_key, value if value is not None else "")
+                return value
+            except sqlite3.OperationalError:
+                stale = self._hot_json_get(cache_key, max_age=60.0)
+                if stale is not None:
+                    return stale or None
+                raise
         last_error: Exception | None = None
         for attempt in range(6):
             try:
@@ -2290,6 +2340,20 @@ class Store:
                             "INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                             (key, value),
                         )
+                self._hot_json_cache.pop(self._hot_json_key("meta", extra=key), None)
+                if key in {
+                    "account",
+                    "billing",
+                    "auth_session",
+                    "notify_prefs",
+                    "digest_hour",
+                    "digest_webhook",
+                    "digest_last",
+                    "commute_points",
+                    "watch_prefs",
+                    "discord_link_code",
+                }:
+                    self._invalidate_settings()
                 return
             except sqlite3.OperationalError as exc:
                 last_error = exc
@@ -2302,7 +2366,25 @@ class Store:
             raise last_error
 
     def app_settings(self) -> dict[str, Any]:
-        raw_points = self.get_meta("commute_points") or "[]"
+        return self._hot_json(
+            self._hot_json_key("settings"),
+            self._app_settings_query,
+            fresh_age=2.0,
+        )
+
+    def _app_settings_query(self) -> dict[str, Any]:
+        meta = self._meta_many(
+            [
+                "commute_points",
+                "digest_hour",
+                "watch_prefs",
+                "digest_webhook",
+                "digest_last",
+                "notify_prefs",
+                "account",
+            ]
+        )
+        raw_points = meta.get("commute_points") or "[]"
         try:
             points = json.loads(raw_points)
         except json.JSONDecodeError:
@@ -2310,27 +2392,36 @@ class Store:
         if not isinstance(points, list):
             points = []
         try:
-            hour = int(self.get_meta("digest_hour") or 8)
+            hour = int(meta.get("digest_hour") or 8)
         except (TypeError, ValueError):
             hour = 8
-        raw_prefs = self.get_meta("watch_prefs") or "{}"
+        raw_prefs = meta.get("watch_prefs") or "{}"
         try:
             watch_prefs = json.loads(raw_prefs)
         except json.JSONDecodeError:
             watch_prefs = {}
         if not isinstance(watch_prefs, dict):
             watch_prefs = {}
+        account_raw = meta.get("account") or "{}"
+        try:
+            account = json.loads(account_raw) if isinstance(account_raw, str) else (account_raw or {})
+        except json.JSONDecodeError:
+            account = {}
+        linked = usable_discord_webhook((account or {}).get("discord_webhook_url") or "")
         return {
             "digest_hour": max(0, min(23, hour)),
-            "digest_webhook": "" if self.discord_webhook_url() else (self.get_meta("digest_webhook") or "").strip(),
-            "digest_last": self.get_meta("digest_last"),
+            "digest_webhook": "" if linked else (meta.get("digest_webhook") or "").strip(),
+            "digest_last": meta.get("digest_last"),
             "commute_points": points[:2],
             "watch_prefs": watch_prefs,
-            "notify": self.notify_prefs(),
+            "notify": self._notify_prefs_from_raw(meta.get("notify_prefs")),
             "push_devices": self.push_subscription_count(),
         }
 
     def notify_prefs(self) -> dict[str, Any]:
+        return self._notify_prefs_from_raw(self.get_meta("notify_prefs"))
+
+    def _notify_prefs_from_raw(self, raw: str | None) -> dict[str, Any]:
         defaults = {
             "discord": True,
             "push": False,
@@ -2346,9 +2437,8 @@ class Store:
             "ntDigest": True,
             "ntTips": False,
         }
-        raw = self.get_meta("notify_prefs") or "{}"
         try:
-            data = json.loads(raw)
+            data = json.loads(raw or "{}")
         except json.JSONDecodeError:
             data = {}
         if not isinstance(data, dict):
@@ -2399,6 +2489,8 @@ class Store:
                         """,
                         (endpoint, p256dh, auth, (user_agent or "")[:240], utc_now()),
                     )
+                self._hot_json_cache.pop(self._hot_json_key("push-count"), None)
+                self._hot_json_cache.pop(self._hot_json_key("push-vapid"), None)
                 return
             except sqlite3.OperationalError as exc:
                 last_error = exc
@@ -2414,6 +2506,8 @@ class Store:
             return
         with self.connect() as conn:
             conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        self._hot_json_cache.pop(self._hot_json_key("push-count"), None)
+        self._hot_json_cache.pop(self._hot_json_key("push-vapid"), None)
 
     def list_push_subscriptions(self) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -2421,8 +2515,29 @@ class Store:
         return [dict(row) for row in rows]
 
     def push_subscription_count(self) -> int:
-        with self.connect() as conn:
+        return int(
+            self._hot_json(
+                self._hot_json_key("push-count"),
+                self._push_subscription_count_query,
+                fresh_age=4.0,
+            )
+        )
+
+    def _push_subscription_count_query(self) -> int:
+        with self.read() as conn:
             return int(conn.execute("SELECT COUNT(*) FROM push_subscriptions").fetchone()[0])
+
+    def push_vapid_payload(self, *, public_key: str) -> dict[str, Any]:
+        return self._hot_json(
+            self._hot_json_key("push-vapid"),
+            lambda: {
+                "publicKey": public_key,
+                "supported": True,
+                "devices": self.push_subscription_count(),
+                "enabled": bool(self.notify_prefs().get("push")),
+            },
+            fresh_age=2.0,
+        )
 
     def billing_record(self) -> dict[str, Any]:
         raw = self.get_meta("billing") or "{}"
@@ -2527,6 +2642,15 @@ class Store:
         return {int(row["id"]): dict(row) for row in rows}
 
     def count(self, monitor_id: str | None = None) -> int:
+        return int(
+            self._hot_json(
+                self._hot_json_key("count", extra=str(monitor_id or "")),
+                lambda: self._count_query(monitor_id),
+                fresh_age=2.0,
+            )
+        )
+
+    def _count_query(self, monitor_id: str | None = None) -> int:
         with self.read() as conn:
             if monitor_id:
                 hits = conn.execute(
@@ -2544,6 +2668,15 @@ class Store:
             return int(conn.execute(f"SELECT COUNT(*) FROM (SELECT 1 FROM listings GROUP BY {identity})").fetchone()[0])
 
     def new_today_count(self, monitor_id: str | None = None) -> int:
+        return int(
+            self._hot_json(
+                self._hot_json_key("new-today", extra=str(monitor_id or "")),
+                lambda: self._new_today_count_query(monitor_id),
+                fresh_age=2.0,
+            )
+        )
+
+    def _new_today_count_query(self, monitor_id: str | None = None) -> int:
         since = local_day_start()
         identity = listing_identity_sql()
         sql = f"""
@@ -3112,7 +3245,7 @@ class Store:
             sql += " WHERE kind = ?"
             params.append(kind)
         sql += " ORDER BY shard_key"
-        with self.connect() as conn:
+        with self.read() as conn:
             return [dict(row) for row in conn.execute(sql, params)]
 
     def update_scrape_job(self, job_id: str, **fields: Any) -> None:
@@ -3410,6 +3543,13 @@ class Store:
         return [dict(row) for row in rows]
 
     def catalog_sync_status(self) -> dict[str, Any]:
+        return self._hot_json(
+            self._hot_json_key("catalog-sync"),
+            self._catalog_sync_status_query,
+            fresh_age=2.0,
+        )
+
+    def _catalog_sync_status_query(self) -> dict[str, Any]:
         from app.catalog_sync import daily_shards
 
         jobs = self.list_scrape_jobs("catalog_daily")
@@ -3417,16 +3557,15 @@ class Store:
         done = sum(1 for item in jobs if item.get("status") == "done")
         running = next((item for item in jobs if item.get("status") == "running"), None)
         errors = [item.get("last_error") for item in jobs if item.get("last_error")]
-        with self.connect() as conn:
-            total = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
+        meta = self._meta_many(["catalog_sync_status", "catalog_sync_last", "catalog_sync_error"])
         return {
             "jobs": expected or len(jobs),
             "done": done,
             "running": running.get("shard_key") if running else None,
-            "status": self.get_meta("catalog_sync_status") or ("idle" if not running else "running"),
-            "last_run": self.get_meta("catalog_sync_last"),
-            "last_error": errors[0] if errors else self.get_meta("catalog_sync_error"),
-            "listings": total,
+            "status": meta.get("catalog_sync_status") or ("idle" if not running else "running"),
+            "last_run": meta.get("catalog_sync_last"),
+            "last_error": errors[0] if errors else meta.get("catalog_sync_error"),
+            "listings": self.count(),
             "upserts": sum(int(item.get("upserts") or 0) for item in jobs),
         }
 

@@ -1021,3 +1021,289 @@ def test_rent_score_stays_fast_when_writer_locks_sqlite(tmp_path: Path):
         locker.rollback()
         locker.close()
 
+
+def _leftover_hub(store: Store):
+    from app.monitor import Hub
+
+    hub = object.__new__(Hub)
+    hub.store = store
+    hub.running = False
+    hub.checking = False
+    hub.last_error = None
+    hub.catalog_running = False
+    hub._status_cache = None
+    hub._status_cache_at = 0.0
+    return hub
+
+
+def _seed_leftover_account(store: Store) -> None:
+    store.set_meta(
+        "account",
+        json.dumps(
+            {
+                "email": "a@b.cz",
+                "first": "Ada",
+                "discord_channel_id": "1",
+                "discord_channel_name": "alerts",
+                "discord_webhook_url": "https://discord.com/api/webhooks/1/x",
+            }
+        ),
+    )
+    store.set_meta("auth_session", "tok-leftover")
+    store.set_meta("billing", json.dumps({"plan": "start"}))
+
+
+def test_leftover_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsys):
+    from app.account import discord_status, user_from_session
+    from app.analytics import ingest
+    from app.extension_score import extension_account, score_batch
+
+    store = Store(tmp_path / "leftover-scrape.sqlite")
+    seed = [_latency_listing(i) for i in range(60)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=20, fast=True)
+    with store.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO monitors(id, name, search_url, webhook_url, template_id, enabled, seeded, created_at)
+            VALUES ('m1', 'Praha', 'https://www.sreality.cz/hledani/pronajem/byty', '', 'default', 1, 1, ?)
+            """,
+            ("2020-01-01T00:00:00+00:00",),
+        )
+    _seed_leftover_account(store)
+    hub = _leftover_hub(store)
+    stop = threading.Event()
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_latency_listing(300 + (n + k) % 40) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            n += 1
+
+    class _Req:
+        cookies = {}
+        headers = {"user-agent": "pytest", "cf-ipcountry": "CZ"}
+        client = type("C", (), {"host": "127.0.0.1"})()
+
+    thread = threading.Thread(target=writer, name="rf-job-sim", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    samples = {key: [] for key in ("status", "settings", "templates", "discord", "ext_me", "scores", "auth", "ingest")}
+    first: dict[str, float] = {}
+    try:
+        for i in range(10):
+            t0 = time.perf_counter()
+            payload = hub.status()
+            samples["status"].append((time.perf_counter() - t0) * 1000)
+            assert payload.get("monitors")
+            t0 = time.perf_counter()
+            settings = store.app_settings()
+            samples["settings"].append((time.perf_counter() - t0) * 1000)
+            assert "notify" in settings
+            t0 = time.perf_counter()
+            assert store.list_templates()
+            samples["templates"].append((time.perf_counter() - t0) * 1000)
+            t0 = time.perf_counter()
+            disc = discord_status(store)
+            samples["discord"].append((time.perf_counter() - t0) * 1000)
+            assert disc.get("linked") is True
+            t0 = time.perf_counter()
+            account = extension_account(store)
+            samples["ext_me"].append((time.perf_counter() - t0) * 1000)
+            assert account.get("email") == "a@b.cz"
+            t0 = time.perf_counter()
+            scored = score_batch(store, ids=[str(seed[0].id)], urls=[seed[0].url], allow_network=False)
+            samples["scores"].append((time.perf_counter() - t0) * 1000)
+            assert scored["items"]
+            t0 = time.perf_counter()
+            user = user_from_session(store, "tok-leftover")
+            samples["auth"].append((time.perf_counter() - t0) * 1000)
+            assert user and user["email"] == "a@b.cz"
+            t0 = time.perf_counter()
+            ingest(store, _Req(), {"path": "/", "heartbeat": True, "tz": "Europe/Prague", "lang": "cs"})
+            samples["ingest"].append((time.perf_counter() - t0) * 1000)
+            if i == 0:
+                for key, values in samples.items():
+                    first[key] = values[-1]
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+
+    def p95(values: list[float]) -> float:
+        ordered = sorted(values)
+        return ordered[max(0, int(round(0.95 * (len(ordered) - 1))))]
+
+    assert p95(samples["status"]) < 40, samples["status"]
+    assert p95(samples["settings"]) < 15, samples["settings"]
+    assert p95(samples["templates"]) < 15, samples["templates"]
+    assert p95(samples["discord"]) < 15, samples["discord"]
+    assert p95(samples["ext_me"]) < 15, samples["ext_me"]
+    assert p95(samples["scores"]) < 40, samples["scores"]
+    assert p95(samples["auth"]) < 15, samples["auth"]
+    assert p95(samples["ingest"]) < 40, samples["ingest"]
+    assert samples["status"][1:] and p95(samples["status"][1:]) < 8
+    assert samples["settings"][1:] and p95(samples["settings"][1:]) < 8
+    assert samples["scores"][1:] and p95(samples["scores"][1:]) < 8
+    report = [
+        f"{key} first={first[key]:.2f}ms p95={p95(samples[key]):.2f}ms"
+        for key in samples
+    ]
+    print("leftover JSON TTFB under scrape:\n  " + "\n  ".join(report))
+
+
+def test_status_serves_stale_when_writer_locks_sqlite(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "status-stale.sqlite")
+    _seed_leftover_account(store)
+    hub = _leftover_hub(store)
+    first = hub.status()
+    assert first.get("monitors") is not None
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "list_monitors", boom)
+    hub._status_cache_at = 0.0
+    t0 = time.perf_counter()
+    again = hub.status()
+    ms = (time.perf_counter() - t0) * 1000
+    assert again.get("stale") is True
+    assert again.get("running") == first.get("running")
+    assert ms < 15, f"stale status {ms:.1f}ms"
+
+
+def test_settings_and_discord_serve_stale_when_writer_locks(tmp_path: Path, monkeypatch):
+    from app.account import discord_status
+
+    store = Store(tmp_path / "settings-stale.sqlite")
+    _seed_leftover_account(store)
+    first_settings = store.app_settings()
+    first_discord = discord_status(store)
+    first_templates = store.list_templates()
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "_app_settings_query", boom)
+    monkeypatch.setattr(store, "_list_templates_query", boom)
+    from app import account as user_account
+
+    monkeypatch.setattr(user_account, "_discord_status_query", boom)
+    for key, (at, payload) in list(store._hot_json_cache.items()):
+        store._hot_json_cache[key] = (at - 5.0, payload)
+    t0 = time.perf_counter()
+    again_settings = store.app_settings()
+    settings_ms = (time.perf_counter() - t0) * 1000
+    t0 = time.perf_counter()
+    again_discord = discord_status(store)
+    discord_ms = (time.perf_counter() - t0) * 1000
+    t0 = time.perf_counter()
+    again_templates = store.list_templates()
+    templates_ms = (time.perf_counter() - t0) * 1000
+    assert again_settings.get("stale") is True
+    assert again_settings["digest_hour"] == first_settings["digest_hour"]
+    assert again_discord.get("stale") is True
+    assert again_discord["linked"] == first_discord["linked"]
+    assert [item["id"] for item in again_templates] == [item["id"] for item in first_templates]
+    assert settings_ms < 15
+    assert discord_ms < 15
+    assert templates_ms < 15
+
+
+def test_analytics_ingest_skips_when_writer_locks(tmp_path: Path):
+    from app.analytics import ingest
+
+    store = Store(tmp_path / "ingest-lock.sqlite")
+    locker = sqlite3.connect(store.path, timeout=30)
+    locker.execute("PRAGMA busy_timeout=30000")
+    locker.execute("BEGIN EXCLUSIVE")
+    locker.execute("UPDATE meta SET value = value")
+
+    class _Req:
+        cookies = {"rf_vid": "visitor-lock"}
+        headers = {"user-agent": "pytest"}
+        client = type("C", (), {"host": "127.0.0.1"})()
+
+    try:
+        t0 = time.perf_counter()
+        visitor = ingest(store, _Req(), {"path": "/", "heartbeat": True})
+        ms = (time.perf_counter() - t0) * 1000
+    finally:
+        locker.rollback()
+        locker.close()
+    assert visitor == "visitor-lock"
+    assert ms < 120, f"ingest under exclusive lock {ms:.1f}ms"
+
+
+def test_extension_scores_skip_network_and_serve_stale(tmp_path: Path, monkeypatch):
+    from app.extension_score import score_batch
+
+    store = Store(tmp_path / "ext-stale.sqlite")
+    seed = [_latency_listing(1)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", fast=True)
+    first = score_batch(store, ids=[str(seed[0].id)], urls=[seed[0].url], allow_network=False)
+    assert first["items"]
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("app.extension_score._lookup_rows", boom)
+    t0 = time.perf_counter()
+    again = score_batch(store, ids=[str(seed[0].id)], urls=[seed[0].url], allow_network=True)
+    ms = (time.perf_counter() - t0) * 1000
+    assert again.get("stale") is True
+    assert again["items"][str(seed[0].id)]["found"] is True
+    assert ms < 15, f"stale scores {ms:.1f}ms"
+
+
+def test_discord_link_read_does_not_write(tmp_path: Path, monkeypatch):
+    from app.account import _link_payload
+
+    store = Store(tmp_path / "discord-read.sqlite")
+    store.set_meta("discord_link_code", json.dumps({"code": "ABC123", "expires_at": time.time() - 10}))
+
+    def boom(*_a, **_k):
+        raise AssertionError("expired link read must not write")
+
+    monkeypatch.setattr(store, "set_meta", boom)
+    assert _link_payload(store) is None
+
+
+def test_get_meta_request_path_does_not_retry_sleep(tmp_path: Path, monkeypatch):
+    store = Store(tmp_path / "meta-fast.sqlite")
+    store.set_meta("account", '{"email":"a@b.cz"}')
+    slept = {"n": 0}
+
+    def no_sleep(_seconds):
+        slept["n"] += 1
+
+    monkeypatch.setattr(time, "sleep", no_sleep)
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "read", boom)
+    store._hot_json_put(store._hot_json_key("meta", extra="account"), '{"email":"a@b.cz"}')
+    for key, (at, payload) in list(store._hot_json_cache.items()):
+        store._hot_json_cache[key] = (at - 5.0, payload)
+    t0 = time.perf_counter()
+    value = store.get_meta("account")
+    ms = (time.perf_counter() - t0) * 1000
+    assert json.loads(value)["email"] == "a@b.cz"
+    assert slept["n"] == 0
+    assert ms < 15
+
+
+def test_status_does_not_settle_billing_on_get(tmp_path: Path, monkeypatch):
+    from app import billing as stripe_billing
+
+    store = Store(tmp_path / "status-settle.sqlite")
+    hub = _leftover_hub(store)
+    called = {"n": 0}
+
+    def boom(*_a, **_k):
+        called["n"] += 1
+
+    monkeypatch.setattr(stripe_billing, "settle_pending_if_due", boom)
+    hub.status(fresh=True)
+    assert called["n"] == 0
+

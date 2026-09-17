@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from datetime import datetime, timezone
 from statistics import median
@@ -335,6 +336,14 @@ def _catalog_detail_url(row: dict[str, Any]) -> str:
 
 
 def extension_account(store: Store) -> dict[str, Any]:
+    return store._hot_json(
+        store._hot_json_key("extension-account"),
+        lambda: _extension_account_query(store),
+        fresh_age=2.0,
+    )
+
+
+def _extension_account_query(store: Store) -> dict[str, Any]:
     billing = billing_state(store)
     plan = str(billing.get("plan") or "free")
     rank = PLAN_RANK.get(plan, 0)
@@ -374,7 +383,7 @@ def _lookup_rows(store: Store, *, ids: list[str], urls: list[str]) -> dict[str, 
     id_set = list(dict.fromkeys(item for item in id_set if item))
     url_map = {normalize_url(url): url for url in urls if normalize_url(url)}
 
-    with store.connect() as conn:
+    with store.read() as conn:
         if id_set:
             placeholders = ",".join("?" * len(id_set))
             for row in conn.execute(
@@ -504,37 +513,40 @@ def _peer_median_m2(store: Store, row: dict[str, Any]) -> float | None:
         return cached  # type: ignore[return-value]
 
     values: list[float] = []
-    with store.connect() as conn:
-        # Prefer URL-filtered peers in SQL for speed
-        if want_rent:
-            url_filter = "AND (url LIKE '%/pronajem/%' OR lower(IFNULL(price_label,'')) LIKE '%měsíc%' OR lower(IFNULL(price_label,'')) LIKE '%mesic%')"
-            price_bound = "AND price_czk < 150000"
-        else:
-            url_filter = "AND (url LIKE '%/prodej/%' OR price_czk >= 150000)"
-            price_bound = "AND price_czk >= 150000"
-        sql = f"""
-            SELECT price_czk, area_m2, locality, url, price_label, extras FROM catalog_listings
-            WHERE IFNULL(gone, 0) = 0
-              AND disposition = ?
-              AND price_czk > 0 AND area_m2 > 0
-              {url_filter}
-              {price_bound}
-            LIMIT 250
-        """
-        peers = conn.execute(sql, (disposition,)).fetchall()
-        if len(peers) < 8:
-            peers = conn.execute(
-                f"""
-                SELECT price_czk, area_m2, locality, url, price_label, extras FROM listings
+    try:
+        with store.read() as conn:
+            # Prefer URL-filtered peers in SQL for speed
+            if want_rent:
+                url_filter = "AND (url LIKE '%/pronajem/%' OR lower(IFNULL(price_label,'')) LIKE '%měsíc%' OR lower(IFNULL(price_label,'')) LIKE '%mesic%')"
+                price_bound = "AND price_czk < 150000"
+            else:
+                url_filter = "AND (url LIKE '%/prodej/%' OR price_czk >= 150000)"
+                price_bound = "AND price_czk >= 150000"
+            sql = f"""
+                SELECT price_czk, area_m2, locality, url, price_label, extras FROM catalog_listings
                 WHERE IFNULL(gone, 0) = 0
                   AND disposition = ?
                   AND price_czk > 0 AND area_m2 > 0
                   {url_filter}
                   {price_bound}
                 LIMIT 250
-                """,
-                (disposition,),
-            ).fetchall() or peers
+            """
+            peers = conn.execute(sql, (disposition,)).fetchall()
+            if len(peers) < 8:
+                peers = conn.execute(
+                    f"""
+                    SELECT price_czk, area_m2, locality, url, price_label, extras FROM listings
+                    WHERE IFNULL(gone, 0) = 0
+                      AND disposition = ?
+                      AND price_czk > 0 AND area_m2 > 0
+                      {url_filter}
+                      {price_bound}
+                    LIMIT 250
+                    """,
+                    (disposition,),
+                ).fetchall() or peers
+    except sqlite3.OperationalError:
+        return None
 
     def collect(require_locality: bool) -> list[float]:
         out: list[float] = []
@@ -644,7 +656,13 @@ def invalidate_scores(*ids: str) -> None:
             _SCORE_CACHE.pop(key, None)
 
 
-def score_batch(store: Store, *, ids: list[str] | None = None, urls: list[str] | None = None) -> dict[str, Any]:
+def score_batch(
+    store: Store,
+    *,
+    ids: list[str] | None = None,
+    urls: list[str] | None = None,
+    allow_network: bool = False,
+) -> dict[str, Any]:
     ids = [str(item).strip() for item in (ids or []) if str(item).strip()]
     urls = [str(item).strip() for item in (urls or []) if str(item).strip()]
     items: dict[str, Any] = {}
@@ -669,13 +687,24 @@ def score_batch(store: Store, *, ids: list[str] | None = None, urls: list[str] |
             continue
         need_urls.append(url)
 
-    rows = _lookup_rows(store, ids=need_ids, urls=need_urls) if (need_ids or need_urls) else {}
-    # Always compute locality score for every listing (OSM prefetch + shared cache).
-    warm_amenity_cache(list(rows.values()), max_fetches=12)
+    try:
+        rows = _lookup_rows(store, ids=need_ids, urls=need_urls) if (need_ids or need_urls) else {}
+    except sqlite3.OperationalError:
+        stale_items = dict(items)
+        for native in need_ids:
+            hit = _SCORE_CACHE.get(native)
+            if hit:
+                payload = hit[1]
+                stale_items[native] = {**payload, "stale": True} if isinstance(payload, dict) else payload
+            else:
+                stale_items[native] = not_found_payload(native)
+        return {"items": stale_items, "count": len(stale_items), "stale": True}
+    if allow_network:
+        warm_amenity_cache(list(rows.values()), max_fetches=4)
 
     for native in need_ids:
         row = rows.get(native)
-        payload = score_listing(store, row, allow_network=True) if row else not_found_payload(native)
+        payload = score_listing(store, row, allow_network=allow_network) if row else not_found_payload(native)
         items[native] = payload
         _SCORE_CACHE[native] = (now, payload)
 
@@ -691,7 +720,7 @@ def score_batch(store: Store, *, ids: list[str] | None = None, urls: list[str] |
                 if normalize_url(str(candidate.get("url") or "")) == norm or listing_key(str(candidate.get("url") or "")) == listing_key(norm):
                     row = candidate
                     break
-        payload = score_listing(store, row, allow_network=True) if row else not_found_payload(native, url)
+        payload = score_listing(store, row, allow_network=allow_network) if row else not_found_payload(native, url)
         items[key] = payload
         if native:
             _SCORE_CACHE[native] = (now, payload)

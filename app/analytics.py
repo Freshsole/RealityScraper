@@ -147,15 +147,17 @@ def track(
     city: str = "",
     created_at: str | None = None,
 ) -> None:
-    ensure_schema(store)
-    with store.connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO analytics_events(created_at, kind, visitor_id, path, device, country, country_name, city)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (created_at or _now(), kind, visitor_id, path[:240], device, country, country_name, city),
-        )
+    try:
+        with store.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO analytics_events(created_at, kind, visitor_id, path, device, country, country_name, city)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (created_at or _now(), kind, visitor_id, path[:240], device, country, country_name, city),
+            )
+    except sqlite3.OperationalError:
+        return
 
 
 def backfill(store: Store) -> None:
@@ -264,7 +266,6 @@ def touch_presence(
     key = presence_key(ip, visitor_id)
     if not key:
         return
-    ensure_schema(store)
     try:
         with store.connect() as conn:
             conn.execute(
@@ -435,43 +436,47 @@ def ingest(store: Store, request: Request, payload: dict[str, Any] | None) -> st
     if body.get("city"):
         city = str(body.get("city"))[:80]
     visitor = (request.cookies.get(VISITOR_COOKIE) or str(body.get("vid") or "") or secrets.token_hex(8))[:32]
-    user = user_account.user_from_session(store, request.cookies.get(user_account.SESSION_COOKIE))
-    touch_presence(
-        store,
-        visitor_id=visitor,
-        ip=client_ip(request),
-        path=path,
-        device=device,
-        country=country,
-        country_name=country_name,
-        city=city,
-        email=(user or {}).get("email") or "",
-        name=(user or {}).get("name") or "",
-    )
-    if body.get("heartbeat"):
+    try:
+        user = None
+        if not body.get("heartbeat"):
+            user = user_account.user_from_session(store, request.cookies.get(user_account.SESSION_COOKIE))
+        touch_presence(
+            store,
+            visitor_id=visitor,
+            ip=client_ip(request),
+            path=path,
+            device=device,
+            country=country,
+            country_name=country_name,
+            city=city,
+            email=(user or {}).get("email") or "",
+            name=(user or {}).get("name") or "",
+        )
+        if body.get("heartbeat"):
+            return visitor
+        with store.connect() as conn:
+            recent = conn.execute(
+                """
+                SELECT 1 FROM analytics_events
+                WHERE kind = ? AND visitor_id = ? AND path = ? AND created_at >= ?
+                LIMIT 1
+                """,
+                (KIND_PAGE, visitor, path, (datetime.now(timezone.utc) - timedelta(seconds=4)).isoformat()),
+            ).fetchone()
+        if recent:
+            return visitor
+        track(
+            store,
+            KIND_PAGE,
+            visitor_id=visitor,
+            path=path,
+            device=device,
+            country=country,
+            country_name=country_name,
+            city=city,
+        )
+    except sqlite3.OperationalError:
         return visitor
-    ensure_schema(store)
-    with store.connect() as conn:
-        recent = conn.execute(
-            """
-            SELECT 1 FROM analytics_events
-            WHERE kind = ? AND visitor_id = ? AND path = ? AND created_at >= ?
-            LIMIT 1
-            """,
-            (KIND_PAGE, visitor, path, (datetime.now(timezone.utc) - timedelta(seconds=4)).isoformat()),
-        ).fetchone()
-    if recent:
-        return visitor
-    track(
-        store,
-        KIND_PAGE,
-        visitor_id=visitor,
-        path=path,
-        device=device,
-        country=country,
-        country_name=country_name,
-        city=city,
-    )
     return visitor
 
 
