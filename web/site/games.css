@@ -805,6 +805,13 @@ button {
   color: var(--gray-2);
 }
 
+.rent-hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--faint);
+}
+
 .rent-result-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

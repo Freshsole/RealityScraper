@@ -32,6 +32,7 @@ from app.games import (
     save_rent_round,
     score_guess,
     score_round,
+    teaching_contrast,
     wait_refresh,
 )
 from app.sreality import Listing
@@ -115,6 +116,7 @@ def test_teaching_pair_better_and_cheaper():
     better = _flat("good", "Praha 2 – Vinohrady", "3+kk", 82, 21900)
     worse = _flat("bad", "Praha 2 – Vinohrady", "2+kk", 46, 26800)
     assert is_teaching_pair(better, worse) is True
+    assert teaching_contrast(better, worse) > 0
     normal_cheap = _flat("small", "Praha 2 – Vinohrady", "1+kk", 32, 14200)
     normal_big = _flat("big", "Praha 2 – Vinohrady", "3+kk", 82, 21900)
     assert is_teaching_pair(normal_cheap, normal_big) is False
@@ -124,6 +126,24 @@ def test_teaching_pair_better_and_cheaper():
     tiny = _flat("tiny-a", "Praha 2 – Vinohrady", "2+kk", 48, 19600)
     tiny_dear = _flat("tiny-b", "Praha 2 – Vinohrady", "2+kk", 49, 19700)
     assert is_teaching_pair(tiny, tiny_dear) is False
+    # Tiny 3+kk cheaper than a larger 2+kk is not a better Kč/m² deal.
+    fake_better = _flat("tiny-3kk", "Praha 2 – Vinohrady", "3+kk", 38, 18000)
+    larger_dear = _flat("big-2kk", "Praha 2 – Vinohrady", "2+kk", 70, 22000)
+    assert is_teaching_pair(fake_better, larger_dear) is False
+    assert teaching_contrast(fake_better, larger_dear) == 0
+
+
+def test_teaching_contrast_ranks_price_m2_area_and_disposition():
+    clear_good = _flat("clear-good", "Praha 3 – Žižkov", "4+kk", 92, 17500)
+    clear_bad = _flat("clear-bad", "Praha 3 – Žižkov", "1+kk", 28, 24800)
+    weak_a = _flat("weak-a", "Praha 3 – Žižkov", "2+kk", 50, 19600)
+    weak_b = _flat("weak-b", "Praha 3 – Žižkov", "2+kk", 42, 20800)
+    clear = teaching_contrast(clear_good, clear_bad)
+    weak = teaching_contrast(weak_a, weak_b)
+    assert is_teaching_pair(clear_good, clear_bad)
+    assert is_teaching_pair(weak_a, weak_b)
+    assert clear > weak * 2
+    assert clear > 2.0
 
 
 def test_pair_locality_key_aliases_prague_district():
@@ -189,6 +209,32 @@ def test_teaching_distribution_is_about_80_percent():
     ]
     assert all(row["pair_kind"] == "teaching" for row in forced)
     assert all(is_teaching_pair(row["left"], row["right"]) for row in forced)
+
+
+def test_teaching_pick_prefers_clear_price_m2_contrast():
+    pool = [
+        _flat("clear-good", "Praha 3 – Žižkov", "4+kk", 92, 17500),
+        _flat("clear-bad", "Praha 3 – Žižkov", "1+kk", 28, 24800),
+        _flat("weak-a", "Praha 3 – Žižkov", "2+kk", 50, 19600),
+        _flat("weak-b", "Praha 3 – Žižkov", "2+kk", 42, 20800),
+        _flat("noise", "Praha 3 – Žižkov", "2+kk", 48, 19700),
+    ]
+    weak = teaching_contrast(
+        next(item for item in pool if item["id"] == "weak-a"),
+        next(item for item in pool if item["id"] == "weak-b"),
+    )
+    clear_ids = frozenset({"clear-good", "clear-bad"})
+    picked = []
+    for seed in range(80):
+        pair = pick_same_locality_pair(pool, rng=random.Random(seed), teaching_ratio=1.0)
+        ids = frozenset({pair["left"]["id"], pair["right"]["id"]})
+        picked.append(ids)
+        assert pair["pair_kind"] == "teaching"
+        assert is_teaching_pair(pair["left"], pair["right"])
+        assert teaching_contrast(pair["left"], pair["right"]) >= weak
+        assert "v řádu minut" not in (pair.get("copy") or "")
+        assert "v řádu minut" not in (pair.get("copy_ok") or "")
+    assert picked.count(clear_ids) >= 50
 
 
 def test_cold_path_does_not_block_on_slow_catalog(tmp_path: Path):
@@ -355,6 +401,13 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "STEJNÁ LOKALITA" in rent
     assert "v řádu hodin" in rent
     assert "v řádu minut" not in rent
+    assert "rent-hint" in rent
+    assert "mezery doplníme" in rent
+    assert "18 000" in rent
+    assert "games.js?v=12" in rent
+    assert "games.css?v=14" in rent
+    assert "games.js?v=12" in html
+    assert "games.css?v=14" in html
     assert "vidíte v administraci" not in hub
     assert "Výhodné kousky" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
@@ -377,7 +430,14 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "info-rows" in js
     assert "pill-ghost" in js
     assert "rent-unit" in js
+    assert "rent-hint" in js
     assert "replace(/[^\\d]/g, \"\")" in js
+    assert "groupDigits" in js
+    assert "formatGuessInput" in js
+    assert "caretAfterDigits" in js
+    assert "mezery doplníme" in js
+    assert "Kolik stojí měsíc v Kč?" in js
+    assert "v řádu minut" not in js
     assert "Takové nabídky mizí" in js
     assert "vanishText(item.vanish_hours, item.vanish_label" in js
     assert "TYPICAL_VANISH" in js
@@ -388,6 +448,7 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert 'width="390"' in js
     assert 'width="504"' not in js
     assert 'size="8"' in js
+    assert ".rent-hint" in css
     assert ".converter-actions .pill" in css
     assert ".converter-actions .pill-ghost" in css
     assert "@media (max-width: 480px)" in css
@@ -588,6 +649,10 @@ def test_public_game_helpers_are_memory_only():
     assert "v řádu minut" not in (round_payload.get("vanish_label") or "")
     assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
     assert round_payload.get("pair_key")
+    assert "v řádu minut" not in (round_payload.get("copy") or "")
+    assert "mezery doplníme" in (round_payload.get("copy") or "")
+    assert "18 000" in (round_payload.get("copy_hint") or "")
+    assert "v řádu minut" not in (pair.get("copy") or "")
     assert scored["ok"] is True
     assert scored["score"] == 1000
     assert ms < 40, f"public game helpers {ms:.1f}ms"
@@ -903,6 +968,33 @@ def test_rent_teaching_distribution_is_about_80_percent():
     ]
     assert all(row["round_kind"] == "teaching" for row in forced)
     for row in forced:
+        assert any(
+            is_teaching_pair(left, right)
+            for index, left in enumerate(row["pool"])
+            for right in row["pool"][index + 1 :]
+        )
+
+
+def test_rent_teaching_round_keeps_clear_price_m2_contrast():
+    pool = [
+        _flat("clear-good", "Praha 3 – Žižkov", "4+kk", 92, 17500),
+        _flat("clear-bad", "Praha 3 – Žižkov", "1+kk", 28, 24800),
+        _flat("weak-a", "Praha 3 – Žižkov", "2+kk", 50, 19600),
+        _flat("weak-b", "Praha 3 – Žižkov", "2+kk", 42, 20800),
+        _flat("noise", "Praha 3 – Žižkov", "2+kk", 48, 19700),
+        _flat("extra-a", "Praha 3 – Žižkov", "2+kk", 51, 19800),
+        _flat("extra-b", "Praha 3 – Žižkov", "2+1", 44, 22100),
+        _flat("extra-c", "Praha 3 – Žižkov", "1+1", 36, 23100),
+    ]
+    for seed in range(40):
+        row = pick_rent_round(pool, rng=random.Random(seed), teaching_ratio=1.0)
+        assert row["round_kind"] == "teaching"
+        ids = {item["id"] for item in row["items"]}
+        assert "clear-good" in ids
+        assert "clear-bad" in ids
+        assert "v řádu minut" not in (row.get("copy") or "")
+        assert "mezery doplníme" in (row.get("copy") or "")
+        assert "18 000" in (row.get("copy_hint") or "")
         assert any(
             is_teaching_pair(left, right)
             for index, left in enumerate(row["pool"])

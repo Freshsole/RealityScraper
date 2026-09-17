@@ -143,10 +143,14 @@ DEFAULT_GAME_ESTATE = "byty"
 # Prefer live catalog once at least one locality has two priced, distinct listings.
 MIN_LIVE_LOCALITY_PAIRS = 1
 # Live cards are noisy: ignore missing fields and tiny gaps so "teaching" still means
-# worse = dearer AND (clearly smaller OR worse disposition).
+# worse = dearer AND (clearly smaller OR worse disposition) AND not a better Kč/m² deal.
 MIN_TEACH_PRICE_GAP = 800
 MIN_TEACH_PRICE_RATIO = 0.04
 MIN_TEACH_AREA_GAP = 6
+MIN_TEACH_M2_GAP = 25
+MIN_TEACH_M2_RATIO = 0.05
+# When several teaching pairs exist, stay in the high-contrast band (price/m² + size).
+CLEAR_TEACH_KEEP = 0.6
 DEFAULT_VANISH_HOURS = 8.0
 # first_seen == last_seen on ingest is not a vanish time.
 MIN_OBSERVED_VANISH_HOURS = 0.75
@@ -164,7 +168,7 @@ _HINT_CAP = 600
 
 _INTRO_COPY = (
     "Oba byty jsou ve stejné lokalitě. Který je levnější? "
-    "Dobré kousky mizí v řádu minut — v reálu vyhrává ten, kdo dostane upozornění první."
+    "Lepší byt může stát míň — a přesně ty mizí první."
 )
 _TEACH_OK = (
     "Přesně tak: lepší byt může stát míň. Takové nabídky mizí jako první — "
@@ -180,10 +184,11 @@ _RANDOM_MISS = (
     "Špatně. Levnější byt ve stejné lokalitě už často není. Podobné nabídky mizí {vanish}."
 )
 _RENT_INTRO = (
-    "Všechny byty jsou ve stejné lokalitě. Tipněte nájem — "
-    "vedle sebe uvidíte výhodné kousky i přestřelené ceny. "
+    "Pět bytů ze stejné čtvrti. Napište měsíční nájem čísly — mezery doplníme. "
+    "Vedle sebe uvidíte výhodné kousky i přestřelené ceny. "
     "Dobré nabídky mizí {vanish}."
 )
+_RENT_HINT = "např. 18 000 · jen čísla, mezery doplníme"
 _RENT_TEACH = (
     "Ve stejné čtvrti může větší byt stát míň. Takové nabídky mizí {vanish}."
 )
@@ -235,11 +240,35 @@ def _neighborhood_from_key(key: str) -> str | None:
     return None
 
 
+def _unit_rent(item: dict[str, Any]) -> float | None:
+    """Kč / m² from live area. None when area is missing — do not invent it."""
+    price = _as_int(item.get("price_czk"))
+    area = _as_int(item.get("area_m2"))
+    if not price or not area or area <= 0:
+        return None
+    return price / area
+
+
+def _m2_deal_gap(cheap: dict[str, Any], dear: dict[str, Any]) -> float | None:
+    """Dearer Kč/m² minus cheaper. None if either card has no area."""
+    cheap_m2 = _unit_rent(cheap)
+    dear_m2 = _unit_rent(dear)
+    if cheap_m2 is None or dear_m2 is None:
+        return None
+    return dear_m2 - cheap_m2
+
+
+def _meaningful_m2_gap(gap: float, cheap_m2: float) -> bool:
+    return gap >= MIN_TEACH_M2_GAP or (cheap_m2 > 0 and gap / cheap_m2 >= MIN_TEACH_M2_RATIO)
+
+
 def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
     """True when the dearer flat is also worse (smaller and/or worse disposition).
 
     Pedagogical lesson: a clearly better flat can still be cheaper — and those
     vanish first. Missing area/disposition and tiny live-data gaps do not count.
+    When both cards have area, the cheaper one must also be the better Kč/m² deal
+    so a tiny 3+kk cannot masquerade against a larger, dearer 2+kk.
     """
     cheap, dear = _price_order(left, right)
     if cheap is None:
@@ -263,27 +292,54 @@ def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
         and dear_area + MIN_TEACH_AREA_GAP <= cheap_area
     )
     worse_disp = cheap_disp > 0 and dear_disp > 0 and dear_disp < cheap_disp
-    return bool(worse_area or worse_disp)
+    if not (worse_area or worse_disp):
+        return False
+    m2_gap = _m2_deal_gap(cheap, dear)
+    if m2_gap is None:
+        return True
+    cheap_m2 = _unit_rent(cheap) or 0.0
+    return _meaningful_m2_gap(m2_gap, cheap_m2)
 
 
-def _teaching_contrast(left: dict[str, Any], right: dict[str, Any]) -> float:
-    """Larger = clearer lesson. Used to prefer obvious live pairs."""
+def teaching_contrast(left: dict[str, Any], right: dict[str, Any]) -> float:
+    """Larger = clearer better+cheaper vs worse+dearer lesson.
+
+    Combines Kč/m² gap, living area, and disposition. 0 means not a teaching pair.
+    """
+    if not is_teaching_pair(left, right):
+        return 0.0
     cheap, dear = _price_order(left, right)
     if cheap is None:
         return 0.0
-    cheap_price = _as_int(cheap.get("price_czk")) or 0
+    cheap_price = _as_int(cheap.get("price_czk")) or 1
     dear_price = _as_int(dear.get("price_czk")) or 0
-    if not cheap_price or not dear_price:
-        return 0.0
-    score = (dear_price - cheap_price) / cheap_price
     cheap_area = _as_int(cheap.get("area_m2"))
     dear_area = _as_int(dear.get("area_m2"))
-    if cheap_area and dear_area and cheap_area > dear_area:
-        score += (cheap_area - dear_area) / cheap_area
     cheap_disp = disposition_rank(str(cheap.get("disposition") or ""))
     dear_disp = disposition_rank(str(dear.get("disposition") or ""))
-    if cheap_disp and dear_disp and cheap_disp > dear_disp:
-        score += (cheap_disp - dear_disp) / 6.0
+    cheap_m2 = _unit_rent(cheap)
+    dear_m2 = _unit_rent(dear)
+    worse_area = (
+        cheap_area is not None
+        and dear_area is not None
+        and cheap_area > 0
+        and dear_area > 0
+        and dear_area + MIN_TEACH_AREA_GAP <= cheap_area
+    )
+    worse_disp = cheap_disp > 0 and dear_disp > 0 and dear_disp < cheap_disp
+    if cheap_m2 and dear_m2 and dear_m2 > cheap_m2:
+        score = (dear_m2 - cheap_m2) / cheap_m2
+        m2_axis = True
+    else:
+        score = (dear_price - cheap_price) / cheap_price
+        m2_axis = False
+    if worse_area and cheap_area and dear_area:
+        score += (cheap_area - dear_area) / max(dear_area, 1)
+    if worse_disp:
+        score += (cheap_disp - dear_disp) / 4.0
+    axes = int(m2_axis) + int(bool(worse_area)) + int(bool(worse_disp))
+    if axes >= 2:
+        score += 0.4 * (axes - 1)
     return score
 
 
@@ -677,11 +733,29 @@ def _candidate_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], 
 
 
 def _teaching_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    if _m2_spread_too_tight(items):
+        return []
     return [pair for pair in _candidate_pairs(items) if is_teaching_pair(*pair)]
+
+
+def _m2_spread_too_tight(items: list[dict[str, Any]]) -> bool:
+    """True when every priced m² is within the noise band — no unit-price lesson."""
+    rents: list[float] = []
+    for item in items:
+        rent = _unit_rent(item)
+        if rent is None:
+            return False
+        rents.append(rent)
+    if len(rents) < 2:
+        return False
+    lo, hi = min(rents), max(rents)
+    return not _meaningful_m2_gap(hi - lo, lo)
 
 
 def _has_teaching_pair(items: list[dict[str, Any]]) -> bool:
     if len(items) < 2:
+        return False
+    if _m2_spread_too_tight(items):
         return False
     ordered = sorted(items, key=_unit_price)
     if is_teaching_pair(ordered[0], ordered[-1]):
@@ -696,14 +770,39 @@ def _has_teaching_pair(items: list[dict[str, Any]]) -> bool:
 def _pick_teaching_pair(
     items: list[dict[str, Any]], rng: random.Random
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    pairs = _teaching_pairs(items)
-    if not pairs:
+    if len(items) < 2 or _m2_spread_too_tight(items):
         return None
-    if len(pairs) == 1:
-        return pairs[0]
-    ranked = sorted(pairs, key=lambda pair: _teaching_contrast(*pair), reverse=True)
-    keep = max(1, min(4, (len(ranked) + 2) // 3))
-    return rng.choice(ranked[:keep])
+    ordered = sorted(items, key=_unit_price)
+    n = len(ordered)
+    band = max(4, min(8, (n + 2) // 3))
+    cheap_band = ordered[:band]
+    dear_band = ordered[-band:]
+    scored: list[tuple[tuple[dict[str, Any], dict[str, Any]], float]] = []
+    seen: set[frozenset[str]] = set()
+    for cheap in cheap_band:
+        for dear in dear_band:
+            left_id = str(cheap.get("id") or "")
+            right_id = str(dear.get("id") or "")
+            if not left_id or left_id == right_id:
+                continue
+            key = frozenset((left_id, right_id))
+            if key in seen:
+                continue
+            seen.add(key)
+            score = teaching_contrast(cheap, dear)
+            if score > 0:
+                scored.append(((cheap, dear), score))
+    if not scored:
+        pairs = _teaching_pairs(items)
+        if not pairs:
+            return None
+        scored = [(pair, teaching_contrast(*pair)) for pair in pairs]
+    scored.sort(key=lambda row: row[1], reverse=True)
+    best = scored[0][1]
+    floor = best * CLEAR_TEACH_KEEP
+    clear = [pair for pair, score in scored if score >= floor]
+    keep = max(1, min(3, len(clear)))
+    return rng.choice(clear[:keep])
 
 
 def _parse_stamp(value: Any) -> datetime | None:
@@ -824,7 +923,7 @@ def pick_same_locality_pair(
     if not groups:
         usable = _seed_pool()
         groups = _groups_by_locality(usable)
-    teaching_groups = {key: items for key, items in groups.items() if _teaching_pairs(items)}
+    teaching_groups = {key: items for key, items in groups.items() if _has_teaching_pair(items)}
     want_teaching = rng.random() < max(0.0, min(1.0, float(teaching_ratio)))
     pair_kind = "teaching"
     picked: tuple[dict[str, Any], dict[str, Any]] | None = None
@@ -1030,7 +1129,7 @@ def pick_rent_round(
         pair_kind = "random"
 
     chosen = _pick_rent_flats(candidates, rng=rng, teaching=(pair_kind == "teaching"))
-    if pair_kind == "teaching" and not _teaching_pairs(chosen):
+    if pair_kind == "teaching" and not _has_teaching_pair(chosen):
         pair_kind = "random"
     if len(chosen) < RENT_ROUND_SIZE:
         seen = {str(item.get("id")) for item in chosen}
@@ -1045,7 +1144,7 @@ def pick_rent_round(
     if len(chosen) < RENT_ROUND_SIZE and seed_full:
         key = rng.choice(list(seed_full))
         chosen = _pick_rent_flats(seed_full[key], rng=rng, teaching=want_teaching)
-        pair_kind = "teaching" if want_teaching and _teaching_pairs(chosen) else "random"
+        pair_kind = "teaching" if want_teaching and _has_teaching_pair(chosen) else "random"
 
     vanish, vanish_text = _round_vanish(chosen)
     pair_key = key or str(chosen[0].get("pair_key") or "")
@@ -1065,6 +1164,7 @@ def pick_rent_round(
         "pair_key": pair_key,
         "locality_label": loc,
         "copy": _RENT_INTRO.format(vanish=vanish_text),
+        "copy_hint": _RENT_HINT,
         "copy_ok": copy,
         "vanish_hours": vanish,
         "vanish_label": vanish_text,
@@ -1102,6 +1202,7 @@ def public_rent_round(store: Any = None) -> dict[str, Any]:
         "vanish_hours": payload.get("vanish_hours"),
         "vanish_label": payload.get("vanish_label"),
         "copy": payload.get("copy"),
+        "copy_hint": payload.get("copy_hint") or _RENT_HINT,
         "copy_ok": payload.get("copy_ok"),
         "round_kind": payload.get("round_kind"),
         "seeded": payload.get("seeded"),

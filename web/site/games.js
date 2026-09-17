@@ -8,10 +8,36 @@
 
   const fmtNum = (n) => Math.round(Number(n || 0)).toLocaleString("cs-CZ");
   const fmt = (n) => `${fmtNum(n)} Kč`;
-  const digitsOnly = (raw) => String(raw || "").replace(/[^\d]/g, "");
+  const digitsOnly = (raw) => String(raw || "").replace(/[^\d]/g, "").slice(0, 8);
+  const groupDigits = (digits) => String(digits || "").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   const prettyGuess = (raw) => {
     const digits = digitsOnly(raw);
-    return digits ? Number(digits).toLocaleString("cs-CZ") : "";
+    return digits ? groupDigits(digits) : "";
+  };
+  const caretAfterDigits = (formatted, count) => {
+    if (count <= 0) return 0;
+    let seen = 0;
+    for (let i = 0; i < formatted.length; i += 1) {
+      if (/\d/.test(formatted[i])) {
+        seen += 1;
+        if (seen === count) return i + 1;
+      }
+    }
+    return formatted.length;
+  };
+  const formatGuessInput = (el) => {
+    if (!el) return;
+    const raw = String(el.value || "");
+    const caret = el.selectionStart ?? raw.length;
+    const digitsBefore = digitsOnly(raw.slice(0, caret)).length;
+    const next = prettyGuess(raw);
+    el.value = next;
+    const pos = caretAfterDigits(next, digitsBefore);
+    try {
+      el.setSelectionRange(pos, pos);
+    } catch {
+      /* input not text-like */
+    }
   };
 
   const specText = (item) =>
@@ -250,6 +276,7 @@
       board.removeAttribute("aria-busy");
       const locality = roundMeta.locality_label || item.locality || item.name || "Stejná lokalita";
       const vanish = vanishText(item.vanish_hours, item.vanish_label || roundMeta.vanish_label);
+      const hint = roundMeta.copy_hint || "např. 18 000 · jen čísla, mezery doplníme";
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(locality)}</div>
         <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="390" height="180" alt="" decoding="async" fetchpriority="high" />
@@ -258,18 +285,19 @@
           <div class="portal">${escapeHtml(item.portal_label || "")}</div>
         </div>
         <label class="rent-amount">
-          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus size="8" />
+          <input id="rent-guess" type="text" inputmode="numeric" autocomplete="off" placeholder="18 000" autofocus size="8" aria-describedby="rent-guess-hint" />
           ${ccyPill()}
         </label>
         <p class="rent-unit">Kč / měsíc</p>
+        <p class="rent-hint" id="rent-guess-hint">${escapeHtml(hint)}</p>
         ${infoRows([
           ["Stejná lokalita", locality],
           ["Portál", item.portal_label || ""],
           ["Takové nabídky mizí", vanish],
         ])}
         <div class="mint-banner">
-          <strong>Tipněte měsíční nájem v Kč.</strong>
-          <span>${escapeHtml(roundMeta.copy || `Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${vanish}.`)}</span>
+          <strong>Kolik stojí měsíc v Kč?</strong>
+          <span>${escapeHtml(roundMeta.copy || `Pět bytů ze stejné čtvrti. Čím blíž, tím víc bodů. Dobré nabídky mizí ${vanish}.`)}</span>
         </div>
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-next">${index + 1 >= items.length ? "Odeslat tipy" : "Další byt"}</button>
@@ -278,9 +306,7 @@
       const input = document.getElementById("rent-guess");
       const next = document.getElementById("rent-next");
       const parseGuess = (raw) => Number(digitsOnly(raw) || 0);
-      input?.addEventListener("input", () => {
-        input.value = prettyGuess(input.value);
-      });
+      input?.addEventListener("input", () => formatGuessInput(input));
       const advance = () => {
         const value = parseGuess(input?.value);
         if (!value || value < 1000) {
