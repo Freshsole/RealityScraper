@@ -575,6 +575,7 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
         "ochrana-soukromi.html": "OCHRANA SOUKROMÍ",
         "nastaveni-cookies.html": "NASTAVENÍ COOKIES",
         "byt.html": "Začít hlídat zdarma",
+        "dum.html": "Hlídání domů v ČR",
     }
     for name, needle in pages.items():
         html = site_html(name)
@@ -624,14 +625,18 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert ".type-slot" in last_phone
     assert ".type-rest" in last_phone
     assert ".byt-converter" in last_phone
+    assert ".dum-converter" in last_phone
+    assert ".dum-page" in last_phone
     assert ".room-stage" in last_phone
     assert "/static/site/inquiries.js" in site_html("kontakt.html")
     assert "/static/site/stories-list.js" in site_html("uspechy.html")
     assert "/static/site/legal.js" in site_html("obchodni-podminky.html")
     assert "/static/site/cookies.js" in site_html("nastaveni-cookies.html")
     assert "/static/site/landing-search.js" in site_html("byt.html")
+    assert "/static/site/landing-search.js" in site_html("dum.html")
     assert "/static/site/stories-articles.js" in site_html("clanek.html")
     byt = site_html("byt.html")
+    dum = site_html("dum.html")
     assert "ccy-pill" in byt
     assert "mint-banner" in byt
     assert "badge-mint" in byt
@@ -640,6 +645,19 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "Hlídání bytů v ČR" in byt
     assert "site.css?v=14" in byt
     assert "fonts.googleapis" not in byt
+    assert "ccy-pill" in dum
+    assert "mint-banner" in dum
+    assert "badge-mint" in dum
+    assert "game-pill" in dum
+    assert "dum-converter" in dum
+    assert 'data-estate="dum"' in dum
+    assert "Hlídání domů v ČR" in dum
+    assert "site.css?v=15" in dum
+    assert "fonts.googleapis" not in dum
+    search_js = (Path(__file__).resolve().parents[1] / "web" / "site" / "landing-search.js").read_text(encoding="utf-8")
+    assert "dataset.estate" in search_js
+    assert "dataset.disps" in search_js
+    assert 'params.set("estate", estate)' in search_js
     kontakt = site_html("kontakt.html")
     uspechy = site_html("uspechy.html")
     assert "Odpovíme do 2 hodin" in kontakt
@@ -653,6 +671,7 @@ def test_dashboard_and_admin_shells_are_self_hosted_wise():
     shell = web_body("index.html").decode("utf-8")
     admin = web_body("admin/index.html").decode("utf-8")
     leftover = (root / "byt.html").read_text(encoding="utf-8")
+    leftover_dum = (root / "dum.html").read_text(encoding="utf-8")
     styles = (root / "web" / "styles.css").read_text(encoding="utf-8")
     admin_css = (root / "web" / "admin" / "admin.css").read_text(encoding="utf-8")
     assert "Inter:" not in leftover
@@ -660,10 +679,15 @@ def test_dashboard_and_admin_shells_are_self_hosted_wise():
     assert "col is-us" in leftover
     assert "byt-converter" in leftover
     assert "ccy-pill" in leftover
+    assert "Inter:" not in leftover_dum
+    assert "data-node-id" not in leftover_dum
+    assert "dum-converter" in leftover_dum
+    assert 'data-estate="dum"' in leftover_dum
     for name, html in (
         ("index.html", shell),
         ("admin/index.html", admin),
         ("byt.html", leftover),
+        ("dum.html", leftover_dum),
     ):
         assert "fonts.googleapis" not in html, name
         assert "fonts.gstatic" not in html, name

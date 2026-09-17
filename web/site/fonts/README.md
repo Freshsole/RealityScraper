@@ -2,7 +2,7 @@ Archivo Black (SIL Open Font License 1.1)
 https://fonts.google.com/specimen/Archivo+Black
 
 Self-hosted latin + latin-ext `.woff2` so marketing HTML (`/`, `/hry*`,
-`/prihlaseni`, `/registrace`, `/heslo`, `/kontakt`, `/uspechy*`, `/byt`, legal
+`/prihlaseni`, `/registrace`, `/heslo`, `/kontakt`, `/uspechy*`, `/byt`, `/dum`, legal
 shells) and dashboard/admin shells (`web/index.html`, `web/admin/index.html`)
 do not wait on `fonts.googleapis.com` / `fonts.gstatic.com`. Body copy uses
 the system UI stack.
