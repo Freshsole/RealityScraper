@@ -325,6 +325,8 @@ def main() -> int:
     parser.add_argument("--blob", type=int, default=2500)
     parser.add_argument("--samples", type=int, default=12)
     parser.add_argument("--db", type=Path, default=Path("/tmp/catalog-read-latency.sqlite"))
+    parser.add_argument("--commit-every", type=int, default=500)
+    parser.add_argument("--batch", type=int, default=24)
     args = parser.parse_args()
     for suffix in ("", "-wal", "-shm"):
         path = Path(str(args.db) + suffix) if suffix else args.db
@@ -347,8 +349,10 @@ def main() -> int:
     def writer() -> None:
         n = 0
         while not stop.is_set():
-            batch = [_listing(400 + (n + k) % 80, blob="y" * args.blob) for k in range(24)]
-            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=500, fast=True)
+            batch = [_listing(400 + (n + k) % 80, blob="y" * args.blob) for k in range(args.batch)]
+            store.upsert_catalog_listings_batch(
+                batch, kind="refresh", commit_every=args.commit_every, fast=True
+            )
             n += 1
 
     thread = threading.Thread(target=writer, name="rf-job-sim", daemon=True)

@@ -242,6 +242,17 @@ List path still does not call Photon/Nominatim. InstantSiteASGI `/hry*`, games, 
 
 Healthy recent set is **78** shards (was 60). Unconstrained page-1-across finishes **78 / 1560**. Under a 0.7 s contention deadline (extras 300 ms): held-gate still **21 / 900**; page-1-across **48 / 960** — the extra 16 land HTML shards no longer all fit in 0.7 s at 16 concurrency.
 
+## Scrape writer overlap (`SCRAPE_BATCH_COMMIT` / `SCRAPE_WRITE_CHUNK`)
+
+Catalog/search/pins JSON shares SQLite WAL with NewDiscovery upserts. Two knobs, two layers:
+
+| Knob | Default | Where | What it does |
+|---|---|---|---|
+| `SCRAPE_BATCH_COMMIT` | **500** | `Store.upsert_catalog_listings_batch` | Commit every N rows inside one writer connection. Floor 50. |
+| `SCRAPE_WRITE_CHUNK` | **100** | `Hub._catalog_upsert` | Lock-scoped NewDiscovery / rolling-deep / catalog-sync / Ulov hydrate chunk. Floor 50, never above `SCRAPE_BATCH_COMMIT`. Releases `_catalog_write` between chunks so minute ticks can interleave. |
+
+Live Hub already chunks at 100 even when Store `commit_every` is 500 — a 500-row transaction historically blocked admin/auth/tick writes on a ~1GB catalog. InstantSiteASGI / `SCRAPE_ROLE=web` never takes this lock (`write-deferred:web-role`). Measure before changing defaults: `python scripts/measure_scrape_commit.py` (15k fat listings + 2.5KB blobs, no residential proxy). Leave Store default 500 unless a shorter size clearly wins catalog/pins/search p95 without missing the 12s NewDiscovery write deadline. FTS `q=`, covering pin index, games, pozemky shards, Ulov hydrate, and M&M `SCRAPE_HTTP_PROXY` are unchanged.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

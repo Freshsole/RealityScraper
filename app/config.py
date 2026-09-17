@@ -91,7 +91,35 @@ SCRAPE_FULL_MARKET_URLS = max(10, int(os.getenv("SCRAPE_FULL_MARKET_URLS", "80")
 SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int(os.getenv("SCRAPE_DEEP_SHARDS_PER_TICK", "10"))))
 SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "20"))))
 SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40")))
+# Store-level commit_every inside one upsert_catalog_listings_batch connection.
+# Live NewDiscovery / rolling deep / catalog-sync do **not** use this as the
+# asyncio lock hold: those go through catalog_write_chunk_size() below.
 SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
+# Lock-scoped Hub write size. Default 100 so a 500-row Store transaction cannot
+# hold `_catalog_write` across a whole minute tick (historically starved
+# admin/auth/tick writes on a ~1GB catalog). Floor 50; never above BATCH_COMMIT.
+_raw_write_chunk = os.getenv("SCRAPE_WRITE_CHUNK")
+if _raw_write_chunk is None or str(_raw_write_chunk).strip() == "":
+    SCRAPE_WRITE_CHUNK = max(50, min(100, SCRAPE_BATCH_COMMIT))
+else:
+    SCRAPE_WRITE_CHUNK = max(50, min(SCRAPE_BATCH_COMMIT, int(_raw_write_chunk)))
+
+
+def catalog_write_chunk_size(
+    batch_commit: int | None = None,
+    write_chunk: int | None = None,
+) -> int:
+    """Lock-scoped Hub write size for NewDiscovery / rolling deep / catalog sync.
+
+    Floor 50 (same as Store commit_every). Caps at SCRAPE_WRITE_CHUNK so a
+    SCRAPE_BATCH_COMMIT=500 Store transaction cannot hold `_catalog_write`
+    across a whole minute tick. Never exceeds batch_commit.
+    """
+    batch = max(50, int(SCRAPE_BATCH_COMMIT if batch_commit is None else batch_commit))
+    chunk = int(SCRAPE_WRITE_CHUNK if write_chunk is None else write_chunk)
+    return max(50, min(batch, chunk))
+
+
 SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD", "8")))
 SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
 SCRAPE_PAGE1_BUDGET_FRAC = max(0.4, min(0.95, float(os.getenv("SCRAPE_PAGE1_BUDGET_FRAC", "0.72"))))
