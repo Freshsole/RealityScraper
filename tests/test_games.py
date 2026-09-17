@@ -400,6 +400,10 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "max-width: 100%" in css.split(".converter {", 1)[1].split("}", 1)[0]
     assert "max-width: 100%" in css.split(".rent-hero-img {", 1)[1].split("}", 1)[0]
     assert "width: 0" in css.split(".rent-amount input {", 1)[1].split("}", 1)[0]
+    assert "padding: 24px 16px" in phone
+    assert "white-space: normal" in phone
+    assert ".game-card" in phone
+    assert "max-width: 100%" in phone
 
 
 def test_admin_games_leaderboard_uses_five_column_wise_grid():
@@ -451,6 +455,18 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".mint-banner" in css
     assert "fonts.googleapis" not in css
     assert "--font-ui: system-ui" in css
+    assert "site.css?v=12" in html
+    ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
+    assert "flex-shrink: 0" in ccy
+    assert "@media (max-width: 480px)" in css
+    phone = css.split("@media (max-width: 480px)", 1)[1]
+    assert "--pad: 16px" in phone
+    assert "min-height: 48px" in phone
+    assert "max-width: 100%" in phone
+    assert ".alert-card" in phone
+    assert ".fomo" in phone
+    assert "white-space: normal" in phone
+    assert "fonts.googleapis" not in phone
     assert cold_ms < 80, f"cold homepage HTML {cold_ms:.1f}ms"
     assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
     response = site_page("index.html")
@@ -498,6 +514,12 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "var(--pale)" in css
     assert "var(--radius-pill)" in css
     assert ".auth-card[hidden]" in css
+    assert "auth.css?v=14" in login
+    assert "@media (max-width: 480px)" in css
+    phone = css.split("@media (max-width: 480px)", 1)[1]
+    assert "padding: 24px 16px 40px" in phone
+    assert "min-height: 48px" in phone
+    assert "max-width: 100%" in phone
 
 
 def test_public_game_helpers_are_memory_only():
