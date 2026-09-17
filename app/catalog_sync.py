@@ -361,7 +361,7 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": builder(offer),
                 }
             )
-    # Annonce / Reality.cz / RE/MAX houses use a different list path; one extra newest shard per offer.
+    # Annonce / Reality.cz / RE/MAX / Bazoš houses use a different list path; one extra newest shard per offer.
     for portal_id in ("annonce", "realitycz", "remax"):
         for offer in ("pronajem", "prodej"):
             shards.append(
@@ -372,6 +372,26 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": EXTRA_URLS[portal_id].build_url({"offers": [offer], "category": "domy"}),
                 }
             )
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "bazos",
+                "shard_key": f"bazos:recent:{offer}:domy",
+                "search_url": bazos_url.build_url(
+                    {
+                        "source": "bazos",
+                        "offers": [offer],
+                        "category": "dum",
+                        "districts": list(localities.SREALITY_CZECH_REGIONS),
+                        "sizes": [],
+                        "price_from": None,
+                        "price_to": None,
+                        "radius": 0,
+                    }
+                ),
+            }
+        )
     return shards
 
 

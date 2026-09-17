@@ -152,7 +152,9 @@ _ANCHORS: list[tuple[str, float, float]] | None = None
 def _fold_label(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return text.casefold()
+    text = text.casefold()
+    # Bazoš okres labels use "Frýdek - Místek"; city pins are "Frýdek-Místek".
+    return re.sub(r"\s*[-–—]\s*", "-", text)
 
 
 def locality_anchors() -> list[tuple[str, float, float]]:
