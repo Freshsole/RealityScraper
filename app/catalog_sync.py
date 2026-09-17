@@ -227,6 +227,18 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": urls.build_url({"source": portal_id, "offers": [offer], "category": "byty"}),
                 }
             )
+        if portal_id == "annonce":
+            for offer in ("pronajem", "prodej"):
+                shards.append(
+                    {
+                        "kind": "catalog_daily",
+                        "portal": "annonce",
+                        "shard_key": f"annonce:domy:{offer}:cz",
+                        "search_url": urls.build_url(
+                            {"source": "annonce", "offers": [offer], "category": "domy"}
+                        ),
+                    }
+                )
     return shards
 
 
@@ -326,6 +338,16 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": builder(offer),
                 }
             )
+    # Annonce houses use a different list markup; one extra newest shard per offer.
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "annonce",
+                "shard_key": f"annonce:recent:{offer}:domy",
+                "search_url": EXTRA_URLS["annonce"].build_url({"offers": [offer], "category": "domy"}),
+            }
+        )
     return shards
 
 

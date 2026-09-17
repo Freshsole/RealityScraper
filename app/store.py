@@ -527,8 +527,14 @@ class Store:
         self._init()
 
     def _invalidate_catalog_pins(self) -> None:
-        """Drop wide-map city clusters so newly hydrated GPS/price show on next read."""
+        """Drop wide-map city clusters and short-lived catalog snapshots.
+
+        Leaves `_hot_json_cache` in place so a WAL-busy catalog/search read can
+        still serve the last successful payload instead of blocking the web path.
+        """
         self._city_pin_cache.clear()
+        self._new_today_cache = None
+        self._landing_preview_cache = None
 
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         """Open SQLite with a reader/writer split.

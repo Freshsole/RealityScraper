@@ -45,6 +45,14 @@ def test_recent_shards_cover_all_portals():
     extra = extra_portal_recent_shards()
     assert {item["portal"] for item in extra} == set(PORTAL_IDS) - {"sreality"}
     assert all(item["kind"] == "catalog_recent" for item in shards)
+    annonce = [item for item in extra if item["portal"] == "annonce"]
+    assert {item["shard_key"] for item in annonce} >= {
+        "annonce:recent:pronajem:byty",
+        "annonce:recent:prodej:byty",
+        "annonce:recent:pronajem:domy",
+        "annonce:recent:prodej:domy",
+    }
+    assert all("nabidkovy=1" in item["search_url"] for item in annonce)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

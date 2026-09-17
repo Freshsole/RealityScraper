@@ -72,18 +72,26 @@ Live page-1 from this datacenter (2026-09-17, 12 s cap, worker clients, not `/hr
 | UlovDomov sitemap | **20** | 3295 | 1.8 s |
 | Reality.cz | **24** | 841 | 1.6 s |
 | RE/MAX | **20** | 20 | list ok |
-| Annonce | **10** | 10 | 0.3 s |
+| Annonce | **10** | 10 | 0.3 s | `CARD_RE` ate the next card opener (20 live boxes → 10); empty locality / no GPS |
 | iDNES | 0 | 0 | timeout 12 s — list HTML was fine (~26 cards / 1.3 s); `fetch_page` then geocoded every locality via Photon/Nominatim |
 | ČeskéReality | 0 | 0 | 0.6 s empty in PR #13; live `/nejnovejsi/` now ships cards without `id-nemovitosti` (IDs live in `*.html`) |
 
-After this branch (same 12 s cap, worker `fetch_page`, not `/hry*`):
+After PR #14 (same 12 s cap, worker `fetch_page`, not `/hry*`):
 
 | Portal | page 1 | catalog total | page-1 time |
 |---|---|---|---|
 | iDNES | **26** | **8519** | 1.3 s |
 | ČeskéReality | **20** | **4782** | 0.9 s |
 
-iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Synthetic page-1-across is unchanged (**21→42** shards / **900→2100** listings under a 0.7 s contention deadline). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged. No M&M residential proxy.
+After this branch (Annonce parser + `nabidkovy=1` + local city pins, same 12 s cap):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Annonce rent | **20** | **20** | 0.4 s | was **10** / 10 / 0.3 s; 20/20 locality, 19/20 city-center coords |
+| Annonce houses | **24** | **24** | 0.3 s | new newest shard; 24/24 locality, 22/24 price, 24/24 city pins |
+| Annonce bare `/byty-k-pronajmu.html` | **19** | 19 | 0.3 s | one `Poptávka` skipped |
+
+iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Annonce no longer skips every other slideshow card, defaults to offer-only list URLs, paginates with `?page=`, and HTML list clients pin local city centers (no Photon on page-1). Catalog writes still clear `_city_pin_cache` and now also drop landing / new-today snapshots; `_hot_json_cache` stays as the WAL-busy fallback. Synthetic page-1-across with two extra Annonce house shards: **21→44** page-1 shards / **900→2200** listings under a 0.7 s contention deadline (was 42/2100 before the house shards). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged. No M&M residential proxy.
 
 ## M&M Reality (documented limit)
 
