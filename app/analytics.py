@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -20,6 +21,9 @@ KIND_MONITOR = "monitor"
 KIND_DISCORD = "discord"
 KIND_NOTIFY = "notify"
 KIND_NOTIFY_FAIL = "notify_fail"
+
+_presence_touch_cache: dict[str, float] = {}
+_PRESENCE_CACHE_SEC = 12.0
 
 TZ_GEO: dict[str, tuple[str, str, str]] = {
     "Europe/Prague": ("CZ", "Česká republika", "Praha"),
@@ -266,6 +270,10 @@ def touch_presence(
     key = presence_key(ip, visitor_id)
     if not key:
         return
+    now = time.monotonic()
+    last = _presence_touch_cache.get(key)
+    if last is not None and now - last < _PRESENCE_CACHE_SEC:
+        return
     try:
         with store.connect() as conn:
             conn.execute(
@@ -290,7 +298,15 @@ def touch_presence(
                     "DELETE FROM analytics_presence WHERE ip = ? AND visitor_id != ?",
                     (ip, key),
                 )
+        _presence_touch_cache[key] = now
+        if len(_presence_touch_cache) > 256:
+            oldest = min(_presence_touch_cache, key=_presence_touch_cache.get)
+            _presence_touch_cache.pop(oldest, None)
     except sqlite3.OperationalError:
+        _presence_touch_cache[key] = now
+        if len(_presence_touch_cache) > 256:
+            oldest = min(_presence_touch_cache, key=_presence_touch_cache.get)
+            _presence_touch_cache.pop(oldest, None)
         return
 
 

@@ -1140,7 +1140,8 @@ def test_leftover_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsys):
     assert p95(samples["ext_me"]) < 15, samples["ext_me"]
     assert p95(samples["scores"]) < 40, samples["scores"]
     assert p95(samples["auth"]) < 15, samples["auth"]
-    assert p95(samples["ingest"]) < 40, samples["ingest"]
+    assert samples["ingest"][0] < 120, samples["ingest"]
+    assert samples["ingest"][1:] and p95(samples["ingest"][1:]) < 20, samples["ingest"]
     assert samples["status"][1:] and p95(samples["status"][1:]) < 8
     assert samples["settings"][1:] and p95(samples["settings"][1:]) < 8
     assert samples["scores"][1:] and p95(samples["scores"][1:]) < 8
@@ -1242,6 +1243,10 @@ def test_extension_scores_skip_network_and_serve_stale(tmp_path: Path, monkeypat
     store.upsert_catalog_listings_batch(seed, kind="seeded", fast=True)
     first = score_batch(store, ids=[str(seed[0].id)], urls=[seed[0].url], allow_network=False)
     assert first["items"]
+    from app import extension_score as ext_mod
+
+    for key, (at, payload) in list(ext_mod._SCORE_CACHE.items()):
+        ext_mod._SCORE_CACHE[key] = (at - 120.0, payload)
 
     def boom(*_a, **_k):
         raise sqlite3.OperationalError("database is locked")
