@@ -187,15 +187,20 @@
           `;
         })
         .join("");
-      const fastest = Math.min(
-        8,
-        ...(scored.items || []).map((item) => Number(item.vanish_hours) || 8),
+      const vanishRows = (scored.items || []).map((item) => [
+        Number(item.vanish_hours) || 8,
+        item.vanish_label || "",
+      ]);
+      const observed = vanishRows.filter(([, label]) => label && label !== "v řádu hodin");
+      const fastest = (observed.length ? observed : vanishRows).reduce(
+        (best, row) => (!best || row[0] < best[0] ? row : best),
+        null,
       );
       board.innerHTML = `
         <div class="loc-chip">Žebříček u admina</div>
         <div class="mint-banner">
           <strong>Skóre ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</strong>
-          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Nejrychlejší z těchto pěti mizí ${escapeHtml(vanishText(fastest))} — žebříček uvidí jen admin.</span>
+          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Nejrychlejší z těchto pěti mizí ${escapeHtml(vanishText(fastest?.[0], fastest?.[1]))} — žebříček uvidí jen admin.</span>
         </div>
         ${rows}
         <div class="converter-actions">
@@ -254,11 +259,11 @@
         ${infoRows([
           ["Lokalita", item.locality || item.name || "Byt"],
           ["Portál", item.portal_label || ""],
-          ["Takové nabídky mizí", vanishText(item.vanish_hours)],
+          ["Takové nabídky mizí", vanishText(item.vanish_hours, item.vanish_label)],
         ])}
         <div class="mint-banner">
           <strong>Tipněte měsíční nájem v Kč.</strong>
-          <span>Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${escapeHtml(vanishText(item.vanish_hours))}.</span>
+          <span>Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${escapeHtml(vanishText(item.vanish_hours, item.vanish_label))}.</span>
         </div>
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-next">${index + 1 >= items.length ? "Odeslat tipy" : "Další byt"}</button>
