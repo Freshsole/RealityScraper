@@ -521,6 +521,7 @@ button {
 .info-row span,
 .info-row strong {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .info-row:last-child {
@@ -532,6 +533,48 @@ button {
   font-weight: 600;
   text-align: right;
   overflow-wrap: anywhere;
+}
+
+.board-tease {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.board-tease-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0 4px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--forest);
+}
+
+.board-tease-head strong {
+  font-weight: 600;
+  color: var(--gray-2);
+  text-align: right;
+}
+
+.board-tease .info-row {
+  padding: 10px 0;
+}
+
+.board-tease .info-row strong {
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.board-tease-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--faint);
+  line-height: 1.4;
 }
 
 .loc-chip {
@@ -1055,8 +1098,32 @@ button {
 
   .info-row {
     align-items: flex-start;
-    gap: 8px 12px;
+    flex-wrap: wrap;
+    gap: 4px 12px;
     padding: 10px 0;
+  }
+
+  .info-row span {
+    flex: 1 1 11ch;
+  }
+
+  .info-row strong {
+    flex: 1 1 8ch;
+  }
+
+  .board-tease-head {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding-top: 10px;
+    font-size: 12px;
+  }
+
+  .board-tease-note {
+    max-width: 100%;
+  }
+
+  .name-field {
+    max-width: 100%;
   }
 
   .mint-banner {
