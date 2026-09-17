@@ -423,10 +423,50 @@ _PIN_GRID_DECIMALS = 3
 _PIN_CITY_CLUSTER_SPAN = 1.5
 
 
+# Catalog list/search over-fetch stays on first_seen + card fields. extras/description
+# blobs stay off this index. last_seen is omitted so last_seen-only scrape refreshes
+# do not rewrite it. List/search cards skip the fat extras hydrate; catalog_item still
+# loads extras for flags.
+_CATALOG_COVER_INDEX_COLS = (
+    "first_seen",
+    "id",
+    "monitor_id",
+    "listing_key",
+    "canonical_key",
+    "url",
+    "name",
+    "price_czk",
+    "price_label",
+    "disposition",
+    "area_m2",
+    "locality",
+    "image_url",
+    "lat",
+    "lon",
+    "notified",
+    "gone",
+    "old_price_czk",
+)
+_LISTING_CATALOG_COVER_COLS = (
+    "listings.id, listings.monitor_id, listings.listing_key, listings.canonical_key, "
+    "listings.url, listings.first_seen, listings.name, listings.price_czk, listings.price_label, "
+    "listings.disposition, listings.area_m2, listings.locality, listings.image_url, "
+    "listings.lat, listings.lon, listings.notified, listings.gone, listings.old_price_czk"
+)
+
+
 def _pin_cover_index_sql() -> str:
     return (
         "CREATE INDEX IF NOT EXISTS idx_listings_pin_cover ON listings("
         + ", ".join(_PIN_COVER_INDEX_COLS)
+        + ")"
+    )
+
+
+def _catalog_cover_index_sql() -> str:
+    return (
+        "CREATE INDEX IF NOT EXISTS idx_listings_first_seen ON listings("
+        + ", ".join(_CATALOG_COVER_INDEX_COLS)
         + ")"
     )
 
@@ -442,6 +482,32 @@ def _ensure_pin_cover_index(conn: sqlite3.Connection) -> None:
         return
     conn.execute("DROP INDEX IF EXISTS idx_listings_pin_cover")
     conn.execute(_pin_cover_index_sql())
+
+
+def _ensure_catalog_cover_index(conn: sqlite3.Connection) -> None:
+    """Rebuild first_seen as a covering identity index when columns are missing.
+
+    Catalog newest / q= over-fetch LIMIT walks this index and never touches
+    extras/description. Card fields come from the covering index; extras/flags
+    stay off the scan so fat blobs are not pulled in under a scrape writer.
+    """
+    have = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
+    if have == list(_CATALOG_COVER_INDEX_COLS):
+        return
+    conn.execute("DROP INDEX IF EXISTS idx_listings_first_seen")
+    conn.execute(_catalog_cover_index_sql())
+
+
+def _catalog_cover_sql(where_sql: str, *, limit: int) -> str:
+    """Newest catalog/search ids from the covering first_seen index."""
+    clause = (where_sql or "").strip() or "1=1"
+    return f"""
+        SELECT {_LISTING_CATALOG_COVER_COLS}
+        FROM listings INDEXED BY idx_listings_first_seen
+        WHERE {clause}
+        ORDER BY listings.first_seen DESC
+        LIMIT {int(limit)}
+    """
 
 
 def _pin_grid_bucket_sql(column: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
@@ -505,7 +571,8 @@ def _or_likes(where: list[str], params: list[Any], column: str, patterns: list[s
 
 # Catalog q= uses FTS5 on name/locality/disposition only (no extras/description blobs).
 # Token/prefix match, diacritics folded. Narrower than LIKE %q% for interior substrings.
-# IN (FTS MATCH) + first_seen beats correlated EXISTS, which probes FTS per listing row.
+# IN (FTS MATCH) + covering first_seen: one MATCH scan, then a covering LIMIT walk.
+# Correlated EXISTS probes FTS per listing row and cannot push LIMIT (q=Praha ~50ms).
 LISTINGS_FTS_MATCH_SQL = (
     "listings.rowid IN (SELECT rowid FROM listings_fts WHERE listings_fts MATCH ?)"
 )
@@ -1221,7 +1288,7 @@ class Store:
         if cat_cols and "canonical_key" not in cat_cols:
             conn.execute("ALTER TABLE catalog_listings ADD COLUMN canonical_key TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_first_seen ON listings(first_seen)")
+        _ensure_catalog_cover_index(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_locality ON listings(locality)")
         if cat_cols:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
@@ -4228,6 +4295,7 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_disposition ON listings(disposition)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_geo_notified ON listings(lat, lon, notified)")
         _ensure_pin_cover_index(conn)
+        _ensure_catalog_cover_index(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor ON listings(monitor_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_url ON catalog_listings(url)")
         conn.executescript(
@@ -4955,6 +5023,9 @@ class Store:
         clause = " AND ".join(where)
         fts_q_only = bool(fts_match) and where == ["1=1", LISTINGS_FTS_MATCH_SQL]
         identity = listing_identity_sql()
+        catalog_cover = "listings.first_seen" in order and (
+            where == ["1=1"] or fts_q_only
+        )
         if place_geoms:
             light_sql = f"""
                 SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
@@ -4998,21 +5069,26 @@ class Store:
                 rows = [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
         else:
             fetch_limit = min((offset + limit) * 4, 2000)
-            from_listings = "listings"
-            if fts_q_only and "listings.first_seen" in order:
-                from_listings = "listings INDEXED BY idx_listings_first_seen"
-            sql = f"""
-                SELECT {_LISTING_LIGHT_COLS}
-                FROM {from_listings}
-                WHERE {clause}
-                ORDER BY {order}
-                LIMIT ?
-            """
+            if catalog_cover:
+                sql = _catalog_cover_sql(clause, limit=fetch_limit)
+                sql_params: tuple[Any, ...] = tuple(params)
+            else:
+                from_listings = "listings"
+                if fts_match and "listings.first_seen" in order:
+                    from_listings = "listings INDEXED BY idx_listings_first_seen"
+                sql = f"""
+                    SELECT {_LISTING_LIGHT_COLS}
+                    FROM {from_listings}
+                    WHERE {clause}
+                    ORDER BY {order}
+                    LIMIT ?
+                """
+                sql_params = (*params, fetch_limit)
             span = float(filters.get("_bbox_span") or 0)
             skip_count = span >= 3.5
             total = None
             with self.read() as conn:
-                fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+                fetched = [dict(row) for row in conn.execute(sql, sql_params).fetchall()]
                 if not skip_count:
                     try:
                         if fts_q_only and fts_match:
@@ -5020,6 +5096,12 @@ class Store:
                                 conn.execute(
                                     "SELECT COUNT(*) FROM listings_fts WHERE listings_fts MATCH ?",
                                     (fts_match,),
+                                ).fetchone()[0]
+                            )
+                        elif where == ["1=1"]:
+                            total = int(
+                                conn.execute(
+                                    "SELECT COUNT(*) FROM listings INDEXED BY idx_listings_first_seen"
                                 ).fetchone()[0]
                             )
                         else:
@@ -5042,7 +5124,7 @@ class Store:
                 total = unique_n
                 if len(fetched) >= fetch_limit:
                     total = max(unique_n, offset + len(rows) + (limit if len(rows) >= limit else 0))
-            if rows:
+            if rows and not catalog_cover:
                 cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in rows])
                 rows = [cards[key] for row in rows if (key := (row["monitor_id"], row["id"])) in cards]
         keys = [(row["monitor_id"], row["id"]) for row in rows]

@@ -280,6 +280,21 @@ Measured 2026-09-17 on this agent, same 15k fat fixture / `measure_scrape_commit
 
 City-pin writer p95 is clearly under 20 ms. Tight-zoom stays ~13–18 ms (well under the ~24 ms leftover). Catalog/`q=` FTS plans unchanged (`idx_listings_first_seen` + `listings_fts` LIST SUBQUERY). EXPLAIN city pins: covering `idx_listings_pin_cover` range scan + one `GROUP BY` temp B-tree (no `CO-ROUTINE`).
 
+### Catalog list / FTS search covering index
+
+Leftover after the city-grid slice was catalog list and `q=` writer heat. Newest/`q=` over-fetch used `idx_listings_first_seen` (first_seen only) then looked up fat `listings` rows (2.5KB extras + 2.5KB description). Card hydrate pulled those blobs again for the page.
+
+`idx_listings_first_seen` is now a covering identity+card index (`INDEXED BY`, no extras/description, no last_seen so last_seen-only refreshes do not rewrite it). Over-fetch LIMIT walks that covering index. Page cards skip the fat extras hydrate on this path (flags stay off list JSON; offer/estate fall back to `price_label` / locality; `catalog_item` still loads extras). `q=` stays FTS `IN` + LIST SUBQUERY (correlated EXISTS probed FTS per row and could not push LIMIT: Hub-100 search p95 ~52 ms on `q=Praha`). Token/prefix + diacritics-folded MATCH is unchanged (no interior substring). Defaults stay **500 / 100**. Pin covering index is unchanged.
+
+Measured 2026-09-17 on this agent, same 15k fat fixture / `measure_scrape_commit.py --chunks 100` (no residential proxy). Before = tip of #53; after = covering catalog index.
+
+| writer | catalog p95 | search p95 | pins p95 | tight p95 | 1500-row yield | listings/s |
+|---|---|---|---|---|---|---|
+| quiet before → after | 20.5 → 19.6 ms | 22.8 → 22.3 ms | 11.1 → 11.3 ms | 11.9 → 12.2 ms | — | — |
+| #51 harness before → after | 13.6 → 11.2 ms | 15.2 → 13.2 ms | 14.0 → 14.3 ms | 18.5 → 17.3 ms | — | — |
+| Hub chunk **100** before → after | **13.2 → 9.7 ms** | **15.5 → 12.8 ms** | 12.5 → 12.8 ms | 14.6 → 13.3 ms | 5258 → 5350 ms | 285 → 280 |
+
+Catalog/search writer p95 dropped ~3 ms each. City pins stay ~12–13 ms; tight-zoom ~13 ms. Yield still inside the 12s NewDiscovery write deadline. EXPLAIN catalog newest/`q=Praha`: covering `idx_listings_first_seen` (search still `listings_fts` LIST SUBQUERY, not CORRELATED). Pins still covering `idx_listings_pin_cover`.
 
 ## M&M Reality (documented limit)
 

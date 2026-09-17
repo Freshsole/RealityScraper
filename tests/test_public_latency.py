@@ -27,7 +27,9 @@ from app.store import (
     Store,
     catalog_item_needs_live_fetch,
     listings_fts_match_query,
+    _CATALOG_COVER_INDEX_COLS,
     _PIN_COVER_INDEX_COLS,
+    _catalog_cover_sql,
     _pin_gps_grid_sql,
     _pin_gps_tight_sql,
 )
@@ -920,17 +922,18 @@ def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
     assert store._listings_fts is True
     match = listings_fts_match_query("Praha")
     assert match
-    sql = f"""
-        SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
-        WHERE {LISTINGS_FTS_MATCH_SQL}
-        ORDER BY listings.first_seen DESC LIMIT 96
-    """
+    sql = _catalog_cover_sql(LISTINGS_FTS_MATCH_SQL, limit=96)
+    newest = _catalog_cover_sql("1=1", limit=96)
     with store.read() as conn:
         tables = {
             row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
         }
+        cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
         plan = " ".join(
             row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (match,))
+        )
+        newest_plan = " ".join(
+            row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {newest}")
         )
         count_plan = " ".join(
             row[3]
@@ -951,16 +954,23 @@ def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
             )
         )
     assert "listings_fts" in tables
+    assert cover_cols == list(_CATALOG_COVER_INDEX_COLS)
     assert "listings_fts" in plan
     assert "idx_listings_first_seen" in plan
+    assert "COVERING INDEX" in plan
+    assert "INDEXED BY idx_listings_first_seen" in sql
     assert "CORRELATED" not in plan
     assert "LIKE" not in plan
+    assert "COVERING INDEX" in newest_plan
+    assert "idx_listings_first_seen" in newest_plan
     assert "listings_fts" in count_plan
     assert "LIKE" not in count_plan
     assert "SCAN listings" in like_plan and "LIKE" not in count_plan
     page = store.catalog({"q": "Praha", "limit": 12, "include_pins": "0"})
     assert page["items"]
     assert page["total"] >= len(page["items"])
+    newest_page = store.catalog({"limit": 12, "include_pins": "0"})
+    assert newest_page["items"]
     pins = store.catalog(
         {
             "pins_only": True,
@@ -974,6 +984,18 @@ def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
     with store.read() as conn:
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(listings)")}
     assert "idx_listings_pin_cover" in indexes
+
+
+def test_catalog_cover_index_rebuilds_when_identity_columns_missing(tmp_path: Path):
+    store = Store(tmp_path / "catalog-rebuild.sqlite")
+    with store.connect() as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_listings_first_seen")
+        conn.execute("CREATE INDEX idx_listings_first_seen ON listings(first_seen)")
+        conn.commit()
+    again = Store(tmp_path / "catalog-rebuild.sqlite")
+    with again.read() as conn:
+        cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
+    assert cover_cols == list(_CATALOG_COVER_INDEX_COLS)
 
 
 def test_catalog_q_fts_city_disposition_diacritics_and_upsert(tmp_path: Path):
