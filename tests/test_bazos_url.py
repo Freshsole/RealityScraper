@@ -46,6 +46,17 @@ class BazosUrlTests(unittest.TestCase):
     def test_normalize_portals(self):
         self.assertEqual(normalize_portals("bazos"), "bazos")
         self.assertTrue(normalize_search_url("https://reality.bazos.cz/prodam/dum/").startswith("https://reality.bazos.cz/"))
+        self.assertIn("/pronajmu/byt/", normalize_search_url("https://reality.bazos.cz/pronajem/byty/"))
+        self.assertIn("/prodam/dum/", normalize_search_url("https://reality.bazos.cz/prodej/domy/"))
+
+    def test_parse_plural_and_sreality_offer_aliases(self):
+        parsed = bazos_url.parse_url("https://reality.bazos.cz/pronajem/byty/")
+        self.assertEqual(parsed["offers"], ["pronajem"])
+        self.assertEqual(parsed["category"], "byt")
+        parsed_house = bazos_url.parse_url("https://reality.bazos.cz/prodam/domy/")
+        self.assertEqual(parsed_house["offers"], ["prodej"])
+        self.assertEqual(parsed_house["category"], "dum")
+        self.assertEqual(bazos_url.page_url("https://reality.bazos.cz/pronajem/byty/?order=1", 2), "https://reality.bazos.cz/pronajmu/byt/20/?kitx=ano")
 
     def test_daily_shards_cover_flats_and_houses(self):
         shards = [item for item in daily_shards() if item["portal"] == "bazos"]

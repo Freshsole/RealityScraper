@@ -126,6 +126,16 @@ After this branch (Sreality sale/house detail URLs + newest house shards, same 1
 
 List path still does not call Photon/Nominatim: Sreality JSON `locality.latitude/longitude` when present, otherwise local city pins. Synthetic page-1-across with two extra Sreality house shards: **21→50** page-1 shards / **900→2500** listings under a 0.7 s contention deadline (was 48/2400 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Reality.cz/Bezrealitky/REMAX/Annonce page-1 wins are unchanged.
 
+After this branch (Bazoš page-1 audit: canonical category URLs, house shards, hyphenated okres pins, path pagination, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Bazoš rent byty | **20** | **5632** | 0.5 s | already 20 cards; `/pronajem/byty/` **404** mixed catalog now rewritten to `/pronajmu/byt/`; 15/20 priced (Nabídněte/V textu/Zdarma → Cena neuvedena), 18/20 image (`empty.gif` skipped), 20/20 locality, **19/20 GPS** (was 18; `Frýdek - Místek` pins; `Zahraničí` has no local pin) |
+| Bazoš sale byty | **20** | **8247** | 0.5 s | `/prodam/byt/`; 19/20 price+GPS, 20/20 image+locality; detail URLs **200** |
+| Bazoš houses | **20** | **461** rent / **8493** sale | 0.5 s | new newest shards `/pronajmu/dum/` + `/prodam/dum/` (were daily-only); 20/20 locality+GPS, path page 2 `/dum/20/` |
+
+List path still does not call Photon/Nominatim: card `maps/place` GPS when present, otherwise local city pins (`Frýdek - Místek` matches `Frýdek-Místek`). Pagination is native `/pronajmu/byt/20/` (not `crp=`). Synthetic page-1-across with two extra Bazoš house shards: **21→52** page-1 shards / **900→2600** listings under a 0.7 s contention deadline (was 50/2500 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Sreality/REMAX/Reality.cz/Bezrealitky/Annonce page-1 wins are unchanged.
+
 Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
 
 ## M&M Reality (documented limit)

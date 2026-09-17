@@ -4,15 +4,15 @@ import asyncio
 import html as html_lib
 import re
 from datetime import datetime, timezone
-from typing import Any
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import urljoin
 
 import httpx
 
+from app import bazos_url
 from app.sreality import Listing, ListingGone, format_price
 
 SITE = "https://reality.bazos.cz"
-PAGE_SIZE = 20
+PAGE_SIZE = bazos_url.PAGE_SIZE
 CATALOG_CONCURRENCY = 6
 ID_RE = re.compile(r"/inzerat/(\d+)/([^\"'?]+)")
 COUNT_RE = re.compile(r"Zobrazeno\s+\d+[–-]\d+\s+inzerátů z\s+([\d\s]+)", re.I)
@@ -21,7 +21,11 @@ AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*m", re.I)
 DISP_RE = re.compile(r"(\d+)\s*\+\s*(kk|1)|(\d+)\s*kk|garson|atyp|pokoj", re.I)
 DATE_RE = re.compile(r"\[(\d{1,2})\.(\d{1,2})\.\s*(\d{4})\]")
 MAPS_RE = re.compile(r"maps/place/(-?\d+\.\d+),(-?\d+\.\d+)")
-PHOTO_RE = re.compile(r"https://www\.bazos\.cz/img/(\d+)t?/(\d+)/(\d+)\.(?:jpg|jpeg|webp)(?:\?[^\"'\s]*)?", re.I)
+PHOTO_RE = re.compile(
+    r"(?:https?:)?//(?:www\.)?bazos\.cz/img/(\d+)t?/(\d+)/(\d+)\.(?:jpg|jpeg|webp)(?:\?[^\"'\s]*)?",
+    re.I,
+)
+NO_PRICE_RE = re.compile(r"dohod|inzer[aá]t|nab[ií]dn[eě]te|v textu|zdarma|neuveden", re.I)
 CARD_RE = re.compile(r'<div class="inzeraty inzeratyflex">(.*?)<div class="inzeratyakce">', re.S | re.I)
 TITLE_RE = re.compile(r"<h2[^>]*class=['\"]?nadpis['\"]?[^>]*>.*?<a[^>]*>(.*?)</a>", re.S | re.I)
 TITLE2_RE = re.compile(r"<h1[^>]*class=['\"]?nadpisdetail['\"]?[^>]*>(.*?)</h1>", re.S | re.I)
@@ -138,8 +142,9 @@ def parse_area(text: str) -> int | None:
 
 def parse_price(text: str) -> tuple[int | None, str]:
     label = _clean(text)
-    if "dohod" in label.casefold() or "inzerát" in label.casefold():
-        return None, label or "Cena dohodou"
+    folded = label.casefold()
+    if NO_PRICE_RE.search(folded):
+        return None, "Cena neuvedena"
     match = PRICE_RE.search(label.replace("\xa0", " "))
     if not match:
         return None, label
@@ -212,29 +217,10 @@ class BazosClient:
                 item.lat, item.lon = point
 
     def _context(self) -> tuple[str, str]:
-        parts = [part for part in urlsplit(self.search_url).path.split("/") if part and not part.isdigit()]
-        offer = "pronajem"
-        estate = "byt"
-        if parts:
-            from app.bazos_url import PATH_OFFER
-
-            offer = PATH_OFFER.get(parts[0], "pronajem")
-        if len(parts) > 1:
-            estate = parts[1]
-        return offer, estate
+        return bazos_url.path_context(self.search_url)
 
     def _page_url(self, page: int) -> str:
-        split = urlsplit(self.search_url)
-        parts = [part for part in split.path.split("/") if part and not part.isdigit()]
-        path = "/" + "/".join(parts) + "/" if parts else "/"
-        query = dict(parse_qsl(split.query, keep_blank_values=True))
-        query.pop("order", None)
-        query["kitx"] = "ano"
-        if page > 1:
-            query["crp"] = str((page - 1) * PAGE_SIZE)
-        else:
-            query.pop("crp", None)
-        return urlunsplit((split.scheme or "https", split.netloc or "reality.bazos.cz", path, urlencode(query), ""))
+        return bazos_url.page_url(self.search_url, page, PAGE_SIZE)
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         url = self._page_url(page)
@@ -379,6 +365,7 @@ class BazosClient:
         area = parse_area(blob)
         photos = parse_photos(html)
         img = photos[0] if photos else None
+        maps = MAPS_RE.search(html)
         views_m = VIEWS_RE.search(html)
         views = int(re.sub(r"\D", "", views_m.group(1))) if views_m and re.sub(r"\D", "", views_m.group(1)) else None
         flags, specs = specs_from_text(blob)
@@ -390,6 +377,10 @@ class BazosClient:
             "specs": specs,
             "agency": "",
         }
+        lat = lon = None
+        if maps:
+            lat = float(maps.group(1))
+            lon = float(maps.group(2))
         return Listing(
             id=int(listing_id),
             name=title,
@@ -406,6 +397,8 @@ class BazosClient:
             created_on=parse_created(html),
             views=views,
             description=popis or None,
+            lat=lat,
+            lon=lon,
         )
 
     def _parse_detail(self, listing: Listing, html: str) -> Listing:

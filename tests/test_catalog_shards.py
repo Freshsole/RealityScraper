@@ -55,6 +55,18 @@ def test_sreality_recent_shards_cover_sizes():
     assert all("velikost=" not in item["search_url"] for item in houses)
 
 
+def test_bazos_newest_and_house_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "bazos"]
+    recent = [item for item in extra_portal_recent_shards() if item["portal"] == "bazos"]
+    assert any(item["shard_key"] == "bazos:dum:pronajem:cz" for item in daily)
+    assert any(item["shard_key"] == "bazos:recent:pronajem:domy" for item in recent)
+    assert any("/pronajmu/dum/" in item["search_url"] for item in recent)
+    assert any("/prodam/dum/" in item["search_url"] for item in recent)
+    assert any("/pronajmu/byt/" in item["search_url"] for item in recent)
+    assert all("/byty/" not in item["search_url"] and "/domy/" not in item["search_url"] for item in daily + recent)
+    assert all("kitx=ano" in item["search_url"] for item in recent)
+
+
 def test_sreality_house_daily_shards():
     daily = [item for item in daily_shards() if item["portal"] == "sreality"]
     keys = {item["shard_key"] for item in daily}

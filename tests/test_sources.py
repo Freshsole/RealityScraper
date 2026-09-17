@@ -70,6 +70,15 @@ def test_recent_shards_cover_all_portals():
     }
     assert all("order_by_published_date=0" in item["search_url"] for item in remax)
     assert any("/reality/domy-a-vily/pronajem/" in item["search_url"] for item in remax)
+    bazos = [item for item in extra if item["portal"] == "bazos"]
+    assert {item["shard_key"] for item in bazos} >= {
+        "bazos:recent:pronajem:byty",
+        "bazos:recent:prodej:byty",
+        "bazos:recent:pronajem:domy",
+        "bazos:recent:prodej:domy",
+    }
+    assert all("/pronajmu/" in item["search_url"] or "/prodam/" in item["search_url"] for item in bazos)
+    assert all("/byty/" not in item["search_url"] and "/domy/" not in item["search_url"] for item in bazos)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

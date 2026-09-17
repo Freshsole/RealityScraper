@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app import localities
 
 BASE = "https://reality.bazos.cz"
+PAGE_SIZE = 20
 
 OFFERS = [
     ("pronajem", "Pronájem"),
@@ -12,6 +13,8 @@ OFFERS = [
 ]
 OFFER_PATH = {"pronajem": "pronajmu", "prodej": "prodam"}
 PATH_OFFER = {value: key for key, value in OFFER_PATH.items()}
+# Sreality-style /pronajem/byty/ and /prodej/domy/ 404 into a mixed catalog on Bazoš.
+OFFER_TOKENS = frozenset(OFFER_PATH) | frozenset(PATH_OFFER)
 
 CATEGORIES = [
     ("byt", "Byty"),
@@ -142,9 +145,64 @@ def _category(raw) -> str:
     return key if key in CAT_KEYS else "byt"
 
 
+def canonical_offer(raw: str) -> str:
+    key = str(raw or "").strip().lower()
+    if key in OFFER_PATH:
+        return key
+    return PATH_OFFER.get(key, "pronajem")
+
+
+def canonical_category(raw: str, default: str = "byt") -> str:
+    key = CATEGORY_ALIASES.get(str(raw or "").strip().lower(), str(raw or "").strip().lower())
+    return key if key in CAT_KEYS else default
+
+
 def _offer(filters: dict) -> str:
     offer = (filters.get("offers") or ["pronajem"])[0]
-    return offer if offer in OFFER_PATH else "pronajem"
+    return canonical_offer(offer)
+
+
+def list_path(offer: str, category: str, page: int = 1, page_size: int = PAGE_SIZE) -> str:
+    offer_seg = OFFER_PATH[canonical_offer(offer)]
+    cat_seg = canonical_category(category)
+    page = max(1, int(page or 1))
+    if page > 1:
+        return f"/{offer_seg}/{cat_seg}/{(page - 1) * page_size}/"
+    return f"/{offer_seg}/{cat_seg}/"
+
+
+def path_context(url: str) -> tuple[str, str]:
+    parts = [part for part in urlsplit(url or "").path.split("/") if part and not part.isdigit()]
+    offer = "pronajem"
+    category = "byt"
+    if parts and parts[0] in OFFER_TOKENS:
+        offer = canonical_offer(parts[0])
+        if len(parts) > 1:
+            category = canonical_category(parts[1])
+    return offer, category
+
+
+def page_url(search_url: str, page: int = 1, page_size: int = PAGE_SIZE) -> str:
+    """Canonical list URL: /pronajmu/byt/ and /pronajmu/byt/20/, never /pronajem/byty/."""
+    split = urlsplit(search_url or BASE)
+    parts = [part for part in split.path.split("/") if part and not part.isdigit()]
+    page = max(1, int(page or 1))
+    if parts and parts[0] in OFFER_TOKENS:
+        offer = canonical_offer(parts[0])
+        if len(parts) > 1:
+            path = list_path(offer, parts[1], page, page_size)
+        else:
+            offer_seg = OFFER_PATH[offer]
+            path = f"/{offer_seg}/{(page - 1) * page_size}/" if page > 1 else f"/{offer_seg}/"
+    else:
+        path = "/" + "/".join(parts) + "/" if parts else "/"
+        if page > 1:
+            path = f"{path}{(page - 1) * page_size}/"
+    query = dict(parse_qsl(split.query, keep_blank_values=True))
+    query.pop("order", None)
+    query.pop("crp", None)
+    query["kitx"] = "ano"
+    return urlunsplit((split.scheme or "https", split.netloc or "reality.bazos.cz", path, urlencode(query), ""))
 
 
 def locality_query(districts: list[str] | None) -> tuple[str, int]:
@@ -203,10 +261,12 @@ def parse_url(url: str) -> dict:
     data = default_filters()
     split = urlsplit(url or "")
     parts = [part for part in split.path.split("/") if part and not part.isdigit()]
-    if parts and parts[0] in PATH_OFFER:
-        data["offers"] = [PATH_OFFER[parts[0]]]
-    if len(parts) > 1 and parts[1] in CAT_KEYS:
-        data["category"] = parts[1]
+    if parts and parts[0] in OFFER_TOKENS:
+        data["offers"] = [canonical_offer(parts[0])]
+    if len(parts) > 1:
+        mapped = canonical_category(parts[1], default="")
+        if mapped:
+            data["category"] = mapped
     query = parse_qs(split.query, keep_blank_values=True)
     hledat = (query.get("hledat") or [""])[0].strip()
     data["hledat"] = hledat
