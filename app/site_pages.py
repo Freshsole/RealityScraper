@@ -214,20 +214,32 @@ def _cookie_value(scope: dict[str, Any], name: str) -> str:
     return ""
 
 
-def app_shell_redirect(path: str, scope: dict[str, Any]) -> str | None:
+def app_shell_redirect_for_cookies(path: str, cookies: dict[str, str], query: str = "") -> str | None:
     """303 target when the app shell has no session/guest cookie. Never touches SQLite."""
-    if _cookie_value(scope, SESSION_COOKIE):
+    if (cookies.get(SESSION_COOKIE) or "").strip():
         return None
     normalized = path[:-1] if path.endswith("/") and path != "/" else path
     if normalized == "/nabidka":
-        if _cookie_value(scope, _GUEST_SEARCH_COOKIE):
+        if (cookies.get(_GUEST_SEARCH_COOKIE) or "").strip():
             return None
-        nxt = path
-        query = scope.get("query_string") or b""
-        if query:
-            nxt = f"{path}?{query.decode('latin-1')}"
+        nxt = f"{path}?{query}" if query else path
         return f"/registrace?next={quote(nxt, safe='')}"
     return "/prihlaseni"
+
+
+def app_shell_redirect(path: str, scope: dict[str, Any]) -> str | None:
+    """ASGI-scope wrapper around cookie-presence redirect. Never touches SQLite."""
+    cookies = {
+        SESSION_COOKIE: _cookie_value(scope, SESSION_COOKIE),
+        _GUEST_SEARCH_COOKIE: _cookie_value(scope, _GUEST_SEARCH_COOKIE),
+    }
+    query = (scope.get("query_string") or b"").decode("latin-1")
+    return app_shell_redirect_for_cookies(path, cookies, query)
+
+
+def web_page(rel: str) -> HTMLResponse:
+    """In-memory dashboard/admin HTML. Fallback when InstantSiteASGI is not in front."""
+    return HTMLResponse(web_body(rel), headers={"Cache-Control": "no-store, max-age=0"})
 
 
 async def _read_body(receive: Receive) -> bytes:
@@ -297,8 +309,9 @@ class InstantSiteASGI:
     """Outer ASGI app: GET/HEAD marketing/auth/app HTML, game JSON, and hot assets skip Hub/SQLite.
 
     Dashboard HTML is served from memory. A missing session cookie 303s to /prihlaseni
-    (guest /nabidka uses rf_guest_search) without SQLite. Cookie presence is not a
-    session check — /api/auth/me and other dashboard APIs still fall through to FastAPI.
+    (guest /nabidka uses rf_guest_search) without SQLite. FastAPI's require_account
+    fallback uses the same cookie-presence helper. Cookie presence is not a session
+    check — /api/auth/me and other dashboard APIs still fall through to FastAPI+WAL.
     """
 
     def __init__(self, app: App, store: Any | None = None) -> None:
