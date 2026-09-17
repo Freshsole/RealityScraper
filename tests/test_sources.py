@@ -61,6 +61,15 @@ def test_recent_shards_cover_all_portals():
         "realitycz:recent:prodej:domy",
     }
     assert all("s=2" in item["search_url"] for item in realitycz)
+    remax = [item for item in extra if item["portal"] == "remax"]
+    assert {item["shard_key"] for item in remax} >= {
+        "remax:recent:pronajem:byty",
+        "remax:recent:prodej:byty",
+        "remax:recent:pronajem:domy",
+        "remax:recent:prodej:domy",
+    }
+    assert all("order_by_published_date=0" in item["search_url"] for item in remax)
+    assert any("/reality/domy-a-vily/pronajem/" in item["search_url"] for item in remax)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

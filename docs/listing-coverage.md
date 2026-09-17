@@ -104,6 +104,18 @@ After this branch (Reality.cz newest/`g=` pagination + house shards + Bezrealitk
 
 List path still does not call Photon/Nominatim: card `gpsx`/`gpsy` when present, otherwise local city pins. Reality.cz pagination is `g={page-1}-2` (not `strana`). Synthetic page-1-across with two extra Reality.cz house shards: **21→46** page-1 shards / **900→2300** listings under a 0.7 s contention deadline (was 44/2200 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, and map freshness polling are unchanged.
 
+After this branch (RE/MAX newest + DMS GPS + house shards, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| RE/MAX rent | **21** | **1097** | 0.9 s | was **20** / 20, 0 GPS, `order_by_price=0` (nejdražší), 20/21 cards; now `order_by_published_date=0`, 21/21 price+image+locality+DMS GPS |
+| RE/MAX houses | **21** | **58** | 0.6 s | new newest shard `/domy-a-vily/pronajem/`; 21/21 price+image+locality+GPS |
+| RE/MAX sale | **21** | **1891** | 0.6 s | same parser; 21/21 fields |
+| Annonce rent | **20** | 20 | 0.4 s | 20/20 price+image+locality, 19/20 city pins (already at peers) |
+| iDNES rent | **26** | **8469** | 1.3 s | 26/26 price+image+locality; 24/26 GPS (two Croatia localities have no local pin) |
+
+List path still does not call Photon/Nominatim: RE/MAX card `data-gps` DMS when present, otherwise local city pins. Synthetic page-1-across with two extra RE/MAX house shards: **21→48** page-1 shards / **900→2400** listings under a 0.7 s contention deadline (was 46/2300 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Reality.cz/Bezrealitky page-1 wins are unchanged.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

@@ -19,6 +19,16 @@ def test_annonce_house_shards_are_offer_only():
     assert all("nabidkovy=1" in item["search_url"] for item in daily + recent)
 
 
+def test_remax_newest_and_house_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "remax"]
+    recent = [item for item in extra_portal_recent_shards() if item["portal"] == "remax"]
+    assert any(item["shard_key"] == "remax:domy:pronajem:cz" for item in daily)
+    assert any(item["shard_key"] == "remax:recent:pronajem:domy" for item in recent)
+    assert all("order_by_published_date=0" in item["search_url"] for item in daily + recent)
+    assert any("/reality/domy-a-vily/pronajem/" in item["search_url"] for item in recent)
+    assert any("/reality/byty/pronajem/" in item["search_url"] for item in recent)
+
+
 def test_realitycz_newest_and_house_shards():
     daily = [item for item in daily_shards() if item["portal"] == "realitycz"]
     recent = [item for item in extra_portal_recent_shards() if item["portal"] == "realitycz"]

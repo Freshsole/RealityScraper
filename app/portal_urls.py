@@ -227,16 +227,26 @@ class RemaxUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        sale = "2" if offer == "pronajem" else "1"
-        return _join(self.site + "/reality/byty/", {"sale": sale, "order_by_price": "0"})
+        offer_path = "pronajem" if offer == "pronajem" else "prodej"
+        category = str(filters.get("category") or "byty").casefold()
+        kind = "domy-a-vily" if "dom" in category else "byty"
+        query: dict[str, str] = {}
+        if (filters.get("sort") or "nejnovejsi") == "nejnovejsi":
+            query["order_by_published_date"] = "0"
+        return _join(self.site + f"/reality/{kind}/{offer_path}/", query)
 
     def parse_url(self, url: str) -> dict:
         filters = default_filters(self.source)
         query = dict(parse_qsl(urlsplit(url or "").query, keep_blank_values=True))
-        if query.get("sale") == "1" or "/prodej" in (url or "").lower():
+        raw = (url or "").lower()
+        if query.get("sale") == "1" or "/prodej" in raw:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
+        if "domy" in raw or "vily" in raw:
+            filters["category"] = "domy"
+        else:
+            filters["category"] = "byty"
         return filters
 
 
