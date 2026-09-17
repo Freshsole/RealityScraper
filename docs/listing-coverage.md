@@ -242,6 +242,30 @@ List path still does not call Photon/Nominatim. InstantSiteASGI `/hry*`, games, 
 
 Healthy recent set is **78** shards (was 60). Unconstrained page-1-across finishes **78 / 1560**. Under a 0.7 s contention deadline (extras 300 ms): held-gate still **21 / 900**; page-1-across **48 / 960** — the extra 16 land HTML shards no longer all fit in 0.7 s at 16 concurrency.
 
+## Scrape writer overlap (`SCRAPE_BATCH_COMMIT` / `SCRAPE_WRITE_CHUNK`)
+
+Catalog/search/pins JSON shares SQLite WAL with NewDiscovery upserts. Two knobs, two layers:
+
+| Knob | Default | Where | What it does |
+|---|---|---|---|
+| `SCRAPE_BATCH_COMMIT` | **500** | `Store.upsert_catalog_listings_batch` | Commit every N rows inside one writer connection. Floor 50. |
+| `SCRAPE_WRITE_CHUNK` | **100** | `Hub._catalog_upsert` | Lock-scoped NewDiscovery / rolling-deep / catalog-sync / Ulov hydrate chunk. Floor 50, never above `SCRAPE_BATCH_COMMIT`. Releases `_catalog_write` between chunks so minute ticks can interleave. |
+
+Live Hub already chunks at 100 even when Store `commit_every` is 500 — a 500-row transaction historically blocked admin/auth/tick writes on a ~1GB catalog. InstantSiteASGI / `SCRAPE_ROLE=web` never takes this lock (`write-deferred:web-role`). Measure before changing defaults: `python scripts/measure_scrape_commit.py` (15k fat listings + 2.5KB blobs, no residential proxy). Leave Store default 500 unless a shorter size clearly wins catalog/pins/search p95 without missing the 12s NewDiscovery write deadline. FTS `q=`, covering pin index, games, pozemky shards, Ulov hydrate, and M&M `SCRAPE_HTTP_PROXY` are unchanged.
+
+Measured 2026-09-17 on this agent, 15k fat fixture, uncached catalog/search/pins under a NewDiscovery-shaped writer (400-row ticks, Hub chunks). Quiet first-hit is cold; writer rows are the overlap case. `#51` harness = 24-row refresh `commit_every=500` (batch ends first). Yield = 1500 existing-row refresh (steady-state minute cards already in catalog).
+
+| writer | catalog p95 | search p95 | pins p95 | tight p95 | 1500-row yield | listings/s | 12s write deadline |
+|---|---|---|---|---|---|---|---|
+| quiet (no writer) | 21.5 ms | 33.3 ms | 37.7 ms | 13.2 ms | — | — | — |
+| #51 harness batch=24 | 12.8 ms | 14.9 ms | **28.5 ms** | 18.8 ms | — | — | — |
+| Hub chunk **50** | 10.8 ms | 14.9 ms | 26.0 ms | 18.8 ms | 5611 ms | **267** | ok |
+| Hub chunk **100** (live default) | 13.0 ms | 15.1 ms | 26.9 ms | 18.0 ms | 2081 ms | **721** | ok |
+| Hub chunk 250 | 13.2 ms | 15.7 ms | 26.7 ms | 17.6 ms | 1855 ms | 809 | ok |
+| Hub chunk 500 | 12.8 ms | 16.1 ms | 27.0 ms | 19.1 ms | 1726 ms | 869 | ok |
+
+Chunk 50 is **not** a clear win: city-pin p95 only ~1 ms better than live 100, while write throughput drops 2.7× (still inside 12s, but it starves listing yield). Chunk 250/500 do not improve p95. **Leave `SCRAPE_BATCH_COMMIT=500` and `SCRAPE_WRITE_CHUNK=100`.** EXPLAIN still covering `idx_listings_pin_cover` for pins and `listings_fts` LIST SUBQUERY for `q=Praha`.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

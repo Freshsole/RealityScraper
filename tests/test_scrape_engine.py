@@ -215,10 +215,71 @@ def test_batch_commit_constant_from_config():
     from app import config
 
     assert config.SCRAPE_BATCH_COMMIT >= 50
+    assert config.SCRAPE_WRITE_CHUNK >= 50
+    assert config.SCRAPE_WRITE_CHUNK <= config.SCRAPE_BATCH_COMMIT
+    # Unset env → Store default 500, live Hub chunk 100.
+    assert config.SCRAPE_BATCH_COMMIT == 500
+    assert config.SCRAPE_WRITE_CHUNK == 100
+    assert config.catalog_write_chunk_size() == 100
+    # Store default stays 500; live NewDiscovery already chunks at 100.
+    assert config.catalog_write_chunk_size(batch_commit=500, write_chunk=100) == 100
+    assert config.catalog_write_chunk_size(batch_commit=500, write_chunk=50) == 50
+    assert config.catalog_write_chunk_size(batch_commit=50, write_chunk=100) == 50
+    assert config.catalog_write_chunk_size(batch_commit=500, write_chunk=250) == 250
     assert config.SCRAPE_CONCURRENCY >= config.SCRAPE_CONCURRENCY_FLOOR
     assert 0.4 <= config.SCRAPE_PAGE1_BUDGET_FRAC <= 0.95
     assert config.SCRAPE_PAGE1_ACROSS_SHARDS is True
     assert config.SCRAPE_DEEP_YIELD_TO_DISCOVERY is True
+
+
+def test_catalog_upsert_chunks_without_starving_listing_yield(tmp_path, monkeypatch):
+    from app.monitor import Hub
+
+    monkeypatch.setattr("app.config.SCRAPE_ROLE", "worker")
+    monkeypatch.setattr("app.config.SCRAPE_BATCH_COMMIT", 500)
+    monkeypatch.setattr("app.config.SCRAPE_WRITE_CHUNK", 50)
+    monkeypatch.setattr("app.config.DB_PATH", tmp_path / "chunk-yield.sqlite")
+    hub = Hub()
+    calls: list[tuple[int, int | None]] = []
+    real = hub.store.upsert_catalog_listings_batch
+
+    def spy(listings, **kwargs):
+        calls.append((len(listings), kwargs.get("commit_every")))
+        return real(listings, **kwargs)
+
+    hub.store.upsert_catalog_listings_batch = spy  # type: ignore[method-assign]
+    listings = [_listing(10_000 + i) for i in range(120)]
+
+    async def _run() -> dict:
+        return await hub._catalog_upsert(listings, kind="seeded")
+
+    stats = asyncio.run(_run())
+    assert stats["n"] == 120
+    assert stats["new"] == 120
+    assert stats["deferred_write"] == 0
+    assert calls == [(50, 50), (50, 50), (20, 50)]
+    with hub.store.read() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0]
+    assert n == 120
+
+
+def test_catalog_upsert_web_role_does_not_take_write_lock(tmp_path, monkeypatch):
+    from app.monitor import Hub
+
+    monkeypatch.setattr("app.config.SCRAPE_ROLE", "web")
+    monkeypatch.setattr("app.config.DB_PATH", tmp_path / "chunk-web.sqlite")
+    hub = Hub()
+    listings = [_listing(1)]
+
+    async def _run() -> dict:
+        return await hub._catalog_upsert(listings, kind="seeded")
+
+    stats = asyncio.run(_run())
+    assert stats["n"] == 0
+    assert stats["deferred_write"] == 1
+    with hub.store.read() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0]
+    assert n == 0
 
 
 def test_should_yield_deep_while_discovery_or_higher_priority_waiters():
@@ -427,3 +488,5 @@ def test_throughput_helpers_stay_off_instant_site():
     assert "scrape_proxy" not in src
     assert "scrape_engine" not in src
     assert "scrape_worker" not in src
+    assert "SCRAPE_WRITE_CHUNK" not in src
+    assert "upsert_catalog_listings_batch" not in src

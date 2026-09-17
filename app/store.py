@@ -3260,7 +3260,7 @@ class Store:
     ) -> dict[str, int]:
         if not listings:
             return {"n": 0, "new": 0, "updated": 0, "same": 0}
-        every = max(50, int(commit_every or config.SCRAPE_BATCH_COMMIT))
+        every = max(50, int(commit_every if commit_every is not None else config.SCRAPE_BATCH_COMMIT))
         new = updated = same = 0
         pin_dirty = False
         with self.connect() as conn:

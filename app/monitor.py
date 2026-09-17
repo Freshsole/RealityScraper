@@ -885,7 +885,9 @@ class Hub:
             return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": len(listings)}
         # Keep individual SQLite writer holds short; large 500-row transactions
         # blocked admin/auth/tick writes for tens of seconds on a 1GB database.
-        chunk_size = max(50, min(100, int(config.SCRAPE_BATCH_COMMIT)))
+        # SCRAPE_BATCH_COMMIT (default 500) is the Store commit_every; live Hub
+        # chunks at SCRAPE_WRITE_CHUNK (default 100). See catalog_write_chunk_size.
+        chunk_size = config.catalog_write_chunk_size()
         totals = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
         deadline = (
             time.monotonic() + max(5.0, write_deadline_sec)
