@@ -633,6 +633,19 @@ def _teaching_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], d
     return [pair for pair in _candidate_pairs(items) if is_teaching_pair(*pair)]
 
 
+def _has_teaching_pair(items: list[dict[str, Any]]) -> bool:
+    if len(items) < 2:
+        return False
+    ordered = sorted(items, key=_unit_price)
+    if is_teaching_pair(ordered[0], ordered[-1]):
+        return True
+    for index, left in enumerate(items):
+        for right in items[index + 1 :]:
+            if is_teaching_pair(left, right):
+                return True
+    return False
+
+
 def _pick_teaching_pair(
     items: list[dict[str, Any]], rng: random.Random
 ) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -845,13 +858,29 @@ def _pick_rent_flats(
         unique.append(item)
     live = [item for item in unique if not _is_seed_id(item.get("id"))]
     seed = [item for item in unique if _is_seed_id(item.get("id"))]
+    if 0 < len(live) < size:
+        chosen = list(live)
+        chosen_ids = {str(item.get("id")) for item in chosen}
+        rest = [item for item in unique if str(item.get("id")) not in chosen_ids]
+        if teaching and not _has_teaching_pair(chosen):
+            extra = _pick_teaching_pair(unique, rng)
+            if extra:
+                for item in extra:
+                    eid = str(item.get("id"))
+                    if eid not in chosen_ids:
+                        chosen.append(item)
+                        chosen_ids.add(eid)
+                rest = [item for item in rest if str(item.get("id")) not in chosen_ids]
+        chosen.extend(_spread_pick(sorted(rest, key=_unit_price), size - len(chosen)))
+        rng.shuffle(chosen)
+        return chosen[:size]
     pool = live if len(live) >= size else [*live, *seed]
-    if teaching and not _teaching_pairs(pool) and _teaching_pairs(unique):
+    if teaching and not _has_teaching_pair(pool) and _has_teaching_pair(unique):
         pool = unique
     if len(pool) <= size:
         rng.shuffle(pool)
         return pool
-    chosen: list[dict[str, Any]] = []
+    chosen = []
     if teaching:
         live_pair = _pick_teaching_pair(live, rng) if len(live) >= 2 else None
         picked = live_pair or _pick_teaching_pair(pool, rng)
@@ -873,9 +902,11 @@ def _round_locality_label(items: list[dict[str, Any]], pair_key: str) -> str:
 
 
 def _round_vanish(items: list[dict[str, Any]]) -> tuple[float, str]:
+    stamped = [item for item in items if item.get("first_seen") or item.get("last_seen")]
+    source = stamped or items
     observed: list[tuple[float, str]] = []
     typical: list[float] = []
-    for item in items:
+    for item in source:
         hours, label = _item_vanish(item)
         if label != TYPICAL_VANISH_LABEL:
             observed.append((hours, label))
@@ -930,23 +961,17 @@ def pick_rent_round(
     seed_full = {key: items for key, items in filled.items() if len(items) >= RENT_ROUND_SIZE}
     source = live_full or seed_full or filled
 
-    teaching_source = {key: items for key, items in source.items() if _teaching_pairs(items)}
     want_teaching = rng.random() < max(0.0, min(1.0, float(teaching_ratio)))
     pair_kind = "random"
     key = ""
     candidates: list[dict[str, Any]] = []
-    if want_teaching and teaching_source:
-        ranked = sorted(
-            teaching_source.items(),
-            key=lambda row: (
-                1 if len(row[1]) >= RENT_ROUND_SIZE else 0,
-                max((_teaching_contrast(*pair) for pair in _teaching_pairs(row[1])), default=0.0),
-            ),
-            reverse=True,
-        )
-        keep = max(1, min(4, (len(ranked) + 2) // 3))
-        key, candidates = rng.choice(ranked[:keep])
-        pair_kind = "teaching"
+    if want_teaching:
+        teaching_keys = [name for name, items in source.items() if _has_teaching_pair(items)]
+        if teaching_keys:
+            full = [name for name in teaching_keys if len(source[name]) >= RENT_ROUND_SIZE]
+            key = rng.choice(full or teaching_keys)
+            candidates = source[key]
+            pair_kind = "teaching"
     if not candidates:
         key = rng.choice(list(source))
         candidates = source[key]
