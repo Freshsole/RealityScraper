@@ -425,8 +425,8 @@ _PIN_CITY_CLUSTER_SPAN = 1.5
 
 # Catalog list/search over-fetch stays on first_seen + card fields. extras/description
 # blobs stay off this index. last_seen is omitted so last_seen-only scrape refreshes
-# do not rewrite it. List/search cards skip the fat extras hydrate; catalog_item still
-# loads extras for flags.
+# do not rewrite it. List/search cards get lean offer/estate from covering columns;
+# catalog_item still loads extras for flags.
 _CATALOG_COVER_INDEX_COLS = (
     "first_seen",
     "id",
@@ -488,8 +488,8 @@ def _ensure_catalog_cover_index(conn: sqlite3.Connection) -> None:
     """Rebuild first_seen as a covering identity index when columns are missing.
 
     Catalog newest / q= over-fetch LIMIT walks this index and never touches
-    extras/description. Card fields come from the covering index; extras/flags
-    stay off the scan so fat blobs are not pulled in under a scrape writer.
+    extras/description. Card fields come from the covering index; list/search
+    cards use lean offer/estate so fat extras blobs stay off this path.
     """
     have = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
     if have == list(_CATALOG_COVER_INDEX_COLS):
@@ -508,6 +508,25 @@ def _catalog_cover_sql(where_sql: str, *, limit: int) -> str:
         ORDER BY listings.first_seen DESC
         LIMIT {int(limit)}
     """
+
+
+def _catalog_cover_extras(row: dict[str, Any]) -> dict[str, Any]:
+    """Offer/estate for list cards without reading extras/description blobs."""
+    label = str(row.get("price_label") or "")
+    name = str(row.get("name") or "")
+    folded = name.casefold()
+    extras: dict[str, Any] = {"flags": []}
+    if "měsíc" in label or "mesic" in label.casefold():
+        extras["offer"] = "Pronájem"
+    elif label:
+        extras["offer"] = "Prodej"
+    if "pozemek" in folded:
+        extras["estate"] = "Pozemek"
+    elif "dům" in name or "dum" in folded or "domu" in folded:
+        extras["estate"] = "Dům"
+    else:
+        extras["estate"] = "Byt"
+    return extras
 
 
 def _pin_grid_bucket_sql(column: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
@@ -5124,9 +5143,13 @@ class Store:
                 total = unique_n
                 if len(fetched) >= fetch_limit:
                     total = max(unique_n, offset + len(rows) + (limit if len(rows) >= limit else 0))
-            if rows and not catalog_cover:
-                cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in rows])
-                rows = [cards[key] for row in rows if (key := (row["monitor_id"], row["id"])) in cards]
+            if rows:
+                if catalog_cover:
+                    for row in rows:
+                        row["extras"] = _catalog_cover_extras(row)
+                else:
+                    cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in rows])
+                    rows = [cards[key] for row in rows if (key := (row["monitor_id"], row["id"])) in cards]
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:
