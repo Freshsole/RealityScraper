@@ -63,6 +63,10 @@ HOUSE_SLUG_RE = re.compile(
     re.I,
 )
 FALSE_HOUSE_SLUG_RE = re.compile(r"(?:^|-)(?:u-[a-z0-9-]*domu|koldum)(?:-|$)", re.I)
+LAND_SLUG_RE = re.compile(
+    r"(?:^|-)(?:housing|pozemek|pozemky|pozemku|parcela)(?:-|$)",
+    re.I,
+)
 SLUG_STOP = {
     "kk",
     "housing",
@@ -223,8 +227,10 @@ def offer_from_inzerat_slug(slug: str) -> str:
 
 
 def estate_from_inzerat_slug(slug: str) -> str:
-    """byt vs dum from the sitemap slug. 'housing' is land, not a house."""
+    """byt vs dum vs pozemek from the sitemap slug. 'housing' is land, not a house."""
     folded = (slug or "").casefold()
+    if LAND_SLUG_RE.search(folded):
+        return "pozemek"
     if not folded or FALSE_HOUSE_SLUG_RE.search(folded):
         return "byt"
     if HOUSE_SLUG_RE.search(folded) or folded.endswith("-dum"):
@@ -457,13 +463,14 @@ def listing_from_detail_payload(payload: Any, *, offer: str = "", keep_url: str 
     folded_title = title.casefold()
     if ptype in {"house", "villa"} or disp_token in {"familyhouse", "villa"} or "dům" in folded_title:
         estate = "dum"
-    elif ptype in {"land", "plot"}:
+    elif ptype in {"land", "plot", "housing"}:
         estate = "pozemek"
     else:
         estate = "byt"
+    noun = {"dum": "domu", "pozemek": "pozemku"}.get(estate, "bytu")
     listing = listing_from_card(
         listing_id=listing_id,
-        name=title or f"{'Pronájem' if offer_kind == 'pronajem' else 'Prodej'} {'domu' if estate == 'dum' else 'bytu'}",
+        name=title or f"{'Pronájem' if offer_kind == 'pronajem' else 'Prodej'} {noun}",
         url=url,
         price_czk=price_czk,
         price_label=price_label,
@@ -541,7 +548,7 @@ def fields_from_inzerat_slug(slug: str, offer: str) -> tuple[str, str, str]:
     locality = " ".join(word[:1].upper() + word[1:] for word in locality_parts if word)
     label = "Pronájem" if offer == "pronajem" else "Prodej"
     estate = estate_from_inzerat_slug(slug)
-    estate_word = "domu" if estate == "dum" else "bytu"
+    estate_word = {"dum": "domu", "pozemek": "pozemku"}.get(estate, "bytu")
     name = f"{label} {estate_word} {disp}".strip() if disp else f"{label} {estate_word}".strip()
     if locality:
         name = f"{name}, {locality}"
@@ -561,6 +568,8 @@ class UlovdomovClient(HtmlPortalClient):
 
     def _estate_key(self) -> str:
         path = (self.search_url or "").lower()
+        if "/pozem" in path:
+            return "pozemek"
         if "/domy" in path or "/dum/" in path or "rodinne-domy" in path:
             return "dum"
         return "byt"

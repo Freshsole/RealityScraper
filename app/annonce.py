@@ -40,6 +40,7 @@ HOUSE_HINT_RE = re.compile(
     r"(?:rodinn\w*\s+dom|domu|dům|dum|domy|domů|vila|chalup|chata|\brd\b)",
     re.I,
 )
+LAND_HINT_RE = re.compile(r"(?:pozemek|pozemku|pozemky|parcela|stavebn[íi]\s+parc)", re.I)
 BLANK_DISP = {"", "-", "–", "—", "ostatní", "ostatni", "n/a", "neuvedeno", "undefined"}
 BARE_HOUSE_PATHS = {"/domy.html", "/domy", "/rodinne-domy.html", "/rodinne-domy"}
 
@@ -71,17 +72,31 @@ class AnnonceClient(HtmlPortalClient):
     PAGE_SIZE = 20
 
     def _context(self) -> str:
-        path = canonical_annonce_url(self.search_url or "").lower()
+        split = urlsplit(canonical_annonce_url(self.search_url or ""))
+        path = (split.path or "").lower()
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        business = str(query.get("business_type") or "")
+        if business == "131":
+            return "pronajem"
+        if business == "130":
+            return "prodej"
         if "prodej" in path or "prodam" in path:
+            return "prodej"
+        if "pozem" in path:
             return "prodej"
         return "pronajem"
 
     def _estate(self, title: str = "", url: str = "") -> str:
         path = canonical_annonce_url(self.search_url or "").lower()
+        if "pozem" in path:
+            return "pozemek"
         if "domy" in path or "dum" in path:
             return "dum"
-        if HOUSE_HINT_RE.search(f"{title} {url}"):
+        blob = f"{title} {url}"
+        if HOUSE_HINT_RE.search(blob):
             return "dum"
+        if LAND_HINT_RE.search(blob) and "byt" not in path:
+            return "pozemek"
         return "byt"
 
     def _page_url(self, page: int, newest: bool = True) -> str:

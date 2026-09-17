@@ -99,10 +99,30 @@ class ExtraPortalTests(unittest.TestCase):
         sale_houses = annonce_url.build_url({"offers": ["prodej"], "category": "domy"})
         self.assertIn("/domy-na-prodej.html", sale_houses)
         self.assertIn("sort=ageasc", sale_houses)
+        land_sale = annonce_url.build_url({"offers": ["prodej"], "category": "pozemky"})
+        self.assertIn("/pozemky.html", land_sale)
+        self.assertIn("business_type=130", land_sale)
+        self.assertIn("nabidkovy=1", land_sale)
+        self.assertIn("sort=ageasc", land_sale)
+        land_rent = annonce_url.build_url({"offers": ["pronajem"], "category": "pozemky"})
+        self.assertIn("business_type=131", land_rent)
+        self.assertEqual(
+            annonce_url.parse_url("https://www.annonce.cz/pozemky.html?business_type=131")["offers"],
+            ["pronajem"],
+        )
+        self.assertEqual(
+            annonce_url.parse_url("https://www.annonce.cz/pozemky.html?business_type=130")["category"],
+            "pozemky",
+        )
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         ulov_houses = ulovdomov_url.build_url({"offers": ["pronajem"], "category": "domy"})
         self.assertTrue(ulov_houses.endswith("/pronajem/domy"))
+        self.assertTrue(ulovdomov_url.build_url({"offers": ["prodej"], "category": "pozemky"}).endswith("/prodej/pozemky"))
+        self.assertEqual(
+            ulovdomov_url.parse_url("https://www.ulovdomov.cz/prodej/pozemky")["category"],
+            "pozemky",
+        )
         self.assertEqual(
             ulovdomov_url.parse_url("https://www.ulovdomov.cz/prodej/domy")["category"],
             "domy",
@@ -117,6 +137,12 @@ class ExtraPortalTests(unittest.TestCase):
         houses = remax_url.build_url({"offers": ["pronajem"], "category": "domy"})
         self.assertIn("/reality/domy-a-vily/pronajem/", houses)
         self.assertIn("order_by_published_date=0", houses)
+        land = remax_url.build_url({"offers": ["prodej"], "category": "pozemky"})
+        self.assertIn("/reality/pozemky/prodej/", land)
+        self.assertEqual(
+            remax_url.parse_url("https://www.remax-czech.cz/reality/pozemky/pronajem/?order_by_published_date=0")["category"],
+            "pozemky",
+        )
         self.assertEqual(
             remax_url.parse_url("https://www.remax-czech.cz/reality/domy-a-vily/prodej/?order_by_published_date=0")["category"],
             "domy",
@@ -127,6 +153,12 @@ class ExtraPortalTests(unittest.TestCase):
         houses = realitycz_url.build_url({"offers": ["pronajem"], "category": "domy"})
         self.assertIn("/pronajem/domy/Ceska-republika/", houses)
         self.assertIn("s=2", houses)
+        land = realitycz_url.build_url({"offers": ["prodej"], "category": "pozemky"})
+        self.assertIn("/prodej/pozemky/Ceska-republika/", land)
+        self.assertEqual(
+            realitycz_url.parse_url("https://www.reality.cz/prodej/pozemky/Ceska-republika/?s=2")["category"],
+            "pozemky",
+        )
         self.assertEqual(
             realitycz_url.parse_url("https://www.reality.cz/pronajem/domy/Ceska-republika/?s=2")["category"],
             "domy",
@@ -135,6 +167,12 @@ class ExtraPortalTests(unittest.TestCase):
         ceske_houses = ceskereality_url.build_url({"offers": ["pronajem"], "category": "domy"})
         self.assertIn("/pronajem/rodinne-domy/nejnovejsi/", ceske_houses)
         self.assertNotIn("/pronajem/domy/", ceske_houses)
+        ceske_land = ceskereality_url.build_url({"offers": ["prodej"], "category": "pozemky"})
+        self.assertIn("/prodej/pozemky/nejnovejsi/", ceske_land)
+        self.assertEqual(
+            ceskereality_url.parse_url("https://www.ceskereality.cz/pronajem/pozemky/")["category"],
+            "pozemky",
+        )
         self.assertEqual(
             ceskereality_url.parse_url("https://www.ceskereality.cz/pronajem/rodinne-domy/")["category"],
             "domy",
@@ -154,6 +192,23 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].price_czk, 16500)
         self.assertIn("Žižkov", items[0].locality or items[0].name)
 
+    def test_ceskereality_land_cards_tag_pozemek(self):
+        html = """
+<article class="i-estate">
+  <a href="/prodej/pozemky/bratkovice/3899999.html">x</a>
+  <h2>Prodej pozemku 902 m², Bratkovice</h2>
+  <div class="i-estate__price">1 250 000 Kč</div>
+  <img src="https://img-cache.ceskereality.cz/nemovitosti/abc/3899999/320x320_1.jpg" alt="Pozemek" />
+</article>
+"""
+        client = CeskerealityClient("https://www.ceskereality.cz/prodej/pozemky/nejnovejsi/")
+        items = client._parse_list(html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, 3899999)
+        self.assertEqual(items[0].extras.get("estate"), "Pozemek")
+        self.assertIn("/pozemky/", items[0].url)
+        self.assertEqual(client._kind(), "pozemky")
+
     def test_annonce_list(self):
         client = AnnonceClient("https://www.annonce.cz/byty-k-pronajmu.html")
         items = client._parse_list(ANNONCE)
@@ -164,6 +219,36 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].price_czk, 24000)
         self.assertEqual(items[0].extras.get("estate"), "Byt")
         self.assertEqual(items[0].extras.get("offer"), "Pronájem")
+
+    def test_annonce_land_list_uses_pozemky_path_and_estate(self):
+        html = """
+<div class="box q ext-item">
+  <h2><a href="/inzerat/prodej-stavebniho-pozemku-88672789-wecez9.html">Prodej stavebního pozemku 902 m</a></h2>
+  <table>
+    <tr><th>Lokalita:</th><td>Bratkovice</td></tr>
+    <tr><th>Plocha:</th><td>902 m2</td></tr>
+  </table>
+  <div class="price">1 250 000 Kč</div>
+  <img src="https://static.annonce.cz/foto/land.jpg" />
+</div>
+<div class="rows js-more"></div>
+"""
+        sale = AnnonceClient("https://www.annonce.cz/pozemky.html?nabidkovy=1&sort=ageasc&business_type=130")
+        items = sale._parse_list(html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].id, 88672789)
+        self.assertEqual(items[0].extras.get("estate"), "Pozemek")
+        self.assertEqual(items[0].extras.get("offer"), "Prodej")
+        self.assertEqual(items[0].price_czk, 1250000)
+        self.assertEqual(items[0].locality, "Bratkovice")
+        page1 = sale._page_url(1, newest=True)
+        self.assertIn("/pozemky.html", page1)
+        self.assertIn("business_type=130", page1)
+        self.assertIn("sort=ageasc", page1)
+        rent = AnnonceClient("https://www.annonce.cz/pozemky.html?business_type=131")
+        self.assertEqual(rent._context(), "pronajem")
+        self.assertEqual(rent._estate("Pronájem zahrady"), "pozemek")
+        self.assertIn("business_type=131", rent._page_url(1, newest=True))
 
     def test_annonce_slideshow_cards_keep_every_listing(self):
         from app.annonce import canonical_annonce_url
@@ -262,6 +347,19 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].id, 445566)
         self.assertEqual(items[0].price_czk, 18900)
         self.assertIn("Praha 3", items[0].locality)
+
+    def test_remax_land_list_tags_pozemek(self):
+        html = """
+<div class="pl-items__item" data-url="/reality/detail/551122/prodej-pozemku-bratkovice" data-title="Prodej pozemku 902 m²" data-display-address="Bratkovice" data-price="1 250 000 Kč" data-img="https://www.remax-czech.cz/foto.jpg">
+  karta
+</div>
+"""
+        client = RemaxClient("https://www.remax-czech.cz/reality/pozemky/prodej/?order_by_published_date=0")
+        items = client._parse_list(html)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].extras.get("estate"), "Pozemek")
+        self.assertEqual(items[0].extras.get("offer"), "Prodej")
+        self.assertEqual(items[0].price_czk, 1250000)
 
     def test_remax_live_cards_fill_price_image_locality_gps(self):
         from app.places import approx_point_from_locality
@@ -418,6 +516,16 @@ class ExtraPortalTests(unittest.TestCase):
             import asyncio
 
             asyncio.run(houses.aclose())
+        land = BezrealitkyClient(
+            "https://www.bezrealitky.cz/vyhledat?offerType=PRODEJ&estateType=POZEMEK&order=TIMEORDER_DESC"
+        )
+        try:
+            self.assertIn("estateType: [POZEMEK]", land._args(1))
+            self.assertIn("offerType: [PRODEJ]", land._args(1))
+        finally:
+            import asyncio
+
+            asyncio.run(land.aclose())
 
     def test_ulovdomov_next_data_and_json(self):
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
@@ -546,7 +654,7 @@ class ExtraPortalTests(unittest.TestCase):
 
         self.assertEqual(estate_from_inzerat_slug("pronajem-troubsko-troubsko-troubsko-dum"), "dum")
         self.assertEqual(estate_from_inzerat_slug("-senohraby-senohraby-ve-vilach-fiveplusrooms"), "dum")
-        self.assertEqual(estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing"), "byt")
+        self.assertEqual(estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing"), "pozemek")
         self.assertEqual(estate_from_inzerat_slug("pronajem-praha-krc-u-novych-domu-i-2-1"), "byt")
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
         listing = client.listing_from_sitemap_url(by_id[3496443][0], "pronajem", by_id[3496443][3], 3496443)
@@ -556,6 +664,9 @@ class ExtraPortalTests(unittest.TestCase):
         house = client.listing_from_sitemap_url(by_id[5222881][0], "pronajem", by_id[5222881][3], 5222881)
         self.assertEqual(house.extras.get("estate"), "Dům")
         self.assertIn("domu", house.name.casefold())
+        land = client.listing_from_sitemap_url(by_id[5669330][0], "prodej", by_id[5669330][3], 5669330)
+        self.assertEqual(land.extras.get("estate"), "Pozemek")
+        self.assertIn("pozemku", land.name.casefold())
 
     def test_ceskereality_live_nejnovejsi_uses_html_id_not_firm_image(self):
         html = (FIXTURES / "ceskereality_nejnovejsi.html").read_text()

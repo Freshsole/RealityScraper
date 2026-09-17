@@ -22,6 +22,10 @@ class CeskerealityListTests(unittest.TestCase):
             "domy",
         )
         self.assertEqual(
+            ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/pozemky/nejnovejsi/")["category"],
+            "pozemky",
+        )
+        self.assertEqual(
             ceskereality_url.parse_url("https://www.ceskereality.cz/pronajem/domy/")["category"],
             "domy",
         )
