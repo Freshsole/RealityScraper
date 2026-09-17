@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "data": {
+    "id": 5222881,
+    "offerTypeId": "rent",
+    "title": "Pronájem domu 277 m2",
+    "description": "Pronájem rodinného domu.",
+    "street": {"id": 1, "name": "Troubsko"},
+    "village": {"id": 2, "name": "Troubsko"},
+    "villagePart": {"id": 3, "name": "Troubsko"},
+    "district": {"id": 4, "name": "Brno-venkov"},
+    "geoCoordinates": {"lat": 49.169, "lng": 16.508},
+    "seo": "pronajem-troubsko-troubsko-troubsko-rodinny-dum",
+    "rentalPrice": {"value": 49000, "currency": "CZK"},
+    "absoluteUrl": "https://www.ulovdomov.cz/i/5222881/pronajem-troubsko-troubsko-troubsko-rodinny-dum",
+    "status": "ACTIVE",
+    "photos": [
+      {
+        "id": 1,
+        "path": "https://storage.livendo.eu/cdn/image?id=house-1&size=large",
+        "alt": "Pronájem domu 277 m2"
+      }
+    ],
+    "parameters": [
+      {"name": "offerType", "value": "rent"},
+      {"name": "disposition", "value": "familyHouse"},
+      {"name": "propertyType", "value": "house"},
+      {"name": "price", "value": 49000},
+      {"name": "floorArea", "value": 277}
+    ]
+  }
+}

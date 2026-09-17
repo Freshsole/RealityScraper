@@ -236,7 +236,7 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": urls.build_url({"source": portal_id, "offers": [offer], "category": "byty"}),
                 }
             )
-        if portal_id in {"annonce", "realitycz", "remax", "ceskereality"}:
+        if portal_id in {"annonce", "realitycz", "remax", "ceskereality", "ulovdomov"}:
             for offer in ("pronajem", "prodej"):
                 shards.append(
                     {
@@ -361,8 +361,8 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": builder(offer),
                 }
             )
-    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES houses use a different list path.
-    for portal_id in ("annonce", "realitycz", "remax", "ceskereality"):
+    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES / UlovDomov houses use a different list path.
+    for portal_id in ("annonce", "realitycz", "remax", "ceskereality", "ulovdomov"):
         for offer in ("pronajem", "prodej"):
             shards.append(
                 {

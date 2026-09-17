@@ -9,7 +9,11 @@ from app.store import CATALOG_MONITOR_ID, Store
 from app.ulovdomov import (
     DETAIL_API,
     UlovdomovClient,
+    estate_from_inzerat_slug,
+    hydrate_bucket,
+    interleave_hydrate,
     listing_from_detail_payload,
+    listing_hydrate_bucket,
     merge_detail,
     needs_hydrate,
     reset_ulov_caches,
@@ -18,6 +22,8 @@ from app import ulov_hydrate
 
 FIXTURES = Path(__file__).parent / "fixtures"
 DETAIL = json.loads((FIXTURES / "ulov_offer_detail.json").read_text())
+HOUSE_DETAIL = json.loads((FIXTURES / "ulov_offer_house.json").read_text())
+SALE_DETAIL = json.loads((FIXTURES / "ulov_offer_sale.json").read_text())
 SITEMAP = (FIXTURES / "ulov_sitemap_offers.xml").read_text()
 
 
@@ -35,6 +41,23 @@ def test_detail_payload_has_price_and_photo():
     assert listing.area_m2 == 18
     assert listing.url.endswith("/3496443")
     assert "/inzerat/" in listing.url
+    assert listing.extras.get("estate") == "Byt"
+
+
+def test_house_and_sale_detail_payloads():
+    house = listing_from_detail_payload(HOUSE_DETAIL)
+    assert house is not None
+    assert house.id == 5222881
+    assert house.price_czk == 49000
+    assert house.extras.get("estate") == "Dům"
+    assert house.disposition == "dům"
+    assert house.image_url
+    sale = listing_from_detail_payload(SALE_DETAIL)
+    assert sale is not None
+    assert sale.id == 5679032
+    assert sale.price_czk == 4350000
+    assert sale.extras.get("offer") == "Prodej"
+    assert sale.extras.get("estate") == "Byt"
 
 
 def test_detail_keeps_catalog_url():
@@ -92,6 +115,19 @@ def test_fetch_page_does_not_call_detail():
             assert total == 2
             assert len(listings) == 2
             assert all(needs_hydrate(item) for item in listings)
+            house_client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/domy")
+            await house_client.aclose()
+            house_client._client = client._client
+            houses, house_total = await house_client.fetch_page(1)
+            assert house_total == 1
+            assert houses[0].id == 5222881
+            assert houses[0].extras.get("estate") == "Dům"
+            sale_houses = UlovdomovClient("https://www.ulovdomov.cz/prodej/domy")
+            await sale_houses.aclose()
+            sale_houses._client = client._client
+            villas, villa_total = await sale_houses.fetch_page(1)
+            assert villa_total == 1
+            assert villas[0].id == 5653004
         finally:
             await client.aclose()
 
@@ -290,3 +326,187 @@ def test_unpriced_ulov_reader_prefers_missing_price(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0]["id"] == 2037015
     assert DETAIL_API.endswith("/v2/offer/detail")
+
+
+def test_estate_and_hydrate_buckets():
+    assert estate_from_inzerat_slug("pronajem-troubsko-troubsko-troubsko-dum") == "dum"
+    assert estate_from_inzerat_slug("-senohraby-senohraby-ve-vilach-fiveplusrooms") == "dum"
+    assert estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing") == "byt"
+    assert hydrate_bucket("pronajem", "pronajem-olomouc-2-kk") == "rent"
+    assert hydrate_bucket("prodej", "-praha-kbely-1-kk") == "sale"
+    assert hydrate_bucket("pronajem", "pronajem-troubsko-troubsko-troubsko-dum") == "rent_house"
+    mixed = interleave_hydrate(
+        {
+            "rent": ["r1", "r2"],
+            "sale": ["s1"],
+            "rent_house": ["h1"],
+            "sale_house": ["v1"],
+            "other": [],
+        },
+        5,
+    )
+    assert mixed == ["r1", "s1", "h1", "v1", "r2"]
+
+
+def test_collect_candidates_interleaves_sale_and_houses():
+    reset_ulov_caches()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "sitemap-offers" in str(request.url):
+            return httpx.Response(200, text=SITEMAP, headers={"content-type": "application/xml"})
+        raise AssertionError(f"unexpected {request.url}")
+
+    class EmptyStore:
+        def unpriced_ulov_listings(self, limit: int = 20):
+            return []
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            listings = await ulov_hydrate.collect_candidates(EmptyStore(), client, limit=4)
+            kinds = [listing_hydrate_bucket(item) for item in listings]
+            assert "rent" in kinds
+            assert "sale" in kinds
+            assert "rent_house" in kinds
+            assert "sale_house" in kinds
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()
+
+
+def test_collect_candidates_prefers_store_unpriced_over_sitemap(tmp_path: Path):
+    reset_ulov_caches()
+    store = Store(tmp_path / "ulov-mix.sqlite")
+    client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+    unpriced = client.listing_from_sitemap_url(
+        "https://www.ulovdomov.cz/inzerat/-pardubice-studanka-bartonova-2-1/5679032",
+        "prodej",
+        "-pardubice-studanka-bartonova-2-1",
+        5679032,
+    )
+    priced = client.listing_from_sitemap_url(
+        "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443",
+        "pronajem",
+        "pronajem-brno-veveri-bayerova-2-kk",
+        3496443,
+    )
+    merge_detail(priced, listing_from_detail_payload(DETAIL, keep_url=priced.url))
+    store.upsert_catalog_listing(unpriced, kind="refresh", fast=True)
+    store.upsert_catalog_listing(priced, kind="refresh", fast=True)
+    rows = store.unpriced_ulov_listings(limit=10)
+    assert [row["id"] for row in rows] == [5679032]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "sitemap-offers" in str(request.url):
+            return httpx.Response(200, text=SITEMAP, headers={"content-type": "application/xml"})
+        raise AssertionError(f"unexpected {request.url}")
+
+    async def _run() -> None:
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            listings = await ulov_hydrate.collect_candidates(store, client, limit=3)
+            ids = [item.id for item in listings]
+            assert 5679032 in ids
+            assert 3496443 not in ids
+            sale = next(item for item in listings if item.id == 5679032)
+            assert listing_hydrate_bucket(sale) == "sale"
+            assert all(needs_hydrate(item) for item in listings)
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()
+
+
+def test_hydrate_410_is_gone_not_a_block():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            410,
+            json={"error": "Offer is not available", "success": False, "data": {"status": "DELETED"}},
+        )
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/prodej/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            listing = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/-praha-kbely-herlikovicka-1-kk/5679034",
+                "prodej",
+                "-praha-kbely-herlikovicka-1-kk",
+                5679034,
+            )
+            result = await client.hydrate_listings([listing], concurrency=1, delay_sec=0, deadline_sec=3)
+            assert result.gone == 1
+            assert result.blocked is None
+            assert result.priced == 0
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+
+
+def test_hydrate_mixed_sale_house_batch_is_fail_fast():
+    reset_ulov_caches()
+    hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(str(request.url))
+        offer_id = request.url.params.get("offerId")
+        if offer_id == "5679032":
+            return httpx.Response(200, json=SALE_DETAIL)
+        if offer_id == "5222881":
+            return httpx.Response(200, json=HOUSE_DETAIL)
+        if offer_id == "2037015":
+            return httpx.Response(429, json={"error": "rate"}, headers={"Retry-After": "3"})
+        raise AssertionError(f"unexpected {request.url}")
+
+    async def _run() -> None:
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+        await client.aclose()
+        client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            sale = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/-pardubice-studanka-bartonova-2-1/5679032",
+                "prodej",
+                "-pardubice-studanka-bartonova-2-1",
+                5679032,
+            )
+            house = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/pronajem-troubsko-troubsko-troubsko-dum/5222881",
+                "pronajem",
+                "pronajem-troubsko-troubsko-troubsko-dum",
+                5222881,
+            )
+            later = client.listing_from_sitemap_url(
+                "https://www.ulovdomov.cz/inzerat/pronajem-praha-liben-na-korabe-1-kk/2037015",
+                "pronajem",
+                "pronajem-praha-liben-na-korabe-1-kk",
+                2037015,
+            )
+            result = await client.hydrate_listings(
+                [sale, house, later],
+                concurrency=1,
+                delay_sec=0,
+                deadline_sec=5,
+                fail_fast=True,
+            )
+            assert sale.price_czk == 4350000
+            assert house.price_czk == 49000
+            assert house.extras.get("estate") == "Dům"
+            assert result.priced == 2
+            assert result.blocked is not None
+            assert result.blocked.status_code == 429
+            assert result.aborted
+            assert result.kinds.get("sale", {}).get("priced") == 1
+            assert result.kinds.get("rent_house", {}).get("priced") == 1
+        finally:
+            await client.aclose()
+
+    asyncio.run(_run())
+    reset_ulov_caches()

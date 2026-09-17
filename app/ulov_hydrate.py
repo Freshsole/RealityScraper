@@ -3,6 +3,10 @@
 Newest sitemap cards have URL/locality/disposition but no price or photo.
 This pass fills those fields for games/map. InstantSiteASGI / SCRAPE_ROLE=web
 never import or run this module on a request path.
+
+Sale + house stubs are interleaved with rent so a tick is not all newest flats.
+Unpriced catalog rows win; sitemap backfills remaining slots. Rate-limits abort
+the batch immediately.
 """
 
 from __future__ import annotations
@@ -16,7 +20,15 @@ from app import config
 from app.block_page import PortalBlocked
 from app.sreality import Listing
 from app.store import _listing_from_catalog_dict
-from app.ulovdomov import UlovdomovClient, HydrateResult, needs_hydrate
+from app.ulovdomov import (
+    UlovdomovClient,
+    HydrateResult,
+    HYDRATE_BUCKETS,
+    hydrate_bucket,
+    interleave_hydrate,
+    listing_hydrate_bucket,
+    needs_hydrate,
+)
 
 
 def allowed() -> bool:
@@ -30,20 +42,25 @@ def _search_url() -> str:
     return "https://www.ulovdomov.cz/pronajem/byty"
 
 
+def _empty_buckets() -> dict[str, list[Listing]]:
+    return {key: [] for key in HYDRATE_BUCKETS}
+
+
 async def _sitemap_candidates(client: UlovdomovClient, *, limit: int, seen: set[int]) -> list[Listing]:
     cap = max(1, int(limit or 1))
     rows = await client._load_sitemap_rows()
-    rent = [item for item in rows if item[1] == "pronajem" and item[2] not in seen]
-    sale = [item for item in rows if item[1] != "pronajem" and item[2] not in seen]
-    listings: list[Listing] = []
-    for url, offer, listing_id, slug in rent + sale:
+    buckets = _empty_buckets()
+    for url, offer, listing_id, slug in rows:
+        if listing_id in seen:
+            continue
+        key = hydrate_bucket(offer, slug)
+        if len(buckets.get(key) or []) >= cap:
+            continue
         listing = client.listing_from_sitemap_url(url, offer, slug, listing_id)
         if listing is None or not needs_hydrate(listing):
             continue
-        listings.append(listing)
-        if len(listings) >= cap:
-            break
-    return listings
+        buckets.setdefault(key, []).append(listing)
+    return interleave_hydrate(buckets, cap)
 
 
 def candidates_from_store(store: Any, limit: int) -> list[Listing]:
@@ -56,12 +73,33 @@ def candidates_from_store(store: Any, limit: int) -> list[Listing]:
     return listings
 
 
+def merge_candidates(store_listings: list[Listing], sitemap_listings: list[Listing], *, limit: int) -> list[Listing]:
+    """Store unpriced first within each kind, then newest sitemap stubs; round-robin kinds."""
+    cap = max(1, int(limit or 1))
+    seen: set[int] = set()
+    buckets = _empty_buckets()
+    for listing in store_listings + sitemap_listings:
+        listing_id = int(listing.id or 0)
+        if not listing_id or listing_id in seen or not needs_hydrate(listing):
+            continue
+        seen.add(listing_id)
+        buckets.setdefault(listing_hydrate_bucket(listing), []).append(listing)
+    return interleave_hydrate(buckets, cap)
+
+
 async def collect_candidates(store: Any, client: UlovdomovClient, *, limit: int) -> list[Listing]:
-    listings = candidates_from_store(store, limit)
-    if listings:
-        return listings[:limit]
-    # Fresh catalog: take newest sitemap stubs (rent first). Never invent cards.
-    return await _sitemap_candidates(client, limit=limit, seen=set())
+    cap = max(1, int(limit or 1))
+    # Pull extra unpriced rows so sale/houses can mix even when rent dominates the catalog.
+    store_cap = max(cap, min(160, cap * 3))
+    store_listings = candidates_from_store(store, store_cap)
+    seen = {int(item.id) for item in store_listings if item.id}
+    sitemap_listings = await _sitemap_candidates(client, limit=max(cap, cap * 2), seen=seen)
+    lookup = getattr(store, "ulov_hydrated_ids", None)
+    if lookup is not None:
+        skip = lookup([int(item.id) for item in sitemap_listings if item.id])
+        if skip:
+            sitemap_listings = [item for item in sitemap_listings if int(item.id) not in skip]
+    return merge_candidates(store_listings, sitemap_listings, limit=cap)
 
 
 async def hydrate_batch(client: UlovdomovClient, listings: list[Listing]) -> HydrateResult:

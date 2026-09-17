@@ -16,7 +16,7 @@ Measured 2026-09-16 from a datacenter IP (this Cloud Agent). InstantSiteASGI / `
 
 Worker now: API → sitemap cards (cached 8 min, newest-by-id pages of 20) → HTML/`_next/data` only if the sitemap fetch is not valid XML. Empty offer shard after a good sitemap returns `[]` without cooling the portal. Games read those hydrated rentals from memory when a locality has two priced cards; seed stays the InstantSiteASGI cold fallback.
 
-Fixture yield: 2 rent + 1 sale cards from `tests/fixtures/ulov_sitemap_offers.xml` after a mocked 500.
+Fixture yield: 2 rent flats + 1 sale + 1 rent house + 1 sale villa from `tests/fixtures/ulov_sitemap_offers.xml` after a mocked 500.
 
 Live `scripts/measure_listing_yield.py` (this agent, 2026-09-16):
 
@@ -26,7 +26,7 @@ Live `scripts/measure_listing_yield.py` (this agent, 2026-09-16):
 | UlovDomov sale | **20** | **4293** | cached | leading-dash sitemap slugs |
 | M&M Reality | **0** | 0 | 105 ms | `blocked:cloudflare:403` hard — no fake listings |
 
-Worker hydrate (`SCRAPE_ROLE!=web`, off InstantSiteASGI / `/hry*`): newest unpriced Ulov catalog rows (fallback: newest sitemap cards), `GET /v2/offer/detail?offerId=` batched (default 20, concurrency 4, 0.12 s spacing, 15 s deadline, fail-fast on 403/429 / 2 consecutive errors). `fetch_page` never calls detail. Thin sitemap upserts do not wipe a hydrated price/photo on `catalog_listings` or on the `listings` row the catalog/map reads. List/detail overlay missing price/image/GPS from `catalog_listings` so a hydrate is visible on the next read.
+Worker hydrate (`SCRAPE_ROLE!=web`, off InstantSiteASGI / `/hry*`): newest unpriced Ulov catalog rows mixed with newest sitemap stubs (rent + sale + houses, unpriced first), `GET /v2/offer/detail?offerId=` batched (default 32, concurrency 6, 0.12 s spacing, 18 s deadline, fail-fast on 403/429 / 2 consecutive errors). `fetch_page` never calls detail. Thin sitemap upserts do not wipe a hydrated price/photo on `catalog_listings` or on the `listings` row the catalog/map reads. List/detail overlay missing price/image/GPS from `catalog_listings` so a hydrate is visible on the next read.
 
 Live hydrate of the same page-1 rent cards (this agent, 2026-09-16):
 
@@ -156,6 +156,23 @@ After this branch (ČeskéReality houses/sale page-1 audit: `/rodinne-domy/` sha
 
 List path still does not call Photon/Nominatim: local city pins only. Empty house `/nejnovejsi/` falls back to `/rodinne-domy/`, not apartments. Synthetic page-1-across with two extra ČeskéReality house shards: **21→56** page-1 shards / **900→2800** listings under a 0.7 s contention deadline (was 54/2700 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and iDNES/Bazoš/Sreality/REMAX/Reality.cz/Bezrealitky/Annonce page-1 wins are unchanged.
 
+After this branch (UlovDomov hydrate depth: sale+houses, larger fail-fast batch, unpriced first, same 12 s list cap, worker `fetch_page` + worker hydrate, not `/hry*`):
+
+| Shard / hydrate | page 1 or attempted | priced | imaged | notes |
+|---|---|---|---|---|
+| Ulov rent byty sitemap | **20** | 0 on list | 0 on list | catalog total **3292** (3 houses split off; was 3295 mixed) |
+| Ulov sale byty sitemap | **20** | 0 on list | 0 on list | catalog total **4291** (2 villas split off; was 4293 mixed) |
+| Ulov rent houses `/pronajem/domy` | **3** | 0 on list | 0 on list | live sitemap has 3 `-dum` rents; HTML `/pronajem/domy` is empty SSR |
+| Ulov sale houses `/prodej/domy` | **2** | 0 on list | 0 on list | Senohraby villas (`ve-vilach`); `-housing` slugs are **land**, not houses |
+| Hydrate rent 20 (before=after) | **20** | **19** | **20** | 95%, 2.6–3.4 s. One card photos-only (price not invented) |
+| Hydrate sale 20 | **20** | **19** | **19** | 95%, 2.6–3.6 s. One newest sale **410 DELETED** (gone, not a block) |
+| Hydrate houses 5 | **5** | **5** | **4** | 100% priced. One rent house has no photos |
+| Hydrate mixed 32 (new tick) | **32** | **30** | **30** | **94%**, 3.4 s. Mix: 14 rent + 13 sale + 3 rent houses + 2 sale villas. 1 gone, 1 photos-only. 429/403 abort still fail-fast |
+
+Worker tick now round-robins rent / sale / houses, prefers catalog rows missing price, backfills newest sitemap stubs, default batch **32** / concurrency **6** / 18 s deadline, fail-fast on rate limits. `fetch_page` still never calls `offer/detail`. InstantSiteASGI `/hry*`, games live teaching, page-1-across, other portal page-1 wins, and M&M `SCRAPE_HTTP_PROXY` plumbing are unchanged.
+
+Synthetic page-1-across with two extra UlovDomov house shards: **21→58** page-1 shards / **900→2900** listings under a 0.7 s contention deadline (was 56/2800 after ČeskéReality houses).
+
 Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
 
 ## M&M Reality (documented limit)
@@ -175,7 +192,7 @@ Shipped incremental:
 - Portal cooldown already per-portal; **blocked shards no longer defer pages 2..N**.
 - Opt-in `SCRAPE_BROWSER_FETCH=1` **only** when `SCRAPE_ROLE` is `worker` or local `all` — never `web`. Default skips hard-blocks (`SCRAPE_BROWSER_ON_HARD_CF=0`) so Chrome is not launched for a known WAF deny.
 - Soft backends: `curl_cffi` → Playwright → system Chrome, each under `SCRAPE_BROWSER_TIMEOUT_SEC` (12s). Worker proxy URL is forwarded to those backends when set.
-- UlovDomov worker hydrate: `v2/offer/detail` for newest unpriced cards (batch 20, fail-fast). Off on `SCRAPE_ROLE=web`. Opt out with `SCRAPE_ULOV_HYDRATE=0`.
+- UlovDomov worker hydrate: `v2/offer/detail` for newest unpriced cards (batch 32, rent+sale+houses, fail-fast). Off on `SCRAPE_ROLE=web`. Opt out with `SCRAPE_ULOV_HYDRATE=0`.
 - Opt-in `SCRAPE_HTTP_PROXY` / `SCRAPE_HTTPS_PROXY` on the scrape worker only (see below).
 
 ### Enable residential proxy (worker only)
