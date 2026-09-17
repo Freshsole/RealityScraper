@@ -162,7 +162,7 @@
 }
 
 .auth-fields.compact {
-  gap: 12px;
+  gap: 16px;
 }
 
 .field {
@@ -300,6 +300,8 @@ label .optional {
   flex-direction: column;
   gap: 4px;
   width: 100%;
+  margin-top: 2px;
+  flex-shrink: 0;
 }
 
 .strength-bars {
