@@ -18,7 +18,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.sreality import Listing
-from app.store import LISTINGS_FTS_MATCH_SQL, Store, listings_fts_match_query, _pin_gps_tight_sql
+from app.store import (
+    LISTINGS_FTS_MATCH_SQL,
+    Store,
+    listings_fts_match_query,
+    _pin_gps_grid_sql,
+    _pin_gps_tight_sql,
+)
 
 
 def _listing(i: int, *, blob: str) -> Listing:
@@ -178,19 +184,11 @@ def _plans(store: Store) -> None:
             (praha,),
         ),
         "pins-bbox": (
-            """
-            SELECT ROUND(src.lat, 3) AS lat, ROUND(src.lon, 3) AS lon, COUNT(*) AS n
-            FROM (
-                SELECT listings.lat, listings.lon, listings.listing_key
-                FROM listings
-                WHERE listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                  AND listings.lat BETWEEN 49.90 AND 50.25
-                  AND listings.lon BETWEEN 14.10 AND 14.75
-                GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)
-            ) src
-            GROUP BY ROUND(src.lat, 3), ROUND(src.lon, 3)
-            """,
-            (),
+            _pin_gps_grid_sql(
+                "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+                "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+            ),
+            (49.90, 50.25, 14.10, 14.75),
         ),
         "pins-tight": (
             _pin_gps_tight_sql(
