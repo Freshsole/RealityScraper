@@ -328,7 +328,21 @@ def test_instant_site_html_and_games_json_on_web_role(tmp_path, monkeypatch):
 
     async def _run() -> None:
         app = InstantSiteASGI(inner, store=store)
-        for path in ("/hry", "/hry/vyssi-nizsi", "/hry/najem", "/"):
+        for path in (
+            "/hry",
+            "/hry/vyssi-nizsi",
+            "/hry/najem",
+            "/",
+            "/kontakt",
+            "/uspechy",
+            "/byt",
+            "/obchodni-podminky",
+            "/ochrana-soukromi",
+            "/nastaveni-cookies",
+            "/heslo",
+            "/sw.js",
+            "/manifest.webmanifest",
+        ):
             scope, receive, send, sent = _asgi_get_setup(path)
             await app(scope, receive, send)
             start = next(item for item in sent if item["type"] == "http.response.start")

@@ -11,8 +11,12 @@ import pytest
 from app.games import reset_pool_cache, wait_refresh
 from app.site_pages import (
     InstantSiteASGI,
+    INSTANT_ROUTES,
     app_shell_redirect,
     app_shell_redirect_for_cookies,
+    instant_asset_rel,
+    instant_page_name,
+    instant_root_file,
     site_asset,
     site_body,
     web_body,
@@ -293,6 +297,31 @@ def test_marketing_auth_html_bypasses_blocked_inner_app():
         status, _headers, body = await _asgi_get(app, "/static/site/auth.js")
         assert status == 200
         assert b"/api/auth/login" in body
+        leftover_assets = (
+            ("/static/site/inquiries.js", b"contact-form"),
+            ("/static/site/legal.js", b"legal-toc"),
+            ("/static/site/cookies.js", b"rf_consent"),
+            ("/static/site/stories-list.js", b"stories-grid"),
+            ("/static/site/stories-articles.js", b"article-body"),
+            ("/static/site/landing-search.js", b"guest-search"),
+            ("/static/site/assets/room/dum.webp", b"WEBP"),
+            ("/sw.js", b"push"),
+            ("/manifest.webmanifest", b"standalone"),
+        )
+        for path, needle in leftover_assets:
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert needle in body, path
+            assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
+            if path == "/sw.js":
+                assert headers[b"cache-control"] == b"no-store, max-age=0"
+                assert headers[b"service-worker-allowed"] == b"/"
+            elif path == "/manifest.webmanifest":
+                assert headers[b"cache-control"] == b"no-store, max-age=0"
+            else:
+                assert headers[b"cache-control"].startswith(b"public")
         assert hit["n"] == 0
 
     asyncio.run(run())
@@ -799,6 +828,45 @@ def test_fastapi_html_fallbacks_stay_memory_and_skip_sqlite():
     assert "return web_page(\"admin/index.html\")" in src
     assert "return site_page(\"prihlaseni.html\")" in src
     assert "return site_page(\"kontakt.html\")" in src
+    assert "return site_page(\"uspechy.html\")" in src
+    assert "return site_page(\"byt.html\")" in src
+    assert "return site_page(\"obchodni-podminky.html\")" in src
+    assert "return site_page(\"ochrana-soukromi.html\")" in src
+    assert "return site_page(\"nastaveni-cookies.html\")" in src
+    assert "return site_page(\"heslo.html\")" in src
+    assert "return site_page(\"clanek.html\")" in src
+    for path in (
+        "/",
+        "/kontakt",
+        "/kontakt/",
+        "/uspechy",
+        "/uspechy/martina-tomas",
+        "/obchodni-podminky",
+        "/ochrana-soukromi",
+        "/nastaveni-cookies",
+        "/byt",
+        "/heslo",
+    ):
+        assert instant_page_name(path), path
+    assert instant_asset_rel("/static/site/inquiries.js") == "site/inquiries.js"
+    assert instant_asset_rel("/static/site/legal.js") == "site/legal.js"
+    assert instant_asset_rel("/static/site/cookies.js") == "site/cookies.js"
+    assert instant_asset_rel("/static/site/stories-list.js") == "site/stories-list.js"
+    assert instant_asset_rel("/static/site/landing-search.js") == "site/landing-search.js"
+    assert instant_root_file("/sw.js")[0] == "sw.js"
+    assert instant_root_file("/manifest.webmanifest")[0] == "manifest.webmanifest"
+    assert set(INSTANT_ROUTES).issuperset(
+        {
+            "/",
+            "/kontakt",
+            "/uspechy",
+            "/byt",
+            "/obchodni-podminky",
+            "/ochrana-soukromi",
+            "/nastaveni-cookies",
+            "/heslo",
+        }
+    )
     web_body.cache_clear()
     page = web_page("admin/index.html")
     assert page.body == web_body("admin/index.html")
@@ -1323,6 +1391,170 @@ def test_home_auth_dashboard_instant_path_stays_fast_under_sqlite_exclusive_lock
                 assert body
             assert ms < 40, f"{label} under exclusive lock {ms:.1f}ms"
         print("home InstantSite under exclusive lock:\n  " + "\n  ".join(report))
+        assert hit["n"] == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        locker.rollback()
+        locker.close()
+
+
+def test_remaining_shells_ttfb_cold_warm_under_scrape_writer(tmp_path: Path):
+    """Dedicated InstantSite leftover HTML shells + companion JS vs scrape writer."""
+    reset_pool_cache()
+    store = Store(tmp_path / "shell-ttfb.sqlite")
+    seed = [_hry_ttfb_listing(i) for i in range(240)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=40, fast=True)
+    stop = threading.Event()
+    hit = {"n": 0}
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_hry_ttfb_listing(800 + (n + k) % 80) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            if n % 3 == 0:
+                store.record_scrape_tick({"kind": "new_discovery", "n": n, "role": "all"})
+            n += 1
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    html_paths = (
+        "/kontakt",
+        "/uspechy",
+        "/uspechy/martina-tomas",
+        "/obchodni-podminky",
+        "/ochrana-soukromi",
+        "/nastaveni-cookies",
+        "/byt",
+        "/heslo",
+    )
+    asset_paths = (
+        "/static/site/inquiries.js",
+        "/static/site/legal.js",
+        "/static/site/cookies.js",
+        "/static/site/stories-list.js",
+        "/static/site/stories-articles.js",
+        "/static/site/landing-search.js",
+        "/static/site/assets/room/dum.webp",
+        "/sw.js",
+        "/manifest.webmanifest",
+    )
+    needles = {
+        "/kontakt": "OZVĚTE SE NÁM".encode(),
+        "/uspechy": "NAŠLI SI VYSNĚNÉ BYDLENÍ".encode(),
+        "/uspechy/martina-tomas": b"article-page",
+        "/obchodni-podminky": "OBCHODNÍ PODMÍNKY".encode(),
+        "/ochrana-soukromi": "OCHRANA SOUKROMÍ".encode(),
+        "/nastaveni-cookies": "NASTAVENÍ COOKIES".encode(),
+        "/byt": "Začít hlídat zdarma".encode(),
+        "/heslo": "OBNOVTE SI HESLO".encode(),
+    }
+    cold: dict[str, float] = {}
+    warm: dict[str, list[float]] = {path: [] for path in (*html_paths, *asset_paths)}
+
+    thread = threading.Thread(target=writer, name="rf-shell-ttfb", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        for path in html_paths:
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path)
+            cold[path] = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert needles[path] in body, path
+            assert b"fonts.googleapis" not in body
+            assert b"Inter:" not in body
+        for path in asset_paths:
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path)
+            cold[path] = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert body
+            if path in {"/sw.js", "/manifest.webmanifest"}:
+                assert headers[b"cache-control"] == b"no-store, max-age=0"
+            else:
+                assert headers[b"cache-control"].startswith(b"public")
+        for _ in range(12):
+            for path in (*html_paths, *asset_paths):
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                warm[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+
+    try:
+        asyncio.run(run())
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+        reset_pool_cache()
+
+    assert hit["n"] == 0
+    report = []
+    for path in (*html_paths, *asset_paths):
+        values = warm[path]
+        p50 = _percentile(values, 0.50)
+        p95 = _percentile(values, 0.95)
+        report.append(
+            f"{path} cold={cold[path]:.2f}ms warm_n={len(values)} warm_p50={p50:.2f}ms warm_p95={p95:.2f}ms"
+        )
+        html = path in html_paths
+        assert cold[path] < (8 if html else 15), f"{path} cold {cold[path]:.1f}ms"
+        assert p50 < (1 if html else 8), f"{path} warm p50 {p50:.1f}ms {values}"
+        assert p95 < (4 if html else 15), f"{path} warm p95 {p95:.1f}ms {values}"
+    print("remaining InstantSite shells TTFB cold/warm under scrape:\n  " + "\n  ".join(report))
+
+
+def test_remaining_shells_instant_path_stays_fast_under_sqlite_exclusive_lock(tmp_path: Path):
+    store = Store(tmp_path / "shell-lock.sqlite")
+    store.upsert_catalog_listings_batch(
+        [_hry_ttfb_listing(i) for i in range(40)], kind="seeded", commit_every=20, fast=True
+    )
+    locker = sqlite3.connect(store.path, timeout=30)
+    locker.execute("PRAGMA busy_timeout=30000")
+    locker.execute("BEGIN EXCLUSIVE")
+    locker.execute("UPDATE meta SET value = value")
+    hit = {"n": 0}
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        report = []
+        for path in (
+            "/kontakt",
+            "/uspechy",
+            "/uspechy/martina-tomas",
+            "/obchodni-podminky",
+            "/ochrana-soukromi",
+            "/nastaveni-cookies",
+            "/byt",
+            "/heslo",
+            "/static/site/inquiries.js",
+            "/static/site/legal.js",
+            "/sw.js",
+            "/manifest.webmanifest",
+        ):
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            report.append(f"{path} {ms:.2f}ms")
+            assert status == 200, path
+            assert body
+            assert ms < 40, f"{path} under exclusive lock {ms:.1f}ms"
+        print("remaining shells InstantSite under exclusive lock:\n  " + "\n  ".join(report))
         assert hit["n"] == 0
 
     try:

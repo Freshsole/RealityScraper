@@ -4291,19 +4291,62 @@ body.article-popup-open {
   .contact-hero .display,
   .form-panel h2,
   .info-panel h2,
-  .hero-stat {
+  .hero-stat,
+  .legal-header .display,
+  .privacy-hero .display,
+  .cookies-hero .display,
+  .stories-hero .display,
+  .stories-grid-head .lead,
+  .legal-crumbs,
+  .cookies-hero .legal-crumbs,
+  .article-crumbs {
     white-space: normal;
   }
 
+  .legal-header .display,
+  .privacy-hero .display,
+  .cookies-hero .display,
+  .stories-hero .display,
+  .stories-cta .display,
+  .contact-cta .display,
+  .legal-cta .display,
+  .contact-hero .display {
+    font-size: 32px;
+    line-height: 0.95;
+    letter-spacing: -1px;
+  }
+
   .form-panel,
-  .info-panel {
+  .info-panel,
+  .cookie-card {
     padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .story-card {
+    width: 100%;
     max-width: 100%;
   }
 
   .hero-stat-banner {
     flex-wrap: wrap;
     padding: 16px;
+  }
+
+  .contact-cta .pill,
+  .stories-cta .pill,
+  .stories-cta-pill,
+  .legal-cta .pill,
+  .form-submit,
+  .article-cta-pill {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .legal-crumbs,
+  .cookies-hero .legal-crumbs,
+  .article-crumbs {
+    flex-wrap: wrap;
   }
 }
 

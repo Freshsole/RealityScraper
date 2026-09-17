@@ -233,47 +233,58 @@ def page() -> HTMLResponse:
     return web_page("index.html")
 
 
-async def landing() -> HTMLResponse:
+def landing() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves / from memory first.
     return site_page("index.html")
 
 
 def byt_preview() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /byt from memory first.
     return site_page("byt.html")
 
 
 def contact() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /kontakt from memory first.
     return site_page("kontakt.html")
 
 
 def terms() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /obchodni-podminky from memory first.
     return site_page("obchodni-podminky.html")
 
 
 def privacy() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /ochrana-soukromi from memory first.
     return site_page("ochrana-soukromi.html")
 
 
 def cookies_page() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /nastaveni-cookies from memory first.
     return site_page("nastaveni-cookies.html")
 
 
 def stories() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /uspechy from memory first.
     return site_page("uspechy.html")
 
 
-async def games_hub() -> HTMLResponse:
+def games_hub() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /hry from memory first.
     return site_page("hry.html")
 
 
-async def game_higher() -> HTMLResponse:
+def game_higher() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /hry/vyssi-nizsi from memory first.
     return site_page("hry-vyssi-nizsi.html")
 
 
-async def game_rent() -> HTMLResponse:
+def game_rent() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /hry/najem from memory first.
     return site_page("hry-najem.html")
 
 
 def story_article() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /uspechy/{slug} from memory first.
     return site_page("clanek.html")
 
 
@@ -288,6 +299,7 @@ def auth_register() -> HTMLResponse:
 
 
 def auth_forgot() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /heslo from memory first.
     return site_page("heslo.html")
 
 
@@ -1190,6 +1202,7 @@ async def digest_test(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 @app.get("/sw.js")
 def service_worker() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves /sw.js from memory first.
     return FileResponse(
         config.WEB_DIR / "sw.js",
         media_type="application/javascript",
@@ -1199,6 +1212,7 @@ def service_worker() -> FileResponse:
 
 @app.get("/manifest.webmanifest")
 def web_manifest() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves /manifest.webmanifest from memory first.
     return FileResponse(
         config.WEB_DIR / "manifest.webmanifest",
         media_type="application/manifest+json",

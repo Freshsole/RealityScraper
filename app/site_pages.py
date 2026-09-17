@@ -82,6 +82,12 @@ INSTANT_ASSET_FILES = (
     "site/games.js",
     "site/auth.css",
     "site/auth.js",
+    "site/cookies.js",
+    "site/legal.js",
+    "site/stories-list.js",
+    "site/stories-articles.js",
+    "site/inquiries.js",
+    "site/landing-search.js",
     "t.js",
     "site/assets/logo.svg",
     "site/fonts/archivo-black-latin.woff2",
@@ -94,10 +100,20 @@ INSTANT_ASSET_FILES = (
     "site/assets/db-1.webp",
     "site/assets/db-2.webp",
     "site/assets/db-3.webp",
+    "site/assets/room/dum.webp",
     "styles.css",
     "admin/admin.css",
 )
 INSTANT_ASSETS: dict[str, str] = {f"/static/{rel}": rel for rel in INSTANT_ASSET_FILES}
+# PWA GET shells live at the origin root (not /static/). Memory path, no SQLite.
+INSTANT_ROOT_FILES: dict[str, tuple[str, bytes, bytes]] = {
+    "/sw.js": ("sw.js", b"application/javascript; charset=utf-8", _NO_STORE),
+    "/manifest.webmanifest": (
+        "manifest.webmanifest",
+        b"application/manifest+json",
+        _NO_STORE,
+    ),
+}
 INSTANT_GAME_GET = {
     "/api/public/games/higher-lower",
     "/api/public/games/higher-lower/",
@@ -139,10 +155,14 @@ def instant_asset_rel(path: str) -> str | None:
     return INSTANT_ASSETS.get(path)
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def web_body(rel: str) -> bytes:
     path = Path(config.WEB_DIR) / rel
     return path.read_bytes()
+
+
+def instant_root_file(path: str) -> tuple[str, bytes, bytes] | None:
+    return INSTANT_ROOT_FILES.get(path)
 
 
 def preload_site_pages() -> None:
@@ -152,6 +172,8 @@ def preload_site_pages() -> None:
         site_body(name)
     web_body(_APP_SHELL_REL)
     web_body(_ADMIN_SHELL_REL)
+    for rel, _ctype, _cache in INSTANT_ROOT_FILES.values():
+        web_body(rel)
     for rel in INSTANT_ASSET_FILES:
         site_asset(rel)
 
@@ -314,6 +336,8 @@ class InstantSiteASGI:
     (guest /nabidka uses rf_guest_search) without SQLite. FastAPI's require_account
     fallback uses the same cookie-presence helper. Cookie presence is not a session
     check — /api/auth/me and other dashboard APIs still fall through to FastAPI+WAL.
+    Marketing leftovers (/kontakt, /uspechy, legal, /byt) plus their JS, /sw.js, and
+    the web manifest also stay on this memory path.
     """
 
     def __init__(self, app: App, store: Any | None = None) -> None:
@@ -337,6 +361,20 @@ class InstantSiteASGI:
                         cache_control=_ASSET_CACHE_CONTROL,
                         method=method,
                         extra_headers=[(b"access-control-allow-origin", _ACAO)],
+                    )
+                    return
+                root = instant_root_file(path)
+                if root:
+                    rel, content_type, cache_control = root
+                    extra = [(b"service-worker-allowed", b"/")] if path == "/sw.js" else None
+                    await _send_bytes(
+                        send,
+                        status=200,
+                        body=web_body(rel),
+                        content_type=content_type,
+                        cache_control=cache_control,
+                        method=method,
+                        extra_headers=extra,
                     )
                     return
                 name = instant_page_name(path)

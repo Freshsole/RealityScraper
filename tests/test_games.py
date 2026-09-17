@@ -543,7 +543,7 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".mint-banner" in css
     assert "fonts.googleapis" not in css
     assert "--font-ui: system-ui" in css
-    assert "site.css?v=12" in html
+    assert "site.css?v=13" in html
     ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
     assert "flex-shrink: 0" in ccy
     assert "@media (max-width: 480px)" in css
@@ -584,6 +584,8 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
         assert "archivo-black-latin.woff2" in html, name
         assert 'rel="preload"' in html, name
         assert "/static/site/site.css" in html, name
+        assert "Inter:" not in html, name
+        assert "data-node-id" not in html, name
     login = site_html("prihlaseni.html")
     register = site_html("registrace.html")
     forgot = site_html("heslo.html")
@@ -608,6 +610,23 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "padding: 24px 16px 40px" in phone
     assert "min-height: 48px" in phone
     assert "max-width: 100%" in phone
+    site_css = (Path(__file__).resolve().parents[1] / "web" / "site" / "site.css").read_text(encoding="utf-8")
+    assert "fonts.googleapis" not in site_css
+    assert "var(--forest)" in site_css
+    assert "var(--green)" in site_css
+    last_phone = site_css.rsplit("@media (max-width: 480px)", 1)[1]
+    assert ".legal-header .display" in last_phone
+    assert ".cookies-hero .display" in last_phone
+    assert ".stories-hero .display" in last_phone
+    assert ".contact-hero .display" in last_phone
+    assert ".cookie-card" in last_phone
+    assert "white-space: normal" in last_phone
+    assert "/static/site/inquiries.js" in site_html("kontakt.html")
+    assert "/static/site/stories-list.js" in site_html("uspechy.html")
+    assert "/static/site/legal.js" in site_html("obchodni-podminky.html")
+    assert "/static/site/cookies.js" in site_html("nastaveni-cookies.html")
+    assert "/static/site/landing-search.js" in site_html("byt.html")
+    assert "/static/site/stories-articles.js" in site_html("clanek.html")
 
 
 def test_dashboard_and_admin_shells_are_self_hosted_wise():
@@ -618,6 +637,9 @@ def test_dashboard_and_admin_shells_are_self_hosted_wise():
     leftover = (root / "byt.html").read_text(encoding="utf-8")
     styles = (root / "web" / "styles.css").read_text(encoding="utf-8")
     admin_css = (root / "web" / "admin" / "admin.css").read_text(encoding="utf-8")
+    assert "Inter:" not in leftover
+    assert "data-node-id" not in leftover
+    assert "col is-us" in leftover
     for name, html in (
         ("index.html", shell),
         ("admin/index.html", admin),
