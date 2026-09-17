@@ -676,14 +676,22 @@ function renderMap(items) {
 }
 
 function sourceFromUrl(url) {
+  if (typeof window.portalIdFrom === "function") return window.portalIdFrom(url);
   const raw = String(url || "").toLowerCase();
   if (raw.includes("idnes")) return "idnes";
   if (raw.includes("bezrealitky")) return "bezrealitky";
   if (raw.includes("bazos")) return "bazos";
+  if (raw.includes("ceskereality")) return "ceskereality";
+  if (raw.includes("annonce")) return "annonce";
+  if (raw.includes("mmreality")) return "mmreality";
+  if (raw.includes("ulovdomov")) return "ulovdomov";
+  if (raw.includes("remax")) return "remax";
+  if (raw.includes("reality.cz") && !raw.includes("sreality")) return "realitycz";
   return "sreality";
 }
 
 function portalLabel(url) {
+  if (typeof window.portalLabelOf === "function") return window.portalLabelOf(url);
   const source = sourceFromUrl(url);
   if (source === "idnes") return "Reality.iDNES";
   if (source === "bezrealitky") return "Bezrealitky";
@@ -692,6 +700,7 @@ function portalLabel(url) {
 }
 
 function portalIcon(url) {
+  if (typeof window.portalIconOf === "function") return window.portalIconOf(url);
   const source = sourceFromUrl(url);
   if (source === "idnes") return "/static/icons/idnes.svg";
   if (source === "bezrealitky") return "/static/icons/bezrealitky.svg";
@@ -715,10 +724,14 @@ function templateName(id) {
 
 function normalizeMonitorPortals(value) {
   const raw = String(value || "all").toLowerCase();
-  return raw === "sreality" || raw === "bezrealitky" || raw === "idnes" || raw === "bazos" ? raw : "all";
+  const known = (window.PORTALS || []).map((item) => item.id);
+  if (raw === "all") return "all";
+  if (known.includes(raw) || ["sreality", "bezrealitky", "idnes", "bazos"].includes(raw)) return raw;
+  return "all";
 }
 
 function portalTitle(portal) {
+  if (typeof window.portalLabelOf === "function") return window.portalLabelOf(portal);
   if (portal === "idnes") return "Reality.iDNES";
   if (portal === "bazos") return "Bazoš";
   return portal === "bezrealitky" ? "Bezrealitky" : "Sreality";
@@ -745,11 +758,8 @@ function renderPortalUrlStack(host, targets, primary) {
 
 function portalsSummary(value) {
   const portals = normalizeMonitorPortals(value);
-  if (portals === "sreality") return "Jen Sreality";
-  if (portals === "bezrealitky") return "Jen Bezrealitky";
-  if (portals === "idnes") return "Jen iDNES Reality";
-  if (portals === "bazos") return "Jen Bazoš";
-  return "Všechny (Sreality, Bezrealitky, iDNES i Bazoš)";
+  if (portals === "all") return "Všechny (10 portálů)";
+  return `Jen ${portalTitle(portals)}`;
 }
 
 function selectedMonitorPortals() {
@@ -796,10 +806,12 @@ function monitorEditorHtml(item, draft) {
         <h3>Hlídané portály</h3>
         <div class="chip-row" data-modal-portals>
           <button type="button" class="chip${data.portals === "all" ? " on" : ""}" data-portals="all">Všechny</button>
-          <button type="button" class="chip${data.portals === "sreality" ? " on" : ""}" data-portals="sreality">Jen Sreality</button>
-          <button type="button" class="chip${data.portals === "bezrealitky" ? " on" : ""}" data-portals="bezrealitky">Jen Bezrealitky</button>
-          <button type="button" class="chip${data.portals === "idnes" ? " on" : ""}" data-portals="idnes">Jen iDNES Reality</button>
-          <button type="button" class="chip${data.portals === "bazos" ? " on" : ""}" data-portals="bazos">Jen Bazoš</button>
+          ${(window.PORTALS || [])
+            .map(
+              (item) =>
+                `<button type="button" class="chip${data.portals === item.id ? " on" : ""}" data-portals="${item.id}">Jen ${escapeHtml(item.label)}</button>`,
+            )
+            .join("")}
         </div>
       </div>
       <label>Discord webhook<input name="webhook_url" value="${escapeHtml(data.webhook_url)}" placeholder="prázdné = výchozí webhook pro tento portál" /></label>
@@ -1722,6 +1734,8 @@ function chipGroup(title, key, options, single = false) {
 
 function currentSource() {
   const raw = filterState.source;
+  const known = (window.PORTALS || []).map((item) => item.id);
+  if (known.includes(raw)) return raw;
   if (raw === "bezrealitky" || raw === "idnes" || raw === "bazos") return raw;
   return "sreality";
 }
@@ -1937,7 +1951,7 @@ function readRanges() {
     filterState.sort = "nejnovejsi";
     filterState.radius = num("f-bazos-radius");
     if (filterState.radius == null) filterState.radius = 20;
-  } else {
+  } else if (currentSource() === "bezrealitky") {
     filterState.sort = filterState.sort || "TIMEORDER_DESC";
     filterState.annuity_from = num("f-annuity-from");
     filterState.annuity_to = num("f-annuity-to");

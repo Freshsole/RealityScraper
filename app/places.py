@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import math
 import re
 import threading
 import time
 import unicodedata
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,21 @@ _last_nominatim = 0.0
 _memory: dict[str, dict[str, Any]] = {}
 _BUNDLED: dict[str, dict[str, Any]] | None = None
 _SHAPES_PATH = Path(__file__).resolve().parent / "place_shapes.json"
+_HTTP: httpx.AsyncClient | None = None
+
+
+def _http() -> httpx.AsyncClient:
+    global _HTTP
+    if _HTTP is None or _HTTP.is_closed:
+        _HTTP = httpx.AsyncClient(timeout=16.0, headers=HEADERS, follow_redirects=True)
+    return _HTTP
+
+
+async def aclose() -> None:
+    global _HTTP
+    if _HTTP is not None and not _HTTP.is_closed:
+        await _HTTP.aclose()
+    _HTTP = None
 
 
 def bundled_shapes() -> dict[str, dict[str, Any]]:
@@ -528,8 +546,8 @@ async def _nominatim_lookup(ids: list[str]) -> list[dict[str, Any]]:
     wanted = [normalize_osm_id(item) for item in ids if normalize_osm_id(item)]
     if not wanted:
         return []
-    async with httpx.AsyncClient(timeout=16.0, headers=HEADERS) as client:
-        return await _nominatim_get(
+    client = _http()
+    return await _nominatim_get(
             client,
             "/lookup",
             {
@@ -682,43 +700,43 @@ async def search_places(query: str) -> list[dict[str, Any]]:
         seen.add(ident)
         items.append({"id": ident, "label": label, "kind": "area", "lat": None, "lon": None})
     try:
-        async with httpx.AsyncClient(timeout=4.0, headers=HEADERS) as client:
-            response = await client.get(
-                "https://photon.komoot.io/api/",
-                params={"q": needle, "limit": 12, "lat": 50.087, "lon": 14.421},
+        client = _http()
+        response = await client.get(
+            "https://photon.komoot.io/api/",
+            params={"q": needle, "limit": 12, "lat": 50.087, "lon": 14.421},
+        )
+        response.raise_for_status()
+        for feature in (response.json() or {}).get("features") or []:
+            props = feature.get("properties") or {}
+            kind = _photon_kind(props)
+            if not kind:
+                continue
+            osm_type = str(props.get("osm_type") or "").upper()[:1]
+            osm_id = props.get("osm_id")
+            if osm_type not in {"R", "W", "N"} or not osm_id:
+                continue
+            ident = f"{osm_type}{osm_id}"
+            if ident in seen:
+                continue
+            seen.add(ident)
+            coords = (feature.get("geometry") or {}).get("coordinates") or []
+            lat = lon = None
+            if len(coords) >= 2 and isinstance(coords[0], (int, float)):
+                lon, lat = float(coords[0]), float(coords[1])
+            items.append(
+                {
+                    "id": ident,
+                    "label": _photon_label(props),
+                    "kind": kind,
+                    "lat": lat,
+                    "lon": lon,
+                    "osm_key": str(props.get("osm_key") or ""),
+                    "osm_value": str(props.get("osm_value") or ""),
+                    "extent": props.get("extent"),
+                }
             )
-            response.raise_for_status()
-            for feature in (response.json() or {}).get("features") or []:
-                props = feature.get("properties") or {}
-                kind = _photon_kind(props)
-                if not kind:
-                    continue
-                osm_type = str(props.get("osm_type") or "").upper()[:1]
-                osm_id = props.get("osm_id")
-                if osm_type not in {"R", "W", "N"} or not osm_id:
-                    continue
-                ident = f"{osm_type}{osm_id}"
-                if ident in seen:
-                    continue
-                seen.add(ident)
-                coords = (feature.get("geometry") or {}).get("coordinates") or []
-                lat = lon = None
-                if len(coords) >= 2 and isinstance(coords[0], (int, float)):
-                    lon, lat = float(coords[0]), float(coords[1])
-                items.append(
-                    {
-                        "id": ident,
-                        "label": _photon_label(props),
-                        "kind": kind,
-                        "lat": lat,
-                        "lon": lon,
-                        "osm_key": str(props.get("osm_key") or ""),
-                        "osm_value": str(props.get("osm_value") or ""),
-                        "extent": props.get("extent"),
-                    }
-                )
-                if len(items) >= 12:
-                    break
+            if len(items) >= 12:
+                break
     except Exception:
         pass
     items.sort(key=lambda item: _rank_place(item, needle))
@@ -727,10 +745,37 @@ async def search_places(query: str) -> list[dict[str, Any]]:
     return items
 
 
-_GEOCODE_CACHE: dict[str, tuple[float, float] | None] = {}
+_GEOCODE_CACHE_MAX = 4096
+_GEOCODE_CACHE: OrderedDict[str, Any] = OrderedDict()
+_cache_lock = threading.Lock()
+_CACHE_MISS = object()
 _photon_ok = True
 _geocode_nom_lock = threading.Lock()
 _last_geocode_nom = 0.0
+_GEOCODE_WORKERS = 4
+_geocode_executor = ThreadPoolExecutor(max_workers=_GEOCODE_WORKERS, thread_name_prefix="geocode")
+atexit.register(_geocode_executor.shutdown, wait=False)
+
+
+def _cache_get(key: str) -> Any:
+    with _cache_lock:
+        if key not in _GEOCODE_CACHE:
+            return _CACHE_MISS
+        _GEOCODE_CACHE.move_to_end(key)
+        return _GEOCODE_CACHE[key]
+
+
+def _cache_put(key: str, value: Any) -> None:
+    with _cache_lock:
+        _GEOCODE_CACHE[key] = value
+        _GEOCODE_CACHE.move_to_end(key)
+        while len(_GEOCODE_CACHE) > _GEOCODE_CACHE_MAX:
+            _GEOCODE_CACHE.popitem(last=False)
+
+
+async def _to_geocode_thread(fn, /, *args):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_geocode_executor, fn, *args)
 
 
 def locality_query(text: str) -> str:
@@ -805,19 +850,26 @@ def geocode_locality_sync(text: str) -> tuple[float, float] | None:
     if len(needle) < 4:
         return None
     key = needle.casefold()
-    if key in _GEOCODE_CACHE:
-        return _GEOCODE_CACHE[key]
+    cached = _cache_get(key)
+    if cached is not _CACHE_MISS:
+        return cached
     point = _photon_locality_sync(needle)
     status = "ok"
     if point is None:
         point, status = _nominatim_locality_sync(needle)
     if point is not None or status == "empty":
-        _GEOCODE_CACHE[key] = point
+        _cache_put(key, point)
     return point
 
 
 async def geocode_locality(text: str) -> tuple[float, float] | None:
-    return await asyncio.to_thread(geocode_locality_sync, text)
+    needle = locality_query(text)
+    if len(needle) < 4:
+        return None
+    cached = _cache_get(needle.casefold())
+    if cached is not _CACHE_MISS:
+        return cached
+    return await _to_geocode_thread(geocode_locality_sync, text)
 
 
 def has_house_number(text: str) -> bool:
@@ -848,6 +900,22 @@ def format_reverse_address(addr: dict[str, Any] | None) -> str:
     return street or city_part or suburb
 
 
+def _reverse_cache_key(lat: float, lon: float) -> str:
+    return f"rev:{round(lat, 5)}:{round(lon, 5)}"
+
+
+def reverse_address_cached(lat: float, lon: float) -> str:
+    point = _usable_geocode_point(lat, lon)
+    if not point:
+        return ""
+    cached = _cache_get(_reverse_cache_key(point[0], point[1]))
+    if cached is _CACHE_MISS or not cached:
+        return ""
+    if isinstance(cached, tuple) and cached:
+        return str(cached[0] or "")
+    return ""
+
+
 def reverse_address_sync(lat: float, lon: float) -> str:
     try:
         lat_f = float(lat)
@@ -857,10 +925,12 @@ def reverse_address_sync(lat: float, lon: float) -> str:
     point = _usable_geocode_point(lat_f, lon_f)
     if not point:
         return ""
-    key = f"rev:{round(point[0], 5)}:{round(point[1], 5)}"
-    if key in _GEOCODE_CACHE:
-        cached = _GEOCODE_CACHE[key]
-        return cached[0] if cached else ""
+    key = _reverse_cache_key(point[0], point[1])
+    cached = _cache_get(key)
+    if cached is not _CACHE_MISS:
+        if not cached:
+            return ""
+        return str(cached[0] or "") if isinstance(cached, tuple) else ""
     global _last_geocode_nom
     with _geocode_nom_lock:
         wait = 1.1 - (time.monotonic() - _last_geocode_nom)
@@ -886,11 +956,11 @@ def reverse_address_sync(lat: float, lon: float) -> str:
         except Exception:
             return ""
     label = format_reverse_address(payload.get("address") if isinstance(payload, dict) else None)
-    _GEOCODE_CACHE[key] = (label, point[0], point[1]) if label else None
+    _cache_put(key, (label, point[0], point[1]) if label else None)
     return label
 
 
-def refine_listing_location(listing: Any) -> Any:
+def refine_listing_location(listing: Any, *, network: bool = False) -> Any:
     locality = str(getattr(listing, "locality", None) or "").strip()
     lat = getattr(listing, "lat", None)
     lon = getattr(listing, "lon", None)
@@ -898,13 +968,27 @@ def refine_listing_location(listing: Any) -> Any:
         return listing
     if lat is None or lon is None:
         return listing
-    label = reverse_address_sync(float(lat), float(lon))
+    label = reverse_address_sync(float(lat), float(lon)) if network else reverse_address_cached(float(lat), float(lon))
     if label:
         listing.locality = label
         extras = dict(getattr(listing, "extras", None) or {})
         extras["address"] = label
         listing.extras = extras
     return listing
+
+
+def _refine_with_network(listing: Any) -> Any:
+    return refine_listing_location(listing, network=True)
+
+
+async def refine_listing_location_async(listing: Any) -> Any:
+    refine_listing_location(listing, network=False)
+    locality = str(getattr(listing, "locality", None) or "").strip()
+    if has_house_number(locality):
+        return listing
+    if getattr(listing, "lat", None) is None or getattr(listing, "lon", None) is None:
+        return listing
+    return await _to_geocode_thread(_refine_with_network, listing)
 
 
 def street_from_locality(text: str) -> str:
@@ -1263,10 +1347,10 @@ async def _overpass_json(query: str) -> dict[str, Any]:
     last_error: Exception | None = None
     for url in _OVERPASS_URLS:
         try:
-            async with httpx.AsyncClient(timeout=6.0, headers=HEADERS) as client:
-                response = await client.post(url, data={"data": query})
-                response.raise_for_status()
-                payload = response.json()
+            client = _http()
+            response = await client.post(url, data={"data": query})
+            response.raise_for_status()
+            payload = response.json()
             return payload if isinstance(payload, dict) else {}
         except Exception as exc:
             last_error = exc
@@ -1299,29 +1383,29 @@ async def _photon_street_ids(name: str, lat: float, lon: float) -> list[int]:
         terms.append(f"{name} Praha")
         terms.append(f"{name} Praha 7")
     try:
-        async with httpx.AsyncClient(timeout=10.0, headers=HEADERS) as client:
-            for term in terms:
-                response = await client.get(
-                    "https://photon.komoot.io/api/",
-                    params={"q": term, "limit": 12, "lat": lat, "lon": lon},
-                )
-                response.raise_for_status()
-                for feature in (response.json() or {}).get("features") or []:
-                    props = feature.get("properties") or {}
-                    if str(props.get("osm_key") or "") != "highway":
+        client = _http()
+        for term in terms:
+            response = await client.get(
+                "https://photon.komoot.io/api/",
+                params={"q": term, "limit": 12, "lat": lat, "lon": lon},
+            )
+            response.raise_for_status()
+            for feature in (response.json() or {}).get("features") or []:
+                props = feature.get("properties") or {}
+                if str(props.get("osm_key") or "") != "highway":
+                    continue
+                osm_type = str(props.get("osm_type") or "").upper()[:1]
+                osm_id = props.get("osm_id")
+                if osm_type != "W" or not osm_id:
+                    continue
+                coords = (feature.get("geometry") or {}).get("coordinates") or []
+                if len(coords) >= 2 and isinstance(coords[0], (int, float)):
+                    if _haversine_m(lat, lon, float(coords[1]), float(coords[0])) > 4000:
                         continue
-                    osm_type = str(props.get("osm_type") or "").upper()[:1]
-                    osm_id = props.get("osm_id")
-                    if osm_type != "W" or not osm_id:
-                        continue
-                    coords = (feature.get("geometry") or {}).get("coordinates") or []
-                    if len(coords) >= 2 and isinstance(coords[0], (int, float)):
-                        if _haversine_m(lat, lon, float(coords[1]), float(coords[0])) > 4000:
-                            continue
-                    street_name = str(props.get("name") or props.get("street") or "").strip()
-                    if street_name and street_name.casefold() != name.casefold():
-                        continue
-                    ids.append(int(osm_id))
+                street_name = str(props.get("name") or props.get("street") or "").strip()
+                if street_name and street_name.casefold() != name.casefold():
+                    continue
+                ids.append(int(osm_id))
     except Exception:
         return list(dict.fromkeys(ids))
     return list(dict.fromkeys(ids))
@@ -1387,10 +1471,10 @@ async def _osm_api_way(osm_id: str) -> dict[str, Any] | None:
     if not osm_id.startswith("W") or not osm_id[1:].isdigit():
         return None
     try:
-        async with httpx.AsyncClient(timeout=6.0, headers=HEADERS) as client:
-            response = await client.get(f"https://api.openstreetmap.org/api/0.6/way/{osm_id[1:]}/full.json")
-            response.raise_for_status()
-            payload = response.json()
+        client = _http()
+        response = await client.get(f"https://api.openstreetmap.org/api/0.6/way/{osm_id[1:]}/full.json")
+        response.raise_for_status()
+        payload = response.json()
     except Exception:
         return None
     elements = payload.get("elements") if isinstance(payload, dict) else None
@@ -1512,8 +1596,8 @@ async def _search_named_polygons(name: str) -> list[dict[str, Any]]:
     if "praha" not in name.casefold() and "prague" not in name.casefold() and len(name.split()) == 1:
         query = f"{name} Praha"
     try:
-        async with httpx.AsyncClient(timeout=12.0, headers=HEADERS) as client:
-            rows = await _nominatim_get(
+        client = _http()
+        rows = await _nominatim_get(
                 client,
                 "/search",
                 {
@@ -1636,8 +1720,8 @@ async def geometries(ids: list[str], *, network: bool = True) -> list[dict[str, 
             missing.append(ident)
     if missing:
         try:
-            async with httpx.AsyncClient(timeout=16.0, headers=HEADERS) as client:
-                rows = await _nominatim_get(
+            client = _http()
+            rows = await _nominatim_get(
                     client,
                     "/lookup",
                     {

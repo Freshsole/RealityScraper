@@ -1,0 +1,859 @@
+{
+  "at": "2026-09-17T20:25:45+00:00",
+  "mode": "live",
+  "minutes": 5.0,
+  "seconds": 367.2,
+  "db": "/Users/jirka/Desktop/Folders/Realitify2grok/data/monitor.sqlite",
+  "concurrency": 16,
+  "concurrency_overrides": {},
+  "limiter_limits": {
+    "annonce": 16,
+    "bazos": 16,
+    "bezrealitky": 16,
+    "ceskereality": 16,
+    "idnes": 16,
+    "mmreality": 16,
+    "realitycz": 16,
+    "remax": 16,
+    "sreality": 16,
+    "ulovdomov": 16,
+    "*global*": 128
+  },
+  "deep_shards_total": 797,
+  "deep_shards_per_tick": 10,
+  "deep_loop_sec": 2,
+  "coverage_cycle_s_theoretical": 159.4,
+  "coverage_cycle_h_theoretical": 0.04,
+  "deep_unique_shards_in_window": 244,
+  "coverage_cycle_s_measured": 1199.5,
+  "coverage_cycle_h_measured": 0.33,
+  "watchdog": {
+    "n": 600,
+    "max_ms": 170.7,
+    "p50_ms": 1.6,
+    "p95_ms": 2.2,
+    "last_ms": 1.4,
+    "over_50ms": 0,
+    "over_500ms": 0,
+    "over_2000ms": 0,
+    "events": []
+  },
+  "portal_health": {
+    "annonce": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:38:40+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 2
+    },
+    "bazos": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:39:40+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 0
+    },
+    "bezrealitky": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:37:50+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 117
+    },
+    "ceskereality": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:38:40+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 2
+    },
+    "idnes": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:39:40+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 0
+    },
+    "mmreality": {
+      "consecutive": 0,
+      "cooldown_sec": 900,
+      "disabled": false,
+      "disabled_until": null,
+      "reason": "",
+      "disable_count": 0,
+      "skips": 0
+    },
+    "realitycz": {
+      "consecutive": 0,
+      "cooldown_sec": 900,
+      "disabled": false,
+      "disabled_until": null,
+      "reason": "",
+      "disable_count": 0,
+      "skips": 0
+    },
+    "remax": {
+      "consecutive": 0,
+      "cooldown_sec": 900,
+      "disabled": false,
+      "disabled_until": null,
+      "reason": "",
+      "disable_count": 0,
+      "skips": 0
+    },
+    "sreality": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:36:36+00:00",
+      "reason": "timeout",
+      "disable_count": 1,
+      "skips": 212
+    },
+    "ulovdomov": {
+      "consecutive": 0,
+      "cooldown_sec": 1800,
+      "disabled": true,
+      "disabled_until": "2026-09-17T20:34:39+00:00",
+      "reason": "500",
+      "disable_count": 1,
+      "skips": 8
+    }
+  },
+  "scrape_jobs": {},
+  "throughput": {
+    "seconds": 367.2,
+    "pages": 2038,
+    "listings": 21450,
+    "pages_per_s": 5.55,
+    "listings_per_s": 58.413,
+    "unique_shards": 298,
+    "deferred_rows": 103,
+    "deferred_wait_ms_p50": 65409.6,
+    "deferred_wait_ms_p95": 65409.6,
+    "portals": {
+      "annonce": {
+        "pages": 16,
+        "listings": 60,
+        "pages_per_s": 0.044,
+        "listings_per_s": 0.163,
+        "ok": 16,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 5014.53,
+        "fetch_ms_p95": 5025.65,
+        "fetch_ms_p99": 5149.55,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 3.06,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 100.0,
+        "header_samples": 6,
+        "pipelines": {
+          "monitor": {
+            "pages": 4,
+            "listings": 20,
+            "pages_per_s": 0.011,
+            "listings_per_s": 0.054
+          },
+          "discovery": {
+            "pages": 12,
+            "listings": 40,
+            "pages_per_s": 0.033,
+            "listings_per_s": 0.109
+          }
+        }
+      },
+      "bazos": {
+        "pages": 38,
+        "listings": 400,
+        "pages_per_s": 0.103,
+        "listings_per_s": 1.089,
+        "ok": 38,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 367.02,
+        "fetch_ms_p95": 5022.57,
+        "fetch_ms_p99": 5045.33,
+        "parse_ms_p50": 1.44,
+        "parse_ms_p95": 10.45,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 100.0,
+        "header_samples": 20,
+        "pipelines": {
+          "discovery": {
+            "pages": 32,
+            "listings": 320,
+            "pages_per_s": 0.087,
+            "listings_per_s": 0.871
+          },
+          "monitor": {
+            "pages": 6,
+            "listings": 80,
+            "pages_per_s": 0.016,
+            "listings_per_s": 0.218
+          }
+        }
+      },
+      "bezrealitky": {
+        "pages": 92,
+        "listings": 270,
+        "pages_per_s": 0.251,
+        "listings_per_s": 0.735,
+        "ok": 92,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 5006.27,
+        "fetch_ms_p95": 5040.62,
+        "fetch_ms_p99": 5041.39,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 0.19,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 18,
+        "pipelines": {
+          "monitor": {
+            "pages": 4,
+            "listings": 30,
+            "pages_per_s": 0.011,
+            "listings_per_s": 0.082
+          },
+          "discovery": {
+            "pages": 16,
+            "listings": 240,
+            "pages_per_s": 0.044,
+            "listings_per_s": 0.654
+          },
+          "deep": {
+            "pages": 72,
+            "listings": 0,
+            "pages_per_s": 0.196,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "ceskereality": {
+        "pages": 16,
+        "listings": 6,
+        "pages_per_s": 0.044,
+        "listings_per_s": 0.016,
+        "ok": 16,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 5012.16,
+        "fetch_ms_p95": 5017.79,
+        "fetch_ms_p99": 5993.86,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 3.21,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 6,
+        "pipelines": {
+          "discovery": {
+            "pages": 12,
+            "listings": 4,
+            "pages_per_s": 0.033,
+            "listings_per_s": 0.011
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 2,
+            "pages_per_s": 0.011,
+            "listings_per_s": 0.005
+          }
+        }
+      },
+      "idnes": {
+        "pages": 127,
+        "listings": 463,
+        "pages_per_s": 0.346,
+        "listings_per_s": 1.261,
+        "ok": 36,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 91,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 0.0,
+        "fetch_ms_p95": 5021.21,
+        "fetch_ms_p99": 5046.58,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 2399.18,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 65409.6,
+        "deferred_wait_ms_p95": 65409.6,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 18,
+        "pipelines": {
+          "discovery": {
+            "pages": 32,
+            "listings": 260,
+            "pages_per_s": 0.087,
+            "listings_per_s": 0.708
+          },
+          "monitor": {
+            "pages": 5,
+            "listings": 50,
+            "pages_per_s": 0.014,
+            "listings_per_s": 0.136
+          },
+          "deep": {
+            "pages": 90,
+            "listings": 153,
+            "pages_per_s": 0.245,
+            "listings_per_s": 0.417
+          }
+        }
+      },
+      "mmreality": {
+        "pages": 38,
+        "listings": 0,
+        "pages_per_s": 0.103,
+        "listings_per_s": 0.0,
+        "ok": 38,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 2812.18,
+        "fetch_ms_p95": 5022.29,
+        "fetch_ms_p99": 5041.23,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 7.89,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 19,
+        "pipelines": {
+          "monitor": {
+            "pages": 6,
+            "listings": 0,
+            "pages_per_s": 0.016,
+            "listings_per_s": 0.0
+          },
+          "discovery": {
+            "pages": 32,
+            "listings": 0,
+            "pages_per_s": 0.087,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "realitycz": {
+        "pages": 38,
+        "listings": 0,
+        "pages_per_s": 0.103,
+        "listings_per_s": 0.0,
+        "ok": 38,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 2391.56,
+        "fetch_ms_p95": 5034.74,
+        "fetch_ms_p99": 5039.58,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 2.43,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 19,
+        "pipelines": {
+          "discovery": {
+            "pages": 32,
+            "listings": 0,
+            "pages_per_s": 0.087,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 6,
+            "listings": 0,
+            "pages_per_s": 0.016,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "remax": {
+        "pages": 25,
+        "listings": 44,
+        "pages_per_s": 0.068,
+        "listings_per_s": 0.12,
+        "ok": 25,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 3,
+        "list_to_detail": 8.33,
+        "fetch_ms_p50": 5013.14,
+        "fetch_ms_p95": 5033.79,
+        "fetch_ms_p99": 5035.09,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 4.11,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 6,
+        "pipelines": {
+          "discovery": {
+            "pages": 20,
+            "listings": 30,
+            "pages_per_s": 0.054,
+            "listings_per_s": 0.082
+          },
+          "monitor": {
+            "pages": 5,
+            "listings": 14,
+            "pages_per_s": 0.014,
+            "listings_per_s": 0.038
+          }
+        }
+      },
+      "sreality": {
+        "pages": 1638,
+        "listings": 20207,
+        "pages_per_s": 4.461,
+        "listings_per_s": 55.028,
+        "ok": 1626,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 12,
+        "error_rate": 0.0,
+        "detail_fetches": 1,
+        "list_to_detail": 1638.0,
+        "fetch_ms_p50": 257.14,
+        "fetch_ms_p95": 5009.43,
+        "fetch_ms_p99": 5030.64,
+        "parse_ms_p50": 1.19,
+        "parse_ms_p95": 4.48,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 100.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 1499,
+        "pipelines": {
+          "discovery": {
+            "pages": 196,
+            "listings": 3672,
+            "pages_per_s": 0.534,
+            "listings_per_s": 10.0
+          },
+          "monitor": {
+            "pages": 2,
+            "listings": 42,
+            "pages_per_s": 0.005,
+            "listings_per_s": 0.114
+          },
+          "deep": {
+            "pages": 1440,
+            "listings": 16493,
+            "pages_per_s": 3.921,
+            "listings_per_s": 44.914
+          }
+        }
+      },
+      "ulovdomov": {
+        "pages": 10,
+        "listings": 0,
+        "pages_per_s": 0.027,
+        "listings_per_s": 0.0,
+        "ok": 0,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 10,
+        "deferred": 0,
+        "error_rate": 1.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 628.66,
+        "fetch_ms_p95": 805.46,
+        "fetch_ms_p99": 805.46,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 0.0,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": null,
+        "last_modified_pct": null,
+        "header_samples": 0,
+        "pipelines": {
+          "discovery": {
+            "pages": 8,
+            "listings": 0,
+            "pages_per_s": 0.022,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 2,
+            "listings": 0,
+            "pages_per_s": 0.005,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "unknown": {
+        "pages": 0,
+        "listings": 0,
+        "pages_per_s": 0.0,
+        "listings_per_s": 0.0,
+        "ok": 0,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": null,
+        "fetch_ms_p95": null,
+        "fetch_ms_p99": null,
+        "parse_ms_p50": null,
+        "parse_ms_p95": null,
+        "upsert_ms_p50": 22.69,
+        "upsert_ms_p95": 53.37,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": null,
+        "last_modified_pct": null,
+        "header_samples": 0,
+        "pipelines": {}
+      }
+    }
+  },
+  "last_error": null,
+  "vs_baseline": {
+    "pages_per_s": {
+      "now": 5.55,
+      "base": 7.111,
+      "delta_pct": -22.0
+    },
+    "listings_per_s": {
+      "now": 58.413,
+      "base": 78.467,
+      "delta_pct": -25.6
+    },
+    "coverage_cycle_h_measured": {
+      "now": 0.33,
+      "base": 0.24,
+      "delta_pct": 37.5
+    },
+    "watchdog_p95_ms": {
+      "now": 2.2,
+      "base": 2.0,
+      "delta_pct": 10.0
+    },
+    "portals": {
+      "annonce": {
+        "pages_per_s": {
+          "now": 0.044,
+          "base": 0.034,
+          "delta_pct": 29.4
+        },
+        "listings_per_s": {
+          "now": 0.163,
+          "base": 0.254,
+          "delta_pct": -35.8
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 3.06,
+          "base": 6.14,
+          "delta_pct": -50.2
+        }
+      },
+      "bazos": {
+        "pages_per_s": {
+          "now": 0.103,
+          "base": 0.099,
+          "delta_pct": 4.0
+        },
+        "listings_per_s": {
+          "now": 1.089,
+          "base": 1.099,
+          "delta_pct": -0.9
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 10.45,
+          "base": 1.84,
+          "delta_pct": 467.9
+        }
+      },
+      "bezrealitky": {
+        "pages_per_s": {
+          "now": 0.251,
+          "base": 0.746,
+          "delta_pct": -66.4
+        },
+        "listings_per_s": {
+          "now": 0.735,
+          "base": 6.025,
+          "delta_pct": -87.8
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 0.19,
+          "base": 0.5,
+          "delta_pct": -62.0
+        }
+      },
+      "ceskereality": {
+        "pages_per_s": {
+          "now": 0.044,
+          "base": 0.034,
+          "delta_pct": 29.4
+        },
+        "listings_per_s": {
+          "now": 0.016,
+          "base": 0.025,
+          "delta_pct": -36.0
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 3.21,
+          "base": 6.6,
+          "delta_pct": -51.4
+        }
+      },
+      "idnes": {
+        "pages_per_s": {
+          "now": 0.346,
+          "base": 0.275,
+          "delta_pct": 25.8
+        },
+        "listings_per_s": {
+          "now": 1.261,
+          "base": 0.983,
+          "delta_pct": 28.3
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 2399.18,
+          "base": 2318.23,
+          "delta_pct": 3.5
+        }
+      },
+      "mmreality": {
+        "pages_per_s": {
+          "now": 0.103,
+          "base": 0.169,
+          "delta_pct": -39.1
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 7.89,
+          "base": 7.61,
+          "delta_pct": 3.7
+        }
+      },
+      "realitycz": {
+        "pages_per_s": {
+          "now": 0.103,
+          "base": 0.169,
+          "delta_pct": -39.1
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.2625,
+          "delta_pct": -100.0
+        },
+        "parse_ms_p95": {
+          "now": 2.43,
+          "base": 5.51,
+          "delta_pct": -55.9
+        }
+      },
+      "remax": {
+        "pages_per_s": {
+          "now": 0.068,
+          "base": 0.034,
+          "delta_pct": 100.0
+        },
+        "listings_per_s": {
+          "now": 0.12,
+          "base": 0.178,
+          "delta_pct": -32.6
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 4.11,
+          "base": 6.96,
+          "delta_pct": -40.9
+        }
+      },
+      "sreality": {
+        "pages_per_s": {
+          "now": 4.461,
+          "base": 5.534,
+          "delta_pct": -19.4
+        },
+        "listings_per_s": {
+          "now": 55.028,
+          "base": 69.905,
+          "delta_pct": -21.3
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 4.48,
+          "base": 3.17,
+          "delta_pct": 41.3
+        }
+      },
+      "ulovdomov": {
+        "pages_per_s": {
+          "now": 0.027,
+          "base": 0.017,
+          "delta_pct": 58.8
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 1.0,
+          "base": 1.0,
+          "delta_pct": 0.0
+        },
+        "parse_ms_p95": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        }
+      },
+      "unknown": {
+        "pages_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": null,
+          "base": null,
+          "delta_pct": null
+        }
+      }
+    }
+  }
+}

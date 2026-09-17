@@ -110,6 +110,7 @@
   }
 
   function portalIcon(portal) {
+    if (typeof window.portalIconOf === "function") return window.portalIconOf(portal);
     const key = String(portal || "")
       .toLowerCase()
       .normalize("NFD")

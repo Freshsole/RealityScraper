@@ -17,6 +17,7 @@ from app import billing as stripe_billing
 from app import config
 from app import whatsapp as wa_notify
 from app.store import Store, local_day_start
+from app.sources import PORTAL_LABELS, PORTAL_ORDER
 
 ADMIN_COOKIE = "realitify_admin"
 DEMO = "demo"
@@ -1372,13 +1373,11 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             "SELECT IFNULL(portal,'neznámý') AS portal, COUNT(*) n, MAX(last_seen) seen FROM catalog_listings WHERE IFNULL(gone,0)=0 GROUP BY portal"
         ):
             name = str(row["portal"] or "neznámý")
-            portals[name] = {"name": name.title() if name != "sreality" else "Sreality", "n": int(row["n"]), "seen": row["seen"]}
-    if "bezrealitky" in portals:
-        portals["bezrealitky"]["name"] = "Bezrealitky"
-    if "idnes" in portals:
-        portals["idnes"]["name"] = "Reality.iDNES"
-    if "bazos" in portals:
-        portals["bazos"]["name"] = "Bazoš"
+            portals[name] = {
+                "name": PORTAL_LABELS.get(name, name.title() if name != "sreality" else "Sreality"),
+                "n": int(row["n"]),
+                "seen": row["seen"],
+            }
     for item in live_jobs:
         portal = str(item.get("portal") or "")
         if portal not in portals:
@@ -1465,7 +1464,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         prev = by_portal.get(portal)
         if not prev or stamp > (prev.get("finished_at") or prev.get("started_at") or ""):
             by_portal[portal] = item
-    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
+    titles = dict(PORTAL_LABELS)
     all_scrape_ticks = store.list_scrape_ticks(limit=120)
     # Deep runs much more often than discovery/monitor checks. Keep the admin
     # history representative instead of letting deep rows hide both priorities.
@@ -1482,8 +1481,8 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     latest_tick = all_scrape_ticks[0] if all_scrape_ticks else None
     tick_at = str((latest_tick or {}).get("at") or "")
     tick_ok = bool(latest_tick) and not bool((latest_tick or {}).get("error"))
-    seen_portals = set(by_portal) | {key for key in portals if key in titles}
-    for portal in sorted(seen_portals, key=lambda key: titles.get(key, key)):
+    seen_portals = set(by_portal) | {key for key in portals if key in titles} | set(PORTAL_ORDER)
+    for portal in sorted(seen_portals, key=lambda key: (PORTAL_ORDER.index(key) if key in PORTAL_ORDER else 99, titles.get(key, key))):
         title = titles.get(portal, portal.title())
         item = by_portal.get(portal)
         # Minute Sreality discovery ticks are the source of truth; monitor_live jobs go stale.

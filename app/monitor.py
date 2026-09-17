@@ -4,7 +4,6 @@ import asyncio
 import json
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,8 +12,8 @@ from app import push as web_push
 from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
-from app.sources import client_for, source_name
-from app.catalog_sync import daily_shards, listing_is_new_for_monitor, sreality_recent_shards
+from app.sources import PORTAL_LABELS, client_for, source_name
+from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_shards
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
@@ -35,6 +34,7 @@ class Hub:
         self._discord_task: asyncio.Task[None] | None = None
         self._coords_task: asyncio.Task[None] | None = None
         self._dedupe_task: asyncio.Task[None] | None = None
+        self._prune_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.catalog_running_portals: set[str] = set()
         self._recent_shard_idx = 0
@@ -46,16 +46,19 @@ class Hub:
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
-        from app.scrape_engine import AdaptiveLimiter, ScrapeEngine
+        from app.scrape_engine import LimiterRegistry, ScrapeEngine
+        from app.perf_diag import CountedPool
 
-        self._scrape_limiter = AdaptiveLimiter()
-        self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
+        self._scrape_registry = LimiterRegistry()
+        self._monitor_engine = ScrapeEngine(
+            registry=self._scrape_registry, priority=0, pipeline="monitor"
+        )
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
-        self.ui_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-ui")
-        self.auth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-auth")
-        self.job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-job")
+        self.ui_pool = CountedPool(max_workers=4, thread_name_prefix="rf-ui", pool_name="ui")
+        self.auth_pool = CountedPool(max_workers=2, thread_name_prefix="rf-auth", pool_name="auth")
+        self.job_pool = CountedPool(max_workers=2, thread_name_prefix="rf-job", pool_name="job")
 
     def client_for(self, search_url: str):
         client = self.clients.get(search_url)
@@ -130,8 +133,18 @@ class Hub:
 
         return await asyncio.get_running_loop().run_in_executor(self.job_pool, _call)
 
+    async def _flush_scrape_metrics(self) -> None:
+        from app.scrape_timing import drain, enabled
+
+        if not enabled():
+            return
+        rows = drain()
+        if rows:
+            await self._job_db(self.store.insert_scrape_metrics, rows)
+
     async def _record_tick(self, tick: dict[str, Any]) -> None:
         """Serialize tick metadata off the event loop and retry transient writers."""
+        await self._flush_scrape_metrics()
         def _call() -> None:
             for attempt in range(5):
                 try:
@@ -168,9 +181,11 @@ class Hub:
             )
             self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
             self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
+            self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
         elif role == "web":
             # Digests only — listing polls / catalog / sold run in scrape_worker.
             self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
+            self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
         if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
             from app.discord_bot import run_discord_bot
@@ -205,6 +220,7 @@ class Hub:
                 self._discord_task,
                 self._coords_task,
                 self._dedupe_task,
+                self._prune_task,
             )
             if task is not None
         ]
@@ -221,6 +237,7 @@ class Hub:
         self._discord_task = None
         self._coords_task = None
         self._dedupe_task = None
+        self._prune_task = None
 
     async def close(self) -> None:
         await self.stop()
@@ -233,6 +250,28 @@ class Hub:
             except (asyncio.TimeoutError, Exception):
                 pass
         self.clients.clear()
+
+    async def _prune_loop(self) -> None:
+        await asyncio.sleep(20)
+        while self.running:
+            try:
+                await self._prune_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(86400)
+            except asyncio.CancelledError:
+                raise
+
+    async def _prune_tick(self) -> None:
+        dry = await asyncio.to_thread(self.store.prune_perf_data, dry_run=True)
+        self.store.set_meta("prune_perf_dry", json.dumps(dry))
+        if config.PRUNE_APPLY:
+            applied = await asyncio.to_thread(self.store.prune_perf_data, dry_run=False)
+            self.store.set_meta("prune_perf_last", utc_now())
+            self.store.set_meta("prune_perf_applied", json.dumps(applied))
 
     async def _loop(self) -> None:
         await asyncio.sleep(1)
@@ -515,6 +554,31 @@ class Hub:
                 )
             raise
 
+    async def _timed_detail(self, client, listing: Listing, reason: str) -> Listing:
+        from app.scrape_timing import log_row
+        from app.sources import portal_of
+
+        started = time.monotonic()
+        result = await client.fetch_detail(listing)
+        log_row(
+            {
+                "kind": "detail",
+                "portal": portal_of(getattr(listing, "url", "") or ""),
+                "pipeline": "monitor",
+                "shard_key": reason,
+                "page": 0,
+                "fetch_ms": round((time.monotonic() - started) * 1000.0, 2),
+                "parse_ms": None,
+                "upsert_ms": None,
+                "listings_count": 1,
+                "status_code": 200,
+                "limiter_at_call": None,
+                "error": None,
+                "deferred": 0,
+            }
+        )
+        return result
+
     async def _classify(
         self,
         client,
@@ -522,7 +586,7 @@ class Hub:
         prev: dict[str, Any] | None,
     ) -> Listing | None:
         if prev is None:
-            listing = await client.fetch_detail(listing)
+            listing = await self._timed_detail(client, listing, "new")
             if is_recently_created(listing.created_on, config.NEW_MAX_AGE_DAYS):
                 listing.kind = "new"
                 listing.changes = detail_price_change(listing)
@@ -536,7 +600,7 @@ class Hub:
 
         price_changes = snapshot_price_change(prev, listing)
         if price_changes:
-            listing = await client.fetch_detail(listing)
+            listing = await self._timed_detail(client, listing, "changed")
             listing.kind = "changed"
             listing.changes = merge_price_changes(price_changes, detail_price_change(listing))
             return listing
@@ -777,12 +841,7 @@ class Hub:
             if portal not in config.CATALOG_SYNC_HOURS:
                 return {"ok": False, "error": "Neznámý portál"}
             payload["portal"] = portal
-            payload["label"] = {
-                "sreality": "Sreality",
-                "bezrealitky": "Bezrealitky",
-                "idnes": "Reality.iDNES",
-                "bazos": "Bazoš",
-            }.get(portal, portal)
+            payload["label"] = PORTAL_LABELS.get(portal, portal)
         else:
             cleaned = normalize_search_url(str(job.get("url") or ""))
             if not cleaned:
@@ -853,6 +912,7 @@ class Hub:
                 totals["deferred_write"] = len(listings) - offset
                 break
             chunk = listings[offset : offset + chunk_size]
+            t_up = time.monotonic()
             async with self._catalog_write:
                 part = await self._job_db(
                     self.store.upsert_catalog_listings_batch,
@@ -861,6 +921,25 @@ class Hub:
                     commit_every=chunk_size,
                     fast=True,
                 )
+            from app.scrape_timing import log_row
+
+            log_row(
+                {
+                    "kind": "upsert",
+                    "portal": "",
+                    "pipeline": kind,
+                    "shard_key": "",
+                    "page": 0,
+                    "fetch_ms": None,
+                    "parse_ms": None,
+                    "upsert_ms": round((time.monotonic() - t_up) * 1000.0, 2),
+                    "listings_count": len(chunk),
+                    "status_code": None,
+                    "limiter_at_call": None,
+                    "error": None,
+                    "deferred": 0,
+                }
+            )
             for key in ("n", "new", "updated", "same"):
                 totals[key] += int(part.get(key) or 0)
             # Let pending minute ticks acquire the write lock.
@@ -889,8 +968,8 @@ class Hub:
         ), None
 
     def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
-        """Rotate through full Sreality shards without synchronous DB writes."""
-        deep = [item for item in daily_shards() if item.get("portal") == "sreality"]
+        """Rotate through full-market shards (all portals) without synchronous DB writes."""
+        deep = daily_shards()
         if not deep:
             return []
         n = max(1, min(len(deep), int(take or config.SCRAPE_DEEP_SHARDS_PER_TICK)))
@@ -904,12 +983,12 @@ class Hub:
         """High-priority NewDiscovery; never waits for rolling deep."""
         from app.scrape_engine import ScrapeEngine
 
-        recent = sreality_recent_shards()
+        recent = recent_shards()
         if not recent:
             return
 
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=1)
+        engine = ScrapeEngine(registry=self._scrape_registry, priority=1, pipeline="discovery")
         disc_stats = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
         disc_listings: list[Listing] = []
         disc_pages = 0
@@ -966,7 +1045,7 @@ class Hub:
                 "write_skipped": bool(write_note) and not disc_listings,
             },
             "refresh": {},
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         try:
             await self._record_tick(tick)
@@ -988,7 +1067,7 @@ class Hub:
         if not deep:
             return
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=2)
+        engine = ScrapeEngine(registry=self._scrape_registry, priority=2, pipeline="deep")
         listings: list[Listing] = []
         pages_ok = 0
         deferred = 0
@@ -1050,7 +1129,7 @@ class Hub:
                 "coverage_pct": coverage_pct,
                 "notified": 0,
             },
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         await self._record_tick(tick)
         print(
@@ -1070,13 +1149,15 @@ class Hub:
             return {"ok": False, "error": "Chybí URL hledání"}
         pages = max(1, min(200, int(max_pages or 40)))
         client = self.client_for(cleaned)
-        engine = ScrapeEngine()
+        engine = ScrapeEngine(registry=self._scrape_registry, pipeline="manual")
         started = time.monotonic()
         result = await engine.fetch_pages_parallel(
             shard_key=f"manual:{portal_of(cleaned)}:{cleaned[:80]}",
             fetch_page=lambda p: client.fetch_page(p, newest=True),
             max_pages=pages,
             deadline_monotonic=time.monotonic() + max(30.0, float(config.SCRAPE_FULL_MARKET_DEADLINE_SEC)),
+            portal=portal_of(cleaned),
+            search_url=cleaned,
         )
         listings = list(result.listings)
         stats = {"n": 0, "new": 0, "updated": 0, "same": 0}
@@ -1098,7 +1179,7 @@ class Hub:
                 "total": result.total,
             },
             "refresh": {"listings": 0, "shards": 0, "notified": 0},
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         await self._job_db(self.store.record_scrape_tick, tick)
         return {
@@ -1392,7 +1473,7 @@ class Hub:
         try:
             from app.scrape_engine import ScrapeEngine
 
-            engine = ScrapeEngine()
+            engine = ScrapeEngine(pipeline="catalog_sync")
             needed: int | None = None
             while page <= 400:
                 window = max(1, engine.limiter.limit)

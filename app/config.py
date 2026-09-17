@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -64,6 +65,11 @@ if SCRAPE_ROLE not in {"all", "web", "worker"}:
     SCRAPE_ROLE = "all"
 SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
 SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))
+# Hard cap across all portals. Per-portal ceilings cannot exceed this in aggregate.
+SCRAPE_GLOBAL_CONCURRENCY = max(
+    SCRAPE_CONCURRENCY,
+    min(128, int(os.getenv("SCRAPE_GLOBAL_CONCURRENCY", str(SCRAPE_CONCURRENCY + 8)))),
+)
 SCRAPE_RECENT_PAGES = max(1, min(10, int(os.getenv("SCRAPE_RECENT_PAGES", "4"))))
 SCRAPE_DISCOVERY_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DISCOVERY_DEADLINE_SEC", "50")))
 SCRAPE_MONITOR_DEADLINE_SEC = max(20, int(os.getenv("SCRAPE_MONITOR_DEADLINE_SEC", "55")))
@@ -74,8 +80,34 @@ SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int(os.getenv("SCRAPE_DEEP_SHARDS_P
 SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "20"))))
 SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40")))
 SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
+# 1 = refresh also writes listings/events/photos (legacy). 0 = catalog_listings + listing_links only.
+REFRESH_WRITES_FULL_ROW = os.getenv("REFRESH_WRITES_FULL_ROW", "1").strip().lower() in {"1", "true", "yes"}
+EVENTS_TTL_DAYS = max(7, int(os.getenv("EVENTS_TTL_DAYS", "30")))
+LISTING_PHOTOS_CAP = max(1, min(40, int(os.getenv("LISTING_PHOTOS_CAP", "8"))))
+FACETS_CACHE_SEC = max(30, int(os.getenv("FACETS_CACHE_SEC", "600")))
+PRUNE_APPLY = os.getenv("PRUNE_APPLY", "0").strip().lower() in {"1", "true", "yes"}
 SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD", "8")))
 SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
+# Per-page scrape_metrics_log + parse/fetch split. Off in production.
+SCRAPE_METRICS_DETAIL = os.getenv("SCRAPE_METRICS_DETAIL", "0").strip().lower() in {"1", "true", "yes"}
+# JSON dict of portal → concurrency ceiling, e.g. '{"sreality":24,"mmreality":4}'
+_raw_scrape_overrides = (os.getenv("SCRAPE_CONCURRENCY_OVERRIDES", "") or "").strip()
+try:
+    SCRAPE_CONCURRENCY_OVERRIDES = {
+        str(key).strip().lower(): max(1, min(64, int(value)))
+        for key, value in (json.loads(_raw_scrape_overrides) if _raw_scrape_overrides else {}).items()
+    }
+except (json.JSONDecodeError, TypeError, ValueError):
+    SCRAPE_CONCURRENCY_OVERRIDES = {}
+# Split connect/read so they cannot stack into 50s+ zombie waits.
+# Successful Sreality/Bazos fetches are typically <1s; 8s is ~10× that p95.
+SCRAPE_HTTP_CONNECT_TIMEOUT = max(1.0, min(15.0, float(os.getenv("SCRAPE_HTTP_CONNECT_TIMEOUT", "5"))))
+SCRAPE_HTTP_TIMEOUT = max(2.0, min(30.0, float(os.getenv("SCRAPE_HTTP_TIMEOUT", "8"))))
+# List-crawl attempts per request (1 = no retry). 403/500 will not improve on retry.
+SCRAPE_HTTP_RETRIES = max(1, min(3, int(os.getenv("SCRAPE_HTTP_RETRIES", "1"))))
+SCRAPE_PORTAL_FAILS_TO_DISABLE = max(2, min(20, int(os.getenv("SCRAPE_PORTAL_FAILS_TO_DISABLE", "5"))))
+SCRAPE_PORTAL_COOLDOWN_SEC = max(30, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_SEC", str(15 * 60))))
+SCRAPE_PORTAL_COOLDOWN_CAP_SEC = max(SCRAPE_PORTAL_COOLDOWN_SEC, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_CAP_SEC", str(60 * 60))))
 
 
 def _hour_env(name: str, default: int) -> int:
@@ -88,6 +120,12 @@ CATALOG_SYNC_HOURS = {
     "bezrealitky": _hour_env("CATALOG_SYNC_HOUR_BEZREALITKY", 2),
     "idnes": _hour_env("CATALOG_SYNC_HOUR_IDNES", 3),
     "bazos": _hour_env("CATALOG_SYNC_HOUR_BAZOS", 4),
+    "ceskereality": _hour_env("CATALOG_SYNC_HOUR_CESKEREALITY", 5),
+    "annonce": _hour_env("CATALOG_SYNC_HOUR_ANNONCE", 6),
+    "mmreality": _hour_env("CATALOG_SYNC_HOUR_MMREALITY", 7),
+    "ulovdomov": _hour_env("CATALOG_SYNC_HOUR_ULOVDOMOV", 8),
+    "remax": _hour_env("CATALOG_SYNC_HOUR_REMAX", 9),
+    "realitycz": _hour_env("CATALOG_SYNC_HOUR_REALITYCZ", 10),
 }
 IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
 BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")

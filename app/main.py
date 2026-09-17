@@ -60,8 +60,19 @@ async def maybe_auto_update() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    print(f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE}", flush=True)
+    print(
+        f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE} scrape_role={config.SCRAPE_ROLE}",
+        flush=True,
+    )
+    from app import perf_diag
+
+    perf_diag.install_default_executor()
+    if perf_diag.ENABLED:
+        asyncio.create_task(perf_diag.watchdog(), name="perf-watchdog")
     await hub.start()
+    from app import games as marketing_games
+
+    marketing_games.schedule_pool_refresh(hub.store)
     if config.ON_RAILWAY and not config.PERSISTENT_STORAGE:
         hub.last_error = (
             "Databáze není na Railway Volume. Po každém deployi se smaže účet. "
@@ -78,6 +89,13 @@ async def lifespan(_app: FastAPI):
             os._exit(130)
 
         threading.Thread(target=_force_exit, name="shutdown-watchdog", daemon=True).start()
+        try:
+            from app import discord_notify, places
+
+            await asyncio.wait_for(places.aclose(), timeout=1.0)
+            await asyncio.wait_for(discord_notify.aclose(), timeout=1.0)
+        except Exception:
+            pass
         try:
             await asyncio.wait_for(hub.close(), timeout=2.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
@@ -105,9 +123,19 @@ async def record_ops_timing(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception:
-        admin_panel.record_api_sample((time.perf_counter() - started) * 1000, False)
+        ms = (time.perf_counter() - started) * 1000
+        admin_panel.record_api_sample(ms, False)
+        from app import perf_diag
+
+        perf_diag.record_request(path, request.method, 500, ms, thread=threading.current_thread().name)
         raise
-    admin_panel.record_api_sample((time.perf_counter() - started) * 1000, response.status_code < 500)
+    ms = (time.perf_counter() - started) * 1000
+    admin_panel.record_api_sample(ms, response.status_code < 500)
+    from app import perf_diag
+
+    perf_diag.record_request(path, request.method, response.status_code, ms, thread=threading.current_thread().name)
+    if ms >= 200:
+        response.headers["X-Perf-Ms"] = f"{ms:.0f}"
     return response
 
 
@@ -152,6 +180,10 @@ def _client_ip(request: Request) -> str:
     if forwarded:
         return forwarded[:64]
     return ((request.client.host if request.client else "") or "")[:64]
+
+
+async def _auth_db(fn, *args):
+    return await asyncio.get_running_loop().run_in_executor(hub.auth_pool, fn, *args)
 
 
 @app.middleware("http")
@@ -270,6 +302,24 @@ def stories() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+def games_hub() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry.html")
+
+
+def game_higher() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-vyssi-nizsi.html")
+
+
+def game_rent() -> HTMLResponse:
+    from app.site_pages import site_page
+
+    return site_page("hry-najem.html")
+
+
 def story_article() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -298,6 +348,9 @@ app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_sche
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry", games_hub, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry/vyssi-nizsi", game_higher, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hry/najem", game_rent, methods=["GET"], include_in_schema=False)
 app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
 app.add_api_route("/registrace", auth_register, methods=["GET"], include_in_schema=False)
 app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=False)
@@ -350,7 +403,8 @@ async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None
 async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
     try:
-        user, token = user_account.register(
+        user, token = await _auth_db(
+            user_account.register,
             hub.store,
             str(body.get("name") or ""),
             str(body.get("email") or ""),
@@ -372,7 +426,12 @@ async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict
 async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
     try:
-        user, token = user_account.login(hub.store, str(body.get("email") or ""), str(body.get("password") or ""))
+        user, token = await _auth_db(
+            user_account.login,
+            hub.store,
+            str(body.get("email") or ""),
+            str(body.get("password") or ""),
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     response = JSONResponse(user)
@@ -382,7 +441,7 @@ async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 @app.post("/api/auth/logout")
 async def auth_logout_api() -> dict:
-    user_account.clear_session(hub.store)
+    await _auth_db(user_account.clear_session, hub.store)
     response = JSONResponse({"ok": True})
     response.delete_cookie(user_account.SESSION_COOKIE, path="/")
     return response
@@ -390,7 +449,7 @@ async def auth_logout_api() -> dict:
 
 @app.get("/api/auth/me")
 async def auth_me(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    return _current_user(realitify_session)
+    return await _auth_db(_current_user, realitify_session)
 
 
 def _extension_session(request: Request, cookie: str | None) -> str | None:
@@ -500,9 +559,9 @@ async def extension_ingest(
         native = ext_score.extract_sreality_id(url)
         try:
             listing = await client.fetch_listing_url(url)
-            from app.places import refine_listing_location
+            from app.places import refine_listing_location_async
 
-            refine_listing_location(listing)
+            await refine_listing_location_async(listing)
             await asyncio.to_thread(hub.store.upsert_catalog_listing, listing, kind="extension")
             if listing.id:
                 ext_score.invalidate_scores(str(listing.id))
@@ -650,6 +709,14 @@ async def admin_broadcast(
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     await asyncio.to_thread(_admin_user, realitify_admin)
     return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+
+
+@app.get("/api/admin/games")
+async def admin_games(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    from app import games as marketing_games
+
+    await asyncio.to_thread(_admin_user, realitify_admin)
+    return await asyncio.to_thread(marketing_games.leaderboard, hub.store)
 
 
 @app.post("/api/admin/scrape-url")
@@ -947,6 +1014,19 @@ async def status() -> dict:
     return await asyncio.to_thread(hub.status)
 
 
+@app.get("/api/perf/diag")
+async def perf_diag_snapshot() -> dict:
+    from app import perf_diag
+
+    payload = perf_diag.snapshot()
+    try:
+        payload["scrape_tick"] = hub.store.get_meta("scrape_worker_tick")
+    except Exception:
+        payload["scrape_tick"] = None
+    payload["scrape_role"] = config.SCRAPE_ROLE
+    return payload
+
+
 @app.get("/api/version")
 async def version() -> dict:
     return await version_info()
@@ -1224,12 +1304,63 @@ async def public_guest_search_start(request: Request) -> JSONResponse:
 
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
-    return {"items": hub.store.public_gone_fast_rentals(days=3, limit=4)}
+    items = await asyncio.to_thread(hub.store.public_gone_fast_rentals, days=3, limit=4)
+    return {"items": items}
+
+
+@app.get("/api/public/games/higher-lower")
+async def public_game_higher_lower() -> dict:
+    from app import games as marketing_games
+
+    # Memory/seed only — catalog refresh is background and must not delay the response.
+    marketing_games.schedule_pool_refresh(hub.store)
+    return await asyncio.to_thread(marketing_games.higher_lower_pair, hub.store)
+
+
+@app.get("/api/public/games/rent-round")
+async def public_game_rent_round() -> dict:
+    from app import games as marketing_games
+
+    marketing_games.schedule_pool_refresh(hub.store)
+    payload = await asyncio.to_thread(marketing_games.rent_round, hub.store)
+    return {"round_id": payload["round_id"], "items": payload["items"]}
+
+
+@app.post("/api/public/games/rent-score")
+async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) -> dict:
+    from app import games as marketing_games
+
+    body = payload or {}
+    guesses = body.get("guesses") or []
+    if not isinstance(guesses, list) or len(guesses) < 1:
+        raise HTTPException(400, "Chybí tipy")
+    ids = [str(item.get("id") or "") for item in guesses if isinstance(item, dict)]
+    found = await asyncio.to_thread(marketing_games.lookup_prices, hub.store, ids)
+    items = [found[key] for key in ids if key in found]
+    if len(items) < 1:
+        raise HTTPException(400, "Neznámé byty")
+    scored = marketing_games.score_round(items, [item for item in guesses if isinstance(item, dict)])
+    saved = await asyncio.to_thread(
+        marketing_games.save_rent_round,
+        hub.store,
+        player_name=str(body.get("name") or ""),
+        scored=scored,
+    )
+    return {
+        "ok": True,
+        "id": saved["id"],
+        "player_name": saved["player_name"],
+        "score": scored["score"],
+        "max_score": scored["max_score"],
+        "accuracy": scored["accuracy"],
+        "items": scored["items"],
+    }
 
 
 @app.get("/api/listings")
 async def listings() -> dict:
-    return {"items": hub.store.recent_notified(24)}
+    items = await asyncio.to_thread(hub.store.recent_notified, 24)
+    return {"items": items}
 
 
 def _catalog_filters(
@@ -1267,7 +1398,8 @@ def _catalog_filters(
     limit: int = 36,
     offset: int = 0,
     pins_only: bool = False,
-    include_pins: str = "1",
+    include_pins: str = "0",
+    facets: str = "1",
 ) -> dict[str, Any]:
     payload = {
         "portal": portal,
@@ -1304,6 +1436,7 @@ def _catalog_filters(
         "limit": limit,
         "offset": offset,
         "include_pins": include_pins,
+        "facets": facets,
     }
     if pins_only:
         payload["pins_only"] = True
@@ -1353,7 +1486,8 @@ async def catalog(
     sort: str = "newest",
     limit: int = 36,
     offset: int = 0,
-    include_pins: str = "1",
+    include_pins: str = "0",
+    facets: str = "1",
 ) -> dict:
     payload = await place_geo.attach_geoms(
         _catalog_filters(
@@ -1391,6 +1525,7 @@ async def catalog(
             limit=limit,
             offset=offset,
             include_pins=include_pins,
+            facets=facets,
         )
     )
     return await _run_catalog_query(payload)
@@ -1474,7 +1609,9 @@ async def catalog_item(
     listing_key: str = "",
     url: str = "",
 ) -> dict:
-    item = hub.store.catalog_item(monitor_id, id, listing_key=listing_key, url=url)
+    item = await asyncio.to_thread(
+        hub.store.catalog_item, monitor_id, id, listing_key, url
+    )
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
     source_url = item.get("url") or url
@@ -1483,14 +1620,28 @@ async def catalog_item(
             listing = _listing_from_catalog_dict(item)
             listing.photos = []
             listing = await hub.client_for(source_url).fetch_detail(listing)
-            from app.places import refine_listing_location
+            from app.places import refine_listing_location_async
 
-            refine_listing_location(listing)
-            hub.store.save_listing_enrichment(item["monitor_id"], listing)
-            item = hub.store.catalog_item(item["monitor_id"], item["id"], listing_key=item.get("listing_key") or "", url=source_url) or item
+            await refine_listing_location_async(listing)
+
+            def _enrich() -> dict:
+                hub.store.save_listing_enrichment(item["monitor_id"], listing)
+                return (
+                    hub.store.catalog_item(
+                        item["monitor_id"],
+                        item["id"],
+                        listing_key=item.get("listing_key") or "",
+                        url=source_url,
+                    )
+                    or item
+                )
+
+            item = await asyncio.to_thread(_enrich)
         except ListingGone:
             await hub.notify_sold(hub.store.get_monitor(item["monitor_id"]), item["id"])
-            item = hub.store.catalog_item(item["monitor_id"], item["id"], url=source_url) or item
+            item = await asyncio.to_thread(
+                hub.store.catalog_item, item["monitor_id"], item["id"], url=source_url
+            ) or item
         except Exception:
             pass
     return item
@@ -1499,27 +1650,30 @@ async def catalog_item(
 @app.post("/api/catalog/user")
 async def save_listing_user(payload: dict[str, Any]) -> dict:
     try:
-        return hub.store.set_listing_user(payload.get("url") or "", payload.get("status"), payload.get("note"))
+        return await asyncio.to_thread(
+            hub.store.set_listing_user, payload.get("url") or "", payload.get("status"), payload.get("note")
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/settings")
 async def get_settings() -> dict:
-    return hub.store.app_settings()
+    return await asyncio.to_thread(hub.store.app_settings)
 
 
 @app.post("/api/settings")
 async def save_settings(payload: dict[str, Any]) -> dict:
     try:
-        return hub.store.save_app_settings(payload)
+        return await asyncio.to_thread(hub.store.save_app_settings, payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/monitors")
 async def list_monitors() -> dict:
-    return {"items": hub.store.list_monitors()}
+    items = await asyncio.to_thread(hub.store.list_monitors)
+    return {"items": items}
 
 
 @app.post("/api/monitors")
@@ -1591,46 +1745,29 @@ async def delete_template(template_id: str) -> dict:
 
 
 def _filter_mod(source: str | None = None, url: str = ""):
-    raw = (source or "").lower()
-    lowered = (url or "").lower()
-    if raw == "idnes" or "idnes.cz" in lowered:
-        return idnes_url
-    if raw == "bazos" or "bazos" in lowered:
-        return bazos_url
-    if raw == "bezrealitky" or "bezrealitky.cz" in lowered:
-        return bezrealitky_url
-    return url_builder
+    from app.sources import url_mod_for
+
+    return url_mod_for(source, url or "")
 
 
 @app.get("/api/filters/catalog")
 async def filter_catalog() -> dict:
+    from app.sources import PORTALS
+
+    sources = {}
+    for spec in PORTALS:
+        sources[spec.id] = {
+            "catalog": spec.urls.catalog(),
+            "defaults": spec.urls.default_filters(),
+            "sample": spec.urls.sample_filters(),
+        }
     payload = {
         "locality_map": localities.catalog_map(),
         "catalog": url_builder.catalog(),
         "defaults": url_builder.default_filters(),
         "sample": url_builder.sample_filters(),
-        "sources": {
-            "sreality": {
-                "catalog": url_builder.catalog(),
-                "defaults": url_builder.default_filters(),
-                "sample": url_builder.sample_filters(),
-            },
-            "bezrealitky": {
-                "catalog": bezrealitky_url.catalog(),
-                "defaults": bezrealitky_url.default_filters(),
-                "sample": bezrealitky_url.sample_filters(),
-            },
-            "idnes": {
-                "catalog": idnes_url.catalog(),
-                "defaults": idnes_url.default_filters(),
-                "sample": idnes_url.sample_filters(),
-            },
-            "bazos": {
-                "catalog": bazos_url.catalog(),
-                "defaults": bazos_url.default_filters(),
-                "sample": bazos_url.sample_filters(),
-            },
-        },
+        "sources": sources,
+        "portals": [{"id": spec.id, "label": spec.label} for spec in PORTALS],
     }
     return payload
 

@@ -3,33 +3,37 @@ from __future__ import annotations
 import asyncio
 import html as html_lib
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
+from app.html_listing import PRICE_RE, clean as _clean, extract_listing_html
 from app.sreality import Listing, ListingGone, format_price
 
 SITE = "https://reality.bazos.cz"
 PAGE_SIZE = 20
 CATALOG_CONCURRENCY = 6
-ID_RE = re.compile(r"/inzerat/(\d+)/([^\"'?]+)")
-COUNT_RE = re.compile(r"Zobrazeno\s+\d+[–-]\d+\s+inzerátů z\s+([\d\s]+)", re.I)
-PRICE_RE = re.compile(r"([\d\s]+)\s*Kč", re.I)
-AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*m", re.I)
-DISP_RE = re.compile(r"(\d+)\s*\+\s*(kk|1)|(\d+)\s*kk|garson|atyp|pokoj", re.I)
+ID_RE = re.compile(r"/inzerat/(\d{4,12})/([^\"'?]{1,300})")
+COUNT_RE = re.compile(r"Zobrazeno\s+\d{1,7}[–-]\d{1,7}\s+inzerátů z\s+([\d\s]{1,24})", re.I)
+AREA_RE = re.compile(r"(\d{1,6}(?:[.,]\d{1,2})?)\s*m", re.I)
+DISP_RE = re.compile(r"(\d{1,2})\s*\+\s*(kk|1)|(\d{1,2})\s*kk|garson|atyp|pokoj", re.I)
 DATE_RE = re.compile(r"\[(\d{1,2})\.(\d{1,2})\.\s*(\d{4})\]")
-MAPS_RE = re.compile(r"maps/place/(-?\d+\.\d+),(-?\d+\.\d+)")
-PHOTO_RE = re.compile(r"https://www\.bazos\.cz/img/(\d+)t?/(\d+)/(\d+)\.(?:jpg|jpeg|webp)(?:\?[^\"'\s]*)?", re.I)
-CARD_RE = re.compile(r'<div class="inzeraty inzeratyflex">(.*?)<div class="inzeratyakce">', re.S | re.I)
-TITLE_RE = re.compile(r"<h2[^>]*class=['\"]?nadpis['\"]?[^>]*>.*?<a[^>]*>(.*?)</a>", re.S | re.I)
-TITLE2_RE = re.compile(r"<h1[^>]*class=['\"]?nadpisdetail['\"]?[^>]*>(.*?)</h1>", re.S | re.I)
-LOC_RE = re.compile(r'class="inzeratylok"[^>]*>(.*?)</div>', re.S | re.I)
-PRICE_BOX_RE = re.compile(r'class="inzeratycena"[^>]*>(.*?)</div>', re.S | re.I)
-VIEWS_RE = re.compile(r'class="inzeratyview"[^>]*>([\d\s]+)', re.I)
-NAME_RE = re.compile(r"<td[^>]*>Jméno:.*?<b[^>]*>.*?<span[^>]*>(.*?)</span>", re.S | re.I)
-POPIS_RE = re.compile(r"class=['\"]?popis(?:detail)?['\"]?[^>]*>(.*?)</div>", re.S | re.I)
+MAPS_RE = re.compile(r"maps/place/(-?\d{1,3}\.\d{1,10}),(-?\d{1,3}\.\d{1,10})")
+PHOTO_RE = re.compile(
+    r"https://www\.bazos\.cz/img/(\d{1,4})t?/(\d{1,12})/(\d{1,12})\.(?:jpg|jpeg|webp)(?:\?[^\"'\s]{0,200})?",
+    re.I,
+)
+CARD_RE = re.compile(r'<div class="inzeraty inzeratyflex">(.{0,80000}?)<div class="inzeratyakce">', re.S | re.I)
+TITLE_RE = re.compile(r"<h2[^>]*class=['\"]?nadpis['\"]?[^>]{0,80}>.{0,400}?<a[^>]{0,200}>(.{0,400}?)</a>", re.S | re.I)
+TITLE2_RE = re.compile(r"<h1[^>]*class=['\"]?nadpisdetail['\"]?[^>]{0,80}>(.{0,400}?)</h1>", re.S | re.I)
+LOC_RE = re.compile(r'class="inzeratylok"[^>]{0,80}>(.{0,400}?)</div>', re.S | re.I)
+PRICE_BOX_RE = re.compile(r'class="inzeratycena"[^>]{0,80}>(.{0,400}?)</div>', re.S | re.I)
+VIEWS_RE = re.compile(r'class="inzeratyview"[^>]{0,80}>([\d\s]{1,16})', re.I)
+NAME_RE = re.compile(r"<td[^>]{0,80}>Jméno:.{0,400}?<b[^>]{0,80}>.{0,200}?<span[^>]{0,80}>(.{0,200}?)</span>", re.S | re.I)
+POPIS_RE = re.compile(r"class=['\"]?popis(?:detail)?['\"]?[^>]{0,80}>(.{0,20000}?)</div>", re.S | re.I)
 
 HEADERS = {
     "User-Agent": (
@@ -73,11 +77,6 @@ FLAG_WORDS = {
     "zahrad": "garden",
     "bezbariér": "barrier_free",
 }
-
-
-def _clean(text: str) -> str:
-    raw = html_lib.unescape(re.sub(r"<[^>]+>", " ", text or ""))
-    return re.sub(r"\s+", " ", raw.replace("\xa0", " ")).strip()
 
 
 def _abs(url: str) -> str:
@@ -164,7 +163,7 @@ def specs_from_text(text: str) -> tuple[list[str], list[dict[str, str]]]:
     flags = [name for needle, name in FLAG_WORDS.items() if needle in folded]
     flags = list(dict.fromkeys(flags))
     specs: list[dict[str, str]] = []
-    floor = re.search(r"(-?\d+)\s*\.\s*(?:podlaž|patro|np)\b", folded)
+    floor = re.search(r"(-?\d{1,3})\s*\.\s*(?:podlaž|patro|np)\b", folded)
     if floor:
         specs.append({"label": "Podlaží", "value": floor.group(1)})
     if "družstev" in folded:
@@ -181,10 +180,12 @@ def specs_from_text(text: str) -> tuple[list[str], list[dict[str, str]]]:
 class BazosClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
+        from app.scrape_http import scrape_timeout
+
         self._client = httpx.AsyncClient(
             headers=HEADERS,
             follow_redirects=True,
-            timeout=20.0,
+            timeout=scrape_timeout(),
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=32),
         )
 
@@ -239,16 +240,27 @@ class BazosClient:
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         url = self._page_url(page)
         response = await self._client.get(url, headers={"Accept": "text/html"})
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
         if response.status_code in {404, 410}:
             return [], 0
         response.raise_for_status()
-        html = response.text
+        raw = response.content
         if page <= 1:
             self.search_url = str(response.url).split("#")[0]
-        listings = self._parse_list(html)
+
+        def _parse(blob: bytes) -> tuple[list[Listing], int]:
+            text = blob.decode("utf-8", "replace")
+            listings = self._parse_list(extract_listing_html(text))
+            parsed_total = self._parse_total(text)
+            total = parsed_total or (len(listings) if page == 1 else 0)
+            return listings, total
+
+        parse_started = time.monotonic()
+        listings, total = await asyncio.to_thread(_parse, raw)
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         await self._attach_coords(listings)
-        parsed_total = self._parse_total(html)
-        total = parsed_total or (len(listings) if page == 1 else 0)
         return listings, total
 
     async def fetch_catalog(self, gate: asyncio.Semaphore | None = None) -> tuple[list[Listing], int]:
@@ -333,14 +345,22 @@ class BazosClient:
         if response.status_code in {404, 410}:
             raise ListingGone(listing.url)
         response.raise_for_status()
-        html = response.text
-        folded = html.casefold()
-        if "inzerát byl stažen" in folded or "inzerát neexistuje" in folded or "stránka nenalezena" in folded:
-            raise ListingGone(listing.url)
-        return self._parse_detail(listing, html)
+        raw = response.content
+
+        def _parse(blob: bytes) -> Listing:
+            html = blob.decode("utf-8", "replace")
+            folded = html.casefold()
+            if "inzerát byl stažen" in folded or "inzerát neexistuje" in folded or "stránka nenalezena" in folded:
+                raise ListingGone(listing.url)
+            return self._parse_detail(listing, extract_listing_html(html))
+
+        return await asyncio.to_thread(_parse, raw)
 
     def _parse_total(self, html: str) -> int:
-        match = COUNT_RE.search((html or "").replace("\xa0", " "))
+        raw = (html or "").replace("\xa0", " ")
+        if len(raw) > 32_000:
+            raw = raw[:32_000]
+        match = COUNT_RE.search(raw)
         if not match:
             return 0
         digits = re.sub(r"\D", "", match.group(1))
@@ -366,7 +386,7 @@ class BazosClient:
         title_m = TITLE_RE.search(html)
         title = _clean(title_m.group(1) if title_m else "")
         if not title:
-            alt = re.search(r'alt="([^"]+)"', html)
+            alt = re.search(r'alt="([^"]{1,400})"', html)
             title = html_lib.unescape(alt.group(1)) if alt else f"{OFFER_LABEL.get(offer, offer)} {estate}"
         loc_m = LOC_RE.search(html)
         locality = _clean((loc_m.group(1) if loc_m else "").replace("<br>", " ").replace("<br/>", " "))
