@@ -1073,12 +1073,29 @@ button {
 
   .game-hub,
   .game-card {
-    padding-left: 20px;
-    padding-right: 20px;
+    padding-left: 16px;
+    padding-right: 16px;
   }
 
   .game-card {
-    padding: 24px 20px;
+    padding: 24px 16px;
     min-height: 0;
+    max-width: 100%;
+    box-shadow: var(--shadow-card);
+  }
+
+  .game-pills,
+  .game-pill {
+    max-width: 100%;
+  }
+
+  .game-pill {
+    white-space: normal;
+  }
+
+  .game-band .pill {
+    width: 100%;
+    min-height: 48px;
+    justify-self: stretch;
   }
 }

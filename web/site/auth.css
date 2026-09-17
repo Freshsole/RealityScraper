@@ -830,3 +830,31 @@ label .optional {
     width: auto;
   }
 }
+
+/* Phone ~390px — 16px gutters, floating card, 48px CTA */
+@media (max-width: 480px) {
+  .auth-page {
+    padding: 24px 16px 40px;
+  }
+
+  .auth-stack,
+  .auth-card {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .auth-card {
+    padding: 24px 16px;
+    box-shadow: 0 16px 16px rgba(14, 15, 12, 0.04);
+  }
+
+  .auth-h {
+    font-size: 28px;
+  }
+
+  .auth-btn {
+    width: 100%;
+    min-height: 48px;
+  }
+}

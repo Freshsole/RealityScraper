@@ -419,6 +419,7 @@ button {
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ccy-flag {
@@ -457,6 +458,11 @@ button {
   color: var(--body);
 }
 
+.info-row span,
+.info-row strong {
+  min-width: 0;
+}
+
 .info-row:last-child {
   border-bottom: 0;
 }
@@ -465,6 +471,7 @@ button {
   color: var(--forest);
   font-weight: 600;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .mint-banner {
@@ -1182,6 +1189,8 @@ body.landing-modal-open {
 
 .table-wrap {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
 }
 
@@ -1790,6 +1799,10 @@ body.landing-modal-open {
     display: none;
   }
 
+  .nav-login {
+    display: none;
+  }
+
   .navbar {
     height: auto;
     min-height: 80px;
@@ -1811,7 +1824,15 @@ body.landing-modal-open {
   .fomo-actions,
   .hero-actions {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .hero-actions .pill,
+  .fomo-actions .pill,
+  .cta-row .pill,
+  .final-cta .pill {
+    width: 100%;
   }
 
   .footer-cols {
@@ -1839,6 +1860,169 @@ body.landing-modal-open {
   .contact-faq {
     padding-left: var(--gutter);
     padding-right: var(--gutter);
+  }
+}
+
+/* Phone ~390px — Wise marketing home, FOMO, converter card, CTAs */
+@media (max-width: 480px) {
+  :root {
+    --pad: 16px;
+  }
+
+  .navbar {
+    min-height: 64px;
+    gap: 10px;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .hero {
+    padding: 32px var(--gutter) 28px;
+    gap: 24px;
+  }
+
+  .hero-left {
+    gap: 20px;
+  }
+
+  .hero-left .display {
+    font-size: 36px;
+    line-height: 0.86;
+    max-width: none;
+  }
+
+  .hero-copy {
+    font-size: 16px;
+  }
+
+  .hero-actions,
+  .fomo-actions,
+  .cta-row,
+  .final-cta > div {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .hero-actions .pill,
+  .fomo-actions .pill,
+  .cta-row .pill,
+  .final-cta .pill,
+  .game-card .pill {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .hero-trust {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .alert-card {
+    width: 100%;
+    max-width: 100%;
+    padding: 16px;
+    min-width: 0;
+    box-shadow: var(--shadow-card);
+  }
+
+  .amount-row {
+    min-width: 0;
+  }
+
+  .amount-row strong {
+    min-width: 0;
+    font-size: 40px;
+  }
+
+  .badge-mint {
+    white-space: normal;
+  }
+
+  .info-row {
+    align-items: flex-start;
+    gap: 8px 12px;
+    padding: 10px 0;
+  }
+
+  .mint-banner {
+    padding: 14px;
+  }
+
+  .urg-item {
+    white-space: normal;
+    align-items: flex-start;
+  }
+
+  .fomo,
+  .final-cta {
+    padding: 64px var(--gutter);
+    gap: 24px;
+  }
+
+  .fomo .display,
+  .final-cta .display {
+    font-size: 32px;
+    line-height: 0.9;
+  }
+
+  .sold-section,
+  .how-section,
+  .db-section,
+  .compare-section,
+  .pricing-section,
+  .quotes-section,
+  .faq-section {
+    padding: 64px var(--gutter);
+  }
+
+  .game-card {
+    padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .game-pill {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .step-card,
+  .tier,
+  .quote,
+  .form-panel,
+  .info-panel {
+    padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .contact-hero .display,
+  .form-panel h2,
+  .info-panel h2 {
+    white-space: normal;
+  }
+
+  .contact-hero .display {
+    font-size: 32px;
+  }
+
+  .hero-stat-banner {
+    flex-wrap: wrap;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .hero-stat {
+    white-space: normal;
+  }
+
+  .hero-stat-div {
+    display: none;
+  }
+
+  .link-row {
+    white-space: normal;
+    justify-content: center;
   }
 }
 
@@ -4088,6 +4272,38 @@ body.article-popup-open {
 @media (max-width: 900px) {
   .game-hub {
     grid-template-columns: 1fr;
+  }
+}
+
+/* After later page blocks so 390px tokens win the cascade */
+@media (max-width: 480px) {
+  .game-card {
+    padding: 24px 16px;
+    max-width: 100%;
+    box-shadow: var(--shadow-card);
+  }
+
+  .game-card .pill {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .contact-hero .display,
+  .form-panel h2,
+  .info-panel h2,
+  .hero-stat {
+    white-space: normal;
+  }
+
+  .form-panel,
+  .info-panel {
+    padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .hero-stat-banner {
+    flex-wrap: wrap;
+    padding: 16px;
   }
 }
 
