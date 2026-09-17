@@ -27,7 +27,9 @@ from app.store import (
     Store,
     catalog_item_needs_live_fetch,
     listings_fts_match_query,
+    _PIN_COVER_INDEX_COLS,
     _pin_gps_grid_sql,
+    _pin_gps_tight_sql,
 )
 
 
@@ -836,11 +838,14 @@ def test_map_pin_gps_grid_uses_covering_lat_lon_index(tmp_path: Path):
     sql = _pin_gps_grid_sql(gps_clause)
     with store.read() as conn:
         indexes = {row[1] for row in conn.execute("PRAGMA index_list(listings)")}
+        cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_pin_cover')")]
         plan = " ".join(
             row[3]
             for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (49.90, 50.25, 14.10, 14.75))
         )
     assert "idx_listings_pin_cover" in indexes
+    assert cover_cols == list(_PIN_COVER_INDEX_COLS)
+    assert "name" in cover_cols and "url" in cover_cols and "locality" in cover_cols
     assert "idx_listings_pin_cover" in plan or "COVERING INDEX" in plan
     assert "SCAN listings" not in plan or "USING INDEX" in plan
     pins = store.catalog(
@@ -856,6 +861,54 @@ def test_map_pin_gps_grid_uses_covering_lat_lon_index(tmp_path: Path):
     assert all(item.get("lat") is not None and item.get("lon") is not None for item in pins["items"])
     # 80 rows share 40 GPS cells at 0.001°; grid must collapse them.
     assert len(pins["items"]) <= 50
+
+
+def test_map_pin_tight_zoom_hydrates_labels_via_covering_index(tmp_path: Path):
+    store = Store(tmp_path / "pin-tight.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=4000)
+    gps_clause = (
+        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+    )
+    sql = _pin_gps_tight_sql(gps_clause, pin_cap=8000)
+    with store.read() as conn:
+        cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_pin_cover')")]
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (50.08, 50.12, 14.42, 14.46))
+        )
+    assert cover_cols == list(_PIN_COVER_INDEX_COLS)
+    assert "COVERING INDEX" in plan
+    assert "idx_listings_pin_cover" in plan
+    assert "SCAN listings" not in plan or "USING INDEX" in plan
+    pins = store.catalog(
+        {
+            "pins_only": True,
+            "south": "50.08",
+            "north": "50.12",
+            "west": "14.42",
+            "east": "14.46",
+        }
+    )
+    assert pins["items"]
+    assert all(item.get("name") and item.get("url") and item.get("locality") for item in pins["items"])
+    assert all("extras" not in item and "description" not in item for item in pins["items"])
+    assert all(item.get("lat") is not None and item.get("lon") is not None for item in pins["items"])
+
+
+def test_pin_cover_index_rebuilds_when_label_columns_missing(tmp_path: Path):
+    store = Store(tmp_path / "pin-rebuild.sqlite")
+    with store.connect() as conn:
+        conn.execute("DROP INDEX IF EXISTS idx_listings_pin_cover")
+        conn.execute(
+            "CREATE INDEX idx_listings_pin_cover ON listings("
+            "lat, lon, notified, id, monitor_id, price_czk, listing_key, canonical_key)"
+        )
+        conn.commit()
+    again = Store(tmp_path / "pin-rebuild.sqlite")
+    with again.read() as conn:
+        cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_pin_cover')")]
+    assert cover_cols == list(_PIN_COVER_INDEX_COLS)
 
 
 def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
@@ -1001,6 +1054,13 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
         "west": "14.10",
         "east": "14.75",
     }
+    tight_filters = {
+        "pins_only": True,
+        "south": "50.08",
+        "north": "50.12",
+        "west": "14.42",
+        "east": "14.46",
+    }
 
     def sample(*, flush: bool) -> dict[str, float]:
         if flush:
@@ -1022,6 +1082,14 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
         pins = store.catalog(pin_filters)
         pin_ms = (time.perf_counter() - t0) * 1000
         assert pins["items"]
+        if flush:
+            _flush_hot_json(store)
+        t0 = time.perf_counter()
+        tight = store.catalog(tight_filters)
+        tight_ms = (time.perf_counter() - t0) * 1000
+        assert tight["items"]
+        assert all(item.get("name") and item.get("url") and item.get("locality") for item in tight["items"])
+        assert all("extras" not in item and "description" not in item for item in tight["items"])
         if flush:
             _flush_hot_json(store)
         t0 = time.perf_counter()
@@ -1050,6 +1118,7 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
             "catalog": catalog_ms,
             "search": search_ms,
             "pins": pin_ms,
+            "pins_tight": tight_ms,
             "listings": list_ms,
             "watch": watch_ms,
             "item": item_ms,
@@ -1060,6 +1129,9 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
     quiet_pins = store.catalog(pin_filters)
     assert quiet_pins["items"]
     assert len(quiet_pins["items"]) <= 80
+    quiet_tight = store.catalog(tight_filters)
+    assert quiet_tight["items"]
+    assert all(item.get("name") and item.get("url") for item in quiet_tight["items"])
     quiet_miss = [sample(flush=True) for _ in range(8)]
     stop = threading.Event()
 
@@ -1085,7 +1157,7 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
 
     report = []
     for label, rows in (("quiet", quiet_miss), ("writer", writer_miss), ("writer-cached", writer_hit)):
-        for key in ("catalog", "search", "pins", "listings", "watch", "item", "fresh"):
+        for key in ("catalog", "search", "pins", "pins_tight", "listings", "watch", "item", "fresh"):
             values = col(rows, key)
             report.append(f"{label} {key} p50={_p50(values):.2f}ms p95={_p95(values):.2f}ms")
     print("fat catalog JSON under scrape:\n  " + "\n  ".join(report))
@@ -1093,12 +1165,14 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
     assert _p95(col(quiet_miss, "catalog")) < 45, col(quiet_miss, "catalog")
     assert _p95(col(quiet_miss, "search")) < 25, col(quiet_miss, "search")
     assert _p95(col(quiet_miss, "pins")) < 50, col(quiet_miss, "pins")
+    assert _p95(col(quiet_miss, "pins_tight")) < 25, col(quiet_miss, "pins_tight")
     assert _p95(col(quiet_miss, "listings")) < 20, col(quiet_miss, "listings")
     assert _p95(col(quiet_miss, "item")) < 12, col(quiet_miss, "item")
     assert _p95(col(quiet_miss, "watch")) < 12, col(quiet_miss, "watch")
     assert _p95(col(writer_miss, "catalog")) < 50, col(writer_miss, "catalog")
     assert _p95(col(writer_miss, "search")) < 35, col(writer_miss, "search")
     assert _p95(col(writer_miss, "pins")) < 50, col(writer_miss, "pins")
+    assert _p95(col(writer_miss, "pins_tight")) < 35, col(writer_miss, "pins_tight")
     assert _p95(col(writer_miss, "listings")) < 25, col(writer_miss, "listings")
     assert _p95(col(writer_miss, "item")) < 12, col(writer_miss, "item")
     # 2s hot JSON can expire during writer_miss; first cached sample may recompute.

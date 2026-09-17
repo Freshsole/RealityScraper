@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.sreality import Listing
-from app.store import LISTINGS_FTS_MATCH_SQL, Store, listings_fts_match_query
+from app.store import LISTINGS_FTS_MATCH_SQL, Store, listings_fts_match_query, _pin_gps_tight_sql
 
 
 def _listing(i: int, *, blob: str) -> Listing:
@@ -192,6 +192,14 @@ def _plans(store: Store) -> None:
             """,
             (),
         ),
+        "pins-tight": (
+            _pin_gps_tight_sql(
+                "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+                "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?",
+                pin_cap=8000,
+            ),
+            (50.08, 50.12, 14.42, 14.46),
+        ),
         "item-url": (
             """
             SELECT listings.id FROM listings
@@ -233,6 +241,7 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         "catalog": [],
         "search": [],
         "pins": [],
+        "pins_tight": [],
         "listings": [],
         "watch": [],
         "item": [],
@@ -244,6 +253,13 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         "north": "50.25",
         "west": "14.10",
         "east": "14.75",
+    }
+    tight_filters = {
+        "pins_only": True,
+        "south": "50.08",
+        "north": "50.12",
+        "west": "14.42",
+        "east": "14.46",
     }
     for _ in range(n):
         if flush:
@@ -264,6 +280,12 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         pins = store.catalog(pin_filters)
         samples["pins"].append((time.perf_counter() - t0) * 1000)
         assert pins["items"]
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
+        tight = store.catalog(tight_filters)
+        samples["pins_tight"].append((time.perf_counter() - t0) * 1000)
+        assert tight["items"]
         if flush:
             _flush(store)
         t0 = time.perf_counter()

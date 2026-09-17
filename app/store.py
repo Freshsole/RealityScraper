@@ -387,10 +387,10 @@ def listing_identity_sql(alias: str = "listings") -> str:
 
 
 def listing_pin_identity_sql(alias: str = "listings") -> str:
-    """Dedupe expression covered by idx_listings_pin_cover (no url / blobs)."""
+    """Dedupe expression covered by idx_listings_pin_cover (no extras/description blobs)."""
     return (
         f"COALESCE(NULLIF({alias}.canonical_key, ''), NULLIF({alias}.listing_key, ''), "
-        f"{alias}.monitor_id || ':' || {alias}.id)"
+        f"NULLIF({alias}.url, ''), {alias}.monitor_id || ':' || {alias}.id)"
     )
 
 
@@ -402,11 +402,46 @@ _PIN_COVER_COLS = (
 _PIN_DISPLAY_COLS = (
     f"{_PIN_COVER_COLS}, listings.price_label, listings.name, listings.locality, listings.url"
 )
+_PIN_COVER_INDEX_COLS = (
+    "lat",
+    "lon",
+    "notified",
+    "id",
+    "monitor_id",
+    "price_czk",
+    "listing_key",
+    "canonical_key",
+    "name",
+    "locality",
+    "url",
+    "price_label",
+)
 # Prague-wide bbox span is ~1.0; city-centroid clustering still waits for >1.5 so
 # Holešovice density stays visible. Grid ~100m cells before that.
 _PIN_GRID_SPAN = 0.35
 _PIN_GRID_DECIMALS = 3
 _PIN_CITY_CLUSTER_SPAN = 1.5
+
+
+def _pin_cover_index_sql() -> str:
+    return (
+        "CREATE INDEX IF NOT EXISTS idx_listings_pin_cover ON listings("
+        + ", ".join(_PIN_COVER_INDEX_COLS)
+        + ")"
+    )
+
+
+def _ensure_pin_cover_index(conn: sqlite3.Connection) -> None:
+    """Rebuild the pin covering index when label columns are missing.
+
+    Tight-zoom pins need name/url/locality/price_label in the same covering
+    index as lat/lon so GPS reads never touch extras/description blobs.
+    """
+    have = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_pin_cover')")]
+    if have == list(_PIN_COVER_INDEX_COLS):
+        return
+    conn.execute("DROP INDEX IF EXISTS idx_listings_pin_cover")
+    conn.execute(_pin_cover_index_sql())
 
 
 def _pin_gps_grid_sql(gps_clause: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
@@ -427,6 +462,18 @@ def _pin_gps_grid_sql(gps_clause: str, *, decimals: int = _PIN_GRID_DECIMALS) ->
             GROUP BY {identity}
         ) src
         GROUP BY ROUND(src.lat, {decimals}), ROUND(src.lon, {decimals})
+    """
+
+
+def _pin_gps_tight_sql(gps_clause: str, *, pin_cap: int) -> str:
+    """Individual tight-zoom pins: covering-index labels, no extras/description."""
+    identity = listing_pin_identity_sql()
+    return f"""
+        SELECT {_PIN_DISPLAY_COLS}
+        FROM listings INDEXED BY idx_listings_pin_cover
+        WHERE {gps_clause}
+        GROUP BY {identity}
+        LIMIT {int(pin_cap)}
     """
 
 
@@ -4169,10 +4216,7 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_id ON listings(id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_disposition ON listings(disposition)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_geo_notified ON listings(lat, lon, notified)")
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_listings_pin_cover "
-            "ON listings(lat, lon, notified, id, monitor_id, price_czk, listing_key, canonical_key)"
-        )
+        _ensure_pin_cover_index(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor ON listings(monitor_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_url ON catalog_listings(url)")
         conn.executescript(
@@ -5064,10 +5108,10 @@ class Store:
                 cache_hit = True
                 filters["_pin_leftover"] = leftover
                 filters["_pin_leftover_sample"] = leftover_sample
-        elif anchors and not place_geoms and not wide and span >= _PIN_GRID_SPAN and isinstance(bbox, tuple):
+        elif anchors and not place_geoms and not wide and isinstance(bbox, tuple):
             skip = {"south", "north", "west", "east", "lat", "lon", "radius_m", "limit", "offset", "sort", "places", "place_geoms", "place_empty"}
             cache_key = (
-                "pin-grid",
+                "pin-grid" if span >= _PIN_GRID_SPAN else "pin-tight",
                 tuple(round(float(item), 4) for item in bbox),
                 tuple(
                     sorted(
@@ -5148,7 +5192,8 @@ class Store:
                     # GPS-only range scan so idx_listings_pin_cover can cover the
                     # read. City-wide (span >= 0.35, still below 1.5 city centroids)
                     # GROUP BY identity then ~100m grid instead of pulling 8000 fat rows.
-                    pin_cap = max(int(pin_limit), 8000)
+                    # Tight zoom hydrates name/url/locality from the same covering
+                    # index — never extras/description blobs.
                     base_where, base_params = _without_map_bbox(where, params, filters)
                     gps_sql_frag = filters.get("_gps_sql") or (
                         "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
@@ -5164,25 +5209,19 @@ class Store:
                         gps_sql = _pin_gps_grid_sql(gps_clause)
                         gps_rows = [dict(row) for row in conn.execute(gps_sql, gps_bind).fetchall()]
                     else:
-                        identity = listing_pin_identity_sql()
-                        gps_sql = f"""
-                        SELECT {_PIN_DISPLAY_COLS}
-                        FROM listings
-                        WHERE {gps_clause}
-                        GROUP BY {identity}
-                        LIMIT {pin_cap}
-                        """
+                        gps_sql = _pin_gps_tight_sql(gps_clause, pin_cap=int(pin_limit))
                         gps_rows = [dict(row) for row in conn.execute(gps_sql, gps_bind).fetchall()]
                     fetched.extend(gps_rows)
-                    # Null-GPS locality pins: skip the 2000-row first_seen sort on
-                    # city-wide views once GPS already filled the viewport.
-                    take_null = (not use_grid) or len(gps_rows) < 80
+                    # Null-GPS locality pins: skip once GPS already filled the viewport.
+                    # Tight zoom still takes them when GPS is sparse so district
+                    # listings without coordinates stay on the Holešovice path.
+                    take_null = len(gps_rows) < (80 if use_grid else int(pin_limit))
                     if take_null:
                         text_sql = str(filters.get("_text_sql") or "").strip()
                         text_params = list(filters.get("_text_params") or [])
                         null_parts = [
                             *base_where,
-                            "(listings.lat IS NULL OR listings.lon IS NULL)",
+                            "listings.lat IS NULL",
                         ]
                         null_params = list(base_params)
                         if text_sql:
@@ -5191,7 +5230,7 @@ class Store:
                         null_limit = 400 if use_grid else 2000
                         null_sql = f"""
                         SELECT {_PIN_DISPLAY_COLS}
-                        FROM listings
+                        FROM listings INDEXED BY idx_listings_pin_cover
                         WHERE {" AND ".join(null_parts)}
                         LIMIT {null_limit}
                         """
