@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-09-17",
+  "source": "performance_report.md audit",
+  "upsert_ms_per_listing": 7.7,
+  "upsert_queries_per_listing": 15,
+  "upsert_batch_50_ms": 385.3,
+  "catalog_http_ms_median": 91.1,
+  "catalog_http_ms_max": 129.6,
+  "catalog_http_bytes_median": 505421,
+  "catalog_no_pins_http_ms_median": 31.5,
+  "catalog_fn_ms": 80.05,
+  "discovery_tick_ms": 188799,
+  "rss_mb": 200.4,
+  "sql": {
+    "listings_url_or_listing_key_ms": 5.837,
+    "nearby_catalog_ms": 4.475,
+    "gone_fast_ifnull_ms": 5.405,
+    "pins_limit_800_ms": 56.268,
+    "facets_groupby_ms": 9.821,
+    "daily_shards_ms": 168.0
+  }
+}
