@@ -89,7 +89,16 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("nabidkovy=1", houses)
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
-        self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
+        rent = remax_url.build_url({"offers": ["pronajem"]})
+        self.assertIn("/reality/byty/pronajem/", rent)
+        self.assertIn("order_by_published_date=0", rent)
+        houses = remax_url.build_url({"offers": ["pronajem"], "category": "domy"})
+        self.assertIn("/reality/domy-a-vily/pronajem/", houses)
+        self.assertIn("order_by_published_date=0", houses)
+        self.assertEqual(
+            remax_url.parse_url("https://www.remax-czech.cz/reality/domy-a-vily/prodej/?order_by_published_date=0")["category"],
+            "domy",
+        )
         rent = realitycz_url.build_url({"offers": ["pronajem"]})
         self.assertIn("/pronajem/byty/Ceska-republika/", rent)
         self.assertIn("s=2", rent)
@@ -140,12 +149,83 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(client._page_url(2), "https://www.annonce.cz/byty-k-pronajmu.html?page=2")
 
     def test_remax_list(self):
-        client = RemaxClient("https://www.remax-czech.cz/reality/byty/?sale=2")
+        client = RemaxClient("https://www.remax-czech.cz/reality/byty/pronajem/?order_by_published_date=0")
         items = client._parse_list(REMAX)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].id, 445566)
         self.assertEqual(items[0].price_czk, 18900)
         self.assertIn("Praha 3", items[0].locality)
+
+    def test_remax_live_cards_fill_price_image_locality_gps(self):
+        from app.places import approx_point_from_locality
+        from app.remax import parse_remax_gps
+
+        html = (FIXTURES / "remax_cards.html").read_text()
+        client = RemaxClient("https://www.remax-czech.cz/reality/byty/pronajem/")
+        items = client._parse_list(html)
+        self.assertEqual([item.id for item in items], [447815, 446000, 449001])
+        first = items[0]
+        self.assertEqual(first.price_czk, 70000)
+        self.assertIn("th350.jpg", first.image_url or "")
+        self.assertIn("Praha 2", first.locality)
+        self.assertNotIn("ulice", (first.locality or "").casefold())
+        self.assertAlmostEqual(first.lat, 50 + 4 / 60 + 40.5 / 3600, places=5)
+        self.assertAlmostEqual(first.lon, 14 + 26 / 60 + 38.7 / 3600, places=5)
+        self.assertEqual(first.disposition, "4+kk")
+        self.assertEqual(first.area_m2, 130)
+        self.assertIsNone(items[1].lat)
+        self.assertEqual(items[1].locality, "Praha 7")
+        self.assertEqual(items[1].price_czk, 18900)
+        self.assertEqual(items[2].extras.get("estate"), "Dům")
+        self.assertEqual(client._parse_total(html), 1097)
+        gps = parse_remax_gps("50°04'40.5\"N,14°26'38.7\"E")
+        self.assertIsNotNone(gps)
+        self.assertIn("order_by_published_date=0", client._page_url(1, newest=True))
+        self.assertNotIn("order_by_price", client._page_url(1, newest=True))
+        self.assertIn("stranka=2", client._page_url(2, newest=True))
+        pin = approx_point_from_locality("Praha 7")
+        self.assertIsNotNone(pin)
+
+    def test_remax_fetch_page_uses_html_gps_not_photon(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        import httpx
+
+        from app.places import approx_point_from_locality
+
+        html = (FIXTURES / "remax_cards.html").read_text()
+        geocode = AsyncMock(side_effect=AssertionError("list fetch must not hit Nominatim/Photon"))
+        hits: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            hits.append(str(request.url))
+            return httpx.Response(200, text=html)
+
+        async def _run() -> None:
+            client = RemaxClient("https://www.remax-czech.cz/reality/byty/?sale=2&order_by_price=0")
+            await client.aclose()
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                with patch("app.places.geocode_locality", geocode), patch(
+                    "app.places.geocode_locality_sync",
+                    side_effect=AssertionError("list fetch must not geocode"),
+                ):
+                    listings, total = await client.fetch_page(1, newest=True)
+            finally:
+                await client.aclose()
+            self.assertEqual(len(listings), 3)
+            self.assertEqual(total, 1097)
+            geocode.assert_not_called()
+            self.assertTrue(any("order_by_published_date=0" in url for url in hits))
+            self.assertFalse(any("order_by_price" in url for url in hits))
+            by_id = {item.id: item for item in listings}
+            self.assertAlmostEqual(by_id[447815].lat, 50 + 4 / 60 + 40.5 / 3600, places=5)
+            praha7 = approx_point_from_locality("Praha 7")
+            if praha7:
+                self.assertEqual((by_id[446000].lat, by_id[446000].lon), praha7)
+
+        asyncio.run(_run())
 
     def test_mmreality_list(self):
         client = MmrealityClient("https://www.mmreality.cz/nemovitosti/?typ-nabidky=pronajem")
