@@ -136,6 +136,15 @@ def daily_shards() -> list[dict[str, str]]:
                         "search_url": url,
                     }
                 )
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "sreality",
+                "shard_key": f"sreality:domy:{offer}:cz",
+                "search_url": _sreality_url(offer, "domy"),
+            }
+        )
     for offer in ("PRONAJEM", "PRODEJ"):
         for size, _label in bezrealitky_url.SIZES:
             url = bezrealitky_url.build_url(
@@ -242,33 +251,44 @@ def daily_shards() -> list[dict[str, str]]:
     return shards
 
 
+def _sreality_url(offer: str, category: str, sizes: list[str] | None = None) -> str:
+    return url_builder.build_url(
+        {
+            "source": "sreality",
+            "offers": [offer],
+            "category": category,
+            "districts": list(localities.SREALITY_CZECH_REGIONS),
+            "sizes": sizes or [],
+            "sort": "nejnovejsi",
+            "price_from": None,
+            "price_to": None,
+            "area_from": None,
+            "area_to": None,
+        }
+    )
+
+
 def sreality_recent_shards() -> list[dict[str, str]]:
     """Small newest-first shards for continuous Sreality catalog refresh (~60s)."""
     shards: list[dict[str, str]] = []
     for offer in ("pronajem", "prodej"):
         for size, _label in url_builder.SIZES:
-            url = url_builder.build_url(
-                {
-                    "source": "sreality",
-                    "offers": [offer],
-                    "category": "byty",
-                    "districts": list(localities.SREALITY_CZECH_REGIONS),
-                    "sizes": [size],
-                    "sort": "nejnovejsi",
-                    "price_from": None,
-                    "price_to": None,
-                    "area_from": None,
-                    "area_to": None,
-                }
-            )
             shards.append(
                 {
                     "kind": "catalog_recent",
                     "portal": "sreality",
                     "shard_key": f"sreality:recent:{offer}:{size}",
-                    "search_url": url,
+                    "search_url": _sreality_url(offer, "byty", [size]),
                 }
             )
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "sreality",
+                "shard_key": f"sreality:recent:{offer}:domy",
+                "search_url": _sreality_url(offer, "domy"),
+            }
+        )
     return shards
 
 

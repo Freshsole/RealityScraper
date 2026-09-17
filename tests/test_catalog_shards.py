@@ -41,7 +41,25 @@ def test_realitycz_newest_and_house_shards():
 
 def test_sreality_recent_shards_cover_sizes():
     recent = sreality_recent_shards()
-    assert len(recent) == 26
+    assert len(recent) == 28
     assert recent[0]["kind"] == "catalog_recent"
     assert "velikost=" in recent[0]["search_url"]
     assert "razeni=nejnovejsi" in recent[0]["search_url"]
+    houses = [item for item in recent if item["shard_key"].endswith(":domy")]
+    assert {item["shard_key"] for item in houses} == {
+        "sreality:recent:pronajem:domy",
+        "sreality:recent:prodej:domy",
+    }
+    assert all("/domy" in item["search_url"] for item in houses)
+    assert all("razeni=nejnovejsi" in item["search_url"] for item in houses)
+    assert all("velikost=" not in item["search_url"] for item in houses)
+
+
+def test_sreality_house_daily_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "sreality"]
+    keys = {item["shard_key"] for item in daily}
+    assert "sreality:domy:pronajem:cz" in keys
+    assert "sreality:domy:prodej:cz" in keys
+    houses = [item for item in daily if item["shard_key"].startswith("sreality:domy:")]
+    assert all("razeni=nejnovejsi" in item["search_url"] for item in houses)
+    assert any("/pronajem/domy/" in item["search_url"] for item in houses)

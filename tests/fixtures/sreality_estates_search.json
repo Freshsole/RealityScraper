@@ -1,0 +1,108 @@
+{
+  "dehydratedState": {
+    "queries": [
+      {
+        "queryKey": ["estatesSearch"],
+        "state": {
+          "data": {
+            "pagination": {"limit": 22, "offset": 0, "total": 11307},
+            "results": [
+              {
+                "id": 4115275852,
+                "name": "Pronájem bytu 2+kk 100 m²",
+                "priceCzk": 40000,
+                "priceCzkPerSqM": 400,
+                "priceUnitCb": {"name": "za měsíc", "value": 2},
+                "categoryTypeCb": {"name": "Pronájem", "value": 2},
+                "categoryMainCb": {"name": "Byty", "value": 1},
+                "categorySubCb": {"name": "2+kk", "value": 4},
+                "images": [
+                  {"url": "//d18-a.sdn.cz/d_18/c_img_qF_C/nOdL4BtPEyBuWMSBCmHywh86/c27a.jpeg", "order": 1}
+                ],
+                "locality": {
+                  "city": "Praha",
+                  "citySeoName": "praha",
+                  "cityPart": "Josefov",
+                  "cityPartSeoName": "josefov",
+                  "district": "Praha 1",
+                  "latitude": 50.0892,
+                  "longitude": 14.4184,
+                  "street": "Maiselova",
+                  "streetSeoName": "maiselova"
+                }
+              },
+              {
+                "id": 3273384012,
+                "name": "Prodej bytu 2+1 56 m²",
+                "priceCzk": 0,
+                "priceUnitCb": {"name": "za nemovitost", "value": 1},
+                "categoryTypeCb": {"name": "Prodej", "value": 1},
+                "categoryMainCb": {"name": "Byty", "value": 1},
+                "categorySubCb": {"name": "2+1", "value": 5},
+                "images": [
+                  {"url": "https://d18-a.sdn.cz/d_18/c_img_sale.jpg", "order": 1}
+                ],
+                "locality": {
+                  "city": "Kladno",
+                  "citySeoName": "kladno",
+                  "cityPart": "Kročehlavy",
+                  "cityPartSeoName": "krocehlavy",
+                  "district": "Kladno",
+                  "latitude": 50.1352419889476,
+                  "longitude": 14.1196203231812,
+                  "street": "Otevřená",
+                  "streetNumber": "1324",
+                  "streetSeoName": "otevrena"
+                }
+              },
+              {
+                "id": 2864177228,
+                "name": "Pronájem rodinného domu 179 m², pozemek 760 m²",
+                "priceCzk": 65000,
+                "priceUnitCb": {"name": "za měsíc", "value": 2},
+                "categoryTypeCb": {"name": "Pronájem", "value": 2},
+                "categoryMainCb": {"name": "Domy", "value": 2},
+                "categorySubCb": {"name": "Rodinný", "value": 37},
+                "images": [
+                  {"url": "https://d18-a.sdn.cz/d_18/c_img_house.jpg", "order": 1}
+                ],
+                "locality": {
+                  "city": "Průhonice",
+                  "citySeoName": "pruhonice",
+                  "cityPart": "Průhonice",
+                  "cityPartSeoName": "pruhonice",
+                  "district": "Praha-západ",
+                  "latitude": 49.996766,
+                  "longitude": 14.5724898,
+                  "street": "Pod Valem II.",
+                  "streetSeoName": "pod-valem-ii"
+                }
+              },
+              {
+                "id": 1000000001,
+                "name": "Pronájem bytu 1+kk 28 m²",
+                "priceCzk": 12000,
+                "priceUnitCb": {"name": "za měsíc", "value": 2},
+                "categoryTypeCb": {"name": "Pronájem", "value": 2},
+                "categoryMainCb": {"name": "Byty", "value": 1},
+                "categorySubCb": {"name": "1+kk", "value": 2},
+                "images": [
+                  {"url": "https://d18-a.sdn.cz/d_18/c_img_pin.jpg", "order": 1}
+                ],
+                "locality": {
+                  "city": "Praha",
+                  "citySeoName": "praha",
+                  "cityPart": "",
+                  "cityPartSeoName": "",
+                  "district": "Praha 7",
+                  "street": "",
+                  "streetSeoName": ""
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

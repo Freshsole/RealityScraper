@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import unicodedata
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
@@ -167,9 +168,23 @@ class SrealityClient:
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         try:
-            return await self._fetch_next_data(page, newest)
+            listings, total = await self._fetch_next_data(page, newest)
         except Exception:
-            return await self._fetch_html(page, newest)
+            listings, total = await self._fetch_html(page, newest)
+        self._attach_local_coords(listings)
+        return listings, total
+
+    def _attach_local_coords(self, listings: list[Listing]) -> None:
+        """Pin list cards from local city centers when JSON GPS is absent. No Photon/Nominatim."""
+        missing = [item for item in listings if item.lat is None or item.lon is None]
+        if not missing:
+            return
+        from app.places import approx_point_from_locality
+
+        for item in missing:
+            point = approx_point_from_locality((item.locality or item.name or "").strip())
+            if point:
+                item.lat, item.lon = point
 
     async def _fetch_next_data(self, page: int, newest: bool) -> tuple[list[Listing], int]:
         build_id = await self._resolve_build_id()
@@ -391,10 +406,7 @@ def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None
     price = estate.get("priceCzk")
     if price is None:
         price = estate.get("priceSummaryCzk")
-    try:
-        price_czk = int(price) if price is not None else None
-    except (TypeError, ValueError):
-        price_czk = None
+    price_czk = _price_czk(price)
     unit = _param_label(estate.get("priceUnitCb")) or "měsíc"
     if "/prodej/" in (url or "").lower():
         unit = unit if unit and unit != "měsíc" else "ks"
@@ -636,12 +648,10 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
     if not disposition:
         # Keep listing — empty disposition used to drop valid flats from catalog.
         disposition = "byt"
-    price = raw.get("priceCzk")
-    try:
-        price_czk = int(price) if price is not None else None
-    except (TypeError, ValueError):
-        price_czk = None
+    price_czk = _price_czk(raw.get("priceCzk"))
     unit = ((raw.get("priceUnitCb") or {}).get("name") or "za měsíc").strip()
+    if offer_slug(raw) == "prodej" and (not unit or "měsíc" in unit.casefold() or "mesic" in _fold_ascii(unit)):
+        unit = ((raw.get("priceSummaryUnitCb") or {}).get("name") or "ks").strip()
     price_label = format_price(price_czk, unit)
     area = parse_area(name, price_czk, raw.get("priceCzkPerSqM"))
     loc = raw.get("locality") or {}
@@ -649,7 +659,11 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
     lat, lon = coords_from_locality(loc)
     url = build_detail_url(raw)
     photos = image_urls(raw.get("images") or [])
-    extras = {"flags": ["roommate"]} if disposition.lower() == "pokoj" else {}
+    extras = extras_from_sreality(raw)
+    if disposition.lower() == "pokoj":
+        flags = extras.setdefault("flags", [])
+        if "roommate" not in flags:
+            flags.append("roommate")
     return Listing(
         id=int(listing_id),
         name=name,
@@ -753,6 +767,86 @@ def _locality_house_number(loc: dict[str, Any]) -> str:
     return ""
 
 
+def _fold_ascii(value: str) -> str:
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(ch for ch in text if not unicodedata.combining(ch)).casefold().strip()
+
+
+def _price_czk(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        price = int(value)
+    except (TypeError, ValueError):
+        return None
+    return None if price == 0 else price
+
+
+def _cb_name(raw: Any) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("name") or "").replace("\xa0", " ").strip()
+    return str(raw or "").replace("\xa0", " ").strip()
+
+
+def _cb_value(raw: Any) -> int | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return int(raw.get("value"))
+    except (TypeError, ValueError):
+        return None
+
+
+def offer_slug(raw: dict[str, Any]) -> str:
+    cb = raw.get("categoryTypeCb") or {}
+    value = _cb_value(cb)
+    if value == 1:
+        return "prodej"
+    if value == 2:
+        return "pronajem"
+    name = _fold_ascii(_cb_name(cb))
+    if "draz" in name:
+        return "drazby"
+    if "prodej" in name:
+        return "prodej"
+    return "pronajem"
+
+
+def kind_slug(raw: dict[str, Any]) -> str:
+    cb = raw.get("categoryMainCb") or {}
+    value = _cb_value(cb)
+    if value == 1:
+        return "byt"
+    if value == 2:
+        return "dum"
+    if value == 3:
+        return "pozemek"
+    if value == 4:
+        return "komercni"
+    name = _fold_ascii(_cb_name(cb))
+    mapping = {
+        "byty": "byt",
+        "byt": "byt",
+        "domy": "dum",
+        "dum": "dum",
+        "pozemky": "pozemek",
+        "pozemek": "pozemek",
+        "komercni": "komercni",
+        "ostatni": "ostatni",
+    }
+    return mapping.get(name, "byt")
+
+
+def _sub_slug(raw: dict[str, Any]) -> str:
+    name = _cb_name(raw.get("categorySubCb")) or "nemovitost"
+    compact = name.replace(" ", "")
+    if re.fullmatch(r"\d+\+kk|\d+\+\d+|6-a-vice|atypicky|pokoj", compact, re.I):
+        return compact
+    from app.localities import slugify
+
+    return slugify(name) or "nemovitost"
+
+
 def build_detail_url(raw: dict[str, Any]) -> str:
     loc = raw.get("locality") or {}
     slug = "-".join(
@@ -764,9 +858,9 @@ def build_detail_url(raw: dict[str, Any]) -> str:
         )
         if part
     )
-    offer = "pronajem"
-    kind = "byt"
-    disposition = ((raw.get("categorySubCb") or {}).get("name") or "byt").replace(" ", "")
+    offer = offer_slug(raw)
+    kind = kind_slug(raw)
+    disposition = _sub_slug(raw)
     return f"https://www.sreality.cz/detail/{offer}/{kind}/{disposition}/{slug}/{raw['id']}"
 
 
