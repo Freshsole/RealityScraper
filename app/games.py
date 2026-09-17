@@ -143,14 +143,16 @@ DEFAULT_GAME_ESTATE = "byty"
 # Prefer live catalog once at least one locality has two priced, distinct listings.
 MIN_LIVE_LOCALITY_PAIRS = 1
 # Live cards are noisy: ignore missing fields and tiny gaps so "teaching" still means
-# worse = dearer AND (clearly smaller OR worse disposition) AND not a better Kč/m² deal.
-MIN_TEACH_PRICE_GAP = 800
-MIN_TEACH_PRICE_RATIO = 0.04
-MIN_TEACH_AREA_GAP = 6
-MIN_TEACH_M2_GAP = 25
-MIN_TEACH_M2_RATIO = 0.05
+# worse = dearer AND (clearly smaller OR worse disposition) AND a clearer Kč/m² deal.
+MIN_TEACH_PRICE_GAP = 1500
+MIN_TEACH_PRICE_RATIO = 0.08
+MIN_TEACH_AREA_GAP = 10
+MIN_TEACH_M2_GAP = 40
+MIN_TEACH_M2_RATIO = 0.10
+# 2+kk vs 2+1 is one rank — too noisy to teach on disposition alone.
+MIN_TEACH_DISP_GAP = 2
 # When several teaching pairs exist, stay in the high-contrast band (price/m² + size).
-CLEAR_TEACH_KEEP = 0.6
+CLEAR_TEACH_KEEP = 0.75
 DEFAULT_VANISH_HOURS = 8.0
 # first_seen == last_seen on ingest is not a vanish time.
 MIN_OBSERVED_VANISH_HOURS = 0.75
@@ -168,20 +170,20 @@ _HINT_CAP = 600
 
 _INTRO_COPY = (
     "Oba byty jsou ve stejné lokalitě. Který je levnější? "
-    "Lepší byt může stát míň — a přesně ty mizí první."
+    "Lepší byt může stát míň — i za metr — a přesně ty mizí první."
 )
 _TEACH_OK = (
-    "Přesně tak: lepší byt může stát míň. Takové nabídky mizí jako první — "
+    "Lepší byt stál míň i za metr. Takové nabídky mizí jako první — "
     "podobné byty mizí {vanish}."
 )
 _TEACH_MISS = (
-    "Dražší byt byl menší nebo v horší dispozici. Dobré ceny v jedné ulici mizí {vanish}."
+    "Dražší byt byl horší za metr. Lepší dispozice za míň peněz mizí {vanish}."
 )
 _RANDOM_OK = (
-    "Správně. Ve stejné lokalitě se ceny hodně rozcházejí — a výhodné kousky mizí {vanish}."
+    "Ve stejné lokalitě se ceny hodně rozcházejí — výhodné kousky mizí {vanish}."
 )
 _RANDOM_MISS = (
-    "Špatně. Levnější byt ve stejné lokalitě už často není. Podobné nabídky mizí {vanish}."
+    "Levnější byt ve stejné lokalitě už často není. Podobné nabídky mizí {vanish}."
 )
 _RENT_INTRO = (
     "Pět bytů ze stejné čtvrti. Napište měsíční nájem čísly — mezery doplníme. "
@@ -262,24 +264,17 @@ def _meaningful_m2_gap(gap: float, cheap_m2: float) -> bool:
     return gap >= MIN_TEACH_M2_GAP or (cheap_m2 > 0 and gap / cheap_m2 >= MIN_TEACH_M2_RATIO)
 
 
-def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    """True when the dearer flat is also worse (smaller and/or worse disposition).
+def _m2_label(item: dict[str, Any]) -> str:
+    rent = _unit_rent(item)
+    if rent is None:
+        return ""
+    return f"{int(round(rent)):,} Kč/m²".replace(",", " ")
 
-    Pedagogical lesson: a clearly better flat can still be cheaper — and those
-    vanish first. Missing area/disposition and tiny live-data gaps do not count.
-    When both cards have area, the cheaper one must also be the better Kč/m² deal
-    so a tiny 3+kk cannot masquerade against a larger, dearer 2+kk.
-    """
-    cheap, dear = _price_order(left, right)
-    if cheap is None:
-        return False
-    cheap_price = _as_int(cheap.get("price_czk"))
-    dear_price = _as_int(dear.get("price_czk"))
-    if not cheap_price or not dear_price:
-        return False
-    gap = dear_price - cheap_price
-    if gap < MIN_TEACH_PRICE_GAP and gap / cheap_price < MIN_TEACH_PRICE_RATIO:
-        return False
+
+def _teach_axes(
+    cheap: dict[str, Any], dear: dict[str, Any]
+) -> tuple[bool, bool, int, int | None, int | None]:
+    """worse_area, worse_disp, disp_gap, cheap_area, dear_area — live-noise safe."""
     cheap_area = _as_int(cheap.get("area_m2"))
     dear_area = _as_int(dear.get("area_m2"))
     cheap_disp = disposition_rank(str(cheap.get("disposition") or ""))
@@ -291,12 +286,38 @@ def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
         and dear_area > 0
         and dear_area + MIN_TEACH_AREA_GAP <= cheap_area
     )
-    worse_disp = cheap_disp > 0 and dear_disp > 0 and dear_disp < cheap_disp
+    disp_gap = cheap_disp - dear_disp if cheap_disp > 0 and dear_disp > 0 else 0
+    worse_disp = disp_gap >= MIN_TEACH_DISP_GAP
+    return worse_area, worse_disp, disp_gap, cheap_area, dear_area
+
+
+def is_teaching_pair(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """True when the dearer flat is also worse (smaller and/or worse disposition).
+
+    Pedagogical lesson: a clearly better flat can still be cheaper — and those
+    vanish first. Missing area (unclear Kč/m²), near-ties, and 2+kk vs 2+1
+    disposition noise do not count. Both cards need area so the cheaper one is
+    also the better Kč/m² deal — a tiny 3+kk cannot masquerade against a larger
+    dearer 2+kk.
+    """
+    cheap, dear = _price_order(left, right)
+    if cheap is None:
+        return False
+    cheap_price = _as_int(cheap.get("price_czk"))
+    dear_price = _as_int(dear.get("price_czk"))
+    if not cheap_price or not dear_price:
+        return False
+    gap = dear_price - cheap_price
+    if gap < MIN_TEACH_PRICE_GAP and gap / cheap_price < MIN_TEACH_PRICE_RATIO:
+        return False
+    worse_area, worse_disp, _disp_gap, cheap_area, dear_area = _teach_axes(cheap, dear)
+    if not cheap_area or not dear_area:
+        return False
     if not (worse_area or worse_disp):
         return False
     m2_gap = _m2_deal_gap(cheap, dear)
     if m2_gap is None:
-        return True
+        return False
     cheap_m2 = _unit_rent(cheap) or 0.0
     return _meaningful_m2_gap(m2_gap, cheap_m2)
 
@@ -313,20 +334,9 @@ def teaching_contrast(left: dict[str, Any], right: dict[str, Any]) -> float:
         return 0.0
     cheap_price = _as_int(cheap.get("price_czk")) or 1
     dear_price = _as_int(dear.get("price_czk")) or 0
-    cheap_area = _as_int(cheap.get("area_m2"))
-    dear_area = _as_int(dear.get("area_m2"))
-    cheap_disp = disposition_rank(str(cheap.get("disposition") or ""))
-    dear_disp = disposition_rank(str(dear.get("disposition") or ""))
+    worse_area, worse_disp, disp_gap, cheap_area, dear_area = _teach_axes(cheap, dear)
     cheap_m2 = _unit_rent(cheap)
     dear_m2 = _unit_rent(dear)
-    worse_area = (
-        cheap_area is not None
-        and dear_area is not None
-        and cheap_area > 0
-        and dear_area > 0
-        and dear_area + MIN_TEACH_AREA_GAP <= cheap_area
-    )
-    worse_disp = cheap_disp > 0 and dear_disp > 0 and dear_disp < cheap_disp
     if cheap_m2 and dear_m2 and dear_m2 > cheap_m2:
         score = (dear_m2 - cheap_m2) / cheap_m2
         m2_axis = True
@@ -336,7 +346,7 @@ def teaching_contrast(left: dict[str, Any], right: dict[str, Any]) -> float:
     if worse_area and cheap_area and dear_area:
         score += (cheap_area - dear_area) / max(dear_area, 1)
     if worse_disp:
-        score += (cheap_disp - dear_disp) / 4.0
+        score += disp_gap / 4.0
     axes = int(m2_axis) + int(bool(worse_area)) + int(bool(worse_disp))
     if axes >= 2:
         score += 0.4 * (axes - 1)
@@ -418,6 +428,11 @@ def public_card(item: dict[str, Any], *, include_price: bool = False) -> dict[st
     if include_price:
         card["price_czk"] = item.get("price_czk")
         card["price_label"] = item.get("price_label") or _price_label(item.get("price_czk"))
+        m2_label = _m2_label(item)
+        if m2_label:
+            rent = _unit_rent(item)
+            card["price_m2"] = int(round(rent)) if rent is not None else None
+            card["price_m2_label"] = m2_label
     return card
 
 
@@ -825,7 +840,7 @@ def _pick_teaching_pair(
     best = scored[0][1]
     floor = best * CLEAR_TEACH_KEEP
     clear = [pair for pair, score in scored if score >= floor]
-    keep = max(1, min(3, len(clear)))
+    keep = max(1, min(2, len(clear)))
     return rng.choice(clear[:keep])
 
 

@@ -43,6 +43,13 @@
   const specText = (item) =>
     [item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" · ");
 
+  const m2Label = (item) => String(item?.price_m2_label || "").trim();
+
+  const m2Compare = (left, right) => {
+    const labels = [m2Label(left), m2Label(right)].filter(Boolean);
+    return labels.length === 2 ? labels.join(" vs ") : "";
+  };
+
   const ccyPill = () =>
     `<span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>`;
 
@@ -82,7 +89,10 @@
         <div class="portal">${escapeHtml(item.portal_label || "")}</div>
       </div>
       <div class="amount-stack">
-        <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmtNum(item.price_czk)}` : "— — —"}</div>
+        <div class="amount-col">
+          <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmtNum(item.price_czk)}` : "— — —"}</div>
+          ${revealed && m2Label(item) ? `<div class="flat-m2">${escapeHtml(m2Label(item))}</div>` : ""}
+        </div>
         ${ccyPill()}
       </div>
     </button>
@@ -136,6 +146,7 @@
           played += 1;
           streak = correct ? streak + 1 : 0;
           const message = correct ? data.copy_ok : data.copy_miss;
+          const unit = m2Compare(left, right);
           board.innerHTML = `
             <div class="loc-chip">${escapeHtml(locality)}</div>
             ${rowHtml(left, { revealed: true, state: data.cheaper === "left" ? "win" : "lose" })}
@@ -143,6 +154,7 @@
             ${rowHtml(right, { revealed: true, state: data.cheaper === "right" ? "win" : "lose" })}
             ${infoRows([
               ["Stejná lokalita", locality],
+              ["Kč za m²", unit],
               ["Takové nabídky mizí", vanish],
             ])}
             <div class="mint-banner">
@@ -151,7 +163,7 @@
             </div>
             <div class="converter-actions">
               <button class="pill pill-lg" type="button" id="hl-next">Další dvojice</button>
-              <a class="pill-ghost" href="/registrace">Hlídat podobné byty</a>
+              <a class="pill-ghost" href="/registrace">Hlídat, než zmizí</a>
             </div>
           `;
           renderScore();

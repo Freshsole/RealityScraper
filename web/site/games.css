@@ -502,6 +502,13 @@ button {
   min-width: 168px;
 }
 
+.amount-col {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+  min-width: 0;
+}
+
 .info-rows {
   margin-top: 8px;
   border-top: 1px solid var(--line);
@@ -666,6 +673,20 @@ button {
   color: var(--faint);
   font-size: 32px;
   font-weight: 600;
+}
+
+.flat-m2 {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gray-2);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.flat-row.win .flat-m2 {
+  color: var(--positive);
 }
 
 .vs-row {
@@ -1076,6 +1097,10 @@ button {
     justify-content: space-between;
     min-width: 0;
     width: 100%;
+  }
+
+  .amount-col {
+    justify-items: start;
   }
 
   .flat-price {

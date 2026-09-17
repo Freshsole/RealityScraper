@@ -131,18 +131,42 @@ def test_teaching_pair_better_and_cheaper():
     larger_dear = _flat("big-2kk", "Praha 2 – Vinohrady", "2+kk", 70, 22000)
     assert is_teaching_pair(fake_better, larger_dear) is False
     assert teaching_contrast(fake_better, larger_dear) == 0
+    # Missing area → unclear Kč/m², even with a better disposition.
+    missing_disp = _flat("gap-3kk", "Praha 2 – Vinohrady", "3+kk", None, 18000)
+    dear_studio = _flat("studio", "Praha 2 – Vinohrady", "1+kk", 30, 24000)
+    assert is_teaching_pair(missing_disp, dear_studio) is False
+    # Same layout, 8 m² / 1 200 Kč — near-tie, not a lesson.
+    weak_a = _flat("weak-a", "Praha 2 – Vinohrady", "2+kk", 50, 19600)
+    weak_b = _flat("weak-b", "Praha 2 – Vinohrady", "2+kk", 42, 20800)
+    assert is_teaching_pair(weak_a, weak_b) is False
+    # 2+1 vs 2+kk with almost the same floor — disposition noise.
+    plus_one = _flat("plus-one", "Praha 2 – Vinohrady", "2+1", 50, 18800)
+    plus_kk = _flat("plus-kk", "Praha 2 – Vinohrady", "2+kk", 48, 21400)
+    assert is_teaching_pair(plus_one, plus_kk) is False
+    # Price near-tie (800 Kč / 4 %) even when the cheaper flat is bigger.
+    near_price = _flat("near-big", "Praha 2 – Vinohrady", "3+kk", 86, 18100)
+    near_dear = _flat("near-small", "Praha 2 – Vinohrady", "2+kk", 48, 18900)
+    assert is_teaching_pair(near_price, near_dear) is False
+    # Tiny Kč/m² gap with a 1-rank layout bump is not teaching.
+    fuzzy_m2 = _flat("fuzzy-3kk", "Praha 2 – Vinohrady", "3+kk", 80, 20000)
+    fuzzy_dear = _flat("fuzzy-2kk", "Praha 2 – Vinohrady", "2+kk", 76, 20500)
+    assert is_teaching_pair(fuzzy_m2, fuzzy_dear) is False
 
 
 def test_teaching_contrast_ranks_price_m2_area_and_disposition():
     clear_good = _flat("clear-good", "Praha 3 – Žižkov", "4+kk", 92, 17500)
     clear_bad = _flat("clear-bad", "Praha 3 – Žižkov", "1+kk", 28, 24800)
+    mid_good = _flat("mid-good", "Praha 3 – Žižkov", "3+kk", 70, 19800)
+    mid_bad = _flat("mid-bad", "Praha 3 – Žižkov", "2+kk", 48, 23600)
     weak_a = _flat("weak-a", "Praha 3 – Žižkov", "2+kk", 50, 19600)
     weak_b = _flat("weak-b", "Praha 3 – Žižkov", "2+kk", 42, 20800)
     clear = teaching_contrast(clear_good, clear_bad)
-    weak = teaching_contrast(weak_a, weak_b)
+    mid = teaching_contrast(mid_good, mid_bad)
     assert is_teaching_pair(clear_good, clear_bad)
-    assert is_teaching_pair(weak_a, weak_b)
-    assert clear > weak * 2
+    assert is_teaching_pair(mid_good, mid_bad)
+    assert is_teaching_pair(weak_a, weak_b) is False
+    assert teaching_contrast(weak_a, weak_b) == 0
+    assert clear > mid * 1.4
     assert clear > 2.0
 
 
@@ -170,6 +194,13 @@ def test_higher_lower_seed_pair(tmp_path: Path):
     assert pair["locality_key"]
     assert pair["pair_kind"] in {"teaching", "random"}
     assert {"cheaper", "copy", "copy_ok", "copy_miss", "left", "right", "seeded", "vanish_hours", "vanish_label"} <= set(pair)
+    assert "Správně." not in (pair.get("copy_ok") or "")
+    assert "Špatně." not in (pair.get("copy_miss") or "")
+    assert "za metr" in (pair.get("copy") or "")
+    for side in (pair["left"], pair["right"]):
+        if side.get("area_m2") and side.get("price_czk"):
+            assert side.get("price_m2_label", "").endswith("Kč/m²")
+            assert side.get("price_m2")
 
 
 def test_pairs_never_mix_cities():
@@ -215,15 +246,21 @@ def test_teaching_pick_prefers_clear_price_m2_contrast():
     pool = [
         _flat("clear-good", "Praha 3 – Žižkov", "4+kk", 92, 17500),
         _flat("clear-bad", "Praha 3 – Žižkov", "1+kk", 28, 24800),
+        _flat("mid-good", "Praha 3 – Žižkov", "3+kk", 70, 19800),
+        _flat("mid-bad", "Praha 3 – Žižkov", "2+kk", 48, 23600),
         _flat("weak-a", "Praha 3 – Žižkov", "2+kk", 50, 19600),
         _flat("weak-b", "Praha 3 – Žižkov", "2+kk", 42, 20800),
+        _flat("disp-a", "Praha 3 – Žižkov", "2+1", 50, 18800),
+        _flat("disp-b", "Praha 3 – Žižkov", "2+kk", 48, 21400),
         _flat("noise", "Praha 3 – Žižkov", "2+kk", 48, 19700),
+        _flat("gap", "Praha 3 – Žižkov", "3+kk", None, 17100),
     ]
-    weak = teaching_contrast(
-        next(item for item in pool if item["id"] == "weak-a"),
-        next(item for item in pool if item["id"] == "weak-b"),
+    mid = teaching_contrast(
+        next(item for item in pool if item["id"] == "mid-good"),
+        next(item for item in pool if item["id"] == "mid-bad"),
     )
     clear_ids = frozenset({"clear-good", "clear-bad"})
+    noise_ids = {"weak-a", "weak-b", "disp-a", "disp-b", "noise", "gap"}
     picked = []
     for seed in range(80):
         pair = pick_same_locality_pair(pool, rng=random.Random(seed), teaching_ratio=1.0)
@@ -231,10 +268,15 @@ def test_teaching_pick_prefers_clear_price_m2_contrast():
         picked.append(ids)
         assert pair["pair_kind"] == "teaching"
         assert is_teaching_pair(pair["left"], pair["right"])
-        assert teaching_contrast(pair["left"], pair["right"]) >= weak
+        assert teaching_contrast(pair["left"], pair["right"]) >= mid
+        assert not ids.issubset(noise_ids)
         assert "v řádu minut" not in (pair.get("copy") or "")
         assert "v řádu minut" not in (pair.get("copy_ok") or "")
-    assert picked.count(clear_ids) >= 50
+        assert "Správně." not in (pair.get("copy_ok") or "")
+        assert "za metr" in (pair.get("copy_ok") or "")
+        assert pair["left"].get("price_m2_label")
+        assert pair["right"].get("price_m2_label")
+    assert picked.count(clear_ids) >= 60
 
 
 def test_cold_path_does_not_block_on_slow_catalog(tmp_path: Path):
@@ -405,17 +447,17 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "v řádu minut" not in rent
     assert "v řádu minut" not in hub
     assert "v řádu minut" not in html
-    assert "games.css?v=15" in hub
+    assert "games.css?v=16" in hub
     assert "board-tease" in rent
     assert "jen admin" in rent
     assert "Ve hře skóre uvidíte jen vy" in rent
     assert "rent-hint" in rent
     assert "mezery doplníme" in rent
     assert "18 000" in rent
-    assert "games.js?v=13" in rent
-    assert "games.css?v=15" in rent
-    assert "games.js?v=13" in html
-    assert "games.css?v=15" in html
+    assert "games.js?v=14" in rent
+    assert "games.css?v=16" in rent
+    assert "games.js?v=14" in html
+    assert "games.css?v=16" in html
     assert "vidíte v administraci" not in hub
     assert "Výhodné kousky" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
@@ -436,9 +478,16 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert ".game-hub" in css
     assert "background: var(--surface)" in css
     assert ".game-card .pill" in css
+    assert ".amount-col" in css
+    assert ".flat-m2" in css
     assert "ccy-pill" in js
     assert "info-rows" in js
     assert "pill-ghost" in js
+    assert "amount-col" in js
+    assert "flat-m2" in js
+    assert "m2Compare" in js
+    assert "Kč za m²" in js
+    assert "Hlídat, než zmizí" in js
     assert "rent-unit" in js
     assert "rent-hint" in js
     assert "replace(/[^\\d]/g, \"\")" in js
@@ -865,6 +914,9 @@ def _noisy_live_pool():
         _flat("live-z3", "Žižkov, Praha 3", "2+kk", 48, 19600, portal="idnes"),
         _flat("live-z4", "Praha 3 – Žižkov", "2+kk", 49, 19700, portal="sreality"),
         _flat("live-z-miss", "Praha 3 – Žižkov", "2+kk", None, 31000, portal="bezrealitky"),
+        _flat("live-z-near", "Praha 3 – Žižkov", "2+kk", 50, 19800, portal="sreality"),
+        _flat("live-z-21", "Praha 3", "2+1", 50, 18800, portal="idnes"),
+        _flat("live-z-kk", "Praha 3 – Žižkov", "2+kk", 48, 21400, portal="annonce"),
         _flat("live-v1", "Praha 2 – Vinohrady", "3+kk", 80, 21900, portal="ulovdomov"),
         _flat("live-v2", "Vinohrady, Praha 2", "1+kk", 31, 26800, portal="idnes"),
         _flat("live-b1", "Bedihošť", "1+kk", 28, 9000, portal="annonce"),
@@ -892,6 +944,11 @@ def test_live_noisy_pool_keeps_teaching_rate_and_same_place():
         assert pair["seeded"] is False
         if pair["pair_kind"] == "teaching":
             assert is_teaching_pair(pair["left"], pair["right"])
+            assert "live-z-miss" not in ids
+            assert ids != {"live-z3", "live-z4"}
+            assert ids != {"live-z-near", "live-z3"}
+            assert ids != {"live-z-21", "live-z-kk"}
+            assert teaching_contrast(pair["left"], pair["right"]) > 0.8
         kinds.append(pair["pair_kind"])
     rate = kinds.count("teaching") / n
     assert 0.72 <= rate <= 0.88, f"live-pool teaching rate {rate:.3f}"
@@ -1084,6 +1141,8 @@ def test_rent_teaching_round_keeps_clear_price_m2_contrast():
         _flat("extra-a", "Praha 3 – Žižkov", "2+kk", 51, 19800),
         _flat("extra-b", "Praha 3 – Žižkov", "2+1", 44, 22100),
         _flat("extra-c", "Praha 3 – Žižkov", "1+1", 36, 23100),
+        _flat("disp-a", "Praha 3 – Žižkov", "2+1", 50, 18800),
+        _flat("disp-b", "Praha 3 – Žižkov", "2+kk", 48, 21400),
     ]
     for seed in range(40):
         row = pick_rent_round(pool, rng=random.Random(seed), teaching_ratio=1.0)
