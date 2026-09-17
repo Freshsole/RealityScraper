@@ -382,7 +382,24 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "roundMeta.copy" in js
     assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
+    assert 'width="390"' in js
+    assert 'width="504"' not in js
+    assert 'size="8"' in js
     assert ".converter-actions .pill" in css
+    assert ".converter-actions .pill-ghost" in css
+    assert "@media (max-width: 480px)" in css
+    phone = css.split("@media (max-width: 480px)", 1)[1]
+    assert "--pad: 16px" in phone
+    assert "grid-column: 1 / -1" in phone
+    assert "font-size: 40px" in phone
+    assert "min-height: 48px" in phone
+    assert ".info-row" in phone
+    assert "fonts.googleapis" not in phone
+    ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
+    assert "flex-shrink: 0" in ccy
+    assert "max-width: 100%" in css.split(".converter {", 1)[1].split("}", 1)[0]
+    assert "max-width: 100%" in css.split(".rent-hero-img {", 1)[1].split("}", 1)[0]
+    assert "width: 0" in css.split(".rent-amount input {", 1)[1].split("}", 1)[0]
 
 
 def test_admin_games_leaderboard_uses_five_column_wise_grid():

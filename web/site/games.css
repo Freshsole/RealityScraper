@@ -369,8 +369,10 @@ button {
   gap: 64px;
   align-items: start;
   padding: 56px var(--gutter) 40px;
+  width: 100%;
   max-width: calc(var(--page) + var(--gutter) * 2);
   margin: 0 auto;
+  min-width: 0;
 }
 
 .game-copy {
@@ -415,6 +417,9 @@ button {
   display: grid;
   gap: 0;
   min-height: 420px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 @keyframes game-shimmer {
@@ -449,6 +454,7 @@ button {
   font-size: 14px;
   font-weight: 600;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .ccy-pill::after {
@@ -500,6 +506,11 @@ button {
   color: var(--gray);
 }
 
+.info-row span,
+.info-row strong {
+  min-width: 0;
+}
+
 .info-row:last-child {
   border-bottom: 0;
 }
@@ -508,6 +519,7 @@ button {
   color: var(--forest);
   font-weight: 600;
   text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .loc-chip {
@@ -649,6 +661,14 @@ button {
   width: 100%;
 }
 
+.converter-actions .pill-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+}
+
 .game-status {
   max-width: var(--page);
   margin: 0 auto;
@@ -709,6 +729,7 @@ button {
 
 .rent-hero-img {
   width: 100%;
+  max-width: 100%;
   height: 180px;
   object-fit: cover;
   border-radius: 19px;
@@ -719,13 +740,17 @@ button {
 .rent-amount {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
   padding: 8px 0 16px;
   border-bottom: 1px solid var(--line);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .rent-amount input {
-  width: 100%;
+  width: 0;
+  flex: 1 1 0;
   min-width: 0;
   border: 0;
   background: transparent;
@@ -899,5 +924,161 @@ button {
 
   .pill-lg {
     width: 100%;
+  }
+}
+
+/* Phone ~390px — Wise converter card, Kč pills, CTAs, FOMO rows */
+@media (max-width: 480px) {
+  :root {
+    --pad: 16px;
+  }
+
+  .navbar {
+    min-height: 64px;
+    gap: 10px;
+  }
+
+  .brand {
+    font-size: 20px;
+  }
+
+  .game-play,
+  .game-hero {
+    padding: 24px var(--gutter) 28px;
+    gap: 20px;
+  }
+
+  .game-copy {
+    gap: 14px;
+    padding-top: 0;
+  }
+
+  .game-copy .display,
+  .game-hero .display {
+    font-size: 36px;
+    line-height: 0.86;
+  }
+
+  .lead {
+    font-size: 16px;
+  }
+
+  .game-play,
+  .game-copy,
+  .converter,
+  .rent-amount,
+  .flat-row,
+  .amount-stack {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .converter {
+    padding: 16px;
+    min-height: 0;
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  .loc-chip {
+    max-width: 100%;
+    margin-bottom: 14px;
+    white-space: normal;
+  }
+
+  .flat-row {
+    grid-template-columns: 64px minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px 0;
+    margin: 0;
+  }
+
+  .flat-thumb {
+    width: 64px;
+    height: 64px;
+  }
+
+  .amount-stack {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .flat-price {
+    font-size: 40px;
+    min-width: 0;
+  }
+
+  .flat-price.is-hidden {
+    font-size: 28px;
+  }
+
+  .rent-amount input {
+    font-size: 40px;
+  }
+
+  .rent-hero-img {
+    height: 160px;
+    margin-bottom: 16px;
+  }
+
+  .info-row {
+    align-items: flex-start;
+    gap: 8px 12px;
+    padding: 10px 0;
+  }
+
+  .mint-banner {
+    padding: 14px;
+    margin-top: 16px;
+  }
+
+  .converter-actions {
+    margin-top: 16px;
+  }
+
+  .converter-actions .pill,
+  .game-band .pill,
+  .game-card .pill {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .rent-result-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .rent-result-row .amount-stack {
+    justify-content: space-between;
+  }
+
+  .rent-result-row .flat-price {
+    font-size: 22px;
+  }
+
+  .game-band {
+    padding: 40px var(--gutter);
+  }
+
+  .game-band .display {
+    font-size: 32px;
+    line-height: 0.86;
+  }
+
+  .game-band p {
+    font-size: 16px;
+  }
+
+  .game-hub,
+  .game-card {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .game-card {
+    padding: 24px 20px;
+    min-height: 0;
   }
 }
