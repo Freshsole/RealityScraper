@@ -1390,7 +1390,7 @@
         if (key === lastMapQueryKey) return;
         lastMapQueryKey = key;
         loadCatalog();
-      }, 900);
+      }, 550);
     });
   }
 
@@ -2009,9 +2009,76 @@
       const pins = uniqueOffers(pinData.items || []);
       if (pins.length) renderMapPins(pins);
       else if (seq === catalogSeq) renderMapPins([]);
+      if (pinData.stale) scheduleCatalogRetry(seq);
     } catch (err) {
       if (err?.name === "AbortError") return;
       /* list is already visible */
+    }
+  }
+
+  let lastFreshKey = "";
+  let freshTimer = 0;
+  let staleRetrying = false;
+
+  function pinInViewport(item) {
+    if (!catalogMap || item?.lat == null || item?.lon == null) return false;
+    const lat = Number(item.lat);
+    const lon = Number(item.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || (!lat && !lon)) return false;
+    try {
+      return catalogMap.getBounds().contains([lat, lon]);
+    } catch {
+      return false;
+    }
+  }
+
+  function mergeFreshListing(item) {
+    if (!item || item.id == null) return;
+    const key = listingKey(item);
+    const knownList = lastItems.some((row) => listingKey(row) === key);
+    const knownPin = pinItems.some((row) => listingKey(row) === key);
+    if (!knownList && selected.sort === "newest") {
+      lastItems = uniqueOffers([item, ...lastItems]);
+      total = Math.max(total, lastItems.length);
+      renderList(lastItems, false);
+      const countEl = $("catalog-count");
+      if (countEl) countEl.textContent = `${total} nemovitostí`;
+      const empty = $("catalog-empty");
+      if (empty) empty.hidden = lastItems.length > 0;
+    }
+    if (!knownPin && (pinInViewport(item) || item.lat == null)) {
+      renderMapPins(uniqueOffers([item, ...pinItems]));
+    }
+  }
+
+  function scheduleCatalogRetry(seq) {
+    if (staleRetrying) return;
+    staleRetrying = true;
+    window.setTimeout(() => {
+      staleRetrying = false;
+      if (seq !== catalogSeq || catalogBusy) return;
+      loadCatalog();
+    }, 1200);
+  }
+
+  async function pollCatalogFreshness() {
+    if (document.hidden || catalogBusy || !loaded) return;
+    try {
+      const response = await fetch("/api/catalog/fresh", { signal: AbortSignal.timeout(4000) });
+      if (!response.ok) return;
+      const data = await response.json();
+      const key = data.listing_key || "";
+      if (!key) return;
+      if (!lastFreshKey) {
+        lastFreshKey = key;
+        return;
+      }
+      if (key === lastFreshKey) return;
+      lastFreshKey = key;
+      mergeFreshListing(data);
+      refreshCatalogPins(catalogSeq);
+    } catch {
+      /* keep last pins */
     }
   }
 
@@ -2076,6 +2143,7 @@
       });
       if (!response.ok) throw new Error("catalog");
       data = await response.json();
+      if (data.stale) scheduleCatalogRetry(seq);
     } catch (err) {
       window.clearTimeout(timeout);
       if (seq !== catalogSeq) {
@@ -2100,6 +2168,8 @@
       const items = uniqueOffers(data.items || []);
       const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
       total = data.total || 0;
+      const newest = items[0]?.canonical_key || items[0]?.listing_key || "";
+      if (newest && selected.sort === "newest" && offset === 0) lastFreshKey = newest;
       renderFacets(data.facets);
       if (append) lastItems = uniqueOffers(lastItems.concat(items));
       else lastItems = items;
@@ -2561,6 +2631,11 @@
     ensureMap();
     settingsReady.finally(() => {
       if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
+    });
+    window.clearInterval(freshTimer);
+    freshTimer = window.setInterval(pollCatalogFreshness, 8000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) pollCatalogFreshness();
     });
     // Deep-link from Chrome extension CTA
     const deep = new URLSearchParams(location.search);

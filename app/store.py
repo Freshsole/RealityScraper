@@ -531,6 +531,9 @@ class Store:
         self._new_today_cache = None
         self._landing_preview_cache = None
 
+    def _invalidate_monitors(self) -> None:
+        self._hot_json_cache.pop(self._hot_json_key("monitors"), None)
+
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         """Open SQLite with a reader/writer split.
 
@@ -613,12 +616,16 @@ class Store:
 
     def _hot_json_put(self, key: str, payload: Any) -> None:
         self._hot_json_cache[key] = (time.monotonic(), payload)
-        if len(self._hot_json_cache) <= 48:
+        if len(self._hot_json_cache) <= 96:
             return
         oldest = min(self._hot_json_cache, key=lambda item: self._hot_json_cache[item][0])
         self._hot_json_cache.pop(oldest, None)
 
-    def _hot_json(self, key: str, fn):
+    def _hot_json(self, key: str, fn, *, fresh_age: float = 0.0):
+        if fresh_age > 0:
+            cached = self._hot_json_get(key, max_age=fresh_age)
+            if cached is not None:
+                return cached
         try:
             payload = fn()
         except sqlite3.OperationalError:
@@ -2079,7 +2086,14 @@ class Store:
             conn.execute("DELETE FROM templates WHERE id = ?", (template_id,))
 
     def list_monitors(self) -> list[dict[str, Any]]:
-        with self.connect() as conn:
+        return self._hot_json(
+            self._hot_json_key("monitors"),
+            self._list_monitors_query,
+            fresh_age=2.0,
+        )
+
+    def _list_monitors_query(self) -> list[dict[str, Any]]:
+        with self.read() as conn:
             rows = conn.execute("SELECT * FROM monitors ORDER BY created_at").fetchall()
             tracked, today = self._monitor_count_maps(conn)
         return [
@@ -2089,9 +2103,9 @@ class Store:
 
     def list_monitors_light(self) -> list[dict[str, Any]]:
         """Monitor-loop view without expensive aggregate counts."""
-        with self.connect() as conn:
+        with self.read() as conn:
             rows = conn.execute("SELECT * FROM monitors ORDER BY created_at").fetchall()
-        return [self._monitor_row(row) for row in rows]
+        return [self._monitor_row(row, tracked=0, new_today=0) for row in rows]
 
     def _monitor_count_maps(self, conn: sqlite3.Connection) -> tuple[dict[str, int], dict[str, int]]:
         hits = {
@@ -2124,7 +2138,7 @@ class Store:
         return tracked, today
 
     def get_monitor(self, monitor_id: str) -> dict[str, Any] | None:
-        with self.connect() as conn:
+        with self.read() as conn:
             row = conn.execute("SELECT * FROM monitors WHERE id = ?", (monitor_id,)).fetchone()
         return self._monitor_row(row) if row else None
 
@@ -2144,6 +2158,7 @@ class Store:
             for row in extras:
                 conn.execute("UPDATE monitors SET enabled = 0 WHERE id = ?", (row["id"],))
                 names.append(row["name"] or row["id"])
+            self._invalidate_monitors()
             return names
 
     def save_monitor(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2211,6 +2226,7 @@ class Store:
         self.set_monitor_seeded(monitor_id, True)
         saved = self.get_monitor(monitor_id)
         assert saved
+        self._invalidate_monitors()
         return saved
 
     def delete_monitor(self, monitor_id: str) -> None:
@@ -2221,6 +2237,7 @@ class Store:
             conn.execute("DELETE FROM monitor_jobs WHERE monitor_id = ?", (monitor_id,))
             conn.execute("DELETE FROM monitor_hits WHERE monitor_id = ?", (monitor_id,))
             conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('monitors_initialized', '1')")
+        self._invalidate_monitors()
 
     def set_monitor_seeded(self, monitor_id: str, seeded: bool) -> None:
         with self.connect() as conn:
@@ -2510,7 +2527,7 @@ class Store:
         return {int(row["id"]): dict(row) for row in rows}
 
     def count(self, monitor_id: str | None = None) -> int:
-        with self.connect() as conn:
+        with self.read() as conn:
             if monitor_id:
                 hits = conn.execute(
                     "SELECT COUNT(*) FROM monitor_hits WHERE monitor_id = ?", (monitor_id,)
@@ -2541,7 +2558,7 @@ class Store:
             sql += " AND events.monitor_id = ?"
             params.append(monitor_id)
         sql += f" GROUP BY {identity})"
-        with self.connect() as conn:
+        with self.read() as conn:
             return int(conn.execute(sql, params).fetchone()[0])
 
     def catalog_new_today_count(self) -> int:
@@ -2579,6 +2596,10 @@ class Store:
     def guest_search_used(self, ip: str, visitor_id: str) -> bool:
         ip = (ip or "").strip()
         visitor_id = (visitor_id or "").strip()
+        key = self._hot_json_key("guest-used", extra=f"{ip}:{visitor_id}")
+        return bool(self._hot_json(key, lambda: self._guest_search_used_query(ip, visitor_id), fresh_age=2.0))
+
+    def _guest_search_used_query(self, ip: str, visitor_id: str) -> bool:
         with self.read() as conn:
             if visitor_id and conn.execute(
                 "SELECT 1 FROM guest_searches WHERE visitor_id = ? LIMIT 1", (visitor_id,)
@@ -2599,6 +2620,7 @@ class Store:
                 "INSERT INTO guest_searches(token, ip, visitor_id, created_at) VALUES (?, ?, ?, ?)",
                 (token, ip, visitor_id, utc_now()),
             )
+        self._hot_json_put(self._hot_json_key("guest-used", extra=f"{ip}:{visitor_id}"), True)
         return token
 
     def landing_preview_listings(self) -> list[dict[str, Any]]:
@@ -4056,7 +4078,43 @@ class Store:
                 row["_geo_approx"] = True
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
-        return self._hot_json(self._hot_json_key("catalog", filters), lambda: self._catalog_query(filters))
+        return self._hot_json(
+            self._hot_json_key("catalog", filters),
+            lambda: self._catalog_query(filters),
+            fresh_age=1.2,
+        )
+
+    def catalog_freshness(self) -> dict[str, Any]:
+        return self._hot_json(
+            self._hot_json_key("catalog-fresh"),
+            self._catalog_freshness_query,
+            fresh_age=0.0,
+        )
+
+    def _catalog_freshness_query(self) -> dict[str, Any]:
+        with self.read(quick=True) as conn:
+            row = conn.execute(
+                """
+                SELECT listings.*, monitors.name AS monitor_name
+                FROM listings
+                LEFT JOIN monitors ON monitors.id = listings.monitor_id
+                ORDER BY listings.first_seen DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if not row:
+            return {"listing_key": "", "newest": ""}
+        data = dict(row)
+        pin = _pin_item(data)
+        item = public_listing(data)
+        pin["newest"] = item.get("first_seen") or ""
+        pin["first_seen"] = item.get("first_seen") or ""
+        pin["image_url"] = item.get("image_url") or ""
+        pin["disposition"] = item.get("disposition") or ""
+        pin["area_m2"] = item.get("area_m2")
+        pin["extras"] = item.get("extras") or {}
+        pin["monitor_name"] = item.get("monitor_name") or ""
+        return pin
 
     def _catalog_query(self, filters: dict[str, Any]) -> dict[str, Any]:
         from app.sources import PORTAL_IDS, url_likes
@@ -4444,15 +4502,18 @@ class Store:
                 ORDER BY {order}
                 LIMIT ?
             """
-            if filters.get("_bbox") is not None:
-                with self.read() as conn:
-                    total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0])
-                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
-            else:
-                count_sql = f"SELECT COUNT(*) FROM listings WHERE {clause}"
-                with self.read() as conn:
-                    total = int(conn.execute(count_sql, params).fetchone()[0])
-                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+            span = float(filters.get("_bbox_span") or 0)
+            skip_count = span >= 3.5
+            total = None
+            with self.read() as conn:
+                fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
+                if not skip_count:
+                    try:
+                        total = int(
+                            conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
+                        )
+                    except sqlite3.OperationalError:
+                        total = None
             seen_keys = set()
             rows = []
             for row in fetched:
@@ -4461,7 +4522,12 @@ class Store:
                     continue
                 seen_keys.add(key)
                 rows.append(row)
+            unique_n = len(rows)
             rows = rows[offset : offset + limit]
+            if total is None:
+                total = unique_n
+                if len(fetched) >= fetch_limit:
+                    total = max(unique_n, offset + len(rows) + (limit if len(rows) >= limit else 0))
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:
@@ -4480,7 +4546,10 @@ class Store:
             item["photos"] = _photo_urls(urls)
             items.append(item)
         self._attach_catalog_extras(items, twins=False)
-        facets = self.catalog_facets()
+        try:
+            facets = self.catalog_facets()
+        except sqlite3.OperationalError:
+            facets = self._facets_cache or {"dispositions": [], "portals": [], "monitors": []}
         payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
         include_pins = str(filters.get("include_pins") or "1").strip().lower() not in {"0", "false", "no"}
         if place_geoms:
@@ -4691,33 +4760,39 @@ class Store:
         now = time.monotonic()
         if self._facets_cache is not None and now - self._facets_at < 30:
             return self._facets_cache
-        with self.read() as conn:
-            dispositions = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT disposition FROM listings WHERE disposition IS NOT NULL AND disposition != '' GROUP BY disposition ORDER BY COUNT(*) DESC"
-                )
-            ]
-            monitors = [
-                {"id": row["id"], "name": row["name"], "enabled": bool(row["enabled"])}
-                for row in conn.execute("SELECT id, name, enabled FROM monitors ORDER BY name")
-            ]
-            portals = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT portal FROM listing_links WHERE IFNULL(gone, 0) = 0 AND portal != '' ORDER BY portal"
-                )
-            ]
-            if not portals:
-                from app.sources import PORTAL_IDS, url_likes
+        empty = {"dispositions": [], "portals": [], "monitors": []}
+        try:
+            with self.read() as conn:
+                dispositions = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT disposition FROM listings WHERE disposition IS NOT NULL AND disposition != '' GROUP BY disposition ORDER BY COUNT(*) DESC"
+                    )
+                ]
+                monitors = [
+                    {"id": row["id"], "name": row["name"], "enabled": bool(row["enabled"])}
+                    for row in conn.execute("SELECT id, name, enabled FROM monitors ORDER BY name")
+                ]
+                portals = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT portal FROM listing_links WHERE IFNULL(gone, 0) = 0 AND portal != '' ORDER BY portal"
+                    )
+                ]
+                if not portals:
+                    from app.sources import PORTAL_IDS, url_likes
 
-                for portal_id in PORTAL_IDS:
-                    likes = url_likes(portal_id) or (f"%{portal_id}%",)
-                    if any(
-                        conn.execute("SELECT 1 FROM listings WHERE url LIKE ? LIMIT 1", (like,)).fetchone()
-                        for like in likes
-                    ):
-                        portals.append(portal_id)
+                    for portal_id in PORTAL_IDS:
+                        likes = url_likes(portal_id) or (f"%{portal_id}%",)
+                        if any(
+                            conn.execute("SELECT 1 FROM listings WHERE url LIKE ? LIMIT 1", (like,)).fetchone()
+                            for like in likes
+                        ):
+                            portals.append(portal_id)
+        except sqlite3.OperationalError:
+            if self._facets_cache is not None:
+                return self._facets_cache
+            return empty
         payload = {"dispositions": dispositions, "portals": portals, "monitors": monitors}
         self._facets_cache = payload
         self._facets_at = now
@@ -5336,7 +5411,14 @@ class Store:
         return [dict(row) for row in rows]
 
     def monitor_preview(self, monitor_id: str, limit: int = 6) -> list[dict[str, Any]]:
-        with self.connect() as conn:
+        return self._hot_json(
+            self._hot_json_key("monitor-preview", extra=f"{monitor_id}:{limit}"),
+            lambda: self._monitor_preview_query(monitor_id, limit),
+            fresh_age=2.0,
+        )
+
+    def _monitor_preview_query(self, monitor_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        with self.read() as conn:
             rows = [
                 dict(row)
                 for row in conn.execute(

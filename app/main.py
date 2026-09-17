@@ -974,7 +974,10 @@ async def cms_media(name: str) -> FileResponse:
 
 @app.get("/api/status")
 async def status() -> dict:
-    return await asyncio.to_thread(hub.status)
+    try:
+        return await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.status)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="status-busy") from exc
 
 
 @app.get("/api/version")
@@ -1213,13 +1216,18 @@ async def public_landing_listings() -> dict:
     return {"items": items}
 
 
-def _guest_search_payload(request: Request, *, consume: bool) -> tuple[dict[str, Any], str | None]:
-    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+def _guest_search_payload(
+    *,
+    session_cookie: str | None,
+    guest_token: str,
+    ip: str,
+    visitor: str,
+    consume: bool,
+) -> tuple[dict[str, Any], str | None]:
+    user = user_account.user_from_session(hub.store, session_cookie)
     if user:
         return {"ok": True, "logged_in": True, "allowed": True}, None
-    token = request.cookies.get("rf_guest_search") or ""
-    ip = _client_ip(request)
-    visitor = request.cookies.get(site_stats.VISITOR_COOKIE) or ""
+    token = guest_token or ""
     if hub.store.guest_search_has_access(token):
         if consume:
             return {"ok": False, "logged_in": False, "allowed": False, "need_register": True}, None
@@ -1234,21 +1242,40 @@ def _guest_search_payload(request: Request, *, consume: bool) -> tuple[dict[str,
     return {"ok": True, "logged_in": False, "allowed": True}, granted
 
 
+def _guest_args(request: Request) -> dict[str, Any]:
+    return {
+        "session_cookie": request.cookies.get(user_account.SESSION_COOKIE),
+        "guest_token": request.cookies.get("rf_guest_search") or "",
+        "ip": _client_ip(request),
+        "visitor": request.cookies.get(site_stats.VISITOR_COOKIE) or "",
+    }
+
+
 @app.get("/api/public/guest-search")
 async def public_guest_search_status(request: Request) -> dict:
-    payload, _token = await asyncio.get_running_loop().run_in_executor(
-        hub.ui_pool, lambda: _guest_search_payload(request, consume=False)
-    )
+    args = _guest_args(request)
+    try:
+        payload, _token = await asyncio.get_running_loop().run_in_executor(
+            hub.ui_pool, lambda: _guest_search_payload(**args, consume=False)
+        )
+    except sqlite3.OperationalError:
+        return {"ok": True, "logged_in": False, "allowed": True, "remaining": 1, "stale": True}
     return payload
 
 
 @app.post("/api/public/guest-search")
 async def public_guest_search_start(request: Request) -> JSONResponse:
-    payload, token = _guest_search_payload(request, consume=True)
+    args = _guest_args(request)
+    try:
+        payload, token = await asyncio.get_running_loop().run_in_executor(
+            hub.ui_pool, lambda: _guest_search_payload(**args, consume=True)
+        )
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="guest-busy") from exc
     response = JSONResponse(payload)
     if token and payload.get("ok"):
         response.set_cookie("rf_guest_search", token, max_age=60 * 60 * 24 * 400, samesite="lax", path="/")
-        visitor = request.cookies.get(site_stats.VISITOR_COOKIE)
+        visitor = args.get("visitor")
         if visitor:
             site_stats.attach_cookie(response, visitor)
     return response
@@ -1459,6 +1486,14 @@ async def catalog(
     return await _run_catalog_query(payload)
 
 
+@app.get("/api/catalog/fresh")
+async def catalog_fresh() -> dict:
+    try:
+        return await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.store.catalog_freshness)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="catalog-busy") from exc
+
+
 @app.get("/api/catalog/pins")
 async def catalog_pins(
     portal: str = "",
@@ -1595,7 +1630,11 @@ async def save_settings(payload: dict[str, Any]) -> dict:
 
 @app.get("/api/monitors")
 async def list_monitors() -> dict:
-    return {"items": hub.store.list_monitors()}
+    try:
+        items = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.store.list_monitors)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="monitors-busy") from exc
+    return {"items": items}
 
 
 @app.post("/api/monitors")
@@ -1617,10 +1656,19 @@ async def save_monitor(payload: dict[str, Any]) -> dict:
 
 @app.get("/api/monitors/{monitor_id}/preview")
 async def preview_monitor(monitor_id: str) -> dict:
-    monitor = hub.store.get_monitor(monitor_id)
-    if not monitor:
+    def _load() -> dict[str, Any] | None:
+        monitor = hub.store.get_monitor(monitor_id)
+        if not monitor:
+            return None
+        return {"items": hub.store.monitor_preview(monitor_id)}
+
+    try:
+        payload = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, _load)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail="monitors-busy") from exc
+    if payload is None:
         raise HTTPException(404, "Monitor neexistuje")
-    return {"items": hub.store.monitor_preview(monitor_id)}
+    return payload
 
 
 @app.get("/api/monitors/{monitor_id}/convert")

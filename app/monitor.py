@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import traceback
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
@@ -63,7 +64,7 @@ class Hub:
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
-        self.ui_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-ui")
+        self.ui_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="rf-ui")
         self.auth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-auth")
         self.job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-job")
 
@@ -1740,54 +1741,59 @@ class Hub:
         now = time.monotonic()
         if not fresh and self._status_cache is not None and now - self._status_cache_at < 1.5:
             return self._status_cache
-        monitors = self.store.list_monitors()
-        errors = [item.get("last_error") for item in monitors if item.get("last_error")]
-        last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
-        catalog = self.store.catalog_sync_status()
-        tracked = self.store.count()
-        new_today = self.store.new_today_count()
-        recent = self.store.recent_notified(limit=36, twins=False)
-        recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
-        templates = self.store.list_templates()
-        settings = self.store.app_settings()
-        settle_pending_if_due(self.store)
-        scrape_tick = None
-        raw_tick = self.store.get_meta("scrape_worker_tick")
-        if raw_tick:
-            try:
-                scrape_tick = json.loads(str(raw_tick))
-            except json.JSONDecodeError:
-                scrape_tick = None
-        payload = {
-            "running": self.running,
-            "checking": self.checking,
-            "seeded": all(item.get("seeded") for item in monitors) if monitors else False,
-            "last_check": max(last_checks) if last_checks else None,
-            "last_error": self.last_error or (errors[0] if errors else None),
-            "interval_sec": config.POLL_INTERVAL_SEC,
-            "poll_pages": config.POLL_PAGES,
-            "scrape_role": config.SCRAPE_ROLE,
-            "scrape_worker": scrape_tick,
-            "tracked": tracked,
-            "new_today": new_today,
-            "search_total": catalog.get("listings") or 0,
-            "webhook_ready": bool(self.store.discord_webhook_url())
-            or any(self.store.notify_webhook(item.get("search_url") or "", item.get("webhook_url")) for item in monitors)
-            or bool(config.DISCORD_WEBHOOK_URL or config.BEZREALITKY_WEBHOOK_URL),
-            "recent": recent,
-            "recent_today": recent_today,
-            "monitors": monitors,
-            "templates": templates,
-            "settings": settings,
-            "version": current_version(),
-            "catalog_sync": catalog,
-            "catalog_running": self.catalog_running,
-            "billing": billing_state(self.store),
-            "storage": {
-                "path": str(config.DB_PATH),
-                "persistent": config.PERSISTENT_STORAGE,
-            },
-        }
+        try:
+            monitors = self.store.list_monitors()
+            errors = [item.get("last_error") for item in monitors if item.get("last_error")]
+            last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
+            catalog = self.store.catalog_sync_status()
+            tracked = self.store.count()
+            new_today = self.store.new_today_count()
+            recent = self.store.recent_notified(limit=36, twins=False)
+            recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
+            templates = self.store.list_templates()
+            settings = self.store.app_settings()
+            settle_pending_if_due(self.store)
+            scrape_tick = None
+            raw_tick = self.store.get_meta("scrape_worker_tick")
+            if raw_tick:
+                try:
+                    scrape_tick = json.loads(str(raw_tick))
+                except json.JSONDecodeError:
+                    scrape_tick = None
+            payload = {
+                "running": self.running,
+                "checking": self.checking,
+                "seeded": all(item.get("seeded") for item in monitors) if monitors else False,
+                "last_check": max(last_checks) if last_checks else None,
+                "last_error": self.last_error or (errors[0] if errors else None),
+                "interval_sec": config.POLL_INTERVAL_SEC,
+                "poll_pages": config.POLL_PAGES,
+                "scrape_role": config.SCRAPE_ROLE,
+                "scrape_worker": scrape_tick,
+                "tracked": tracked,
+                "new_today": new_today,
+                "search_total": catalog.get("listings") or 0,
+                "webhook_ready": bool(self.store.discord_webhook_url())
+                or any(self.store.notify_webhook(item.get("search_url") or "", item.get("webhook_url")) for item in monitors)
+                or bool(config.DISCORD_WEBHOOK_URL or config.BEZREALITKY_WEBHOOK_URL),
+                "recent": recent,
+                "recent_today": recent_today,
+                "monitors": monitors,
+                "templates": templates,
+                "settings": settings,
+                "version": current_version(),
+                "catalog_sync": catalog,
+                "catalog_running": self.catalog_running,
+                "billing": billing_state(self.store),
+                "storage": {
+                    "path": str(config.DB_PATH),
+                    "persistent": config.PERSISTENT_STORAGE,
+                },
+            }
+        except sqlite3.OperationalError:
+            if self._status_cache is not None:
+                return {**self._status_cache, "stale": True}
+            raise
         self._status_cache = payload
         self._status_cache_at = time.monotonic()
         return payload
