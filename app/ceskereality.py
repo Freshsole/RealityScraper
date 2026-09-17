@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
-from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
+from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price, with_page
 from app.portal_urls import ceskereality_url
 from app.sreality import Listing
 
@@ -26,9 +26,50 @@ PRICE_BOX_RE = re.compile(
     r"(?:i-estate__footer-price-value|i-estate__price|price)[^>]*>(.*?)</",
     re.S | re.I,
 )
-TOTAL_RE = re.compile(r"(?:vybírat ze|máme tady)\s+([\d\s\u00a0]+)\s+byt", re.I)
+TOTAL_RE = re.compile(
+    r"(?:vybírat ze|máme tady)\s+([\d\s\u00a0]+)\s+(?:byt|rodinn|nemovit|dom)",
+    re.I,
+)
+# /pronajem/domy/ is the agency "Domy, spol. s r.o.", not the house category.
+AGENCY_DOMY_RE = re.compile(r"^/(pronajem|prodej)/domy(/|$)", re.I)
 NAV_SKIP = ("muj-profil", "redirect=", "/mapa/", "?sff=")
 SORT_SKIP = ("/nejnovejsi/", "/nejlevnejsi/", "/nejdrazsi/")
+PATH_SKIP = {
+    "pronajem",
+    "prodej",
+    "byty",
+    "rodinne-domy",
+    "chaty-chalupy",
+    "chaty",
+    "cinzovni-domy",
+    "pozemky",
+    "komercni-prostory",
+    "ostatni",
+    "nejnovejsi",
+    "nejlevnejsi",
+    "nejdrazsi",
+}
+
+
+def canonical_list_url(url: str) -> str:
+    """Rewrite agency /domy/ (and /dum/) list paths to live /rodinne-domy/."""
+    split = urlsplit(url or "")
+    path = split.path or "/"
+    rewritten = AGENCY_DOMY_RE.sub(r"/\1/rodinne-domy\2", path, count=1)
+    rewritten = re.sub(r"^/(pronajem|prodej)/dum(/|$)", r"/\1/rodinne-domy\2", rewritten, count=1, flags=re.I)
+    if rewritten == path:
+        return url
+    return urlunsplit((split.scheme, split.netloc, rewritten, split.query, split.fragment))
+
+
+def _city_from_url(url: str) -> str:
+    parts = [part for part in urlsplit(url or "").path.split("/") if part]
+    if not parts or not parts[-1].endswith(".html"):
+        return ""
+    slug = parts[-2].casefold() if len(parts) >= 2 else ""
+    if not slug or slug in PATH_SKIP or slug.startswith("byty-"):
+        return ""
+    return slug.replace("-", " ").strip()
 
 
 class CeskerealityClient(HtmlPortalClient):
@@ -40,23 +81,33 @@ class CeskerealityClient(HtmlPortalClient):
         path = (self.search_url or "").lower()
         return "prodej" if "/prodej/" in path else "pronajem"
 
+    def _kind(self) -> str:
+        path = (self.search_url or "").lower()
+        if "rodinne-domy" in path or AGENCY_DOMY_RE.search(urlsplit(path).path or path) or "/dum/" in path:
+            return "rodinne-domy"
+        return "byty"
+
     def _nationwide_url(self, *, newest: bool) -> str:
         offer = self._context()
+        kind = self._kind()
         suffix = "nejnovejsi/" if newest else ""
-        return f"{SITE}/{offer}/byty/{suffix}"
+        return f"{SITE}/{offer}/{kind}/{suffix}"
 
     def _fallback_search_url(self) -> str:
-        current = urlsplit(self.search_url or "")
+        current = urlsplit(canonical_list_url(self.search_url or ""))
         if "/nejnovejsi/" in (current.path or ""):
             return self._nationwide_url(newest=False)
         return self._nationwide_url(newest=True)
+
+    def _page_url(self, page: int = 1, newest: bool = True) -> str:
+        return with_page(canonical_list_url(self.search_url or ""), page, self.PAGE_PARAM)
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         listings, total = await super().fetch_page(page, newest=newest)
         if listings or page > 1:
             return listings, total
         fallback = self._fallback_search_url()
-        primary = (self.search_url or "").split("?")[0].rstrip("/")
+        primary = canonical_list_url(self.search_url or "").split("?")[0].rstrip("/")
         if fallback.rstrip("/") == primary:
             return listings, total
         self.search_url = fallback
@@ -118,8 +169,11 @@ class CeskerealityClient(HtmlPortalClient):
         listing_id = self._listing_id(html or "", url)
         if not listing_id:
             return None
+        house = "rodinne-domy" in url or "/chaty/" in url
         if not url or "muj-profil" in url:
-            url = f"{SITE}/{offer}/byty/{listing_id}/"
+            house = house or self._kind() == "rodinne-domy"
+            kind = "rodinne-domy" if house else "byty"
+            url = f"{SITE}/{offer}/{kind}/{listing_id}/"
         title_m = TITLE_RE.search(html) or ALT_RE.search(html)
         title = clean(title_m.group(1) if title_m else "")
         price_m = PRICE_BOX_RE.search(html)
@@ -131,13 +185,18 @@ class CeskerealityClient(HtmlPortalClient):
                 locality = clean(re.sub(r"^²\s*", "", parts[1]))
             elif "," in title:
                 locality = title.split(",")[-1].strip()
+        if not locality:
+            locality = _city_from_url(url)
+        folded = f"{title} {url}".casefold()
+        estate = "dum" if house or "domu" in folded or "/chaty/" in folded else "byt"
         img = ""
         img_m = re.search(r'src="(https://img-cache\.ceskereality\.cz/[^"]+)"', html)
         if img_m:
             img = img_m.group(1).replace("/320x320_", "/640x640_").replace("/32x32_", "/640x640_")
+        noun = "domu" if estate == "dum" else "bytu"
         return listing_from_card(
             listing_id=numeric_id(listing_id, url),
-            name=title or f"{'Pronájem' if offer == 'pronajem' else 'Prodej'} bytu",
+            name=title or f"{'Pronájem' if offer == 'pronajem' else 'Prodej'} {noun}",
             url=url,
             price_czk=price_czk,
             price_label=price_label,
@@ -145,4 +204,5 @@ class CeskerealityClient(HtmlPortalClient):
             image_url=img,
             photos=[img] if img else [],
             offer=offer,
+            estate=estate,
         )

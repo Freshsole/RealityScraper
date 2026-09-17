@@ -146,6 +146,16 @@ After this branch (iDNES houses/sale page-1 audit: canonical category URLs, hous
 
 List path still does not call Photon/Nominatim: local city pins plus Croatian GPS pin aliases (`Rijeka` stays Rijeka, unknown `…, Chorvatsko` falls back to the country pin). Synthetic page-1-across with two extra iDNES house shards: **21→54** page-1 shards / **900→2700** listings under a 0.7 s contention deadline (was 52/2600 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Bazoš/Sreality/REMAX/Reality.cz/Bezrealitky/Annonce page-1 wins are unchanged.
 
+After this branch (ČeskéReality houses/sale page-1 audit: `/rodinne-domy/` shards, agency `/domy/` rewrite, local city pins, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| ČeskéReality rent byty | **20** | **4782** | 1.2 s | already 20/20 price+image; locality 19/20 (one title has no city); GPS **19/20** (was 16; Mariánské Lázně / Police nad Metují pin locally) |
+| ČeskéReality sale byty | **20** | **9289** | 1.0 s | 20/20 price+image+locality; GPS **20/20** (was 16; Napajedla, Lanškroun, Hostivice, …) |
+| ČeskéReality houses | **20** | **331** rent / **11271** sale | 1.0–1.1 s | new newest shards `/pronajem\|prodej/rodinne-domy/nejnovejsi/` (were missing). Live `/domy/` is the agency *Domy, spol. s r.o.* (0 cards) and used to fall back onto `/byty/`; now rewritten to `/rodinne-domy/`. Detail `…-id.html` **200**. Rent 20/20 price+image+locality, GPS 17/20. Sale 19/20 price (`Cena na dotaz` kept), 20/20 image+locality, GPS 12/20 (small municipalities have no local pin) |
+
+List path still does not call Photon/Nominatim: local city pins only. Empty house `/nejnovejsi/` falls back to `/rodinne-domy/`, not apartments. Synthetic page-1-across with two extra ČeskéReality house shards: **21→56** page-1 shards / **900→2800** listings under a 0.7 s contention deadline (was 54/2700 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and iDNES/Bazoš/Sreality/REMAX/Reality.cz/Bezrealitky/Annonce page-1 wins are unchanged.
+
 Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
 
 ## M&M Reality (documented limit)

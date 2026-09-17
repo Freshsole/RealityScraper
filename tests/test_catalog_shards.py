@@ -86,6 +86,25 @@ def test_bazos_newest_and_house_shards():
     assert all("kitx=ano" in item["search_url"] for item in recent)
 
 
+def test_ceskereality_newest_and_house_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "ceskereality"]
+    recent = [item for item in extra_portal_recent_shards() if item["portal"] == "ceskereality"]
+    assert any(item["shard_key"] == "ceskereality:domy:pronajem:cz" for item in daily)
+    assert any(item["shard_key"] == "ceskereality:recent:pronajem:domy" for item in recent)
+    assert {item["shard_key"] for item in recent} >= {
+        "ceskereality:recent:pronajem:byty",
+        "ceskereality:recent:prodej:byty",
+        "ceskereality:recent:pronajem:domy",
+        "ceskereality:recent:prodej:domy",
+    }
+    assert any("/pronajem/rodinne-domy/nejnovejsi/" in item["search_url"] for item in recent)
+    assert any("/prodej/rodinne-domy/nejnovejsi/" in item["search_url"] for item in recent)
+    assert any("/pronajem/byty/nejnovejsi/" in item["search_url"] for item in recent)
+    assert all("/pronajem/domy/" not in item["search_url"] for item in daily + recent)
+    houses = [item for item in recent if item["shard_key"].endswith(":domy")]
+    assert all("rodinne-domy" in item["search_url"] for item in houses)
+
+
 def test_sreality_house_daily_shards():
     daily = [item for item in daily_shards() if item["portal"] == "sreality"]
     keys = {item["shard_key"] for item in daily}

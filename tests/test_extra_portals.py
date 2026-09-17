@@ -110,6 +110,13 @@ class ExtraPortalTests(unittest.TestCase):
             "domy",
         )
         self.assertIn("/pronajem/byty/nejnovejsi/", ceskereality_url.build_url({"offers": ["pronajem"]}))
+        ceske_houses = ceskereality_url.build_url({"offers": ["pronajem"], "category": "domy"})
+        self.assertIn("/pronajem/rodinne-domy/nejnovejsi/", ceske_houses)
+        self.assertNotIn("/pronajem/domy/", ceske_houses)
+        self.assertEqual(
+            ceskereality_url.parse_url("https://www.ceskereality.cz/pronajem/rodinne-domy/")["category"],
+            "domy",
+        )
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
         self.assertEqual(remax_url.parse_url("https://www.remax-czech.cz/reality/byty/?sale=1")["offers"], ["prodej"])
