@@ -2042,7 +2042,7 @@ body.landing-modal-open {
   gap: 24px;
   padding: 96px var(--gutter) 64px;
   text-align: center;
-  background: #fff;
+  background: var(--pale);
 }
 
 .contact-hero .display {
@@ -2064,7 +2064,7 @@ body.landing-modal-open {
   align-items: flex-start;
   gap: 64px;
   padding: 20px var(--gutter) 96px;
-  background: #fff;
+  background: var(--pale);
 }
 
 .form-panel,
@@ -2080,7 +2080,7 @@ body.landing-modal-open {
   gap: 32px;
   padding: 40px;
   background: #fff;
-  border: 1px solid var(--surface);
+  border: 0;
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
 }
@@ -2112,6 +2112,16 @@ body.landing-modal-open {
 
 .info-panel {
   gap: 24px;
+  padding: 40px;
+  background: #fff;
+  border: 0;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.form-panel .mint-banner,
+.info-panel .mint-banner {
+  margin: 0;
 }
 
 .info-cards {
@@ -2424,7 +2434,7 @@ body.landing-modal-open {
   align-items: flex-start;
   gap: 40px;
   padding: 120px var(--gutter) 60px;
-  background: #fff;
+  background: var(--pale);
 }
 
 .section-badge {
@@ -2447,10 +2457,10 @@ body.landing-modal-open {
   width: 100%;
   max-width: 1280px;
   background: #fff;
-  border: 1px solid var(--surface);
+  border: 0;
   border-radius: var(--radius-card);
   overflow: hidden;
-  box-shadow: 0 16px 32px rgba(14, 15, 12, 0.06);
+  box-shadow: var(--shadow-card);
   text-decoration: none;
   color: inherit;
   cursor: pointer;
@@ -2548,7 +2558,7 @@ body.landing-modal-open {
   flex-direction: column;
   gap: 64px;
   padding: 80px var(--gutter) 120px;
-  background: #fff;
+  background: var(--pale);
 }
 
 .stories-grid-head {
@@ -2584,10 +2594,10 @@ body.landing-modal-open {
   flex-direction: column;
   width: 400px;
   background: #fff;
-  border: 1px solid var(--surface);
+  border: 0;
   border-radius: var(--radius-card);
   overflow: hidden;
-  box-shadow: 0 8px 24px rgba(14, 15, 12, 0.06);
+  box-shadow: var(--shadow-card);
   text-decoration: none;
   color: inherit;
   cursor: pointer;
@@ -2698,7 +2708,7 @@ body.landing-modal-open {
   align-items: center;
   gap: 32px;
   padding: 120px var(--gutter);
-  background: #fff;
+  background: var(--forest);
   text-align: center;
 }
 
@@ -2715,10 +2725,12 @@ body.landing-modal-open {
   font-size: 44px;
   line-height: 1.1;
   letter-spacing: -1.5px;
+  color: #fff;
 }
 
 .stories-cta .lead {
   font-size: 18px;
+  color: var(--mint);
 }
 
 .stories-cta-actions {
@@ -2736,7 +2748,7 @@ body.landing-modal-open {
 .stories-cta-actions p {
   margin: 0;
   font-size: 13px;
-  color: var(--body);
+  color: var(--mint);
 }
 
 @media (max-width: 1200px) {
@@ -3271,6 +3283,10 @@ body.article-popup-open {
 }
 
 /* LEGAL PAGES */
+.legal-page {
+  background: var(--pale);
+}
+
 .legal-page .nav-cta {
   gap: 24px;
 }
@@ -3328,12 +3344,12 @@ body.article-popup-open {
 .legal-chip {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
   background: var(--mint);
   color: var(--forest);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .legal-meta p {
@@ -3363,9 +3379,10 @@ body.article-popup-open {
   flex-direction: column;
   gap: 20px;
   padding: 32px;
-  border: 1px solid var(--surface);
+  border: 0;
   border-radius: var(--radius-card);
-  background: var(--pale);
+  background: #fff;
+  box-shadow: var(--shadow-card);
 }
 
 .legal-toc h2 {
@@ -3524,14 +3541,14 @@ body.article-popup-open {
 
 .privacy-pill {
   display: inline-flex;
-  padding: 6px 14px;
-  border-radius: 99px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
   background: var(--mint);
   color: var(--forest);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  text-transform: uppercase;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .privacy-hero .display {
@@ -3873,9 +3890,10 @@ body.article-popup-open {
   gap: 20px;
   width: 100%;
   padding: 24px;
-  border: 1px solid var(--surface);
-  border-radius: 16px;
+  border: 0;
+  border-radius: var(--radius-card);
   background: #fff;
+  box-shadow: var(--shadow-card);
 }
 
 .cookie-card-head {
@@ -4493,6 +4511,50 @@ body.article-popup-open {
   .dum-converter .pill-lg {
     width: 100%;
     min-height: 48px;
+  }
+
+  .contact-hero,
+  .legal-header,
+  .privacy-hero,
+  .cookies-hero {
+    padding-top: 40px;
+    padding-bottom: 28px;
+  }
+
+  .contact-cols,
+  .legal-cols,
+  .cookies-prefs {
+    padding-bottom: 48px;
+    gap: 24px;
+  }
+
+  .featured-story {
+    padding: 48px var(--gutter) 32px;
+  }
+
+  .stories-grid-section {
+    padding: 40px var(--gutter) 64px;
+  }
+
+  .stories-cta,
+  .legal-cta,
+  .contact-cta {
+    padding: 64px var(--gutter);
+  }
+
+  .legal-toc,
+  .info-panel.converter-card,
+  .form-panel.converter-card {
+    padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .legal-header .game-pill,
+  .privacy-hero .game-pill,
+  .cookies-hero .game-pill,
+  .contact-hero .game-pill {
+    max-width: 100%;
+    white-space: normal;
   }
 }
 

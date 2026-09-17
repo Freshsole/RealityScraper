@@ -97,6 +97,14 @@
   color: var(--forest);
 }
 
+.auth-head .game-pill {
+  align-self: flex-start;
+}
+
+.auth-card .mint-banner {
+  margin: 0;
+}
+
 .auth-lead {
   margin: 0;
   font-size: 14px;
@@ -851,6 +859,16 @@ label .optional {
 
   .auth-h {
     font-size: 28px;
+    white-space: normal;
+  }
+
+  .auth-head .game-pill {
+    max-width: 100%;
+    white-space: normal;
+  }
+
+  .auth-card .mint-banner {
+    padding: 14px 16px;
   }
 
   .auth-btn {

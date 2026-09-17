@@ -599,7 +599,7 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".mint-banner" in css
     assert "fonts.googleapis" not in css
     assert "--font-ui: system-ui" in css
-    assert "site.css?v=14" in html
+    assert "site.css?v=16" in html
     ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
     assert "flex-shrink: 0" in ccy
     assert "@media (max-width: 480px)" in css
@@ -661,12 +661,13 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "var(--pale)" in css
     assert "var(--radius-pill)" in css
     assert ".auth-card[hidden]" in css
-    assert "auth.css?v=14" in login
+    assert "auth.css?v=16" in login
     assert "@media (max-width: 480px)" in css
     phone = css.split("@media (max-width: 480px)", 1)[1]
     assert "padding: 24px 16px 40px" in phone
     assert "min-height: 48px" in phone
     assert "max-width: 100%" in phone
+    assert ".auth-head .game-pill" in phone
     site_css = (Path(__file__).resolve().parents[1] / "web" / "site" / "site.css").read_text(encoding="utf-8")
     assert "fonts.googleapis" not in site_css
     assert "var(--forest)" in site_css
@@ -684,6 +685,9 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert ".dum-converter" in last_phone
     assert ".dum-page" in last_phone
     assert ".room-stage" in last_phone
+    assert ".converter-card" in last_phone
+    assert ".stories-cta" in last_phone
+    assert ".legal-toc" in last_phone
     assert "/static/site/inquiries.js" in site_html("kontakt.html")
     assert "/static/site/stories-list.js" in site_html("uspechy.html")
     assert "/static/site/legal.js" in site_html("obchodni-podminky.html")
@@ -699,7 +703,7 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "game-pill" in byt
     assert "byt-converter" in byt
     assert "Hlídání bytů v ČR" in byt
-    assert "site.css?v=14" in byt
+    assert "site.css?v=16" in byt
     assert "fonts.googleapis" not in byt
     assert "ccy-pill" in dum
     assert "mint-banner" in dum
@@ -708,7 +712,7 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert "dum-converter" in dum
     assert 'data-estate="dum"' in dum
     assert "Hlídání domů v ČR" in dum
-    assert "site.css?v=15" in dum
+    assert "site.css?v=16" in dum
     assert "fonts.googleapis" not in dum
     search_js = (Path(__file__).resolve().parents[1] / "web" / "site" / "landing-search.js").read_text(encoding="utf-8")
     assert "dataset.estate" in search_js
@@ -717,8 +721,23 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     kontakt = site_html("kontakt.html")
     uspechy = site_html("uspechy.html")
     assert "Odpovíme do 2 hodin" in kontakt
+    assert "converter-card" in kontakt
+    assert "mint-banner" in kontakt
     assert "Skutečné příběhy" in uspechy
     assert "game-pill" in kontakt and "game-pill" in uspechy
+    assert "mint-banner" in login and "game-pill" in login
+    assert "mint-banner" in register and "game-pill" in register
+    assert "mint-banner" in forgot and "game-pill" in forgot
+    terms = site_html("obchodni-podminky.html")
+    privacy = site_html("ochrana-soukromi.html")
+    cookies = site_html("nastaveni-cookies.html")
+    assert "game-pill" in terms and "Dokumentace" in terms
+    assert "game-pill" in privacy
+    assert "game-pill" in cookies and "Preference" in cookies
+    assert ".legal-page" in site_css
+    assert "background: var(--pale)" in site_css.split(".legal-page {", 1)[1].split("}", 1)[0]
+    assert "background: var(--forest)" in site_css.split(".stories-cta {", 1)[1].split("}", 1)[0]
+    assert "background: var(--pale)" in site_css.split(".contact-hero {", 1)[1].split("}", 1)[0]
 
 
 def test_dashboard_and_admin_shells_are_self_hosted_wise():
