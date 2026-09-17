@@ -4286,17 +4286,21 @@ body.article-popup-open {
   }
 }
 
-/* /byt landing — Wise converter card + room stage + typewriter */
-.byt-page {
+/* /byt + /dum landings — Wise converter card + room stage + typewriter */
+.byt-page,
+.dum-page {
   overflow-x: clip;
 }
 
 .byt-page .hero,
-.byt-page .hero-right {
+.byt-page .hero-right,
+.dum-page .hero,
+.dum-page .hero-right {
   overflow: visible;
 }
 
-.byt-converter {
+.byt-converter,
+.dum-converter {
   overflow: visible;
 }
 
@@ -4449,27 +4453,32 @@ body.article-popup-open {
     flex-wrap: wrap;
   }
 
-  .byt-page .hero-left .display {
+  .byt-page .hero-left .display,
+  .dum-page .hero-left .display {
     font-size: 32px;
     line-height: 0.9;
   }
 
-  .byt-page .type-slot {
+  .byt-page .type-slot,
+  .dum-page .type-slot {
     display: inline-grid;
     width: max-content;
     max-width: 100%;
     justify-items: start;
   }
 
-  .byt-page .type-ghost {
+  .byt-page .type-ghost,
+  .dum-page .type-ghost {
     display: none;
   }
 
-  .byt-page .type-rest {
+  .byt-page .type-rest,
+  .dum-page .type-rest {
     display: block;
   }
 
-  .byt-converter {
+  .byt-converter,
+  .dum-converter {
     width: 100%;
     max-width: 100%;
     padding: 16px;
@@ -4480,7 +4489,8 @@ body.article-popup-open {
     margin-bottom: 16px;
   }
 
-  .byt-converter .pill-lg {
+  .byt-converter .pill-lg,
+  .dum-converter .pill-lg {
     width: 100%;
     min-height: 48px;
   }

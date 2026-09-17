@@ -65,6 +65,8 @@ INSTANT_ROUTES: dict[str, str] = {
     "/uspechy/": "uspechy.html",
     "/byt": "byt.html",
     "/byt/": "byt.html",
+    "/dum": "dum.html",
+    "/dum/": "dum.html",
 }
 # Same static article shell FastAPI serves for every /uspechy/{slug}.
 INSTANT_PREFIX_ROUTES: tuple[tuple[str, str], ...] = (("/uspechy/", "clanek.html"),)
@@ -336,7 +338,7 @@ class InstantSiteASGI:
     (guest /nabidka uses rf_guest_search) without SQLite. FastAPI's require_account
     fallback uses the same cookie-presence helper. Cookie presence is not a session
     check — /api/auth/me and other dashboard APIs still fall through to FastAPI+WAL.
-    Marketing leftovers (/kontakt, /uspechy, legal, /byt) plus their JS, /sw.js, and
+    Marketing leftovers (/kontakt, /uspechy, legal, /byt, /dum) plus their JS, /sw.js, and
     the web manifest also stay on this memory path.
     """
 

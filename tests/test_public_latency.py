@@ -268,6 +268,7 @@ def test_marketing_auth_html_bypasses_blocked_inner_app():
             ("/ochrana-soukromi", "OCHRANA SOUKROMÍ".encode()),
             ("/nastaveni-cookies", "NASTAVENÍ COOKIES".encode()),
             ("/byt", "Začít hlídat zdarma".encode()),
+            ("/dum", "Hlídání domů v ČR".encode()),
         ):
             t0 = time.perf_counter()
             status, headers, body = await _asgi_get(app, path)
@@ -830,6 +831,7 @@ def test_fastapi_html_fallbacks_stay_memory_and_skip_sqlite():
     assert "return site_page(\"kontakt.html\")" in src
     assert "return site_page(\"uspechy.html\")" in src
     assert "return site_page(\"byt.html\")" in src
+    assert "return site_page(\"dum.html\")" in src
     assert "return site_page(\"obchodni-podminky.html\")" in src
     assert "return site_page(\"ochrana-soukromi.html\")" in src
     assert "return site_page(\"nastaveni-cookies.html\")" in src
@@ -845,6 +847,7 @@ def test_fastapi_html_fallbacks_stay_memory_and_skip_sqlite():
         "/ochrana-soukromi",
         "/nastaveni-cookies",
         "/byt",
+        "/dum",
         "/heslo",
     ):
         assert instant_page_name(path), path
@@ -861,6 +864,7 @@ def test_fastapi_html_fallbacks_stay_memory_and_skip_sqlite():
             "/kontakt",
             "/uspechy",
             "/byt",
+            "/dum",
             "/obchodni-podminky",
             "/ochrana-soukromi",
             "/nastaveni-cookies",
@@ -960,6 +964,7 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
         "/ochrana-soukromi",
         "/nastaveni-cookies",
         "/byt",
+        "/dum",
     )
     app_html_paths = (
         "/prehled",
@@ -1432,6 +1437,7 @@ def test_remaining_shells_ttfb_cold_warm_under_scrape_writer(tmp_path: Path):
         "/ochrana-soukromi",
         "/nastaveni-cookies",
         "/byt",
+        "/dum",
         "/heslo",
     )
     asset_paths = (
@@ -1453,6 +1459,7 @@ def test_remaining_shells_ttfb_cold_warm_under_scrape_writer(tmp_path: Path):
         "/ochrana-soukromi": "OCHRANA SOUKROMÍ".encode(),
         "/nastaveni-cookies": "NASTAVENÍ COOKIES".encode(),
         "/byt": "Začít hlídat zdarma".encode(),
+        "/dum": "Hlídání domů v ČR".encode(),
         "/heslo": "OBNOVTE SI HESLO".encode(),
     }
     cold: dict[str, float] = {}
@@ -1541,6 +1548,7 @@ def test_remaining_shells_instant_path_stays_fast_under_sqlite_exclusive_lock(tm
             "/ochrana-soukromi",
             "/nastaveni-cookies",
             "/byt",
+            "/dum",
             "/heslo",
             "/static/site/inquiries.js",
             "/static/site/legal.js",

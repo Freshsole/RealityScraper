@@ -243,6 +243,11 @@ def byt_preview() -> HTMLResponse:
     return site_page("byt.html")
 
 
+def dum_preview() -> HTMLResponse:
+    # Fallback only — InstantSiteASGI serves /dum from memory first.
+    return site_page("dum.html")
+
+
 def contact() -> HTMLResponse:
     # Fallback only — InstantSiteASGI serves /kontakt from memory first.
     return site_page("kontakt.html")
@@ -310,6 +315,7 @@ def admin_page() -> HTMLResponse:
 
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
 app.add_api_route("/byt", byt_preview, methods=["GET"], include_in_schema=False)
+app.add_api_route("/dum", dum_preview, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
 app.add_api_route("/obchodni-podminky", terms, methods=["GET"], include_in_schema=False)
 app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_schema=False)

@@ -12,8 +12,16 @@
   const modalBody = document.getElementById("landing-modal-body");
   if (!searchBtn || !results) return;
 
-  const DISPS = ["1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk"];
-  let selectedDisp = new Set(["2+kk", "3+kk"]);
+  const estate = (document.body.dataset.estate || "byt").trim() || "byt";
+  const DISPS = (document.body.dataset.disps || "1+kk,1+1,2+kk,2+1,3+kk,3+1,4+kk")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const defaultDisp = (document.body.dataset.dispDefault || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => DISPS.includes(item));
+  let selectedDisp = new Set(defaultDisp.length ? defaultDisp : ["2+kk", "3+kk"].filter((item) => DISPS.includes(item)));
   let suggestItems = [];
   let suggestTimer = 0;
   let locked = false;
@@ -70,7 +78,7 @@
     const max = String(price?.value || "").replace(/\s/g, "");
     if (max) params.set("price_to", max);
     params.set("offer", "pronajem");
-    params.set("estate", "byt");
+    params.set("estate", estate);
     return `/nabidka?${params.toString()}`;
   };
 
@@ -80,7 +88,7 @@
       <div class="mock-body">
         <div class="mock-top"><span class="source">${escapeHtml(item.portal || "")}</span><strong>${escapeHtml(item.price || "")}</strong></div>
         <div>
-          <h3>${escapeHtml(item.name || "Byt")}</h3>
+          <h3>${escapeHtml(item.name || (estate === "dum" ? "Dům" : "Byt"))}</h3>
           <p>${escapeHtml(item.locality || "")}</p>
         </div>
       </div>

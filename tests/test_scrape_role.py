@@ -336,6 +336,7 @@ def test_instant_site_html_and_games_json_on_web_role(tmp_path, monkeypatch):
             "/kontakt",
             "/uspechy",
             "/byt",
+            "/dum",
             "/obchodni-podminky",
             "/ochrana-soukromi",
             "/nastaveni-cookies",
