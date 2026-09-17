@@ -14,10 +14,10 @@ SITE = ulovdomov_url.site
 API = "https://ud.api.ulovdomov.cz/v1/offer/find"
 BOUNDS = {"northEast": {"lat": 51.06, "lng": 18.87}, "southWest": {"lat": 48.55, "lng": 12.09}}
 HREF_RE = re.compile(
-    r'href="((?:https://www\.ulovdomov\.cz)?/(?:pronajem|prodej)/[^"]+/\d+[^"]*)"',
+    r'href="((?:https://www\.ulovdomov\.cz)?/(?:pronajem|prodej)/[^"]{0,300}/\d{1,12}[^"]{0,200})"',
     re.I,
 )
-HREF2_RE = re.compile(r'href="((?:https://www\.ulovdomov\.cz)?/inzerat/[^"]+)"', re.I)
+HREF2_RE = re.compile(r'href="((?:https://www\.ulovdomov\.cz)?/inzerat/[^"]{1,400})"', re.I)
 
 
 def _as_int(value: Any) -> int | None:
@@ -61,6 +61,26 @@ def offers_from_payload(payload: Any) -> tuple[list[dict[str, Any]], int]:
             ) or len(rows)
             return [item for item in rows if isinstance(item, dict)], total
     return [], _as_int(payload.get("count") or (data.get("count") if isinstance(data, dict) else None)) or 0
+
+
+def _next_data_json(html: str) -> dict[str, Any]:
+    raw = html or ""
+    start = raw.find('<script id="__NEXT_DATA__"')
+    if start < 0:
+        start = raw.find('id="__NEXT_DATA__"')
+    if start < 0:
+        return {}
+    gt = raw.find(">", start)
+    if gt < 0:
+        return {}
+    end = raw.find("</script>", gt + 1)
+    if end < 0:
+        return {}
+    try:
+        payload = json.loads(raw[gt + 1 : end])
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 class UlovdomovClient(HtmlPortalClient):
@@ -162,12 +182,8 @@ class UlovdomovClient(HtmlPortalClient):
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
-        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html or "", re.S)
-        if match:
-            try:
-                payload = json.loads(match.group(1))
-            except json.JSONDecodeError:
-                payload = {}
+        payload = _next_data_json(html or "")
+        if payload:
             props = payload.get("props", {}).get("pageProps", payload.get("pageProps") or {})
             rows, _total = offers_from_payload(props)
             for raw in rows:
@@ -186,7 +202,7 @@ class UlovdomovClient(HtmlPortalClient):
             idx = html.find(href)
             window = html[max(0, idx - 200) : idx + 500] if idx >= 0 else href
             price_czk, price_label = parse_price(window)
-            title_m = re.search(r">(Pronájem[^<]+|Prodej[^<]+)<", window)
+            title_m = re.search(r">(Pronájem[^<]{1,200}|Prodej[^<]{1,200})<", window)
             items.append(
                 listing_from_card(
                     listing_id=numeric_id(url, url),
@@ -201,26 +217,29 @@ class UlovdomovClient(HtmlPortalClient):
         return items
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
+        from app.scrape_http import request_with_log
+
         offer = self._context()
         body = self._find_body(page)
-        try:
-            response = await self._client.post(
-                API,
-                params={"page": page, "perPage": self.PAGE_SIZE, "sorting": "latest"},
-                json=body,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-            )
-            if response.status_code == 200:
-                rows, total = offers_from_payload(response.json())
-                listings = []
-                seen: set[str] = set()
-                for raw in rows:
-                    listing = self.listing_from_offer(raw, offer)
-                    if listing and listing.url not in seen:
-                        seen.add(listing.url)
-                        listings.append(listing)
-                if listings:
-                    return listings, total or len(listings)
-        except Exception:
-            pass
-        return await super().fetch_page(page, newest=newest)
+        response = await request_with_log(
+            self._client,
+            "POST",
+            API,
+            portal="ulovdomov",
+            params={"page": page, "perPage": self.PAGE_SIZE, "sorting": "latest"},
+            json=body,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+        if response.status_code == 200:
+            rows, total = offers_from_payload(response.json())
+            listings = []
+            seen: set[str] = set()
+            for raw in rows:
+                listing = self.listing_from_offer(raw, offer)
+                if listing and listing.url not in seen:
+                    seen.add(listing.url)
+                    listings.append(listing)
+            return listings, total or len(listings)
+        # 403/500 will not improve on an HTML fallback of the same listing.
+        response.raise_for_status()
+        return [], 0

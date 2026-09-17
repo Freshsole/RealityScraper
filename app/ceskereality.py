@@ -9,14 +9,20 @@ from app.portal_urls import ceskereality_url
 from app.sreality import Listing
 
 SITE = ceskereality_url.site
-CARD_RE = re.compile(r'<article[^>]*class="[^"]*i-estate[^"]*"[^>]*>(.*?)</article>', re.S | re.I)
-CARD2_RE = re.compile(r'class="[^"]*i-estate[^"]*"(.*?)(?:class="[^"]*i-estate[^"]*"|$)', re.S | re.I)
-HREF_RE = re.compile(r'href="([^"]+/(?:pronajem|prodej)/[^"]+)"', re.I)
-ID_RE = re.compile(r"/(\d{5,})(?:[-/]|$)")
-IMG_ID_RE = re.compile(r"img-cache\.ceskereality\.cz/nemovitosti/[^/]+/(\d+)/", re.I)
-TITLE_RE = re.compile(r"<h2[^>]*>(.*?)</h2>", re.S | re.I)
-ALT_RE = re.compile(r'alt="([^"]+)"')
-PRICE_BOX_RE = re.compile(r"(?:i-estate__price|price)[^>]*>(.*?)</", re.S | re.I)
+CARD_RE = re.compile(
+    r'<article[^>]{0,400}class="[^"]{0,200}i-estate[^"]{0,200}"[^>]{0,200}>(.{0,80000}?)</article>',
+    re.S | re.I,
+)
+CARD2_RE = re.compile(
+    r'class="[^"]{0,200}i-estate[^"]{0,200}"(.{0,80000}?)(?:class="[^"]{0,200}i-estate[^"]{0,200}"|$)',
+    re.S | re.I,
+)
+HREF_RE = re.compile(r'href="([^"]{1,400}/(?:pronajem|prodej)/[^"]{0,300})"', re.I)
+ID_RE = re.compile(r"/(\d{5,12})(?:[-/]|$)")
+IMG_ID_RE = re.compile(r"img-cache\.ceskereality\.cz/nemovitosti/[^/]{1,80}/(\d{5,12})/", re.I)
+TITLE_RE = re.compile(r"<h2[^>]{0,120}>(.{0,500}?)</h2>", re.S | re.I)
+ALT_RE = re.compile(r'alt="([^"]{1,400})"')
+PRICE_BOX_RE = re.compile(r"(?:i-estate__price|price)[^>]{0,120}>(.{0,400}?)</", re.S | re.I)
 
 
 class CeskerealityClient(HtmlPortalClient):
@@ -68,7 +74,7 @@ class CeskerealityClient(HtmlPortalClient):
             elif "," in title:
                 locality = title.split(",")[-1].strip()
         img = ""
-        img_m = re.search(r'src="(https://img-cache\.ceskereality\.cz/[^"]+)"', html)
+        img_m = re.search(r'src="(https://img-cache\.ceskereality\.cz/[^"]{1,400})"', html)
         if img_m:
             img = img_m.group(1).replace("/320x320_", "/640x640_")
         return listing_from_card(

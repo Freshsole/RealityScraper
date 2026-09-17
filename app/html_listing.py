@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html as html_lib
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -13,10 +15,15 @@ import httpx
 from app.sreality import Listing, ListingGone, format_price
 
 JS_SAFE_ID = (1 << 53) - 1
-AREA_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*m", re.I)
-PRICE_RE = re.compile(r"(\d{1,3}(?:[\s\u00a0.]\d{3})+|\d{4,8})\s*Kč", re.I)
-DISP_RE = re.compile(r"(\d+)\s*\+\s*(kk|1)|(\d+)\s*kk|garson|atyp|pokoj", re.I)
-COUNT_RE = re.compile(r"([\d\s\u00a0]+)\s+(?:inzerát|nemovitost|nabídek|výsled)", re.I)
+AREA_RE = re.compile(r"(\d{1,6}(?:[.,]\d{1,2})?)\s*m", re.I)
+PRICE_RE = re.compile(r"(\d{1,3}(?:[\s\u00a0.]\d{3}){1,4}|\d{4,8})\s*Kč", re.I)
+DISP_RE = re.compile(r"(\d{1,2})\s*\+\s*(kk|1)|(\d{1,2})\s*kk|garson|atyp|pokoj", re.I)
+COUNT_RE = re.compile(
+    r"(?<!\d)(\d{1,3}(?:[\s\u00a0.]\d{3}){0,4}|\d{1,7})\s+"
+    r"(?:inzerát|nemovitost|nabídek|výsled)",
+    re.I,
+)
+_PARSE_TOTAL_CHARS = 32_000
 GONE_HINTS = (
     "inzerát byl stažen",
     "inzerát neexistuje",
@@ -74,9 +81,79 @@ def numeric_id(value: str | int | None, fallback: str = "") -> int:
     return hash_id(raw or fallback)
 
 
+_IMG_ATTR_RE = re.compile(
+    r'(?:src|data-src|data-img)=["\']([^"\']{1,500}\.(?:jpg|jpeg|webp|png)[^"\']{0,200})["\']',
+    re.I,
+)
+_CSS_URL_RE = re.compile(r"url\((['\"]?)([^\"')\s]{1,500})\1\)", re.I)
+_PHOTO_ATTR_RE = re.compile(
+    r'(?:src|href)=["\']([^"\']{1,500}\.(?:jpg|jpeg|webp)[^"\']{0,200})["\']',
+    re.I,
+)
+_OG_DESC_RE = re.compile(r'property="og:description"\s+content="([^"]{1,4000})"', re.I)
+_LAT_RE = re.compile(r'"lat(?:itude)?"\s*:\s*(-?\d{1,3}\.\d{1,10})')
+_LON_RE = re.compile(r'"l(?:on|ng)(?:itude)?"\s*:\s*(-?\d{1,3}\.\d{1,10})')
+_STRIP_TAGS_CHARS = 80_000
+_PARSE_PRICE_CHARS = 8_000
+_DETAIL_MARKERS = (
+    'id="detail"',
+    "id='detail'",
+    'id="content"',
+    "application/ld+json",
+    "__NEXT_DATA__",
+    'itemtype="http://schema.org/Offer"',
+    'itemtype="https://schema.org/Offer"',
+    'class="inzeraty"',
+    'id="inzerat"',
+    "s-result",
+)
+
+
+def extract_listing_html(html: str, limit: int = 180_000) -> str:
+    raw = html or ""
+    if len(raw) <= 40_000:
+        return raw
+    head = raw[:8_000]
+    lowered = raw.casefold()
+    for marker in _DETAIL_MARKERS:
+        idx = lowered.find(marker.casefold())
+        if idx < 0:
+            continue
+        start = max(0, idx - 2_000)
+        return head + "\n" + raw[start : start + limit]
+    return raw[:limit]
+
+
+def strip_tags(text: str) -> str:
+    """Linear tag strip. CPython `re.sub(r'<[^>]+>', …)` is O(n²) on a long run of `<`."""
+    raw = text or ""
+    if len(raw) > _STRIP_TAGS_CHARS:
+        raw = raw[:_STRIP_TAGS_CHARS]
+    parts: list[str] = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        lt = raw.find("<", i)
+        if lt < 0:
+            parts.append(raw[i:])
+            break
+        if lt > i:
+            parts.append(raw[i:lt])
+        gt = raw.find(">", lt + 1)
+        if gt < 0:
+            parts.append(raw[lt:])
+            break
+        if gt == lt + 1:
+            parts.append("<")
+            i = lt + 1
+            continue
+        parts.append(" ")
+        i = gt + 1
+    return html_lib.unescape("".join(parts))
+
+
 def clean(text: str) -> str:
-    raw = html_lib.unescape(re.sub(r"<[^>]+>", " ", text or ""))
-    return re.sub(r"\s+", " ", raw.replace("\xa0", " ").replace("&zwj;", "")).strip()
+    return " ".join(strip_tags(text).replace("\xa0", " ").replace("&zwj;", "").split())
 
 
 def abs_url(url: str, site: str) -> str:
@@ -121,6 +198,8 @@ def parse_area(text: str) -> int | None:
 
 def parse_price(text: str) -> tuple[int | None, str]:
     label = clean(text)
+    if len(label) > _PARSE_PRICE_CHARS:
+        label = label[:_PARSE_PRICE_CHARS]
     folded = label.casefold()
     if "dohod" in folded or "info v rk" in folded or "cena v rk" in folded:
         return None, label or "Cena dohodou"
@@ -132,7 +211,10 @@ def parse_price(text: str) -> tuple[int | None, str]:
 
 
 def parse_total(html: str) -> int:
-    match = COUNT_RE.search((html or "").replace("\xa0", " "))
+    raw = (html or "").replace("\xa0", " ")
+    if len(raw) > _PARSE_TOTAL_CHARS:
+        raw = raw[:_PARSE_TOTAL_CHARS]
+    match = COUNT_RE.search(raw)
     if not match:
         return 0
     digits = re.sub(r"\D", "", match.group(1))
@@ -155,10 +237,13 @@ def with_page(url: str, page: int, param: str = "strana") -> str:
 
 
 def first_img(html: str) -> str:
-    match = re.search(r'(?:src|data-src|data-img)=["\']([^"\']+\.(?:jpg|jpeg|webp|png)[^"\']*)["\']', html or "", re.I)
+    raw = html or ""
+    if len(raw) > _STRIP_TAGS_CHARS:
+        raw = raw[:_STRIP_TAGS_CHARS]
+    match = _IMG_ATTR_RE.search(raw)
     if match:
         return match.group(1)
-    match = re.search(r'url\((["\']?)([^"\')]+)\1\)', html or "", re.I)
+    match = _CSS_URL_RE.search(raw)
     return match.group(2) if match else ""
 
 
@@ -225,10 +310,12 @@ class HtmlPortalClient:
     SITE = ""
     PAGE_PARAM = "strana"
     PAGE_SIZE = 20
-    TIMEOUT = 25.0
+    TIMEOUT = 8.0
 
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
+        from app.scrape_http import scrape_timeout
+
         headers = dict(BROWSER_HEADERS)
         if self.SITE:
             headers["Referer"] = self.SITE.rstrip("/") + "/"
@@ -236,7 +323,8 @@ class HtmlPortalClient:
         self._client = httpx.AsyncClient(
             headers=headers,
             follow_redirects=True,
-            timeout=self.TIMEOUT,
+            max_redirects=3,
+            timeout=scrape_timeout(),
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
 
@@ -254,7 +342,8 @@ class HtmlPortalClient:
 
     def _parse_detail(self, listing: Listing, html: str) -> Listing:
         photos = []
-        for match in re.findall(r'(?:src|href)=["\']([^"\']+\.(?:jpg|jpeg|webp)[^"\']*)["\']', html or "", re.I):
+        fragment = extract_listing_html(html or "")
+        for match in _PHOTO_ATTR_RE.findall(fragment):
             url = abs_url(match, self.SITE)
             if url and url not in photos and "logo" not in url.casefold() and "icon" not in url.casefold():
                 photos.append(url)
@@ -262,12 +351,12 @@ class HtmlPortalClient:
             listing.photos = photos[:40]
             listing.image_url = photos[0]
         desc = ""
-        og = re.search(r'property="og:description"\s+content="([^"]+)"', html or "", re.I)
+        og = _OG_DESC_RE.search((html or "")[:_STRIP_TAGS_CHARS])
         if og:
             desc = html_lib.unescape(og.group(1))
         if desc:
             listing.description = clean(desc)
-        price_czk, price_label = parse_price(html)
+        price_czk, price_label = parse_price(fragment)
         if price_czk:
             listing.price_czk = price_czk
             listing.price_label = price_label
@@ -275,8 +364,8 @@ class HtmlPortalClient:
             listing.disposition = parse_disposition(listing.name + " " + (listing.description or ""))
         if listing.area_m2 is None:
             listing.area_m2 = parse_area(listing.name + " " + (listing.description or ""))
-        lat = re.search(r'"lat(?:itude)?"\s*:\s*(-?\d+\.\d+)', html or "")
-        lon = re.search(r'"l(?:on|ng)(?:itude)?"\s*:\s*(-?\d+\.\d+)', html or "")
+        lat = _LAT_RE.search(fragment)
+        lon = _LON_RE.search(fragment)
         if lat:
             listing.lat = float(lat.group(1))
         if lon:
@@ -290,17 +379,39 @@ class HtmlPortalClient:
         return any(hint in folded for hint in GONE_HINTS)
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
+        from app.scrape_http import request_with_log
+        from app.sources import portal_of
+
         url = self._page_url(page, newest=newest)
-        response = await self._client.get(url, headers={"Accept": "text/html,application/json;q=0.9"})
-        if response.status_code in {403, 404, 410, 429, 503}:
+        portal = portal_of(self.SITE or self.search_url or url)
+        response = await request_with_log(
+            self._client,
+            "GET",
+            url,
+            portal=portal,
+            headers={"Accept": "text/html,application/json;q=0.9"},
+        )
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
+        if response.status_code in {404, 410}:
             return [], 0
         response.raise_for_status()
-        html = response.text
+        raw = response.content
         if page <= 1:
             self.search_url = str(response.url).split("#")[0]
-        listings = self._parse_list(html)
-        parsed_total = self._parse_total(html)
-        total = parsed_total or (len(listings) if page == 1 else 0)
+
+        def _parse(blob: bytes) -> tuple[list[Listing], int]:
+            text = blob.decode("utf-8", "replace")
+            html = extract_listing_html(text)
+            listings = self._parse_list(html)
+            parsed_total = self._parse_total(html)
+            total = parsed_total or (len(listings) if page == 1 else 0)
+            return listings, total
+
+        parse_started = time.monotonic()
+        listings, total = await asyncio.to_thread(_parse, raw)
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         return listings, total
 
     async def fetch_pages(self, pages: int, newest: bool = True) -> tuple[list[Listing], int]:
@@ -345,7 +456,15 @@ class HtmlPortalClient:
 
     async def fetch_detail(self, listing: Listing) -> Listing:
         response = await self._client.get(listing.url, headers={"Accept": "text/html"})
-        if self._is_gone(response.text, response.status_code):
-            raise ListingGone(listing.url)
-        response.raise_for_status()
-        return self._parse_detail(listing, response.text)
+        raw = response.content
+        status = response.status_code
+        if status not in {404, 410}:
+            response.raise_for_status()
+
+        def _parse(blob: bytes) -> Listing:
+            text = blob.decode("utf-8", "replace")
+            if self._is_gone(text, status):
+                raise ListingGone(listing.url)
+            return self._parse_detail(listing, extract_listing_html(text))
+
+        return await asyncio.to_thread(_parse, raw)

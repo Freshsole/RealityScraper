@@ -135,6 +135,15 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(listing.id, 42)
         self.assertEqual(listing.price_czk, 15000)
 
+    def test_parse_total_is_bounded(self):
+        from app.html_listing import parse_total
+
+        self.assertEqual(parse_total("Nalezeno 1 234 inzerátů v Praze"), 1234)
+        blob = ("123 456 789 <script>var x=1;</script> " * 8_000)
+        started = __import__("time").perf_counter()
+        self.assertEqual(parse_total(blob), 0)
+        self.assertLess(__import__("time").perf_counter() - started, 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,9 +10,12 @@ from app.portal_urls import remax_url
 from app.sreality import Listing
 
 SITE = remax_url.site
-CARD_RE = re.compile(r'<div class="pl-items__item"([^>]*)>(.*?)</div>\s*(?=<div class="pl-items__item"|<nav|$)', re.S | re.I)
-ATTR_RE = re.compile(r'data-([a-z\-]+)="([^"]*)"', re.I)
-DETAIL_RE = re.compile(r"/reality/detail/(\d+)/([^\"'\s]+)")
+CARD_RE = re.compile(
+    r'<div class="pl-items__item"([^>]{0,2000})>(.{0,80000}?)</div>\s*(?=<div class="pl-items__item"|<nav|$)',
+    re.S | re.I,
+)
+ATTR_RE = re.compile(r'data-([a-z\-]{1,40})="([^"]{0,500})"', re.I)
+DETAIL_RE = re.compile(r"/reality/detail/(\d{4,12})/([^\"'\s]{1,300})")
 
 
 def _unescape(value: str) -> str:

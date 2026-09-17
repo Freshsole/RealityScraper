@@ -9,11 +9,14 @@ from app.portal_urls import mmreality_url
 from app.sreality import Listing
 
 SITE = mmreality_url.site
-HREF_RE = re.compile(r'href="((?:https://www\.mmreality\.cz)?/nemovitosti/[^"]+)"', re.I)
-ID_RE = re.compile(r"/nemovitosti/(?:[^/]*-)?(\d{4,})")
-TITLE_RE = re.compile(r"<h[123][^>]*>(.*?)</h[123]>", re.S | re.I)
-IMG_RE = re.compile(r'(?:src|data-src)="(https://[^"]*mmreality[^"]+\.(?:jpg|jpeg|webp)[^"]*)"', re.I)
-CARD_SPLIT_RE = re.compile(r'(?:class="[^"]*(?:estate|property|item|card|offer)[^"]*")', re.I)
+HREF_RE = re.compile(r'href="((?:https://www\.mmreality\.cz)?/nemovitosti/[^"]{1,400})"', re.I)
+ID_RE = re.compile(r"/nemovitosti/(?:[^/]{0,200}-)?(\d{4,12})")
+TITLE_RE = re.compile(r"<h[123][^>]{0,120}>(.{0,500}?)</h[123]>", re.S | re.I)
+IMG_RE = re.compile(
+    r'(?:src|data-src)="(https://[^"]{0,300}mmreality[^"]{0,200}\.(?:jpg|jpeg|webp)[^"]{0,200})"',
+    re.I,
+)
+CARD_SPLIT_RE = re.compile(r'(?:class="[^"]{0,200}(?:estate|property|item|card|offer)[^"]{0,200}")', re.I)
 
 
 class MmrealityClient(HtmlPortalClient):

@@ -10,14 +10,20 @@ from app.portal_urls import annonce_url
 from app.sreality import Listing
 
 SITE = annonce_url.site
-CARD_RE = re.compile(r'<div class="box q ext-item[^"]*">(.*?)<div class="(?:box q ext-item|rows js-more)', re.S | re.I)
-CARD2_RE = re.compile(r'class="box q ext-item[^"]*"(.*?)(?:class="box q ext-item|js-more-ads|$)', re.S | re.I)
-INZERAT_RE = re.compile(r'href="(/inzerat/[^"]+-(\d{6,})-[a-z0-9]+\.html)"', re.I)
-TITLE_RE = re.compile(r"<h2[^>]*>\s*<a[^>]*>(.*?)</a>", re.S | re.I)
-DATE_RE = re.compile(r'class="ad-date"[^>]*>(.*?)</div>', re.S | re.I)
-IMG_RE = re.compile(r'<img[^>]+src="(https://static\.annonce\.cz/[^"]+)"', re.I)
-ATTR_RE = re.compile(r"<th[^>]*>\s*([^<:]+):\s*</th>\s*<td[^>]*>(.*?)</td>", re.S | re.I)
-PRICE_RE = re.compile(r'class="[^"]*price[^"]*"[^>]*>(.*?)</', re.S | re.I)
+CARD_RE = re.compile(
+    r'<div class="box q ext-item[^"]{0,80}">(.{0,80000}?)<div class="(?:box q ext-item|rows js-more)',
+    re.S | re.I,
+)
+CARD2_RE = re.compile(
+    r'class="box q ext-item[^"]{0,80}"(.{0,80000}?)(?:class="box q ext-item|js-more-ads|$)',
+    re.S | re.I,
+)
+INZERAT_RE = re.compile(r'href="(/inzerat/[^"]{1,300}-(\d{6,12})-[a-z0-9]+\.html)"', re.I)
+TITLE_RE = re.compile(r"<h2[^>]{0,120}>\s*<a[^>]{0,300}>(.{0,500}?)</a>", re.S | re.I)
+DATE_RE = re.compile(r'class="ad-date"[^>]{0,80}>(.{0,200}?)</div>', re.S | re.I)
+IMG_RE = re.compile(r'<img[^>]{1,400}src="(https://static\.annonce\.cz/[^"]{1,400})"', re.I)
+ATTR_RE = re.compile(r"<th[^>]{0,80}>\s*([^<:]{1,80}):\s*</th>\s*<td[^>]{0,80}>(.{0,400}?)</td>", re.S | re.I)
+PRICE_RE = re.compile(r'class="[^"]{0,80}price[^"]{0,80}"[^>]{0,80}>(.{0,400}?)</', re.S | re.I)
 
 
 def parse_annonce_date(text: str) -> str | None:

@@ -10,13 +10,16 @@ from app.sreality import Listing
 
 SITE = realitycz_url.site
 HREF_RE = re.compile(
-    r'href="((?:https://www\.reality\.cz)?/(?:detail|nemovitost|inzerat)/[^"]+)"',
+    r'href="((?:https://www\.reality\.cz)?/(?:detail|nemovitost|inzerat)/[^"]{1,400})"',
     re.I,
 )
-HREF2_RE = re.compile(r'href="((?:https://www\.reality\.cz)?/(?:pronajem|prodej)/[^"]+/\d+[^"]*)"', re.I)
-ID_RE = re.compile(r"/(\d{4,})")
-TITLE_RE = re.compile(r"<h[123][^>]*>(.*?)</h[123]>", re.S | re.I)
-IMG_RE = re.compile(r'(?:src|data-src)="([^"]+\.(?:jpg|jpeg|webp)[^"]*)"', re.I)
+HREF2_RE = re.compile(
+    r'href="((?:https://www\.reality\.cz)?/(?:pronajem|prodej)/[^"]{0,300}/\d{4,12}[^"]{0,200})"',
+    re.I,
+)
+ID_RE = re.compile(r"/(\d{4,12})")
+TITLE_RE = re.compile(r"<h[123][^>]{0,120}>(.{0,500}?)</h[123]>", re.S | re.I)
+IMG_RE = re.compile(r'(?:src|data-src)="([^"]{1,400}\.(?:jpg|jpeg|webp)[^"]{0,200})"', re.I)
 
 
 class RealityczClient(HtmlPortalClient):
