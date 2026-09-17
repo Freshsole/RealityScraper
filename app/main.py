@@ -343,13 +343,36 @@ def _current_user(session: str | None) -> dict[str, Any]:
     return user
 
 
+async def _ui(fn, *args, busy: str = "busy"):
+    try:
+        return await asyncio.get_running_loop().run_in_executor(hub.ui_pool, fn, *args)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail=busy) from exc
+
+
+async def _auth(fn, *args, busy: str = "auth-busy"):
+    try:
+        return await asyncio.get_running_loop().run_in_executor(hub.auth_pool, fn, *args)
+    except sqlite3.OperationalError as exc:
+        raise HTTPException(status_code=503, detail=busy) from exc
+
+
 @app.post("/api/t")
 async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     if not site_stats.analytics_allowed(request):
         response = JSONResponse({"ok": True, "skipped": True})
         response.delete_cookie(site_stats.VISITOR_COOKIE, path="/")
         return response
-    visitor = await asyncio.to_thread(site_stats.ingest, hub.store, request, payload or {})
+    try:
+        visitor = await asyncio.get_running_loop().run_in_executor(
+            hub.ui_pool, site_stats.ingest, hub.store, request, payload or {}
+        )
+    except sqlite3.OperationalError:
+        visitor = request.cookies.get(site_stats.VISITOR_COOKIE) or ""
+        response = JSONResponse({"ok": True, "skipped": True})
+        if visitor:
+            site_stats.attach_cookie(response, visitor)
+        return response
     response = JSONResponse({"ok": True})
     site_stats.attach_cookie(response, visitor)
     return response
@@ -399,7 +422,7 @@ async def auth_logout_api() -> dict:
 
 @app.get("/api/auth/me")
 async def auth_me(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    return _current_user(realitify_session)
+    return await _auth(_current_user, realitify_session)
 
 
 def _extension_session(request: Request, cookie: str | None) -> str | None:
@@ -413,15 +436,24 @@ async def extension_me(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
     session = _extension_session(request, realitify_session)
-    user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
-    if not user:
-        account["authenticated"] = False
-        account["active"] = False
-        account["pro"] = False
-        return account
-    account["authenticated"] = True
-    return account
+
+    def _load() -> dict[str, Any]:
+        user = user_account.user_from_session(hub.store, session)
+        account = ext_score.extension_account(hub.store)
+        if not user:
+            return {**account, "authenticated": False, "active": False, "pro": False}
+        return {**account, "authenticated": True}
+
+    try:
+        return await _ui(_load, busy="extension-busy")
+    except HTTPException:
+        return {
+            "authenticated": False,
+            "active": False,
+            "pro": False,
+            "stale": True,
+            "login_url": "/prihlaseni",
+        }
 
 
 @app.post("/api/extension/scores")
@@ -431,23 +463,32 @@ async def extension_scores(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
     session = _extension_session(request, realitify_session)
-    user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
-    if not user:
-        raise HTTPException(401, "Nejste přihlášeni")
-    if not account.get("active"):
-        raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
     body = payload or {}
     ids = body.get("ids") if isinstance(body.get("ids"), list) else []
     urls = body.get("urls") if isinstance(body.get("urls"), list) else []
-    result = ext_score.score_batch(hub.store, ids=[str(x) for x in ids], urls=[str(x) for x in urls])
-    result["account"] = {
-        "plan": account["plan"],
-        "label": account["label"],
-        "active": account["active"],
-        "pro": account["pro"],
-    }
-    return result
+
+    def _load() -> dict[str, Any]:
+        user = user_account.user_from_session(hub.store, session)
+        account = ext_score.extension_account(hub.store)
+        if not user:
+            raise HTTPException(401, "Nejste přihlášeni")
+        if not account.get("active"):
+            raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
+        result = ext_score.score_batch(
+            hub.store,
+            ids=[str(x) for x in ids],
+            urls=[str(x) for x in urls],
+            allow_network=False,
+        )
+        result["account"] = {
+            "plan": account["plan"],
+            "label": account["label"],
+            "active": account["active"],
+            "pro": account["pro"],
+        }
+        return result
+
+    return await _ui(_load, busy="extension-busy")
 
 
 @app.post("/api/extension/ingest")
@@ -458,12 +499,17 @@ async def extension_ingest(
 ) -> dict:
     """Scrape unknown Sreality listings into catalog and return fresh scores."""
     session = _extension_session(request, realitify_session)
-    user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
-    if not user:
-        raise HTTPException(401, "Nejste přihlášeni")
-    if not account.get("active"):
-        raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
+
+    def _auth_account() -> dict[str, Any]:
+        user = user_account.user_from_session(hub.store, session)
+        account = ext_score.extension_account(hub.store)
+        if not user:
+            raise HTTPException(401, "Nejste přihlášeni")
+        if not account.get("active"):
+            raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
+        return account
+
+    account = await _ui(_auth_account, busy="extension-busy")
 
     body = payload or {}
     raw_urls = body.get("urls") if isinstance(body.get("urls"), list) else []
@@ -527,7 +573,10 @@ async def extension_ingest(
     await asyncio.gather(*[_one(url) for url in cleaned])
 
     score_ids = list(dict.fromkeys(ingested + [ext_score.extract_sreality_id(u) for u in cleaned if ext_score.extract_sreality_id(u)]))
-    result = ext_score.score_batch(hub.store, ids=score_ids, urls=cleaned)
+    result = await _ui(
+        lambda: ext_score.score_batch(hub.store, ids=score_ids, urls=cleaned, allow_network=False),
+        busy="extension-busy",
+    )
     result["ingested"] = ingested
     result["errors"] = errors
     result["account"] = {
@@ -1028,23 +1077,32 @@ async def discord_test(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 @app.get("/api/discord/status")
 async def discord_link_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return user_account.discord_status(hub.store)
+    def _load() -> dict[str, Any]:
+        _current_user(realitify_session)
+        return user_account.discord_status(hub.store)
+
+    return await _ui(_load, busy="discord-busy")
 
 
 @app.post("/api/discord/link-code")
 async def discord_link_code(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    try:
+    def _load() -> dict[str, Any]:
+        _current_user(realitify_session)
         return user_account.create_discord_link_code(hub.store)
+
+    try:
+        return await _auth(_load, busy="discord-busy")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/discord/unlink")
 async def discord_unlink(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return user_account.unlink_discord(hub.store)
+    def _load() -> dict[str, Any]:
+        _current_user(realitify_session)
+        return user_account.unlink_discord(hub.store)
+
+    return await _auth(_load, busy="discord-busy")
 
 
 @app.post("/api/email/test")
@@ -1066,8 +1124,11 @@ async def email_test(realitify_session: str | None = Cookie(default=None, alias=
 
 @app.get("/api/whatsapp/status")
 async def whatsapp_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return wa_notify.status(hub.store)
+    def _load() -> dict[str, Any]:
+        _current_user(realitify_session)
+        return wa_notify.status(hub.store)
+
+    return await _ui(_load, busy="whatsapp-busy")
 
 
 @app.post("/api/whatsapp/phone")
@@ -1146,13 +1207,9 @@ def web_manifest() -> FileResponse:
 
 
 @app.get("/api/push/vapid")
-def push_vapid() -> dict:
-    return {
-        "publicKey": web_push.public_key(),
-        "supported": True,
-        "devices": hub.store.push_subscription_count(),
-        "enabled": bool(hub.store.notify_prefs().get("push")),
-    }
+async def push_vapid() -> dict:
+    key = web_push.public_key()
+    return await _ui(lambda: hub.store.push_vapid_payload(public_key=key), busy="push-busy")
 
 
 @app.post("/api/push/subscribe")
@@ -1194,12 +1251,12 @@ async def push_test() -> dict:
 
 @app.get("/api/public/stats")
 async def public_stats() -> dict:
-    return {"new_today": await asyncio.to_thread(hub.store.catalog_new_today_count)}
+    return {"new_today": await _ui(hub.store.catalog_new_today_count, busy="stats-busy")}
 
 
 @app.get("/api/public/landing-listings")
 async def public_landing_listings() -> dict:
-    items = await asyncio.to_thread(hub.store.landing_preview_listings)
+    items = await _ui(hub.store.landing_preview_listings, busy="stats-busy")
     return {"items": items}
 
 
@@ -1270,7 +1327,7 @@ async def public_guest_search_start(request: Request) -> JSONResponse:
 
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
-    items = await asyncio.to_thread(hub.store.public_gone_fast_rentals, days=3, limit=4)
+    items = await _ui(lambda: hub.store.public_gone_fast_rentals(days=3, limit=4), busy="stats-busy")
     return {"items": items}
 
 
@@ -1604,7 +1661,7 @@ async def save_listing_user(payload: dict[str, Any]) -> dict:
 
 @app.get("/api/settings")
 async def get_settings() -> dict:
-    return hub.store.app_settings()
+    return await _ui(hub.store.app_settings, busy="settings-busy")
 
 
 @app.post("/api/settings")
@@ -1682,7 +1739,8 @@ async def delete_monitor(monitor_id: str) -> dict:
 
 @app.get("/api/templates")
 async def list_templates() -> dict:
-    return {"items": hub.store.list_templates(), "variables": VARIABLES, "sample": sample_vars()}
+    items = await _ui(hub.store.list_templates, busy="templates-busy")
+    return {"items": items, "variables": VARIABLES, "sample": sample_vars()}
 
 
 @app.post("/api/templates")
