@@ -156,6 +156,13 @@ CITY_CENTERS = [
     ("Spálené Poříčí", 49.6139, 13.6056),
     ("Černošín", 49.8164, 12.8839),
     ("Zašová", 49.4478, 18.0444),
+    ("Krnov", 50.0898, 17.7030),
+    ("Šternberk", 49.7304, 17.2989),
+    ("Hradec nad Moravicí", 49.8710, 17.8755),
+    ("Rožmitál pod Třemšínem", 49.6020, 13.8645),
+    ("Bakov nad Jizerou", 50.4823, 14.9415),
+    ("Smečno", 50.1886, 14.0050),
+    ("Davle", 49.8923, 14.3856),
 ]
 # iDNES (and other) list cards for Croatian ads have no local Czech pin.
 GPS_PIN_ALIASES = [

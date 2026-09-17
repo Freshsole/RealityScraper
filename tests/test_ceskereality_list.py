@@ -114,6 +114,13 @@ class CeskerealityListTests(unittest.TestCase):
             lazne = approx_point_from_locality("marianske lazne")
             self.assertEqual((listings[2].lat, listings[2].lon), lazne)
             self.assertEqual(lazne, approx_point_from_locality("Mariánské Lázně"))
+            krnov = approx_point_from_locality("Krnov Pod Bezručovým vrchem, Partyzánů")
+            self.assertEqual(krnov, approx_point_from_locality("Krnov"))
+            self.assertIsNotNone(krnov)
+            self.assertEqual(
+                approx_point_from_locality("Šternberk, Příčná"),
+                approx_point_from_locality("Šternberk"),
+            )
 
         asyncio.run(_run())
 
