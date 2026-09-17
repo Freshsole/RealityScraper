@@ -154,17 +154,19 @@ class AnnonceUrls:
             path = "/domy-k-pronajmu.html" if offer == "pronajem" else "/domy-na-prodej.html"
         else:
             path = "/byty-k-pronajmu.html" if offer == "pronajem" else "/byty-na-prodej.html"
-        # nabidkovy=1 drops poptávka cards so page-1 is 20 offers, not a mix of 10.
-        return _join(self.site + path, {"nabidkovy": "1"})
+        # nabidkovy=1 drops poptávka; sort=ageasc is the live "od nejnovějšího" control.
+        return _join(self.site + path, {"nabidkovy": "1", "sort": "ageasc"})
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
-        if "prodej" in raw:
+        if "pronaj" in raw:
+            filters["offers"] = ["pronajem"]
+        elif "prodej" in raw or "prodam" in raw or "rodinne-domy" in raw:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
-        if "domy" in raw:
+        if "domy" in raw or "dum" in raw:
             filters["category"] = "domy"
         return filters
 

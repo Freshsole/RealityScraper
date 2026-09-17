@@ -1,5 +1,9 @@
+import asyncio
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import httpx
 
 from app.annonce import AnnonceClient
 from app.block_page import classify_block
@@ -84,9 +88,17 @@ class ExtraPortalTests(unittest.TestCase):
         rent = annonce_url.build_url({"offers": ["pronajem"]})
         self.assertIn("/byty-k-pronajmu.html", rent)
         self.assertIn("nabidkovy=1", rent)
+        self.assertIn("sort=ageasc", rent)
         houses = annonce_url.build_url({"offers": ["pronajem"], "category": "domy"})
         self.assertIn("/domy-k-pronajmu.html", houses)
         self.assertIn("nabidkovy=1", houses)
+        self.assertIn("sort=ageasc", houses)
+        sale = annonce_url.build_url({"offers": ["prodej"]})
+        self.assertIn("/byty-na-prodej.html", sale)
+        self.assertIn("sort=ageasc", sale)
+        sale_houses = annonce_url.build_url({"offers": ["prodej"], "category": "domy"})
+        self.assertIn("/domy-na-prodej.html", sale_houses)
+        self.assertIn("sort=ageasc", sale_houses)
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         ulov_houses = ulovdomov_url.build_url({"offers": ["pronajem"], "category": "domy"})
@@ -129,6 +141,9 @@ class ExtraPortalTests(unittest.TestCase):
         )
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
+        self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/rodinne-domy.html")["offers"], ["prodej"])
+        self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/rodinne-domy.html")["category"], "domy")
+        self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/domy-k-pronajmu.html")["offers"], ["pronajem"])
         self.assertEqual(remax_url.parse_url("https://www.remax-czech.cz/reality/byty/?sale=1")["offers"], ["prodej"])
 
     def test_ceskereality_list(self):
@@ -147,23 +162,98 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].disposition, "2+kk")
         self.assertEqual(items[0].area_m2, 44)
         self.assertEqual(items[0].price_czk, 24000)
+        self.assertEqual(items[0].extras.get("estate"), "Byt")
+        self.assertEqual(items[0].extras.get("offer"), "Pronájem")
 
     def test_annonce_slideshow_cards_keep_every_listing(self):
+        from app.annonce import canonical_annonce_url
+        from app.places import approx_point_from_locality
+
         html = (FIXTURES / "annonce_cards.html").read_text()
         client = AnnonceClient("https://www.annonce.cz/byty-k-pronajmu.html")
         items = client._parse_list(html)
         ids = [item.id for item in items]
-        self.assertEqual(ids, [88323899, 88695951, 88672809, 88696077, 88159057])
+        self.assertEqual(ids, [88323899, 88695951, 88672809, 88696077, 86945551, 88159057])
         self.assertEqual(items[0].locality, "Praha 4")
         self.assertEqual(items[0].price_czk, 13500)
+        self.assertEqual(items[0].extras.get("estate"), "Byt")
         self.assertIn("attachment", items[0].image_url or "")
         self.assertEqual(items[1].disposition, "3+1")
         self.assertEqual(items[1].locality, "Karlovy Vary")
         self.assertNotIn(88693793, ids)
         self.assertEqual(items[3].locality, "Praha 5")
         self.assertEqual(items[3].price_czk, 26000)
-        self.assertTrue(items[4].url.endswith("88159057-w2713c.html"))
-        self.assertEqual(client._page_url(2), "https://www.annonce.cz/byty-k-pronajmu.html?page=2")
+        self.assertEqual(items[3].extras.get("estate"), "Dům")
+        self.assertEqual(items[3].extras.get("offer"), "Pronájem")
+        house = items[4]
+        self.assertEqual(house.id, 86945551)
+        self.assertEqual(house.locality, "Frýdek Místek")
+        self.assertEqual(house.price_czk, 4399000)
+        self.assertEqual(house.disposition, "5+kk")
+        self.assertEqual(house.area_m2, 216)
+        self.assertEqual(house.extras.get("estate"), "Dům")
+        self.assertEqual(house.extras.get("ownership"), "osobní")
+        self.assertTrue(items[5].url.endswith("88159057-w2713c.html"))
+        self.assertEqual(items[5].extras.get("estate"), "Dům")
+        page2 = client._page_url(2, newest=True)
+        self.assertIn("/byty-k-pronajmu.html", page2)
+        self.assertIn("nabidkovy=1", page2)
+        self.assertIn("sort=ageasc", page2)
+        self.assertIn("page=2", page2)
+        self.assertEqual(
+            canonical_annonce_url("https://www.annonce.cz/rodinne-domy.html"),
+            "https://www.annonce.cz/domy-na-prodej.html",
+        )
+        self.assertEqual(
+            canonical_annonce_url("https://www.annonce.cz/byty-na-prodej$18.html?nabidkovy=1"),
+            "https://www.annonce.cz/byty-na-prodej.html?nabidkovy=1",
+        )
+        sale = AnnonceClient("https://www.annonce.cz/rodinne-domy.html")
+        self.assertIn("/domy-na-prodej.html", sale._page_url(1, newest=True))
+        self.assertEqual(sale._context(), "prodej")
+        self.assertEqual(sale._estate("Prodej rodinného domu"), "dum")
+        priced = sale._parse_list(html)
+        self.assertEqual(priced[4].extras.get("offer"), "Prodej")
+        self.assertEqual(priced[4].extras.get("estate"), "Dům")
+        pin = approx_point_from_locality("Frýdek Místek")
+        self.assertEqual(pin, approx_point_from_locality("Frýdek-Místek"))
+        self.assertIsNotNone(pin)
+        sale._attach_local_coords([house])
+        self.assertEqual((house.lat, house.lon), pin)
+
+    def test_annonce_sale_fetch_page_pins_locally_without_photon(self):
+        html = (FIXTURES / "annonce_cards.html").read_text()
+        hits: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            hits.append(str(request.url))
+            return httpx.Response(200, text=html)
+
+        async def _run() -> None:
+            client = AnnonceClient("https://www.annonce.cz/domy-na-prodej.html")
+            await client.aclose()
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                with patch("app.places.geocode_locality", side_effect=AssertionError("list fetch must not geocode")):
+                    with patch(
+                        "app.places.geocode_locality_sync",
+                        side_effect=AssertionError("list fetch must not geocode"),
+                    ):
+                        listings, _total = await client.fetch_page(1, newest=True)
+            finally:
+                await client.aclose()
+            self.assertTrue(any("sort=ageasc" in url and "nabidkovy=1" in url for url in hits))
+            self.assertTrue(any("/domy-na-prodej.html" in url for url in hits))
+            by_id = {item.id: item for item in listings}
+            house = by_id[86945551]
+            self.assertEqual(house.extras.get("estate"), "Dům")
+            self.assertEqual(house.extras.get("offer"), "Prodej")
+            self.assertEqual(house.disposition, "5+kk")
+            self.assertEqual((house.lat, house.lon), approx_point_from_locality("Frýdek-Místek"))
+
+        from app.places import approx_point_from_locality
+
+        asyncio.run(_run())
 
     def test_remax_list(self):
         client = RemaxClient("https://www.remax-czech.cz/reality/byty/pronajem/?order_by_published_date=0")
