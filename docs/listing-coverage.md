@@ -140,9 +140,9 @@ After this branch (iDNES houses/sale page-1 audit: canonical category URLs, hous
 
 | Portal | page 1 | catalog total | page-1 time | notes |
 |---|---|---|---|---|
-| iDNES rent byty | **26** | **8472** | 1.4 s | already 26/26 price+image+locality; GPS **26/26** (was 24; Rijeka/Opatija pin locally). `/s/pronajem/byt/` **404** now rewritten to `/s/pronajem/byty/` |
+| iDNES rent byty | **26** | **8472** | 1.2 s | already 26/26 price+image+locality; GPS **26/26** (was 24; Rijeka/Opatija pin locally). `/s/pronajem/byt/` and `/s/pronajem/dum/` **404** now rewritten to `/byty/` / `/domy/` |
 | iDNES sale byty | **26** | **27891** | 1.2 s | 26/26 price+image+locality; GPS **26/26** (was 15; Croatia cities + Chorvatsko fallback). Nationwide parse no longer injects `/praha/` |
-| iDNES houses | **26** | **608** rent / **28597** sale | ~1.1 s | new newest shards `/s/{pronajem\|prodej}/domy/` (were daily-only); `/s/pronajem/dum/` **404** → `/domy/`; detail `/detail/…/dum/…` **200**; rent 25/26 price (`Cena na vyžádání` kept); sale 26/26 price+image+locality |
+| iDNES houses | **26** | **608** rent / **28597** sale | 1.3–1.4 s | new newest shards `/s/{pronajem\|prodej}/domy/` (were daily-only); detail `/detail/…/dum/…` **200**; rent 25/26 price (`Cena na vyžádání` kept); sale 26/26 price+image+locality+GPS |
 
 List path still does not call Photon/Nominatim: local city pins plus Croatian GPS pin aliases (`Rijeka` stays Rijeka, unknown `…, Chorvatsko` falls back to the country pin). Synthetic page-1-across with two extra iDNES house shards: **21→54** page-1 shards / **900→2700** listings under a 0.7 s contention deadline (was 52/2600 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Bazoš/Sreality/REMAX/Reality.cz/Bezrealitky/Annonce page-1 wins are unchanged.
 
