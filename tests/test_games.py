@@ -9,6 +9,7 @@ from app.games import (
     DEFAULT_VANISH_HOURS,
     TEACHING_RATIO,
     TYPICAL_VANISH_LABEL,
+    _pick_rent_flats,
     disposition_rank,
     filter_game_estate,
     game_vanish_hours,
@@ -447,17 +448,17 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "v řádu minut" not in rent
     assert "v řádu minut" not in hub
     assert "v řádu minut" not in html
-    assert "games.css?v=16" in hub
+    assert "games.css?v=17" in hub
     assert "board-tease" in rent
     assert "jen admin" in rent
     assert "Ve hře skóre uvidíte jen vy" in rent
     assert "rent-hint" in rent
     assert "mezery doplníme" in rent
     assert "18 000" in rent
-    assert "games.js?v=14" in rent
-    assert "games.css?v=16" in rent
-    assert "games.js?v=14" in html
-    assert "games.css?v=16" in html
+    assert "games.js?v=15" in rent
+    assert "games.css?v=17" in rent
+    assert "games.js?v=15" in html
+    assert "games.css?v=17" in html
     assert "vidíte v administraci" not in hub
     assert "Výhodné kousky" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
@@ -480,14 +481,20 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert ".game-card .pill" in css
     assert ".amount-col" in css
     assert ".flat-m2" in css
+    assert ".rent-reveal-prices" in css
+    assert ".rent-reveal-kicker" in css
     assert "ccy-pill" in js
     assert "info-rows" in js
     assert "pill-ghost" in js
     assert "amount-col" in js
     assert "flat-m2" in js
     assert "m2Compare" in js
+    assert "m2Spread" in js
+    assert "guess_m2_label" in js
+    assert "rent-reveal-prices" in js
     assert "Kč za m²" in js
     assert "Hlídat, než zmizí" in js
+    assert "Hlídat podobné byty" not in js
     assert "rent-unit" in js
     assert "rent-hint" in js
     assert "replace(/[^\\d]/g, \"\")" in js
@@ -785,6 +792,9 @@ def test_public_game_helpers_are_memory_only():
     assert round_payload.get("pair_key")
     assert "v řádu minut" not in (round_payload.get("copy") or "")
     assert "mezery doplníme" in (round_payload.get("copy") or "")
+    assert "za metr" in (round_payload.get("copy") or "")
+    assert "Správně." not in (round_payload.get("copy") or "")
+    assert "Špatně." not in (round_payload.get("copy_ok") or "")
     assert "18 000" in (round_payload.get("copy_hint") or "")
     assert "v řádu minut" not in (pair.get("copy") or "")
     assert scored["ok"] is True
@@ -1124,8 +1134,10 @@ def test_rent_teaching_distribution_is_about_80_percent():
     ]
     assert all(row["round_kind"] == "teaching" for row in forced)
     for row in forced:
+        assert "za metr" in (row.get("copy_ok") or "")
+        assert "Správně." not in (row.get("copy_ok") or "")
         assert any(
-            is_teaching_pair(left, right)
+            is_teaching_pair(left, right) and teaching_contrast(left, right) > 0.8
             for index, left in enumerate(row["pool"])
             for right in row["pool"][index + 1 :]
         )
@@ -1152,12 +1164,81 @@ def test_rent_teaching_round_keeps_clear_price_m2_contrast():
         assert "clear-bad" in ids
         assert "v řádu minut" not in (row.get("copy") or "")
         assert "mezery doplníme" in (row.get("copy") or "")
+        assert "za metr" in (row.get("copy") or "")
+        assert "za metr" in (row.get("copy_ok") or "")
+        assert "Správně." not in (row.get("copy_ok") or "")
+        assert "Špatně." not in (row.get("copy_ok") or "")
         assert "18 000" in (row.get("copy_hint") or "")
         assert any(
             is_teaching_pair(left, right)
             for index, left in enumerate(row["pool"])
             for right in row["pool"][index + 1 :]
         )
+
+
+def test_rent_teaching_rejects_disp_noise_and_near_ties():
+    # Bedihošť is not in seed, so same-district seed cannot pad a teaching pair.
+    pool = [
+        _flat("plus-one", "Bedihošť", "2+1", 50, 18800),
+        _flat("plus-kk", "Bedihošť", "2+kk", 48, 21400),
+        _flat("weak-a", "Bedihošť", "2+kk", 50, 19600),
+        _flat("weak-b", "Bedihošť", "2+kk", 42, 20800),
+        _flat("noise", "Bedihošť", "2+kk", 48, 19700),
+        _flat("gap", "Bedihošť", "3+kk", None, 17100),
+        _flat("same", "Bedihošť", "2+kk", 51, 19800),
+    ]
+    for seed in range(40):
+        row = pick_rent_round(pool, rng=random.Random(seed), teaching_ratio=1.0)
+        assert row["round_kind"] == "random"
+        assert not any(
+            is_teaching_pair(left, right)
+            for index, left in enumerate(row["pool"])
+            for right in row["pool"][index + 1 :]
+        )
+        assert "za metr" in (row.get("copy") or "")
+        assert "Správně." not in (row.get("copy_ok") or "")
+
+
+def test_rent_thin_live_keeps_clear_teaching_pair():
+    items = [
+        _flat("live-a", "Praha 3 – Žižkov", "2+kk", 50, 19600),
+        _flat("live-b", "Praha 3 – Žižkov", "2+kk", 49, 19700),
+        _flat("live-c", "Praha 3 – Žižkov", "2+1", 50, 18800),
+        _flat("live-d", "Praha 3 – Žižkov", "2+kk", 48, 21400),
+        _flat("seed-zizkov-clear", "Praha 3 – Žižkov", "4+kk", 92, 17500),
+        _flat("seed-zizkov-dear", "Praha 3 – Žižkov", "1+kk", 28, 24800),
+    ]
+    for seed in range(40):
+        chosen = _pick_rent_flats(items, rng=random.Random(seed), teaching=True)
+        ids = {item["id"] for item in chosen}
+        assert len(chosen) == 5
+        assert "seed-zizkov-clear" in ids
+        assert "seed-zizkov-dear" in ids
+        assert teaching_contrast(
+            next(item for item in chosen if item["id"] == "seed-zizkov-clear"),
+            next(item for item in chosen if item["id"] == "seed-zizkov-dear"),
+        ) > 0.8
+
+
+def test_score_round_includes_guess_and_actual_m2():
+    items = [
+        _flat("a", "Praha 3 – Žižkov", "2+kk", 50, 20000),
+        _flat("b", "Praha 3 – Žižkov", "1+kk", 25, 15000),
+    ]
+    scored = score_round(items, [{"id": "a", "guess": 18000}, {"id": "b", "guess": 15000}])
+    by_id = {item["id"]: item for item in scored["items"]}
+    assert by_id["a"]["price_m2_label"].endswith("Kč/m²")
+    assert by_id["a"]["guess_m2_label"].endswith("Kč/m²")
+    assert by_id["a"]["price_m2"] == 400
+    assert by_id["a"]["guess_m2"] == 360
+    assert by_id["b"]["price_m2"] == 600
+    assert by_id["b"]["guess_m2"] == 600
+    missing = score_round(
+        [_flat("gap", "Praha 3 – Žižkov", "2+kk", None, 20000)],
+        [{"id": "gap", "guess": 18000}],
+    )
+    assert missing["items"][0].get("price_m2_label") in (None, "")
+    assert missing["items"][0].get("guess_m2_label") in (None, "")
 
 
 def test_rent_round_live_aliases_same_district():

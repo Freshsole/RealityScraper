@@ -187,12 +187,13 @@ _RANDOM_MISS = (
 )
 _RENT_INTRO = (
     "Pět bytů ze stejné čtvrti. Napište měsíční nájem čísly — mezery doplníme. "
-    "Vedle sebe uvidíte výhodné kousky i přestřelené ceny. "
+    "Vedle sebe uvidíte výhodné kousky i přestřelené ceny za metr. "
     "Dobré nabídky mizí {vanish}."
 )
 _RENT_HINT = "např. 18 000 · jen čísla, mezery doplníme"
+# Same lesson as Higher/Lower teaching copy: better+cheaper including Kč/m².
 _RENT_TEACH = (
-    "Ve stejné čtvrti může větší byt stát míň. Takové nabídky mizí {vanish}."
+    "Ve stejné čtvrti může větší byt stát míň i za metr. Takové nabídky mizí {vanish}."
 )
 _RENT_RANDOM = (
     "Ve stejné lokalitě se ceny hodně rozcházejí — výhodné kousky mizí {vanish}."
@@ -264,11 +265,12 @@ def _meaningful_m2_gap(gap: float, cheap_m2: float) -> bool:
     return gap >= MIN_TEACH_M2_GAP or (cheap_m2 > 0 and gap / cheap_m2 >= MIN_TEACH_M2_RATIO)
 
 
-def _m2_label(item: dict[str, Any]) -> str:
-    rent = _unit_rent(item)
-    if rent is None:
-        return ""
-    return f"{int(round(rent)):,} Kč/m²".replace(",", " ")
+def _m2_parts(price: int | None, area: int | None) -> tuple[int | None, str]:
+    """Rounded Kč/m² + label. Empty when area is missing — do not invent it."""
+    if not price or not area or area <= 0:
+        return None, ""
+    value = int(round(price / area))
+    return value, f"{value:,} Kč/m²".replace(",", " ")
 
 
 def _teach_axes(
@@ -397,7 +399,13 @@ def score_round(items: list[dict[str, Any]], guesses: list[dict[str, Any]]) -> d
         scored = score_guess(int(item.get("price_czk") or 0), guess)
         total += scored["points"]
         errors.append(min(1.0, scored["error_pct"] / 100.0))
-        results.append({**public_card(item, include_price=True), **scored})
+        area = _as_int(item.get("area_m2"))
+        guess_m2, guess_m2_label = _m2_parts(guess, area)
+        row = {**public_card(item, include_price=True), **scored}
+        if guess_m2_label:
+            row["guess_m2"] = guess_m2
+            row["guess_m2_label"] = guess_m2_label
+        results.append(row)
     accuracy = round((1.0 - (sum(errors) / len(errors))) * 100.0, 1) if errors else 0.0
     return {
         "score": total,
@@ -428,10 +436,9 @@ def public_card(item: dict[str, Any], *, include_price: bool = False) -> dict[st
     if include_price:
         card["price_czk"] = item.get("price_czk")
         card["price_label"] = item.get("price_label") or _price_label(item.get("price_czk"))
-        m2_label = _m2_label(item)
+        price_m2, m2_label = _m2_parts(_as_int(item.get("price_czk")), _as_int(item.get("area_m2")))
         if m2_label:
-            rent = _unit_rent(item)
-            card["price_m2"] = int(round(rent)) if rent is not None else None
+            card["price_m2"] = price_m2
             card["price_m2_label"] = m2_label
     return card
 
@@ -1031,6 +1038,31 @@ def _spread_pick(ordered: list[dict[str, Any]], need: int) -> list[dict[str, Any
     return [ordered[idx] for idx in indexes[:need]]
 
 
+def _trim_rent_flats(
+    items: list[dict[str, Any]],
+    *,
+    size: int,
+    teaching: bool,
+    rng: random.Random,
+) -> list[dict[str, Any]]:
+    """Cap a round at `size` without dropping the HL teaching pair.
+
+    Thin live groups can grow past five after a `_pick_teaching_pair` pad
+    (same helpers as Higher/Lower: `CLEAR_TEACH_KEEP`, top 2). Slicing the
+    tail would silently demote the round to random.
+    """
+    if len(items) <= size:
+        return list(items)
+    if teaching:
+        kept = _pick_teaching_pair(items, rng)
+        if kept:
+            keep_ids = {str(item.get("id")) for item in kept}
+            head = [item for item in items if str(item.get("id")) in keep_ids]
+            tail = [item for item in items if str(item.get("id")) not in keep_ids]
+            return (head + tail)[:size]
+    return list(items[:size])
+
+
 def _pick_rent_flats(
     items: list[dict[str, Any]],
     *,
@@ -1038,7 +1070,12 @@ def _pick_rent_flats(
     size: int = RENT_ROUND_SIZE,
     teaching: bool = True,
 ) -> list[dict[str, Any]]:
-    """Same-place flats: live first, then a teaching contrast + deal-spectrum fill."""
+    """Same-place flats: live first, then a teaching contrast + deal-spectrum fill.
+
+    Teaching uses the same Higher/Lower helpers (`is_teaching_pair`,
+    `_pick_teaching_pair`, `CLEAR_TEACH_KEEP`) so 2+kk vs 2+1, missing Kč/m²,
+    and near-ties never count.
+    """
     unique: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:
@@ -1062,7 +1099,8 @@ def _pick_rent_flats(
                         chosen.append(item)
                         chosen_ids.add(eid)
                 rest = [item for item in rest if str(item.get("id")) not in chosen_ids]
-        chosen.extend(_spread_pick(sorted(rest, key=_unit_price), size - len(chosen)))
+        chosen.extend(_spread_pick(sorted(rest, key=_unit_price), max(0, size - len(chosen))))
+        chosen = _trim_rent_flats(chosen, size=size, teaching=teaching, rng=rng)
         rng.shuffle(chosen)
         return chosen[:size]
     pool = live if len(live) >= size else [*live, *seed]
@@ -1079,7 +1117,8 @@ def _pick_rent_flats(
             chosen.extend(picked)
     chosen_ids = {str(item.get("id")) for item in chosen}
     rest = [item for item in pool if str(item.get("id")) not in chosen_ids]
-    chosen.extend(_spread_pick(sorted(rest, key=_unit_price), size - len(chosen)))
+    chosen.extend(_spread_pick(sorted(rest, key=_unit_price), max(0, size - len(chosen))))
+    chosen = _trim_rent_flats(chosen, size=size, teaching=teaching, rng=rng)
     rng.shuffle(chosen)
     return chosen[:size]
 
@@ -1136,8 +1175,10 @@ def pick_rent_round(
 ) -> dict[str, Any]:
     """Five flats, one district. ~80 % include a pedagogical deal-vs-overpriced contrast.
 
-    Live catalog listings in that district win; same-district seed only pads a
-    thin live group. Never mix Vinohrady with Žižkov. Cold path uses seed.
+    Teaching contrast matches Higher/Lower: `is_teaching_pair` +
+    `_pick_teaching_pair` (`CLEAR_TEACH_KEEP` 0.75, top 2). Live catalog
+    listings in that district win; same-district seed only pads a thin live
+    group. Never mix Vinohrady with Žižkov. Cold path uses seed.
     Land/plots stay out of apartment rounds unless estate=mixed (houses only).
     """
     rng = rng or random.Random()
