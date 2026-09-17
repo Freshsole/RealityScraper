@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from app.site_pages import InstantSiteASGI, site_asset, site_body
+from app.site_pages import InstantSiteASGI, site_asset, site_body, web_body
 from app.store import Store, catalog_item_needs_live_fetch
 
 
@@ -110,7 +110,11 @@ def test_catalog_new_today_skips_full_table_count(tmp_path: Path):
 
 
 async def _asgi_get(
-    app, path: str, method: str = "GET", query_string: bytes = b""
+    app,
+    path: str,
+    method: str = "GET",
+    query_string: bytes = b"",
+    headers: list[tuple[bytes, bytes]] | None = None,
 ) -> tuple[int, dict[bytes, bytes], bytes]:
     sent: list[dict] = []
 
@@ -130,7 +134,7 @@ async def _asgi_get(
             "path": path,
             "raw_path": path.encode(),
             "query_string": query_string,
-            "headers": [],
+            "headers": list(headers or []),
             "client": ("127.0.0.1", 1),
             "server": ("127.0.0.1", 80),
         },
@@ -292,38 +296,127 @@ def test_auth_apis_and_app_pages_still_hit_inner_app():
 
     async def run() -> None:
         app = InstantSiteASGI(inner)
+        session = [(b"cookie", b"realitify_session=test-token")]
         status, _headers, body = await _asgi_get(app, "/prihlaseni")
         assert status == 200
         assert body
         status, _headers, body = await _asgi_get(app, "/registrace")
         assert status == 200
+        status, headers, body = await _asgi_get(app, "/prehled")
+        assert status == 303
+        assert headers[b"location"] == b"/prihlaseni"
+        assert body == b""
+        status, _headers, body = await _asgi_get(app, "/prehled", headers=session)
+        assert status == 200
+        assert b'id="view-overview"' in body
         for method, path in (
             ("POST", "/api/auth/login"),
             ("POST", "/api/auth/register"),
             ("POST", "/api/auth/logout"),
             ("GET", "/api/auth/me"),
             ("POST", "/api/inquiries"),
-            ("GET", "/prehled"),
+            ("GET", "/api/catalog"),
+            ("GET", "/api/listings"),
+            ("GET", "/api/settings"),
+            ("GET", "/api/admin/me"),
             ("POST", "/prihlaseni"),
             ("POST", "/registrace"),
         ):
             if method == "GET":
-                status, _headers, _body = await _asgi_get(app, path)
+                status, _headers, _body = await _asgi_get(app, path, headers=session)
             else:
                 status, _headers, _body = await _asgi_post(app, path, {"email": "a@b.cz"})
             assert status == 204, path
         assert ("GET", "/prihlaseni") not in hit
         assert ("GET", "/registrace") not in hit
+        assert ("GET", "/prehled") not in hit
         assert hit == [
             ("POST", "/api/auth/login"),
             ("POST", "/api/auth/register"),
             ("POST", "/api/auth/logout"),
             ("GET", "/api/auth/me"),
             ("POST", "/api/inquiries"),
-            ("GET", "/prehled"),
+            ("GET", "/api/catalog"),
+            ("GET", "/api/listings"),
+            ("GET", "/api/settings"),
+            ("GET", "/api/admin/me"),
             ("POST", "/prihlaseni"),
             ("POST", "/registrace"),
         ]
+
+    asyncio.run(run())
+
+
+def test_dashboard_html_bypasses_blocked_inner_app():
+    hit = {"n": 0}
+
+    async def inner(scope, receive, send):
+        if scope.get("type") != "http":
+            return
+        hit["n"] += 1
+        await asyncio.sleep(8)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner)
+        session = [(b"cookie", b"realitify_session=test-token")]
+        guest = [(b"cookie", b"rf_guest_search=guest-token")]
+        shell = web_body("index.html")
+        admin = web_body("admin/index.html")
+        for path in (
+            "/prehled",
+            "/nabidka",
+            "/monitory",
+            "/filtry",
+            "/zprava",
+            "/nastaveni",
+            "/nastaveni/profily",
+            "/nastaveni/predplatne",
+        ):
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, path, headers=session)
+            ms = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert body == shell
+            assert headers[b"cache-control"] == b"no-store, max-age=0"
+            assert b'id="view-overview"' in body
+            assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
+        status, headers, body = await _asgi_get(app, "/prehled/", headers=session, method="HEAD")
+        assert status == 200
+        assert body == b""
+        assert int(headers[b"content-length"]) == len(shell)
+        t0 = time.perf_counter()
+        status, headers, body = await _asgi_get(app, "/prehled")
+        ms = (time.perf_counter() - t0) * 1000
+        assert status == 303
+        assert headers[b"location"] == b"/prihlaseni"
+        assert body == b""
+        assert ms < 40, f"unauth /prehled {ms:.1f}ms while inner would block"
+        status, headers, body = await _asgi_get(app, "/nabidka")
+        assert status == 303
+        assert headers[b"location"].startswith(b"/registrace?next=")
+        status, headers, body = await _asgi_get(
+            app, "/nabidka", query_string=b"listing_key=abc", headers=guest
+        )
+        assert status == 200
+        assert body == shell
+        t0 = time.perf_counter()
+        status, headers, body = await _asgi_get(app, "/admin/prehled")
+        ms = (time.perf_counter() - t0) * 1000
+        assert status == 200
+        assert body == admin
+        assert "ADMIN PŘIHLÁŠENÍ".encode() in body
+        assert headers[b"cache-control"] == b"no-store, max-age=0"
+        assert ms < 40, f"/admin/prehled {ms:.1f}ms while inner would block"
+        t0 = time.perf_counter()
+        status, headers, body = await _asgi_get(app, "/static/styles.css")
+        ms = (time.perf_counter() - t0) * 1000
+        assert status == 200
+        assert b".nav" in body or b"nav" in body
+        assert headers[b"access-control-allow-origin"] == b"*"
+        assert ms < 40, f"styles.css {ms:.1f}ms while inner would block"
+        assert hit["n"] == 0
 
     asyncio.run(run())
 
@@ -587,15 +680,40 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
         "/nastaveni-cookies",
         "/byt",
     )
+    app_html_paths = (
+        "/prehled",
+        "/nabidka",
+        "/monitory",
+        "/filtry",
+        "/zprava",
+        "/nastaveni",
+        "/nastaveni/profily",
+        "/admin",
+        "/admin/prehled",
+    )
     asset_paths = (
         "/static/site/games.css",
         "/static/site/games.js",
         "/static/site/fonts/archivo-black-latin.woff2",
         "/static/site/auth.css",
         "/static/site/site.css",
+        "/static/styles.css",
+        "/static/admin/admin.css",
     )
     json_paths = ("/api/public/games/higher-lower", "/api/public/games/rent-round")
-    samples = {path: [] for path in (*html_paths, *asset_paths, *json_paths, "/api/public/games/rent-score")}
+    session = [(b"cookie", b"realitify_session=test-token")]
+    samples = {
+        path: []
+        for path in (
+            *html_paths,
+            *app_html_paths,
+            *asset_paths,
+            *json_paths,
+            "/api/public/games/rent-score",
+            "/prehled unauth",
+            "/nabidka unauth",
+        )
+    }
 
     async def run() -> None:
         app = InstantSiteASGI(inner, store=store)
@@ -606,6 +724,23 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
                 samples[path].append((time.perf_counter() - t0) * 1000)
                 assert status == 200, path
                 assert body
+            for path in app_html_paths:
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path, headers=session)
+                samples[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, "/prehled")
+            samples["/prehled unauth"].append((time.perf_counter() - t0) * 1000)
+            assert status == 303
+            assert headers[b"location"] == b"/prihlaseni"
+            assert body == b""
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, "/nabidka")
+            samples["/nabidka unauth"].append((time.perf_counter() - t0) * 1000)
+            assert status == 303
+            assert headers[b"location"].startswith(b"/registrace?next=")
             for path in asset_paths:
                 t0 = time.perf_counter()
                 status, _headers, body = await _asgi_get(app, path)
@@ -642,7 +777,10 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
             assert "items" in scored
 
         burst = await asyncio.gather(
-            *[_asgi_get(app, path) for path in (*html_paths, *json_paths) * 4]
+            *[
+                *[_asgi_get(app, path) for path in (*html_paths, *json_paths) * 4],
+                *[_asgi_get(app, path, headers=session) for path in app_html_paths * 4],
+            ]
         )
         assert all(status == 200 for status, _headers, _body in burst)
 
@@ -658,7 +796,7 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
         p50 = _percentile(values, 0.50)
         p95 = _percentile(values, 0.95)
         report.append(f"{path} n={len(values)} p50={p50:.2f}ms p95={p95:.2f}ms")
-        html = path in html_paths or path in asset_paths
+        html = path in html_paths or path in app_html_paths or path in asset_paths or path.endswith("unauth")
         assert p50 < (8 if html else 15), f"{path} p50 {p50:.1f}ms {values}"
         assert p95 < (25 if html else 40), f"{path} p95 {p95:.1f}ms {values}"
     print("game TTFB under scrape:\n  " + "\n  ".join(report))

@@ -242,6 +242,7 @@ async def agent_cors(request: Request, call_next):
 
 
 def page() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves /prehled and other app shells from memory first.
     return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
@@ -304,6 +305,7 @@ def auth_forgot() -> FileResponse:
 
 
 def admin_page() -> FileResponse:
+    # Fallback only — InstantSiteASGI serves /admin* HTML from memory first.
     return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
