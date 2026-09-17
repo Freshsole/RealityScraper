@@ -4511,7 +4511,8 @@ img {
 
 .ad-game-tbl .ad-utbl-head,
 .ad-game-tbl .ad-utbl-row {
-  grid-template-columns: 36px minmax(0, 1.6fr) minmax(0, 0.9fr) minmax(0, 0.8fr) minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr) max-content max-content max-content;
+  gap: 28px;
 }
 
 .ad-game-tbl .ad-utbl-head {

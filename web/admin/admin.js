@@ -2442,7 +2442,7 @@
         <span>${esc(item.player_name || "Anonym")}</span>
         <span class="num ad-game-score">${esc(fmtN(item.score || 0))}</span>
         <span class="num">${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
-        <span class="muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
+        <span class="num muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
       </div>`;
     const play = (item) => {
       const details = (item.items || [])
@@ -2487,7 +2487,7 @@
         <article class="ad-card ad-game-board">
           <div class="ad-utbl-wrap">
             <div class="ad-utbl ad-game-tbl">
-              <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span>Kdy</span></div>
+              <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span class="num">Kdy</span></div>
               ${top.map((item, idx) => row(item, idx + 1)).join("")}
               <div class="ad-utbl-empty" ${top.length ? "hidden" : ""}>Zatím žádné kolo — zahrajte /hry/najem.</div>
             </div>

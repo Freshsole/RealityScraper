@@ -356,7 +356,7 @@ def test_admin_games_leaderboard_uses_five_column_wise_grid():
     css = (root / "web" / "admin" / "admin.css").read_text(encoding="utf-8")
     js = (root / "web" / "admin" / "admin.js").read_text(encoding="utf-8")
     assert ".ad-game-tbl" in css
-    assert "grid-template-columns: 36px minmax(0, 1.6fr)" in css
+    assert "grid-template-columns: 40px minmax(0, 1fr) max-content" in css
     assert "ad-ccy-pill" in css
     assert "#163300" in css
     assert "#9fe870" in css
