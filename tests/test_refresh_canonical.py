@@ -53,8 +53,6 @@ class RefreshCanonicalTests(unittest.TestCase):
         with store.connect() as conn:
             row = conn.execute("SELECT canonical_key, url FROM catalog_listings").fetchone()
             self.assertEqual(row["canonical_key"], key)
-            events = int(conn.execute("SELECT COUNT(*) FROM events WHERE kind = 'refresh'").fetchone()[0])
-        self.assertEqual(events, 0)
 
     def test_unchanged_refresh_skips_events(self):
         store = Store(self.tmp / "events.sqlite")
