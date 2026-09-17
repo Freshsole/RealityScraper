@@ -106,6 +106,15 @@ def test_recent_shards_cover_all_portals():
     }
     assert any(item["search_url"].endswith("/pronajem/domy") for item in ulov)
     assert any(item["search_url"].endswith("/prodej/byty") for item in ulov)
+    bezrealitky = [item for item in extra if item["portal"] == "bezrealitky"]
+    assert {item["shard_key"] for item in bezrealitky} >= {
+        "bezrealitky:recent:pronajem:byty",
+        "bezrealitky:recent:prodej:byty",
+        "bezrealitky:recent:pronajem:domy",
+        "bezrealitky:recent:prodej:domy",
+    }
+    assert any("estateType=DUM" in item["search_url"] for item in bezrealitky)
+    assert all("order=TIMEORDER_DESC" in item["search_url"] for item in bezrealitky)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

@@ -93,6 +93,30 @@ def normalize_search_url(url: str) -> str:
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query, doseq=True), ""))
 
 
+def _bezrealitky_url(offer: str, estate: str, sizes: list[str] | None = None) -> str:
+    """Nationwide newest Bezrealitky list URL (Czech OSM + boundary, same as apartment shards)."""
+    br_offer = "PRONAJEM" if str(offer).casefold().startswith("pronaj") else "PRODEJ"
+    return bezrealitky_url.build_url(
+        {
+            "source": "bezrealitky",
+            "offers": [br_offer],
+            "estates": [estate],
+            "sizes": sizes or [],
+            "districts": [localities.CZECH_OSM],
+            "osm_value": "Česko",
+            "boundary_points": localities.CZ_BOUNDARY_POINTS,
+            "flags": ["includeImports", "includeShortTerm"],
+            "currency": "CZK",
+            "location": "exact",
+            "sort": "TIMEORDER_DESC",
+            "price_from": None,
+            "price_to": None,
+            "area_from": None,
+            "area_to": None,
+        }
+    )
+
+
 def daily_shards() -> list[dict[str, str]]:
     shards: list[dict[str, str]] = []
     # Sreality: never crawl whole Praha as one shard (portal page depth cannot cover it).
@@ -147,32 +171,22 @@ def daily_shards() -> list[dict[str, str]]:
         )
     for offer in ("PRONAJEM", "PRODEJ"):
         for size, _label in bezrealitky_url.SIZES:
-            url = bezrealitky_url.build_url(
-                {
-                    "source": "bezrealitky",
-                    "offers": [offer],
-                    "estates": ["BYT"],
-                    "sizes": [size],
-                    "districts": [localities.CZECH_OSM],
-                    "osm_value": "Česko",
-                    "boundary_points": localities.CZ_BOUNDARY_POINTS,
-                    "flags": ["includeImports", "includeShortTerm"],
-                    "currency": "CZK",
-                    "location": "exact",
-                    "price_from": None,
-                    "price_to": None,
-                    "area_from": None,
-                    "area_to": None,
-                }
-            )
             shards.append(
                 {
                     "kind": "catalog_daily",
                     "portal": "bezrealitky",
                     "shard_key": f"bezrealitky:BYT:{offer}:{size}",
-                    "search_url": url,
+                    "search_url": _bezrealitky_url(offer, "BYT", [size]),
                 }
             )
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "bezrealitky",
+                "shard_key": f"bezrealitky:domy:{offer.casefold()}:cz",
+                "search_url": _bezrealitky_url(offer, "DUM"),
+            }
+        )
     # iDNES stops returning new pages around ~150; Praha-wide searches exceed that.
     # "projekty" is a mixed view of the same ads and is too large to paginate.
     idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
@@ -299,25 +313,7 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
     """Newest-first nationwide apartment shards for every non-Sreality portal."""
     shards: list[dict[str, str]] = []
     extras = {
-        "bezrealitky": lambda offer: bezrealitky_url.build_url(
-            {
-                "source": "bezrealitky",
-                "offers": ["PRONAJEM" if offer == "pronajem" else "PRODEJ"],
-                "estates": ["BYT"],
-                "sizes": [],
-                "districts": [localities.CZECH_OSM],
-                "osm_value": "Česko",
-                "boundary_points": localities.CZ_BOUNDARY_POINTS,
-                "flags": ["includeImports", "includeShortTerm"],
-                "currency": "CZK",
-                "location": "exact",
-                "sort": "TIMEORDER_DESC",
-                "price_from": None,
-                "price_to": None,
-                "area_from": None,
-                "area_to": None,
-            }
-        ),
+        "bezrealitky": lambda offer: _bezrealitky_url(offer, "BYT"),
         "idnes": lambda offer: idnes_url.build_url(
             {
                 "source": "idnes",
@@ -361,7 +357,7 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": builder(offer),
                 }
             )
-    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES / UlovDomov houses use a different list path.
+    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES / UlovDomov / Bezrealitky houses.
     for portal_id in ("annonce", "realitycz", "remax", "ceskereality", "ulovdomov"):
         for offer in ("pronajem", "prodej"):
             shards.append(
@@ -412,6 +408,15 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                         "area_to": None,
                     }
                 ),
+            }
+        )
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "bezrealitky",
+                "shard_key": f"bezrealitky:recent:{offer}:domy",
+                "search_url": _bezrealitky_url(offer, "DUM"),
             }
         )
     return shards

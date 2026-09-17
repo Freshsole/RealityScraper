@@ -313,10 +313,21 @@ class ExtraPortalTests(unittest.TestCase):
             self.assertIn("limit: 20", client._args(1))
             self.assertIn("offset: 0", client._args(1))
             self.assertIn("offset: 20", client._args(2))
+            self.assertIn("estateType: [BYT]", client._args(1))
         finally:
             import asyncio
 
             asyncio.run(client.aclose())
+        houses = BezrealitkyClient(
+            "https://www.bezrealitky.cz/vyhledat?offerType=PRONAJEM&estateType=DUM&order=TIMEORDER_DESC"
+        )
+        try:
+            self.assertIn("estateType: [DUM]", houses._args(1))
+            self.assertIn("offerType: [PRONAJEM]", houses._args(1))
+        finally:
+            import asyncio
+
+            asyncio.run(houses.aclose())
 
     def test_ulovdomov_next_data_and_json(self):
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")

@@ -105,6 +105,31 @@ def test_ceskereality_newest_and_house_shards():
     assert all("rodinne-domy" in item["search_url"] for item in houses)
 
 
+def test_bezrealitky_newest_and_house_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "bezrealitky"]
+    recent = [item for item in extra_portal_recent_shards() if item["portal"] == "bezrealitky"]
+    assert any(item["shard_key"] == "bezrealitky:domy:pronajem:cz" for item in daily)
+    assert any(item["shard_key"] == "bezrealitky:recent:pronajem:domy" for item in recent)
+    assert {item["shard_key"] for item in recent} >= {
+        "bezrealitky:recent:pronajem:byty",
+        "bezrealitky:recent:prodej:byty",
+        "bezrealitky:recent:pronajem:domy",
+        "bezrealitky:recent:prodej:domy",
+    }
+    assert any("estateType=DUM" in item["search_url"] for item in recent)
+    assert any("estateType=BYT" in item["search_url"] for item in recent)
+    houses = [item for item in recent if item["shard_key"].endswith(":domy")]
+    assert all("estateType=DUM" in item["search_url"] for item in houses)
+    assert all("estateType=BYT" not in item["search_url"] for item in houses)
+    assert all("order=TIMEORDER_DESC" in item["search_url"] for item in houses)
+    daily_houses = [item for item in daily if item["shard_key"].startswith("bezrealitky:domy:")]
+    assert {item["shard_key"] for item in daily_houses} == {
+        "bezrealitky:domy:pronajem:cz",
+        "bezrealitky:domy:prodej:cz",
+    }
+    assert all("estateType=DUM" in item["search_url"] for item in daily_houses)
+
+
 def test_ulovdomov_newest_and_house_shards():
     daily = [item for item in daily_shards() if item["portal"] == "ulovdomov"]
     recent = [item for item in extra_portal_recent_shards() if item["portal"] == "ulovdomov"]

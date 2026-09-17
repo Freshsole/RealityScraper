@@ -109,6 +109,7 @@ LIST_FIELDS = """
       offerType
       disposition
       surface
+      surfaceLand
       price
       charges
       currency
@@ -134,12 +135,6 @@ LIST_FIELDS = """
       shortTerm
       construction
       frontGarden
-"""
-
-DETAIL_FIELDS = (
-    LIST_FIELDS
-    + """
-      description
       floor
       condition
       ownership
@@ -151,7 +146,22 @@ DETAIL_FIELDS = (
       terraceSurface
       visitCount
 """
+
+DETAIL_FIELDS = (
+    LIST_FIELDS
+    + """
+      description
+"""
 )
+BR_ESTATE_NOUNS = {
+    "BYT": "bytu",
+    "DUM": "domu",
+    "POZEMEK": "pozemku",
+    "GARAZ": "garáže",
+    "KANCELAR": "kanceláře",
+    "NEBYTOVY_PROSTOR": "nebytového prostoru",
+    "REKREACNI_OBJEKT": "rekreačního objektu",
+}
 
 BR_OFFERS = {"PRONAJEM": "Pronájem", "PRODEJ": "Prodej"}
 BR_ESTATES = {
@@ -205,6 +215,8 @@ def format_disposition(raw: str | None) -> str:
     if not raw:
         return ""
     body = raw.replace("DISP_", "")
+    if raw in {"UNDEFINED", "DISP_UNDEFINED"} or body in {"UNDEFINED", ""}:
+        return ""
     if raw in {"GARSONIERA"}:
         return "garsoniéra"
     if raw in {"OSTATNI"}:
@@ -214,6 +226,31 @@ def format_disposition(raw: str | None) -> str:
     if body == "ATYP":
         return "atypický"
     return body.replace("_", "+")
+
+
+def listing_url(uri: str | None, listing_id: Any | None = None) -> str:
+    """Canonical public advert URL. GraphQL `uri` is a slug; older/full values still work."""
+    raw = (uri or "").strip()
+    if not raw and listing_id is not None:
+        raw = str(listing_id)
+    if not raw:
+        return SITE
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw.split("?")[0].rstrip("/")
+    raw = raw.lstrip("/")
+    if raw.startswith("nemovitosti-byty-domy/"):
+        return f"{SITE}/{raw.split('?')[0]}"
+    return f"{SITE}/nemovitosti-byty-domy/{raw.split('?')[0]}"
+
+
+def _int_or_none(value: Any) -> int | None:
+    if value is None or value is False:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number
 
 
 def gql_list(values: list[str]) -> str:
@@ -413,12 +450,18 @@ class BezrealitkyClient:
         if old_price_czk == price_czk:
             old_price_czk = None
         name = (raw.get("imageAltText") or "").strip()
+        land_m2 = _int_or_none(raw.get("surfaceLand"))
         if not name:
-            bits = [raw.get("offerType") == "PRONAJEM" and "Pronájem" or "Prodej", "bytu" if raw.get("estateType") == "BYT" else "nemovitosti"]
+            bits = [
+                BR_OFFERS.get(raw.get("offerType") or "", "Prodej" if raw.get("offerType") != "PRONAJEM" else "Pronájem"),
+                BR_ESTATE_NOUNS.get(raw.get("estateType") or "", "nemovitosti"),
+            ]
             if disposition:
                 bits.append(disposition)
             if area_m2:
                 bits.append(f"{area_m2} m²")
+            if land_m2:
+                bits.append(f"pozemek {land_m2} m²")
             name = " ".join(str(bit) for bit in bits if bit)
         uri = raw.get("uri") or str(listing_id)
         gps = raw.get("gps") or {}
@@ -445,7 +488,7 @@ class BezrealitkyClient:
             disposition=disposition,
             area_m2=area_m2,
             locality=(raw.get("address") or "").strip(),
-            url=f"{SITE}/nemovitosti-byty-domy/{uri}",
+            url=listing_url(uri, listing_id),
             image_url=image,
             photos=photos,
             lat=gps.get("lat"),
@@ -500,12 +543,17 @@ def extras_from_bezrealitky(raw: dict[str, Any]) -> dict[str, Any]:
     if garden:
         flags.append("garden")
         specs.append({"label": "Zahrada", "value": f"{garden} m²" if isinstance(garden, (int, float)) and garden not in (0, True, False) else "ano"})
+    land_m2 = _int_or_none(raw.get("surfaceLand"))
+    if land_m2:
+        flags.append("land")
+        specs.append({"label": "Pozemek", "value": f"{land_m2:,} m²".replace(",", " ")})
     if raw.get("isDiscounted"):
         flags.append("discounted")
     if raw.get("barrierFree"):
         flags.append("barrier_free")
         specs.append({"label": "Bezbariérový", "value": "ano"})
-    floor = BR_FLOORS.get(raw.get("floor") or "", raw.get("floor"))
+    floor_raw = raw.get("floor")
+    floor = BR_FLOORS.get(floor_raw or "", None) if floor_raw not in {None, "", "UNDEFINED"} else None
     if floor:
         specs.append({"label": "Podlaží", "value": str(floor)})
     ownership = BR_OWNERSHIP.get(raw.get("ownership") or "", None)
@@ -542,6 +590,7 @@ def extras_from_bezrealitky(raw: dict[str, Any]) -> dict[str, Any]:
         "flags": flags,
         "specs": specs,
         "charges_czk": charges_n,
+        "land_m2": land_m2,
     }
 
 
