@@ -622,6 +622,7 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert ".cookie-card" in last_phone
     assert "white-space: normal" in last_phone
     assert ".type-slot" in last_phone
+    assert ".type-rest" in last_phone
     assert ".byt-converter" in last_phone
     assert ".room-stage" in last_phone
     assert "/static/site/inquiries.js" in site_html("kontakt.html")

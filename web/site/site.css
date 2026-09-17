@@ -4452,12 +4452,21 @@ body.article-popup-open {
   .byt-page .hero-left .display {
     font-size: 32px;
     line-height: 0.9;
-    overflow-wrap: anywhere;
   }
 
   .byt-page .type-slot {
-    display: block;
+    display: inline-grid;
+    width: max-content;
     max-width: 100%;
+    justify-items: start;
+  }
+
+  .byt-page .type-ghost {
+    display: none;
+  }
+
+  .byt-page .type-rest {
+    display: block;
   }
 
   .byt-converter {
