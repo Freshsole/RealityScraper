@@ -31,6 +31,9 @@ def test_html_portal_pins_local_city_without_network():
     assert point is not None
     assert listing.lat == point[0]
     assert listing.lon == point[1]
+    frydek = _annonce(86945551, "Frýdek Místek")
+    client._attach_local_coords([frydek])
+    assert (frydek.lat, frydek.lon) == approx_point_from_locality("Frýdek-Místek")
 
 
 def test_catalog_write_invalidates_pin_and_preview_caches(tmp_path: Path):

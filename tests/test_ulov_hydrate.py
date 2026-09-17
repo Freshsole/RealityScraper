@@ -128,6 +128,13 @@ def test_fetch_page_does_not_call_detail():
             villas, villa_total = await sale_houses.fetch_page(1)
             assert villa_total == 1
             assert villas[0].id == 5653004
+            land_client = UlovdomovClient("https://www.ulovdomov.cz/prodej/pozemky")
+            await land_client.aclose()
+            land_client._client = client._client
+            plots, plot_total = await land_client.fetch_page(1)
+            assert plot_total == 1
+            assert plots[0].id == 5669330
+            assert plots[0].extras.get("estate") == "Pozemek"
         finally:
             await client.aclose()
 
@@ -331,7 +338,8 @@ def test_unpriced_ulov_reader_prefers_missing_price(tmp_path: Path):
 def test_estate_and_hydrate_buckets():
     assert estate_from_inzerat_slug("pronajem-troubsko-troubsko-troubsko-dum") == "dum"
     assert estate_from_inzerat_slug("-senohraby-senohraby-ve-vilach-fiveplusrooms") == "dum"
-    assert estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing") == "byt"
+    assert estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing") == "pozemek"
+    assert hydrate_bucket("prodej", "-hluboka-nad-vltavou-zahradni-housing") == "sale"
     assert hydrate_bucket("pronajem", "pronajem-olomouc-2-kk") == "rent"
     assert hydrate_bucket("prodej", "-praha-kbely-1-kk") == "sale"
     assert hydrate_bucket("pronajem", "pronajem-troubsko-troubsko-troubsko-dum") == "rent_house"

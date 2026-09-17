@@ -42,7 +42,15 @@ BROWSER_HEADERS = {
 }
 
 OFFER_LABEL = {"pronajem": "Pronájem", "prodej": "Prodej", "drazba": "Dražba"}
-ESTATE_LABEL = {"byt": "Byt", "byty": "Byt", "dum": "Dům", "domy": "Dům", "pozemek": "Pozemek"}
+ESTATE_LABEL = {
+    "byt": "Byt",
+    "byty": "Byt",
+    "dum": "Dům",
+    "domy": "Dům",
+    "pozemek": "Pozemek",
+    "pozemky": "Pozemek",
+    "pozemku": "Pozemek",
+}
 FLAG_WORDS = {
     "balkon": "balcony",
     "balkón": "balcony",

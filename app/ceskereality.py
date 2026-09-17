@@ -27,7 +27,7 @@ PRICE_BOX_RE = re.compile(
     re.S | re.I,
 )
 TOTAL_RE = re.compile(
-    r"(?:vybírat ze|máme tady)\s+([\d\s\u00a0]+)\s+(?:byt|rodinn|nemovit|dom)",
+    r"(?:vybírat ze|máme tady)\s+([\d\s\u00a0]+)\s+(?:byt|rodinn|nemovit|dom|pozem)",
     re.I,
 )
 # /pronajem/domy/ is the agency "Domy, spol. s r.o.", not the house category.
@@ -83,6 +83,8 @@ class CeskerealityClient(HtmlPortalClient):
 
     def _kind(self) -> str:
         path = (self.search_url or "").lower()
+        if "pozem" in path:
+            return "pozemky"
         if "rodinne-domy" in path or AGENCY_DOMY_RE.search(urlsplit(path).path or path) or "/dum/" in path:
             return "rodinne-domy"
         return "byty"
@@ -170,9 +172,11 @@ class CeskerealityClient(HtmlPortalClient):
         if not listing_id:
             return None
         house = "rodinne-domy" in url or "/chaty/" in url
+        land = "/pozemky/" in url or "/pozemek/" in url or self._kind() == "pozemky"
         if not url or "muj-profil" in url:
+            land = land or self._kind() == "pozemky"
             house = house or self._kind() == "rodinne-domy"
-            kind = "rodinne-domy" if house else "byty"
+            kind = "pozemky" if land else ("rodinne-domy" if house else "byty")
             url = f"{SITE}/{offer}/{kind}/{listing_id}/"
         title_m = TITLE_RE.search(html) or ALT_RE.search(html)
         title = clean(title_m.group(1) if title_m else "")
@@ -188,12 +192,17 @@ class CeskerealityClient(HtmlPortalClient):
         if not locality:
             locality = _city_from_url(url)
         folded = f"{title} {url}".casefold()
-        estate = "dum" if house or "domu" in folded or "/chaty/" in folded else "byt"
+        if land or "pozem" in folded and self._kind() == "pozemky":
+            estate = "pozemek"
+        elif house or "domu" in folded or "/chaty/" in folded:
+            estate = "dum"
+        else:
+            estate = "byt"
         img = ""
         img_m = re.search(r'src="(https://img-cache\.ceskereality\.cz/[^"]+)"', html)
         if img_m:
             img = img_m.group(1).replace("/320x320_", "/640x640_").replace("/32x32_", "/640x640_")
-        noun = "domu" if estate == "dum" else "bytu"
+        noun = {"dum": "domu", "pozemek": "pozemku"}.get(estate, "bytu")
         return listing_from_card(
             listing_id=numeric_id(listing_id, url),
             name=title or f"{'Pronájem' if offer == 'pronajem' else 'Prodej'} {noun}",

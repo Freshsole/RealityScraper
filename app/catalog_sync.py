@@ -169,6 +169,14 @@ def daily_shards() -> list[dict[str, str]]:
                 "search_url": _sreality_url(offer, "domy"),
             }
         )
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "sreality",
+                "shard_key": f"sreality:pozemky:{offer}:cz",
+                "search_url": _sreality_url(offer, "pozemky"),
+            }
+        )
     for offer in ("PRONAJEM", "PRODEJ"):
         for size, _label in bezrealitky_url.SIZES:
             shards.append(
@@ -185,6 +193,14 @@ def daily_shards() -> list[dict[str, str]]:
                 "portal": "bezrealitky",
                 "shard_key": f"bezrealitky:domy:{offer.casefold()}:cz",
                 "search_url": _bezrealitky_url(offer, "DUM"),
+            }
+        )
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "bezrealitky",
+                "shard_key": f"bezrealitky:pozemky:{offer.casefold()}:cz",
+                "search_url": _bezrealitky_url(offer, "POZEMEK"),
             }
         )
     # iDNES stops returning new pages around ~150; Praha-wide searches exceed that.
@@ -251,24 +267,25 @@ def daily_shards() -> list[dict[str, str]]:
                 }
             )
         if portal_id in {"annonce", "realitycz", "remax", "ceskereality", "ulovdomov"}:
-            for offer in ("pronajem", "prodej"):
-                shards.append(
-                    {
-                        "kind": "catalog_daily",
-                        "portal": portal_id,
-                        "shard_key": f"{portal_id}:domy:{offer}:cz",
-                        "search_url": urls.build_url(
-                            {"source": portal_id, "offers": [offer], "category": "domy"}
-                        ),
-                    }
-                )
+            for kind in ("domy", "pozemky"):
+                for offer in ("pronajem", "prodej"):
+                    shards.append(
+                        {
+                            "kind": "catalog_daily",
+                            "portal": portal_id,
+                            "shard_key": f"{portal_id}:{kind}:{offer}:cz",
+                            "search_url": urls.build_url(
+                                {"source": portal_id, "offers": [offer], "category": kind}
+                            ),
+                        }
+                    )
     return shards
 
 
 def _sreality_url(offer: str, category: str, sizes: list[str] | None = None) -> str:
-    # Houses: nationwide /domy (no region list) matches the 22-card page-1 list.
+    # Houses/plots: nationwide path (no region list) matches the live page-1 list.
     # Apartment size slices keep Czech regions in the path, same as before.
-    districts = list(localities.SREALITY_CZECH_REGIONS) if category != "domy" else []
+    districts = list(localities.SREALITY_CZECH_REGIONS) if category not in {"domy", "pozemky"} else []
     return url_builder.build_url(
         {
             "source": "sreality",
@@ -304,6 +321,14 @@ def sreality_recent_shards() -> list[dict[str, str]]:
                 "portal": "sreality",
                 "shard_key": f"sreality:recent:{offer}:domy",
                 "search_url": _sreality_url(offer, "domy"),
+            }
+        )
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "sreality",
+                "shard_key": f"sreality:recent:{offer}:pozemky",
+                "search_url": _sreality_url(offer, "pozemky"),
             }
         )
     return shards
@@ -357,17 +382,18 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                     "search_url": builder(offer),
                 }
             )
-    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES / UlovDomov / Bezrealitky houses.
+    # Annonce / Reality.cz / RE/MAX / ČeskéReality / Bazoš / iDNES / UlovDomov / Bezrealitky houses + plots.
     for portal_id in ("annonce", "realitycz", "remax", "ceskereality", "ulovdomov"):
-        for offer in ("pronajem", "prodej"):
-            shards.append(
-                {
-                    "kind": "catalog_recent",
-                    "portal": portal_id,
-                    "shard_key": f"{portal_id}:recent:{offer}:domy",
-                    "search_url": EXTRA_URLS[portal_id].build_url({"offers": [offer], "category": "domy"}),
-                }
-            )
+        for kind in ("domy", "pozemky"):
+            for offer in ("pronajem", "prodej"):
+                shards.append(
+                    {
+                        "kind": "catalog_recent",
+                        "portal": portal_id,
+                        "shard_key": f"{portal_id}:recent:{offer}:{kind}",
+                        "search_url": EXTRA_URLS[portal_id].build_url({"offers": [offer], "category": kind}),
+                    }
+                )
     for offer in ("pronajem", "prodej"):
         shards.append(
             {
@@ -379,6 +405,25 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                         "source": "bazos",
                         "offers": [offer],
                         "category": "dum",
+                        "districts": list(localities.SREALITY_CZECH_REGIONS),
+                        "sizes": [],
+                        "price_from": None,
+                        "price_to": None,
+                        "radius": 0,
+                    }
+                ),
+            }
+        )
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "bazos",
+                "shard_key": f"bazos:recent:{offer}:pozemky",
+                "search_url": bazos_url.build_url(
+                    {
+                        "source": "bazos",
+                        "offers": [offer],
+                        "category": "pozemek",
                         "districts": list(localities.SREALITY_CZECH_REGIONS),
                         "sizes": [],
                         "price_from": None,
@@ -410,6 +455,27 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                 ),
             }
         )
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "idnes",
+                "shard_key": f"idnes:recent:{offer}:pozemky",
+                "search_url": idnes_url.build_url(
+                    {
+                        "source": "idnes",
+                        "offers": [offer],
+                        "category": "pozemky",
+                        "districts": list(localities.SREALITY_CZECH_REGIONS),
+                        "sizes": [],
+                        "sort": "nejnovejsi",
+                        "price_from": None,
+                        "price_to": None,
+                        "area_from": None,
+                        "area_to": None,
+                    }
+                ),
+            }
+        )
     for offer in ("pronajem", "prodej"):
         shards.append(
             {
@@ -417,6 +483,14 @@ def extra_portal_recent_shards() -> list[dict[str, str]]:
                 "portal": "bezrealitky",
                 "shard_key": f"bezrealitky:recent:{offer}:domy",
                 "search_url": _bezrealitky_url(offer, "DUM"),
+            }
+        )
+        shards.append(
+            {
+                "kind": "catalog_recent",
+                "portal": "bezrealitky",
+                "shard_key": f"bezrealitky:recent:{offer}:pozemky",
+                "search_url": _bezrealitky_url(offer, "POZEMEK"),
             }
         )
     return shards

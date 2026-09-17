@@ -140,6 +140,10 @@ class BezrealitkyTests(unittest.TestCase):
         self.assertEqual(len(houses), 1)
         self.assertIn("estateType=DUM", houses[0]["search_url"])
         self.assertIn("offerType=PRONAJEM", houses[0]["search_url"])
+        plots = [item for item in recent if item["shard_key"] == "bezrealitky:recent:prodej:pozemky"]
+        self.assertEqual(len(plots), 1)
+        self.assertIn("estateType=POZEMEK", plots[0]["search_url"])
+        self.assertIn("offerType=PRODEJ", plots[0]["search_url"])
 
     def test_fetch_page_uses_graphql_gps_not_photon(self):
         payload = {"data": {"listAdverts": {"totalCount": 50, "list": [HOUSE, SALE_FULL_URL]}}}

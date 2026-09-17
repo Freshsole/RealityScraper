@@ -93,6 +93,8 @@ class RemaxClient(HtmlPortalClient):
 
     def _estate(self) -> str:
         path = (self.search_url or "").lower()
+        if "pozem" in path:
+            return "pozemek"
         if "domy" in path or "vily" in path:
             return "dum"
         return "byt"
@@ -163,7 +165,11 @@ class RemaxClient(HtmlPortalClient):
         inferred_offer = "pronajem" if "pronajem" in slug or "pronájem" in title.casefold() else offer
         if "prodej" in slug:
             inferred_offer = "prodej"
-        estate = "dum" if HOUSE_SLUG_RE.search(slug) else self._estate()
+        estate = self._estate()
+        if estate == "byt" and HOUSE_SLUG_RE.search(slug):
+            estate = "dum"
+        if "pozem" in slug.casefold():
+            estate = "pozemek"
         lat = gps[0] if gps else None
         lon = gps[1] if gps else None
         return listing_from_card(

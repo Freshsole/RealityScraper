@@ -93,8 +93,14 @@ def test_ulov_api_500_uses_sitemap_and_skips_html():
             await sale_client.aclose()
             sale_client._client = client._client
             sales, sale_total = await sale_client.fetch_page(1)
-            assert sale_total == 1
-            assert sales[0].id == 5669330
+            assert sale_total == 0
+            land_client = UlovdomovClient("https://www.ulovdomov.cz/prodej/pozemky")
+            await land_client.aclose()
+            land_client._client = client._client
+            plots, plot_total = await land_client.fetch_page(1)
+            assert plot_total == 1
+            assert plots[0].id == 5669330
+            assert plots[0].extras.get("estate") == "Pozemek"
             assert not any(path.endswith("/pronajem/byty") or path.endswith("/prodej/byty") for path in hits)
         finally:
             await client.aclose()

@@ -61,6 +61,15 @@ def _offer(filters: dict, default: str = "pronajem") -> str:
     return default
 
 
+def _list_kind(category: str, *, house: str, land: str, flat: str = "byty") -> str:
+    cat = str(category or "byty").casefold()
+    if "pozem" in cat:
+        return land
+    if "dom" in cat:
+        return house
+    return flat
+
+
 def _join(url: str, query: dict[str, str]) -> str:
     split = urlsplit(url)
     existing = dict(parse_qsl(split.query, keep_blank_values=True))
@@ -101,11 +110,8 @@ class CeskerealityUrls:
         return sample_filters(self.source)
 
     def kind(self, filters: dict) -> str:
-        category = str(filters.get("category") or "byty").casefold()
         # Live house lists are /rodinne-domy/. /domy/ is an agency named Domy, spol. s r.o.
-        if "dom" in category:
-            return "rodinne-domy"
-        return "byty"
+        return _list_kind(filters.get("category") or "byty", house="rodinne-domy", land="pozemky")
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
@@ -127,7 +133,9 @@ class CeskerealityUrls:
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
-        if "/rodinne-domy/" in raw or re.search(r"/(?:pronajem|prodej)/domy(?:/|$)", raw) or "/dum/" in raw:
+        if "/pozemky/" in raw or "/pozemek/" in raw:
+            filters["category"] = "pozemky"
+        elif "/rodinne-domy/" in raw or re.search(r"/(?:pronajem|prodej)/domy(?:/|$)", raw) or "/dum/" in raw:
             filters["category"] = "domy"
         else:
             filters["category"] = "byty"
@@ -150,21 +158,37 @@ class AnnonceUrls:
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
         category = str(filters.get("category") or "byty").casefold()
-        if "dom" in category:
+        query: dict[str, str] = {"nabidkovy": "1", "sort": "ageasc"}
+        if "pozem" in category:
+            # Live land index is /pozemky.html; 130=prodej, 131=pronájem.
+            path = "/pozemky.html"
+            query["business_type"] = "131" if offer == "pronajem" else "130"
+        elif "dom" in category:
             path = "/domy-k-pronajmu.html" if offer == "pronajem" else "/domy-na-prodej.html"
         else:
             path = "/byty-k-pronajmu.html" if offer == "pronajem" else "/byty-na-prodej.html"
-        # nabidkovy=1 drops poptávka cards so page-1 is 20 offers, not a mix of 10.
-        return _join(self.site + path, {"nabidkovy": "1"})
+        # nabidkovy=1 drops poptávka; sort=ageasc is the live "od nejnovějšího" control.
+        return _join(self.site + path, query)
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
-        if "prodej" in raw:
+        query = dict(parse_qsl(urlsplit(url or "").query, keep_blank_values=True))
+        business = str(query.get("business_type") or "")
+        if "pozem" in raw:
+            filters["category"] = "pozemky"
+            if business == "131" or "pronaj" in raw:
+                filters["offers"] = ["pronajem"]
+            else:
+                filters["offers"] = ["prodej"]
+            return filters
+        if "pronaj" in raw:
+            filters["offers"] = ["pronajem"]
+        elif "prodej" in raw or "prodam" in raw or "rodinne-domy" in raw:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
-        if "domy" in raw:
+        if "domy" in raw or "dum" in raw:
             filters["category"] = "domy"
         return filters
 
@@ -221,14 +245,15 @@ class UlovdomovUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        category = str(filters.get("category") or "byty").casefold()
-        kind = "domy" if "dom" in category else "byty"
+        kind = _list_kind(filters.get("category") or "byty", house="domy", land="pozemky")
         return f"{self.site}/{offer}/{kind}"
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
-        if "/domy" in raw or "/dum/" in raw or "rodinne-domy" in raw:
+        if "/pozem" in raw:
+            filters["category"] = "pozemky"
+        elif "/domy" in raw or "/dum/" in raw or "rodinne-domy" in raw:
             filters["category"] = "domy"
         else:
             filters["category"] = "byty"
@@ -251,8 +276,7 @@ class RemaxUrls:
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
         offer_path = "pronajem" if offer == "pronajem" else "prodej"
-        category = str(filters.get("category") or "byty").casefold()
-        kind = "domy-a-vily" if "dom" in category else "byty"
+        kind = _list_kind(filters.get("category") or "byty", house="domy-a-vily", land="pozemky")
         query: dict[str, str] = {}
         if (filters.get("sort") or "nejnovejsi") == "nejnovejsi":
             query["order_by_published_date"] = "0"
@@ -266,7 +290,9 @@ class RemaxUrls:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
-        if "domy" in raw or "vily" in raw:
+        if "pozem" in raw:
+            filters["category"] = "pozemky"
+        elif "domy" in raw or "vily" in raw:
             filters["category"] = "domy"
         else:
             filters["category"] = "byty"
@@ -288,8 +314,7 @@ class RealityczUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        category = str(filters.get("category") or "byty").casefold()
-        kind = "domy" if "dom" in category else "byty"
+        kind = _list_kind(filters.get("category") or "byty", house="domy", land="pozemky")
         districts = [str(item) for item in (filters.get("districts") or []) if item]
         region = districts[0] if len(districts) == 1 else ""
         path = f"/{offer}/{kind}/{region}/" if region else f"/{offer}/{kind}/Ceska-republika/"
@@ -301,7 +326,9 @@ class RealityczUrls:
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
-        if "/domy/" in raw or "/dum/" in raw:
+        if "/pozem" in raw:
+            filters["category"] = "pozemky"
+        elif "/domy/" in raw or "/dum/" in raw:
             filters["category"] = "domy"
         else:
             filters["category"] = "byty"

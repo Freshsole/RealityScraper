@@ -12,6 +12,7 @@ import asyncio
 import json
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +24,14 @@ from app.sources import client_for
 def _kind(shard: dict[str, str]) -> str:
     key = shard.get("shard_key") or ""
     url = (shard.get("search_url") or "").lower()
+    if (
+        key.endswith(":pozemky")
+        or ":pozemek:" in key.casefold()
+        or "/pozem" in url
+        or "estatetype=pozemek" in url
+        or "pozemky.html" in url
+    ):
+        return "pozemky"
     if (
         key.endswith(":domy")
         or ":dum:" in key.casefold()
@@ -47,7 +56,7 @@ def _offer(shard: dict[str, str]) -> str:
 
 
 def selected_shards(portals: set[str]) -> list[dict[str, str]]:
-    """One rent/sale apartment shard per portal, plus house shards when present."""
+    """One rent/sale apartment shard per portal, plus house/plot shards when present."""
     rows: list[dict[str, str]] = []
     seen: set[tuple[str, str, str]] = set()
     for item in extra_portal_recent_shards() + sreality_recent_shards():
@@ -97,9 +106,11 @@ async def measure_one(shard: dict[str, str], timeout: float) -> dict:
             "url": item.url,
             "lat": item.lat,
             "lon": item.lon,
+            "estate": (item.extras or {}).get("estate"),
         }
         for item in listings[:2]
     ]
+    estates = Counter(str((item.extras or {}).get("estate") or "") for item in listings)
     return {
         "label": shard["label"],
         "portal": shard["portal"],
@@ -113,6 +124,7 @@ async def measure_one(shard: dict[str, str], timeout: float) -> dict:
         "image": _fill(listings, lambda item: bool(item.image_url)),
         "locality": _fill(listings, lambda item: bool((item.locality or "").strip())),
         "gps": _fill(listings, lambda item: item.lat is not None and item.lon is not None),
+        "estate": dict(estates),
         "sample": sample,
     }
 

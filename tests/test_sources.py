@@ -51,14 +51,22 @@ def test_recent_shards_cover_all_portals():
         "annonce:recent:prodej:byty",
         "annonce:recent:pronajem:domy",
         "annonce:recent:prodej:domy",
+        "annonce:recent:pronajem:pozemky",
+        "annonce:recent:prodej:pozemky",
     }
     assert all("nabidkovy=1" in item["search_url"] for item in annonce)
+    assert all("sort=ageasc" in item["search_url"] for item in annonce)
+    assert any("/domy-na-prodej.html" in item["search_url"] for item in annonce)
+    assert any("/byty-na-prodej.html" in item["search_url"] for item in annonce)
+    assert any("/pozemky.html" in item["search_url"] for item in annonce)
     realitycz = [item for item in extra if item["portal"] == "realitycz"]
     assert {item["shard_key"] for item in realitycz} >= {
         "realitycz:recent:pronajem:byty",
         "realitycz:recent:prodej:byty",
         "realitycz:recent:pronajem:domy",
         "realitycz:recent:prodej:domy",
+        "realitycz:recent:pronajem:pozemky",
+        "realitycz:recent:prodej:pozemky",
     }
     assert all("s=2" in item["search_url"] for item in realitycz)
     remax = [item for item in extra if item["portal"] == "remax"]
@@ -67,15 +75,20 @@ def test_recent_shards_cover_all_portals():
         "remax:recent:prodej:byty",
         "remax:recent:pronajem:domy",
         "remax:recent:prodej:domy",
+        "remax:recent:pronajem:pozemky",
+        "remax:recent:prodej:pozemky",
     }
     assert all("order_by_published_date=0" in item["search_url"] for item in remax)
     assert any("/reality/domy-a-vily/pronajem/" in item["search_url"] for item in remax)
+    assert any("/reality/pozemky/prodej/" in item["search_url"] for item in remax)
     bazos = [item for item in extra if item["portal"] == "bazos"]
     assert {item["shard_key"] for item in bazos} >= {
         "bazos:recent:pronajem:byty",
         "bazos:recent:prodej:byty",
         "bazos:recent:pronajem:domy",
         "bazos:recent:prodej:domy",
+        "bazos:recent:pronajem:pozemky",
+        "bazos:recent:prodej:pozemky",
     }
     assert all("/pronajmu/" in item["search_url"] or "/prodam/" in item["search_url"] for item in bazos)
     assert all("/byty/" not in item["search_url"] and "/domy/" not in item["search_url"] for item in bazos)
@@ -85,8 +98,11 @@ def test_recent_shards_cover_all_portals():
         "idnes:recent:prodej:byty",
         "idnes:recent:pronajem:domy",
         "idnes:recent:prodej:domy",
+        "idnes:recent:pronajem:pozemky",
+        "idnes:recent:prodej:pozemky",
     }
     assert any("/s/pronajem/domy/" in item["search_url"] for item in idnes)
+    assert any("/s/prodej/pozemky/" in item["search_url"] for item in idnes)
     assert all("/dum/" not in item["search_url"] for item in idnes)
     ceske = [item for item in extra if item["portal"] == "ceskereality"]
     assert {item["shard_key"] for item in ceske} >= {
@@ -94,8 +110,11 @@ def test_recent_shards_cover_all_portals():
         "ceskereality:recent:prodej:byty",
         "ceskereality:recent:pronajem:domy",
         "ceskereality:recent:prodej:domy",
+        "ceskereality:recent:pronajem:pozemky",
+        "ceskereality:recent:prodej:pozemky",
     }
     assert any("/pronajem/rodinne-domy/nejnovejsi/" in item["search_url"] for item in ceske)
+    assert any("/prodej/pozemky/nejnovejsi/" in item["search_url"] for item in ceske)
     assert all("/pronajem/domy/" not in item["search_url"] for item in ceske)
     ulov = [item for item in extra if item["portal"] == "ulovdomov"]
     assert {item["shard_key"] for item in ulov} >= {
@@ -103,8 +122,11 @@ def test_recent_shards_cover_all_portals():
         "ulovdomov:recent:prodej:byty",
         "ulovdomov:recent:pronajem:domy",
         "ulovdomov:recent:prodej:domy",
+        "ulovdomov:recent:pronajem:pozemky",
+        "ulovdomov:recent:prodej:pozemky",
     }
     assert any(item["search_url"].endswith("/pronajem/domy") for item in ulov)
+    assert any(item["search_url"].endswith("/prodej/pozemky") for item in ulov)
     assert any(item["search_url"].endswith("/prodej/byty") for item in ulov)
     bezrealitky = [item for item in extra if item["portal"] == "bezrealitky"]
     assert {item["shard_key"] for item in bezrealitky} >= {
@@ -112,8 +134,11 @@ def test_recent_shards_cover_all_portals():
         "bezrealitky:recent:prodej:byty",
         "bezrealitky:recent:pronajem:domy",
         "bezrealitky:recent:prodej:domy",
+        "bezrealitky:recent:pronajem:pozemky",
+        "bezrealitky:recent:prodej:pozemky",
     }
     assert any("estateType=DUM" in item["search_url"] for item in bezrealitky)
+    assert any("estateType=POZEMEK" in item["search_url"] for item in bezrealitky)
     assert all("order=TIMEORDER_DESC" in item["search_url"] for item in bezrealitky)
 
 
