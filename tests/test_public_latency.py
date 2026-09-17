@@ -28,7 +28,10 @@ from app.store import (
     catalog_item_needs_live_fetch,
     listings_fts_match_query,
     _CATALOG_COVER_INDEX_COLS,
+    _COVER_RENT_SQL,
     _PIN_COVER_INDEX_COLS,
+    _catalog_cover_estate_sql,
+    _catalog_cover_offer_sql,
     _catalog_cover_sql,
     _pin_gps_grid_sql,
     _pin_gps_tight_sql,
@@ -885,6 +888,8 @@ def test_map_pin_tight_zoom_hydrates_labels_via_covering_index(tmp_path: Path):
     assert cover_cols == list(_PIN_COVER_INDEX_COLS)
     assert "COVERING INDEX" in plan
     assert "idx_listings_pin_cover" in plan
+    assert "GROUP BY" not in sql
+    assert "TEMP B-TREE FOR GROUP BY" not in plan
     assert "SCAN listings" not in plan or "USING INDEX" in plan
     pins = store.catalog(
         {
@@ -996,6 +1001,86 @@ def test_catalog_cover_index_rebuilds_when_identity_columns_missing(tmp_path: Pa
     with again.read() as conn:
         cover_cols = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
     assert cover_cols == list(_CATALOG_COVER_INDEX_COLS)
+
+
+def test_tight_and_mid_pins_skip_identity_groupby_temp_btree(tmp_path: Path):
+    store = Store(tmp_path / "pin-nogroup.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=80)
+    gps_clause = (
+        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+    )
+    sql = _pin_gps_tight_sql(gps_clause, pin_cap=8000)
+    assert "GROUP BY" not in sql
+    assert "INDEXED BY idx_listings_pin_cover" in sql
+    with store.read() as conn:
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (50.06, 50.18, 14.38, 14.52))
+        )
+    assert "COVERING INDEX" in plan
+    assert "idx_listings_pin_cover" in plan
+    assert "TEMP B-TREE FOR GROUP BY" not in plan
+    mid = store.catalog(
+        {
+            "pins_only": True,
+            "south": "50.06",
+            "north": "50.18",
+            "west": "14.38",
+            "east": "14.52",
+        }
+    )
+    assert mid["items"]
+    assert all(item.get("name") and item.get("url") for item in mid["items"])
+    keys = [item.get("listing_key") for item in mid["items"]]
+    assert len(keys) == len(set(keys))
+
+
+def test_catalog_offer_estate_walks_covering_first_seen(tmp_path: Path):
+    store = Store(tmp_path / "offer-cover.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=4000)
+    offer_sql = _catalog_cover_offer_sql("pronajem")
+    estate_sql = _catalog_cover_estate_sql("byt")
+    assert offer_sql == _COVER_RENT_SQL
+    assert "listings.extras" not in (offer_sql or "")
+    assert "listings.extras" not in (estate_sql or "")
+    sql = _catalog_cover_sql(f"{offer_sql} AND {estate_sql}", limit=96)
+    with store.read() as conn:
+        plan = " ".join(row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}"))
+    assert "COVERING INDEX" in plan
+    assert "idx_listings_first_seen" in plan
+    assert "LIKE" not in plan or "idx_listings_first_seen" in plan
+    page = store.catalog(
+        {"offer": "pronajem", "estate": "byt", "limit": 12, "include_pins": "0"}
+    )
+    assert page["items"]
+    assert all((item.get("extras") or {}).get("offer") == "Pronájem" for item in page["items"])
+    assert all((item.get("extras") or {}).get("estate") == "Byt" for item in page["items"])
+    houses = store.catalog({"estate": "dum", "limit": 12, "include_pins": "0"})
+    assert houses["items"] == []
+
+
+def test_recent_notified_uses_covering_first_seen_not_extras_blobs(tmp_path: Path):
+    store = Store(tmp_path / "listed-cover.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=4000)
+    with store.read() as conn:
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
+                WHERE listings.notified = 1
+                ORDER BY listings.first_seen DESC LIMIT 96
+                """
+            )
+        )
+    assert "COVERING INDEX" in plan
+    assert "idx_listings_first_seen" in plan
+    items = store.recent_notified(8)
+    assert items
+    assert all((item.get("extras") or {}).get("offer") == "Pronájem" for item in items)
+    assert all("blob" not in str((item.get("extras") or {})) for item in items)
 
 
 def test_catalog_q_fts_city_disposition_diacritics_and_upsert(tmp_path: Path):

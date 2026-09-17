@@ -296,6 +296,22 @@ Measured 2026-09-17 on this agent, same 15k fat fixture / `measure_scrape_commit
 
 Catalog/search writer p95 dropped ~3 ms each. City pins stay ~12 ms; tight-zoom ~15 ms (same leftover band as #53). Yield still inside the 12s NewDiscovery write deadline. EXPLAIN catalog newest/`q=Praha`: covering `idx_listings_first_seen` (search still `listings_fts` LIST SUBQUERY, not CORRELATED). Pins still covering `idx_listings_pin_cover`.
 
+### Neighborhood pins / leftover Hub JSON
+
+Leftover after the catalog covering-index slice was **not** search (~12 ms). Hub-100 uncached writer heat on the same 15k fat fixture:
+
+| path | Hub-100 p95 before |
+|---|---|
+| pins_mid (span ~0.26, still identity `GROUP BY`) | **~55 ms** |
+| `/api/status` | ~27 ms |
+| landing-listings (offer/estate extras `LIKE`) | ~24 ms |
+| pins_tight (identity `GROUP BY`) | ~19 ms |
+| search `q=Praha` | ~13 ms |
+
+Tight/mid map pins no longer `GROUP BY` listing identity (temp B-tree over every GPS row). Covering `idx_listings_pin_cover` range scan + `LIMIT`; Python `listing_identity` already dedupes. City-wide ~100m grid is unchanged.
+
+List/search/landing cards and `recent_notified` use lean offer/estate from covering columns (same mapping as catalog newest). Offer `pronajem`/`prodej`/`drazba` and estate `byt`/`dum`/`pozemek` filters match those covering columns so landing/`/api/status` skip extras/description blobs. Amenity flags stay on `catalog_item`. Defaults stay **500 / 100**.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |
