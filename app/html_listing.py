@@ -256,6 +256,18 @@ class HtmlPortalClient:
     def _parse_list(self, html: str) -> list[Listing]:
         raise NotImplementedError
 
+    def _attach_local_coords(self, listings: list[Listing]) -> None:
+        """Pin list cards from local city centers. Network geocode belongs on detail, not page-1."""
+        missing = [item for item in listings if item.lat is None or item.lon is None]
+        if not missing:
+            return
+        from app.places import approx_point_from_locality
+
+        for item in missing:
+            point = approx_point_from_locality((item.locality or item.name or "").strip())
+            if point:
+                item.lat, item.lon = point
+
     def _parse_detail(self, listing: Listing, html: str) -> Listing:
         photos = []
         for match in re.findall(r'(?:src|href)=["\']([^"\']+\.(?:jpg|jpeg|webp)[^"\']*)["\']', html or "", re.I):
@@ -330,6 +342,7 @@ class HtmlPortalClient:
         if page <= 1:
             self.search_url = str(response.url).split("#")[0]
         listings = self._parse_list(html)
+        self._attach_local_coords(listings)
         parsed_total = self._parse_total(html)
         total = parsed_total or (len(listings) if page == 1 else 0)
         return listings, total

@@ -134,8 +134,13 @@ class AnnonceUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        path = "/byty-k-pronajmu.html" if offer == "pronajem" else "/byty-na-prodej.html"
-        return self.site + path
+        category = str(filters.get("category") or "byty").casefold()
+        if "dom" in category:
+            path = "/domy-k-pronajmu.html" if offer == "pronajem" else "/domy-na-prodej.html"
+        else:
+            path = "/byty-k-pronajmu.html" if offer == "pronajem" else "/byty-na-prodej.html"
+        # nabidkovy=1 drops poptávka cards so page-1 is 20 offers, not a mix of 10.
+        return _join(self.site + path, {"nabidkovy": "1"})
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
@@ -144,6 +149,8 @@ class AnnonceUrls:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
+        if "domy" in raw:
+            filters["category"] = "domy"
         return filters
 
 

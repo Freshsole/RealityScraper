@@ -81,7 +81,12 @@ ULOV_JSON = {"data": {"offers": [{"id": 42, "title": "Byt", "price": {"amount": 
 class ExtraPortalTests(unittest.TestCase):
     def test_url_builders(self):
         self.assertIn("/pronajem/byty/", ceskereality_url.build_url({"offers": ["pronajem"]}))
-        self.assertTrue(annonce_url.build_url({"offers": ["pronajem"]}).endswith("/byty-k-pronajmu.html"))
+        rent = annonce_url.build_url({"offers": ["pronajem"]})
+        self.assertIn("/byty-k-pronajmu.html", rent)
+        self.assertIn("nabidkovy=1", rent)
+        houses = annonce_url.build_url({"offers": ["pronajem"], "category": "domy"})
+        self.assertIn("/domy-k-pronajmu.html", houses)
+        self.assertIn("nabidkovy=1", houses)
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
@@ -107,6 +112,21 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].disposition, "2+kk")
         self.assertEqual(items[0].area_m2, 44)
         self.assertEqual(items[0].price_czk, 24000)
+
+    def test_annonce_slideshow_cards_keep_every_listing(self):
+        html = (FIXTURES / "annonce_cards.html").read_text()
+        client = AnnonceClient("https://www.annonce.cz/byty-k-pronajmu.html")
+        items = client._parse_list(html)
+        ids = [item.id for item in items]
+        self.assertEqual(ids, [88323899, 88695951, 88672809, 88159057])
+        self.assertEqual(items[0].locality, "Praha 4")
+        self.assertEqual(items[0].price_czk, 13500)
+        self.assertIn("attachment", items[0].image_url or "")
+        self.assertEqual(items[1].disposition, "3+1")
+        self.assertEqual(items[1].locality, "Karlovy Vary")
+        self.assertNotIn(88693793, ids)
+        self.assertTrue(items[3].url.endswith("88159057-w2713c.html"))
+        self.assertEqual(client._page_url(2), "https://www.annonce.cz/byty-k-pronajmu.html?page=2")
 
     def test_remax_list(self):
         client = RemaxClient("https://www.remax-czech.cz/reality/byty/?sale=2")
