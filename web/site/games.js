@@ -6,9 +6,12 @@
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;");
 
-  const fmt = (n) => {
-    const num = Number(n || 0);
-    return `${Math.round(num).toLocaleString("cs-CZ")} Kč`;
+  const fmtNum = (n) => Math.round(Number(n || 0)).toLocaleString("cs-CZ");
+  const fmt = (n) => `${fmtNum(n)} Kč`;
+  const digitsOnly = (raw) => String(raw || "").replace(/[^\d]/g, "");
+  const prettyGuess = (raw) => {
+    const digits = digitsOnly(raw);
+    return digits ? Number(digits).toLocaleString("cs-CZ") : "";
   };
 
   const specText = (item) =>
@@ -43,7 +46,7 @@
         <div class="portal">${escapeHtml(item.portal_label || "")}</div>
       </div>
       <div class="amount-stack">
-        <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmt(item.price_czk)}` : "— — —"}</div>
+        <div class="flat-price${revealed ? "" : " is-hidden"}">${revealed ? `${fmtNum(item.price_czk)}` : "— — —"}</div>
         ${ccyPill()}
       </div>
     </button>
@@ -176,7 +179,7 @@
                 <div class="portal">Tip ${escapeHtml(fmt(item.guess))} · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
               </div>
               <div class="amount-stack">
-                <div class="flat-price">${escapeHtml(fmt(item.actual))}</div>
+                <div class="flat-price">${escapeHtml(fmtNum(item.actual))}</div>
                 ${ccyPill()}
                 <span class="rent-pts${low ? " is-low" : ""}">${escapeHtml(item.points)} b</span>
               </div>
@@ -184,11 +187,15 @@
           `;
         })
         .join("");
+      const fastest = Math.min(
+        8,
+        ...(scored.items || []).map((item) => Number(item.vanish_hours) || 8),
+      );
       board.innerHTML = `
         <div class="loc-chip">Žebříček u admina</div>
         <div class="mint-banner">
           <strong>Skóre ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</strong>
-          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat pět inzerátů ručně.</span>
+          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Nejrychlejší z těchto pěti mizí ${escapeHtml(vanishText(fastest))} — žebříček uvidí jen admin.</span>
         </div>
         ${rows}
         <div class="converter-actions">
@@ -247,10 +254,11 @@
         ${infoRows([
           ["Lokalita", item.locality || item.name || "Byt"],
           ["Portál", item.portal_label || ""],
+          ["Takové nabídky mizí", vanishText(item.vanish_hours)],
         ])}
         <div class="mint-banner">
-          <strong>Tipněte měsíční nájem.</strong>
-          <span>Enter nebo tlačítko — další byt za vteřinu.</span>
+          <strong>Tipněte měsíční nájem v Kč.</strong>
+          <span>Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${escapeHtml(vanishText(item.vanish_hours))}.</span>
         </div>
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-next">${index + 1 >= items.length ? "Odeslat tipy" : "Další byt"}</button>
@@ -258,7 +266,10 @@
       `;
       const input = document.getElementById("rent-guess");
       const next = document.getElementById("rent-next");
-      const parseGuess = (raw) => Number(String(raw || "").replace(/[^\d]/g, "") || 0);
+      const parseGuess = (raw) => Number(digitsOnly(raw) || 0);
+      input?.addEventListener("input", () => {
+        input.value = prettyGuess(input.value);
+      });
       const advance = () => {
         const value = parseGuess(input?.value);
         if (!value || value < 1000) {

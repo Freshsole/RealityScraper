@@ -322,6 +322,10 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "fonts.googleapis" not in hub and "fonts.googleapis" not in rent
     assert "archivo-black-latin.woff2" in hub
     assert "is-skeleton" in rent
+    assert "ccy-pill" in rent
+    assert "Takové nabídky mizí" in rent
+    assert "vidíte v administraci" not in hub
+    assert "dobré ceny mizí" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
     js = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.js").read_text(encoding="utf-8")
     assert "#163300" in css
@@ -340,7 +344,25 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "pill-ghost" in js
     assert "rent-unit" in js
     assert "replace(/[^\\d]/g, \"\")" in js
+    assert "Takové nabídky mizí" in js
+    assert "vanishText(item.vanish_hours)" in js
+    assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
+    assert ".converter-actions .pill" in css
+
+
+def test_admin_games_leaderboard_uses_five_column_wise_grid():
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "web" / "admin" / "admin.css").read_text(encoding="utf-8")
+    js = (root / "web" / "admin" / "admin.js").read_text(encoding="utf-8")
+    assert ".ad-game-tbl" in css
+    assert "grid-template-columns: 40px minmax(0, 1fr) max-content" in css
+    assert "ad-ccy-pill" in css
+    assert "#163300" in css
+    assert "#9fe870" in css
+    assert "ad-game-tbl" in js
+    assert "ad-ccy-pill" in js
+    assert "Hráči žebříček nevidí" in js
 
 
 def test_homepage_html_is_memory_fast_and_uses_webp():
@@ -358,6 +380,9 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert "hero-apart.webp" in html
     assert "sold-1.webp" in html
     assert 'media="print"' in html
+    assert "ceny v Kč" in html
+    assert "dobré ceny mizí" in html
+    assert "admin žebříčku" not in html
     assert cold_ms < 80, f"cold homepage HTML {cold_ms:.1f}ms"
     assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
     response = site_page("index.html")
@@ -384,6 +409,7 @@ def test_public_game_helpers_are_memory_only():
     ms = (time.perf_counter() - t0) * 1000
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
     assert len(round_payload["items"]) == 5
+    assert all(item.get("vanish_hours") is not None for item in round_payload["items"])
     assert scored["ok"] is True
     assert scored["score"] == 1000
     assert ms < 40, f"public game helpers {ms:.1f}ms"

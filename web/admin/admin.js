@@ -2436,12 +2436,13 @@
     const stats = data.stats || {};
     const top = data.top || [];
     const recent = data.recent || [];
+    const ccy = () => `<span class="ad-ccy-pill"><span>CZ</span> Kč</span>`;
     const row = (item, rank) => `<div class="ad-utbl-row">
         <span class="num">${rank != null ? rank : ""}</span>
         <span>${esc(item.player_name || "Anonym")}</span>
-        <span class="num">${esc(fmtN(item.score || 0))}</span>
+        <span class="num ad-game-score">${esc(fmtN(item.score || 0))}</span>
         <span class="num">${esc(String(item.accuracy ?? 0).replace(".", ","))} %</span>
-        <span class="muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
+        <span class="num muted">${esc(item.created_at || "").replace("T", " ").slice(0, 16)}</span>
       </div>`;
     const play = (item) => {
       const details = (item.items || [])
@@ -2452,7 +2453,10 @@
               <strong>${esc(part.locality || part.name || "Byt")}</strong>
               <span>tip ${esc(fmtN(part.guess || 0))} Kč · realita ${esc(fmtN(part.actual || 0))} Kč</span>
             </div>
-            <em class="${pts >= 400 ? "is-ok" : ""}">${esc(part.points || 0)} b</em>
+            <div class="ad-game-guess-amt">
+              ${ccy()}
+              <em class="${pts >= 400 ? "is-ok" : ""}">${esc(part.points || 0)} b</em>
+            </div>
           </div>`;
         })
         .join("");
@@ -2470,7 +2474,7 @@
       <header class="ad-pagehead">
         <p class="ad-eyebrow">TIP NÁJMU · ŽEBŘÍČEK</p>
         <h1 class="ad-h">HRY</h1>
-        <p class="ad-lead">Skóre z /hry/najem. Hráči ho nevidí — jen admin. Pět bytů, tisíc bodů za přesný tip.</p>
+        <p class="ad-lead">Skóre z /hry/najem v Kč. Hráči žebříček nevidí — jen admin. Pět bytů, 1 000 bodů za přesný tip.</p>
       </header>
       <section class="ad-game-kpis">
         <article class="ad-game-kpi"><span>Odehraných kol</span><strong>${esc(fmtN(stats.n || 0))}</strong></article>
@@ -2482,10 +2486,10 @@
         <h2 class="ad-kicker">Top skóre</h2>
         <article class="ad-card ad-game-board">
           <div class="ad-utbl-wrap">
-            <div class="ad-utbl">
-              <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span>Kdy</span></div>
-              <div>${top.map((item, idx) => row(item, idx + 1)).join("") || ""}</div>
-              <div class="ad-utbl-empty" ${top.length ? "hidden" : ""}>Zatím žádné kolo.</div>
+            <div class="ad-utbl ad-game-tbl">
+              <div class="ad-utbl-head"><span>#</span><span>Hráč</span><span class="num">Skóre</span><span class="num">Přesnost</span><span class="num">Kdy</span></div>
+              ${top.map((item, idx) => row(item, idx + 1)).join("")}
+              <div class="ad-utbl-empty" ${top.length ? "hidden" : ""}>Zatím žádné kolo — zahrajte /hry/najem.</div>
             </div>
           </div>
         </article>

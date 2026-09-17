@@ -454,6 +454,17 @@ button {
   white-space: nowrap;
 }
 
+.ccy-pill::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--forest);
+  opacity: 0.45;
+  margin-left: 2px;
+}
+
 .ccy-flag {
   width: 28px;
   height: 28px;
@@ -635,6 +646,10 @@ button {
   display: grid;
   gap: 10px;
   margin-top: 20px;
+}
+
+.converter-actions .pill {
+  width: 100%;
 }
 
 .game-status {

@@ -3993,6 +3993,10 @@ body.article-popup-open {
   gap: 10px;
 }
 
+.section-head .game-pills {
+  justify-content: center;
+}
+
 .game-pill {
   display: inline-flex;
   align-items: center;
@@ -4014,10 +4018,10 @@ body.article-popup-open {
 
 .game-card {
   background: var(--canvas);
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-card);
-  box-shadow: 0 18px 40px rgba(14, 15, 12, 0.06);
-  padding: 28px;
+  box-shadow: 0 18px 50px rgba(14, 15, 12, 0.08);
+  padding: 32px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -4025,10 +4029,11 @@ body.article-popup-open {
 
 .game-card h2 {
   font-family: var(--font-display);
-  font-size: 32px;
-  line-height: 0.92;
+  font-size: clamp(32px, 4vw, 40px);
+  line-height: 0.88;
   text-transform: uppercase;
   margin: 0;
+  color: var(--ink);
 }
 
 .game-card p {
