@@ -30,6 +30,7 @@ from app.store import (
     _CATALOG_COVER_INDEX_COLS,
     _COVER_RENT_SQL,
     _PIN_COVER_INDEX_COLS,
+    _PIN_GRID_SPAN,
     _catalog_cover_estate_sql,
     _catalog_cover_offer_sql,
     _catalog_cover_sql,
@@ -1021,6 +1022,18 @@ def test_tight_and_mid_pins_skip_identity_groupby_temp_btree(tmp_path: Path):
     assert "COVERING INDEX" in plan
     assert "idx_listings_pin_cover" in plan
     assert "TEMP B-TREE FOR GROUP BY" not in plan
+    tight = store.catalog(
+        {
+            "pins_only": True,
+            "south": "50.08",
+            "north": "50.12",
+            "west": "14.42",
+            "east": "14.46",
+        }
+    )
+    assert tight["items"]
+    assert all(item.get("name") and item.get("url") for item in tight["items"])
+    assert _PIN_GRID_SPAN <= 0.25
     mid = store.catalog(
         {
             "pins_only": True,
@@ -1031,9 +1044,10 @@ def test_tight_and_mid_pins_skip_identity_groupby_temp_btree(tmp_path: Path):
         }
     )
     assert mid["items"]
-    assert all(item.get("name") and item.get("url") for item in mid["items"])
-    keys = [item.get("listing_key") for item in mid["items"]]
-    assert len(keys) == len(set(keys))
+    assert all(item.get("lat") is not None and item.get("lon") is not None for item in mid["items"])
+    # Neighborhood span uses the covering ~100m grid, not thousands of labeled pins.
+    assert len(mid["items"]) <= 50
+    assert all(int(item.get("count") or 1) >= 1 for item in mid["items"])
 
 
 def test_catalog_offer_estate_walks_covering_first_seen(tmp_path: Path):

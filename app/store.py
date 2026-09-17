@@ -417,8 +417,10 @@ _PIN_COVER_INDEX_COLS = (
     "price_label",
 )
 # Prague-wide bbox span is ~1.0; city-centroid clustering still waits for >1.5 so
-# Holešovice density stays visible. Grid ~100m cells before that.
-_PIN_GRID_SPAN = 0.35
+# Holešovice density stays visible. Grid ~100m cells from neighborhood zoom
+# (span >= 0.25) so leftover identity-pin hydrate of thousands of labels
+# never runs on a district bbox. Street-level tight zoom stays one pin per row.
+_PIN_GRID_SPAN = 0.25
 _PIN_GRID_DECIMALS = 3
 _PIN_CITY_CLUSTER_SPAN = 1.5
 
@@ -5257,7 +5259,7 @@ class Store:
         if isinstance(bbox, tuple) and len(bbox) == 4:
             south, north, west, east = bbox
             wide = (north - south) + (east - west) > 1.5
-        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 else 800
+        pin_limit = 8000 if place_geoms or wide else 800
         span = float(filters.get("_bbox_span") or 0)
         cache_hit = False
         cache_key: tuple[Any, ...] | None = None

@@ -1829,10 +1829,10 @@ class Hub:
             errors = [item.get("last_error") for item in monitors if item.get("last_error")]
             last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
             catalog = self.store.catalog_sync_status()
-            tracked = self.store.count()
+            tracked = catalog.get("listings") or self.store.count()
             new_today = self.store.new_today_count()
-            recent = self.store.recent_notified(limit=36, twins=False)
-            recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
+            recent = self.store.recent_notified(limit=36, twins=False, extras=False)
+            recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False, extras=False)
             templates = self.store.list_templates()
             settings = self.store.app_settings()
             scrape_tick = None
