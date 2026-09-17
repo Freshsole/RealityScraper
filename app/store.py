@@ -2714,7 +2714,8 @@ class Store:
         key = listing_key(listing.url)
         now = utc_now()
         portal = portal_from_url(listing.url)
-        cm = self.connect() if conn is None else nullcontext(conn)
+        owns_conn = conn is None
+        cm = self.connect() if owns_conn else nullcontext(conn)
         with cm as conn:
             canon = self._resolve_canonical(conn, listing, fast=fast)
             prev_row = conn.execute(
@@ -2847,7 +2848,7 @@ class Store:
                     (key, *values),
                 )
             self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind, conn=conn)
-        if conn is None and (prev is None or not thin_refresh or changed):
+        if owns_conn and (prev is None or not thin_refresh or changed):
             self._invalidate_catalog_pins()
         return {
             "listing_key": canon,
