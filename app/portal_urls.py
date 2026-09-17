@@ -221,10 +221,18 @@ class UlovdomovUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        return f"{self.site}/{offer}/byty"
+        category = str(filters.get("category") or "byty").casefold()
+        kind = "domy" if "dom" in category else "byty"
+        return f"{self.site}/{offer}/{kind}"
 
     def parse_url(self, url: str) -> dict:
-        return _parse_common(url, self.source)
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        if "/domy" in raw or "/dum/" in raw or "rodinne-domy" in raw:
+            filters["category"] = "domy"
+        else:
+            filters["category"] = "byty"
+        return filters
 
 
 class RemaxUrls:

@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "data": {
+    "id": 5679032,
+    "offerTypeId": "sale",
+    "title": "Prodej bytu 2+1 51 m2",
+    "village": {"id": 1, "name": "Pardubice"},
+    "villagePart": {"id": 2, "name": "Studánka"},
+    "geoCoordinates": {"lat": 50.034, "lng": 15.781},
+    "seo": "prodej-pardubice-studanka-bartonova-2-1",
+    "rentalPrice": {"value": 4350000, "currency": "CZK"},
+    "absoluteUrl": "https://www.ulovdomov.cz/i/5679032/prodej-pardubice-studanka-bartonova-2-1",
+    "status": "ACTIVE",
+    "photos": [
+      {
+        "id": 1,
+        "path": "https://storage.livendo.eu/cdn/image?id=sale-1&size=large",
+        "alt": "Prodej bytu 2+1"
+      }
+    ],
+    "parameters": [
+      {"name": "offerType", "value": "sale"},
+      {"name": "disposition", "value": "twoPlusOne"},
+      {"name": "propertyType", "value": "flat"},
+      {"name": "price", "value": 4350000},
+      {"name": "floorArea", "value": 51}
+    ]
+  }
+}

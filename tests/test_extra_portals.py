@@ -89,6 +89,16 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("nabidkovy=1", houses)
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
+        ulov_houses = ulovdomov_url.build_url({"offers": ["pronajem"], "category": "domy"})
+        self.assertTrue(ulov_houses.endswith("/pronajem/domy"))
+        self.assertEqual(
+            ulovdomov_url.parse_url("https://www.ulovdomov.cz/prodej/domy")["category"],
+            "domy",
+        )
+        self.assertEqual(
+            ulovdomov_url.parse_url("https://www.ulovdomov.cz/prodej/byty")["offers"],
+            ["prodej"],
+        )
         rent = remax_url.build_url({"offers": ["pronajem"]})
         self.assertIn("/reality/byty/pronajem/", rent)
         self.assertIn("order_by_published_date=0", rent)
@@ -420,20 +430,31 @@ class ExtraPortalTests(unittest.TestCase):
     def test_ulovdomov_sitemap_slug_and_cards(self):
         xml = (FIXTURES / "ulov_sitemap_offers.xml").read_text()
         rows = parse_sitemap_offers(xml)
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 6)
         by_id = {item[2]: item for item in rows}
         self.assertEqual(by_id[2037015][1], "pronajem")
         self.assertEqual(by_id[5669330][1], "prodej")
         self.assertEqual(by_id[5446569][1], "spolubydleni")
+        self.assertEqual(by_id[5222881][1], "pronajem")
+        self.assertEqual(by_id[5653004][1], "prodej")
         self.assertEqual(offer_from_inzerat_slug("-hluboka-nad-vltavou-housing"), "prodej")
         name, locality, disp = fields_from_inzerat_slug("pronajem-praha-liben-na-korabe-1-kk", "pronajem")
         self.assertEqual(disp, "1+kk")
         self.assertIn("Praha", locality)
+        from app.ulovdomov import estate_from_inzerat_slug
+
+        self.assertEqual(estate_from_inzerat_slug("pronajem-troubsko-troubsko-troubsko-dum"), "dum")
+        self.assertEqual(estate_from_inzerat_slug("-senohraby-senohraby-ve-vilach-fiveplusrooms"), "dum")
+        self.assertEqual(estate_from_inzerat_slug("-hluboka-nad-vltavou-zahradni-housing"), "byt")
+        self.assertEqual(estate_from_inzerat_slug("pronajem-praha-krc-u-novych-domu-i-2-1"), "byt")
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
         listing = client.listing_from_sitemap_url(by_id[3496443][0], "pronajem", by_id[3496443][3], 3496443)
         self.assertEqual(listing.id, 3496443)
         self.assertEqual(listing.disposition, "2+kk")
         self.assertTrue(listing.url.endswith("/3496443"))
+        house = client.listing_from_sitemap_url(by_id[5222881][0], "pronajem", by_id[5222881][3], 5222881)
+        self.assertEqual(house.extras.get("estate"), "Dům")
+        self.assertIn("domu", house.name.casefold())
 
     def test_ceskereality_live_nejnovejsi_uses_html_id_not_firm_image(self):
         html = (FIXTURES / "ceskereality_nejnovejsi.html").read_text()

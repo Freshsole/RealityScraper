@@ -97,6 +97,15 @@ def test_recent_shards_cover_all_portals():
     }
     assert any("/pronajem/rodinne-domy/nejnovejsi/" in item["search_url"] for item in ceske)
     assert all("/pronajem/domy/" not in item["search_url"] for item in ceske)
+    ulov = [item for item in extra if item["portal"] == "ulovdomov"]
+    assert {item["shard_key"] for item in ulov} >= {
+        "ulovdomov:recent:pronajem:byty",
+        "ulovdomov:recent:prodej:byty",
+        "ulovdomov:recent:pronajem:domy",
+        "ulovdomov:recent:prodej:domy",
+    }
+    assert any(item["search_url"].endswith("/pronajem/domy") for item in ulov)
+    assert any(item["search_url"].endswith("/prodej/byty") for item in ulov)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

@@ -3324,7 +3324,7 @@ class Store:
 
     def unpriced_ulov_listings(self, limit: int = 20) -> list[dict[str, Any]]:
         """Newest Ulov catalog rows missing price or image. WAL reader, bounded."""
-        cap = max(1, min(80, int(limit or 20)))
+        cap = max(1, min(160, int(limit or 32)))
         try:
             with self.read(quick=True) as conn:
                 rows = conn.execute(
@@ -3345,6 +3345,36 @@ class Store:
         except sqlite3.OperationalError:
             return []
         return [dict(row) for row in rows]
+
+    def ulov_hydrated_ids(self, ids: list[int]) -> set[int]:
+        """Catalog Ulov ids that already have both price and image (skip re-hydrate)."""
+        numbers: list[int] = []
+        for raw in ids or []:
+            try:
+                number = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                numbers.append(number)
+        if not numbers:
+            return set()
+        try:
+            with self.read(quick=True) as conn:
+                holders = ",".join("?" * len(numbers))
+                rows = conn.execute(
+                    f"""
+                    SELECT id FROM catalog_listings
+                    WHERE portal = 'ulovdomov'
+                      AND IFNULL(gone, 0) = 0
+                      AND id IN ({holders})
+                      AND price_czk IS NOT NULL AND price_czk > 0
+                      AND IFNULL(image_url, '') != ''
+                    """,
+                    tuple(numbers),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        return {int(row["id"]) for row in rows}
 
     def mark_catalog_listing_gone_id(self, listing_id: int, *, portal: str = "ulovdomov") -> None:
         try:

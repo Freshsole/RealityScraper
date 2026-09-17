@@ -54,7 +54,30 @@ DISPOSITION_NAMES = {
     "atypicky": "atypický",
     "room": "pokoj",
     "pokoj": "pokoj",
+    "familyhouse": "dům",
+    "villa": "vila",
+    "fiveplusrooms": "5+",
 }
+HOUSE_SLUG_RE = re.compile(
+    r"(?:^|-)(?:dum|vila|vilach|chalupa|chata|statek|rodinn)(?:-|$)",
+    re.I,
+)
+FALSE_HOUSE_SLUG_RE = re.compile(r"(?:^|-)(?:u-[a-z0-9-]*domu|koldum)(?:-|$)", re.I)
+SLUG_STOP = {
+    "kk",
+    "housing",
+    "byt",
+    "bytu",
+    "dum",
+    "vila",
+    "vilach",
+    "chalupa",
+    "chata",
+    "statek",
+    "rodinny",
+    "fiveplusrooms",
+}
+HYDRATE_BUCKETS = ("rent", "sale", "rent_house", "sale_house", "other")
 
 _sitemap_rows: list[tuple[str, str, int, str]] | None = None
 _sitemap_at = 0.0
@@ -199,6 +222,66 @@ def offer_from_inzerat_slug(slug: str) -> str:
     return "prodej"
 
 
+def estate_from_inzerat_slug(slug: str) -> str:
+    """byt vs dum from the sitemap slug. 'housing' is land, not a house."""
+    folded = (slug or "").casefold()
+    if not folded or FALSE_HOUSE_SLUG_RE.search(folded):
+        return "byt"
+    if HOUSE_SLUG_RE.search(folded) or folded.endswith("-dum"):
+        return "dum"
+    return "byt"
+
+
+def hydrate_bucket(offer: str, slug: str) -> str:
+    estate = estate_from_inzerat_slug(slug)
+    token = (offer or "").casefold()
+    if token in {"pronajem", "pronájem", "rent"}:
+        return "rent_house" if estate == "dum" else "rent"
+    if token in {"prodej", "sale"}:
+        return "sale_house" if estate == "dum" else "sale"
+    return "other"
+
+
+def listing_hydrate_bucket(listing: Listing) -> str:
+    extras = listing.extras or {}
+    slug = ""
+    match = INZERAT_RE.search(listing.url or "")
+    if match:
+        slug = match.group(1)
+    offer = str(extras.get("offer") or "").casefold()
+    if "pronáj" in offer or "pronaj" in offer or offer == "rent":
+        offer_key = "pronajem"
+    elif "prodej" in offer or offer == "sale":
+        offer_key = "prodej"
+    else:
+        offer_key = offer_from_inzerat_slug(slug)
+    estate = str(extras.get("estate") or "").casefold()
+    if estate in {"dům", "dum", "domu", "vila"}:
+        slug_for_bucket = f"{slug}-dum" if estate_from_inzerat_slug(slug) != "dum" else slug
+        return hydrate_bucket(offer_key, slug_for_bucket)
+    return hydrate_bucket(offer_key, slug)
+
+
+def interleave_hydrate(buckets: dict[str, list], limit: int) -> list:
+    """Round-robin rent / sale / houses so a tick is not all newest rent flats."""
+    cap = max(1, int(limit or 1))
+    out: list = []
+    order = HYDRATE_BUCKETS
+    while len(out) < cap:
+        progressed = False
+        for key in order:
+            rows = buckets.get(key) or []
+            if not rows:
+                continue
+            out.append(rows.pop(0))
+            progressed = True
+            if len(out) >= cap:
+                break
+        if not progressed:
+            break
+    return out
+
+
 def parse_sitemap_offers(xml: str) -> list[tuple[str, str, int, str]]:
     rows: list[tuple[str, str, int, str]] = []
     seen: set[int] = set()
@@ -228,6 +311,7 @@ class HydrateResult:
     aborted: str | None = None
     blocked: PortalBlocked | None = None
     gone_ids: list[int] = field(default_factory=list)
+    kinds: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -238,6 +322,7 @@ class HydrateResult:
             "failed": self.failed,
             "aborted": self.aborted,
             "success_rate": round(self.priced / self.attempted, 3) if self.attempted else 0.0,
+            "kinds": self.kinds,
         }
 
 
@@ -367,9 +452,18 @@ def listing_from_detail_payload(payload: Any, *, offer: str = "", keep_url: str 
     else:
         url = str(raw.get("absoluteUrl") or f"{SITE}/inzerat/{listing_id}").split("#")[0]
     extras = {"source": "offer_detail"}
+    ptype = str(params.get("propertyType") or raw.get("propertyType") or "").casefold()
+    disp_token = str(params.get("disposition") or "").replace("_", "").replace("-", "").casefold()
+    folded_title = title.casefold()
+    if ptype in {"house", "villa"} or disp_token in {"familyhouse", "villa"} or "dům" in folded_title:
+        estate = "dum"
+    elif ptype in {"land", "plot"}:
+        estate = "pozemek"
+    else:
+        estate = "byt"
     listing = listing_from_card(
         listing_id=listing_id,
-        name=title or f"{'Pronájem' if offer_kind == 'pronajem' else 'Prodej'} bytu",
+        name=title or f"{'Pronájem' if offer_kind == 'pronajem' else 'Prodej'} {'domu' if estate == 'dum' else 'bytu'}",
         url=url,
         price_czk=price_czk,
         price_label=price_label,
@@ -379,6 +473,7 @@ def listing_from_detail_payload(payload: Any, *, offer: str = "", keep_url: str 
         image_url=photos[0] if photos else None,
         photos=photos,
         offer=offer_kind,
+        estate=estate,
         lat=lat,
         lon=lon,
         description=str(raw.get("description") or "").strip() or None,
@@ -436,7 +531,7 @@ def fields_from_inzerat_slug(slug: str, offer: str) -> tuple[str, str, str]:
     locality_parts: list[str] = []
     for part in words:
         folded = part.casefold()
-        if folded in {"kk", "housing", "byt", "bytu"} or folded.isdigit():
+        if folded in SLUG_STOP or folded.isdigit():
             break
         if "+" in folded:
             break
@@ -445,7 +540,9 @@ def fields_from_inzerat_slug(slug: str, offer: str) -> tuple[str, str, str]:
             break
     locality = " ".join(word[:1].upper() + word[1:] for word in locality_parts if word)
     label = "Pronájem" if offer == "pronajem" else "Prodej"
-    name = f"{label} bytu {disp}".strip() if disp else f"{label} {raw.replace('-', ' ')}".strip()
+    estate = estate_from_inzerat_slug(slug)
+    estate_word = "domu" if estate == "dum" else "bytu"
+    name = f"{label} {estate_word} {disp}".strip() if disp else f"{label} {estate_word}".strip()
     if locality:
         name = f"{name}, {locality}"
     if not disp:
@@ -462,8 +559,26 @@ class UlovdomovClient(HtmlPortalClient):
         path = (self.search_url or "").lower()
         return "prodej" if "/prodej/" in path else "pronajem"
 
+    def _estate_key(self) -> str:
+        path = (self.search_url or "").lower()
+        if "/domy" in path or "/dum/" in path or "rodinne-domy" in path:
+            return "dum"
+        return "byt"
+
     def _offer_type_id(self) -> int:
         return 2 if self._context() == "prodej" else 1
+
+    def _offer_for_listing(self, listing: Listing) -> str:
+        extras = listing.extras or {}
+        token = str(extras.get("offer") or "").casefold()
+        if "pronáj" in token or "pronaj" in token or token == "rent":
+            return "pronajem"
+        if "prodej" in token or token == "sale":
+            return "prodej"
+        match = INZERAT_RE.search(listing.url or "")
+        if match:
+            return offer_from_inzerat_slug(match.group(1))
+        return self._context()
 
     def _find_body(self, page: int) -> dict[str, Any]:
         return {
@@ -615,6 +730,7 @@ class UlovdomovClient(HtmlPortalClient):
             locality=locality,
             disposition=disp,
             offer=offer,
+            estate=estate_from_inzerat_slug(slug),
             extras={"sitemap_card": True, "source": "sitemap"},
         )
         return listing
@@ -654,7 +770,12 @@ class UlovdomovClient(HtmlPortalClient):
 
     async def _fetch_sitemap_page(self, page: int) -> tuple[list[Listing], int]:
         offer = self._context()
-        rows = [item for item in await self._load_sitemap_rows() if item[1] == offer]
+        estate = self._estate_key()
+        rows = [
+            item
+            for item in await self._load_sitemap_rows()
+            if item[1] == offer and estate_from_inzerat_slug(item[3]) == estate
+        ]
         if not rows:
             return [], 0
         start = max(0, (max(1, page) - 1) * self.PAGE_SIZE)
@@ -812,7 +933,9 @@ class UlovdomovClient(HtmlPortalClient):
         offer_id = self._offer_id(listing)
         if offer_id:
             try:
-                detailed = await self.fetch_offer_detail(offer_id, keep_url=listing.url, offer=self._context())
+                detailed = await self.fetch_offer_detail(
+                    offer_id, keep_url=listing.url, offer=self._offer_for_listing(listing)
+                )
                 return merge_detail(listing, detailed)
             except ListingGone:
                 raise
@@ -836,6 +959,7 @@ class UlovdomovClient(HtmlPortalClient):
         pending = [item for item in listings if item and needs_hydrate(item)]
         if not pending:
             return result
+        pending.sort(key=lambda item: (0 if item.price_czk in (None, 0) else 1, -(int(item.id or 0))))
         gate = asyncio.Semaphore(max(1, min(8, int(concurrency or 1))))
         deadline = time.monotonic() + max(1.0, float(deadline_sec))
         abort = asyncio.Event()
@@ -854,10 +978,15 @@ class UlovdomovClient(HtmlPortalClient):
             async with gate:
                 if abort.is_set() or time.monotonic() >= deadline:
                     return
+                kind = listing_hydrate_bucket(item)
                 async with lock:
                     result.attempted += 1
+                    slot = result.kinds.setdefault(kind, {"attempted": 0, "priced": 0, "imaged": 0})
+                    slot["attempted"] += 1
                 try:
-                    detailed = await self.fetch_offer_detail(offer_id, keep_url=item.url, offer=self._context())
+                    detailed = await self.fetch_offer_detail(
+                        offer_id, keep_url=item.url, offer=self._offer_for_listing(item)
+                    )
                 except ListingGone:
                     async with lock:
                         result.gone += 1
@@ -883,11 +1012,14 @@ class UlovdomovClient(HtmlPortalClient):
                 async with lock:
                     consecutive = 0
                     result.listings.append(item)
+                    slot = result.kinds.setdefault(kind, {"attempted": 0, "priced": 0, "imaged": 0})
                     if item.price_czk not in (None, 0):
                         result.priced += 1
+                        slot["priced"] += 1
                     if item.image_url:
                         result.imaged += 1
-                if delay_sec > 0:
+                        slot["imaged"] += 1
+                if delay_sec > 0 and not abort.is_set():
                     await asyncio.sleep(delay_sec)
 
         tasks = [asyncio.create_task(one(item)) for item in pending]
