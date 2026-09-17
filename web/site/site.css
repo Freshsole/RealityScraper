@@ -4275,3 +4275,35 @@ body.article-popup-open {
   }
 }
 
+/* After later page blocks so 390px tokens win the cascade */
+@media (max-width: 480px) {
+  .game-card {
+    padding: 24px 16px;
+    max-width: 100%;
+    box-shadow: var(--shadow-card);
+  }
+
+  .game-card .pill {
+    width: 100%;
+    min-height: 48px;
+  }
+
+  .contact-hero .display,
+  .form-panel h2,
+  .info-panel h2,
+  .hero-stat {
+    white-space: normal;
+  }
+
+  .form-panel,
+  .info-panel {
+    padding: 24px 16px;
+    max-width: 100%;
+  }
+
+  .hero-stat-banner {
+    flex-wrap: wrap;
+    padding: 16px;
+  }
+}
+
