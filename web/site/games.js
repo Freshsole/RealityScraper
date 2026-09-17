@@ -7,7 +7,6 @@
       .replaceAll('"', "&quot;");
 
   const fmtNum = (n) => Math.round(Number(n || 0)).toLocaleString("cs-CZ");
-  const fmt = (n) => `${fmtNum(n)} Kč`;
   const digitsOnly = (raw) => String(raw || "").replace(/[^\d]/g, "").slice(0, 8);
   const groupDigits = (digits) => String(digits || "").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
   const prettyGuess = (raw) => {
@@ -44,10 +43,18 @@
     [item.disposition, item.area_m2 ? `${item.area_m2} m²` : ""].filter(Boolean).join(" · ");
 
   const m2Label = (item) => String(item?.price_m2_label || "").trim();
+  const guessM2Label = (item) => String(item?.guess_m2_label || "").trim();
 
   const m2Compare = (left, right) => {
     const labels = [m2Label(left), m2Label(right)].filter(Boolean);
     return labels.length === 2 ? labels.join(" vs ") : "";
+  };
+
+  const m2Spread = (rows) => {
+    const priced = (rows || []).filter((item) => m2Label(item));
+    if (priced.length < 2) return m2Label(priced[0]) || "";
+    priced.sort((a, b) => Number(a.price_m2 || 0) - Number(b.price_m2 || 0));
+    return m2Compare(priced[0], priced[priced.length - 1]);
   };
 
   const ccyPill = () =>
@@ -221,14 +228,25 @@
       const rows = (scored.items || [])
         .map((item) => {
           const low = Number(item.points || 0) < 400;
+          const guessUnit = guessM2Label(item);
+          const actualUnit = m2Label(item);
           return `
             <div class="rent-result-row">
               <div>
                 <div class="spec">${escapeHtml(item.locality || item.name || "")} · ${escapeHtml(specText(item))}</div>
-                <div class="portal">Tip ${escapeHtml(fmt(item.guess))} · odchylka ${String(item.error_pct).replace(".", ",")} %</div>
+                <div class="portal">odchylka ${String(item.error_pct).replace(".", ",")} %</div>
               </div>
-              <div class="amount-stack">
-                <div class="flat-price">${escapeHtml(fmtNum(item.actual))}</div>
+              <div class="rent-reveal-prices">
+                <div class="amount-col">
+                  <div class="rent-reveal-kicker">Tip</div>
+                  <div class="flat-price">${escapeHtml(fmtNum(item.guess))}</div>
+                  ${guessUnit ? `<div class="flat-m2">${escapeHtml(guessUnit)}</div>` : ""}
+                </div>
+                <div class="amount-col">
+                  <div class="rent-reveal-kicker">Nájem</div>
+                  <div class="flat-price">${escapeHtml(fmtNum(item.actual))}</div>
+                  ${actualUnit ? `<div class="flat-m2">${escapeHtml(actualUnit)}</div>` : ""}
+                </div>
                 ${ccyPill()}
                 <span class="rent-pts${low ? " is-low" : ""}">${escapeHtml(item.points)} b</span>
               </div>
@@ -247,6 +265,7 @@
       );
       const locality = roundMeta.locality_label || "Stejná lokalita";
       const vanish = vanishText(fastest?.[0], fastest?.[1] || roundMeta.vanish_label);
+      const unit = m2Spread(scored.items || []);
       board.innerHTML = `
         <div class="loc-chip">${escapeHtml(locality)}</div>
         <div class="mint-banner">
@@ -254,10 +273,15 @@
           <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. ${escapeHtml(roundMeta.copy_ok || `Nejrychlejší z těchto pěti mizí ${vanish}`)} Ve hře skóre uvidíte jen vy.</span>
         </div>
         ${rows}
+        ${infoRows([
+          ["Stejná lokalita", locality],
+          ["Kč za m²", unit],
+          ["Takové nabídky mizí", vanish],
+        ])}
         ${boardTease()}
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-again">Další kolo</button>
-          <a class="pill-ghost" href="/registrace">Hlídat podobné byty</a>
+          <a class="pill-ghost" href="/registrace">Hlídat, než zmizí</a>
         </div>
       `;
       document.getElementById("rent-again")?.addEventListener("click", () => {
