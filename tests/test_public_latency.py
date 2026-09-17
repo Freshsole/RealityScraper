@@ -22,7 +22,13 @@ from app.site_pages import (
     web_body,
     web_page,
 )
-from app.store import Store, catalog_item_needs_live_fetch, _pin_gps_grid_sql
+from app.store import (
+    LISTINGS_FTS_EXISTS_SQL,
+    Store,
+    catalog_item_needs_live_fetch,
+    listings_fts_match_query,
+    _pin_gps_grid_sql,
+)
 
 
 def test_catalog_item_skips_live_fetch_when_gallery_is_rich():
@@ -850,6 +856,125 @@ def test_map_pin_gps_grid_uses_covering_lat_lon_index(tmp_path: Path):
     assert all(item.get("lat") is not None and item.get("lon") is not None for item in pins["items"])
     # 80 rows share 40 GPS cells at 0.001°; grid must collapse them.
     assert len(pins["items"]) <= 50
+
+
+def test_catalog_q_uses_listings_fts_not_fat_like(tmp_path: Path):
+    store = Store(tmp_path / "fts-idx.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=80)
+    assert store._listings_fts is True
+    match = listings_fts_match_query("Praha")
+    assert match
+    sql = f"""
+        SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
+        WHERE {LISTINGS_FTS_EXISTS_SQL}
+        ORDER BY listings.first_seen DESC LIMIT 96
+    """
+    with store.read() as conn:
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view')")
+        }
+        plan = " ".join(
+            row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (match,))
+        )
+        count_plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM listings_fts WHERE listings_fts MATCH ?",
+                (match,),
+            )
+        )
+        like_plan = " ".join(
+            row[3]
+            for row in conn.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT COUNT(*) FROM listings
+                WHERE listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ?
+                """,
+                ("%Praha%", "%Praha%", "%Praha%"),
+            )
+        )
+    assert "listings_fts" in tables
+    assert "listings_fts" in plan
+    assert "idx_listings_first_seen" in plan
+    assert "LIKE" not in plan
+    assert "listings_fts" in count_plan
+    assert "LIKE" not in count_plan
+    assert "SCAN listings" in like_plan and "LIKE" not in count_plan
+    page = store.catalog({"q": "Praha", "limit": 12, "include_pins": "0"})
+    assert page["items"]
+    assert page["total"] >= len(page["items"])
+    pins = store.catalog(
+        {
+            "pins_only": True,
+            "south": "49.90",
+            "north": "50.25",
+            "west": "14.10",
+            "east": "14.75",
+        }
+    )
+    assert pins["items"]
+    with store.read() as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(listings)")}
+    assert "idx_listings_pin_cover" in indexes
+
+
+def test_catalog_q_fts_city_disposition_diacritics_and_upsert(tmp_path: Path):
+    from app.sreality import Listing
+
+    store = Store(tmp_path / "fts-sem.sqlite")
+
+    def item(i: int, *, name: str, locality: str, disposition: str) -> Listing:
+        return Listing(
+            id=50_000 + i,
+            name=name,
+            price_czk=18_000,
+            price_label="18000 Kč/měsíc",
+            disposition=disposition,
+            area_m2=50,
+            locality=locality,
+            url=f"https://www.sreality.cz/detail/pronajem/byt/{disposition}/mesto/{50_000 + i}",
+            image_url=f"https://img.example/fts-{i}.jpg",
+            lat=50.08,
+            lon=14.42,
+            extras={"offer": "Pronájem", "estate": "Byt", "portal": "sreality"},
+        )
+
+    store.upsert_catalog_listings_batch(
+        [
+            item(1, name="Pronájem bytu 2+kk", locality="Praha 7 – Holešovice", disposition="2+kk"),
+            item(2, name="Prodej domu 5+kk", locality="Brno-střed", disposition="5+kk"),
+            item(3, name="Ateliér 1+kk", locality="Ostrava", disposition="1+kk"),
+        ],
+        kind="seeded",
+        fast=True,
+    )
+    _flush_hot_json(store)
+    praha = store.catalog({"q": "Praha", "limit": 12, "include_pins": "0"})
+    assert [row["locality"] for row in praha["items"]] == ["Praha 7 – Holešovice"]
+    holes = store.catalog({"q": "Holesovice", "limit": 12, "include_pins": "0"})
+    assert holes["items"] and "Holešovice" in holes["items"][0]["locality"]
+    prefix = store.catalog({"q": "Holešov", "limit": 12, "include_pins": "0"})
+    assert prefix["items"] and "Holešovice" in prefix["items"][0]["locality"]
+    kk = store.catalog({"q": "2+kk", "limit": 12, "include_pins": "0"})
+    assert kk["items"] and all(
+        row["disposition"] == "2+kk" or "2+kk" in (row["name"] or "") for row in kk["items"]
+    )
+    interior = store.catalog({"q": "rah", "limit": 12, "include_pins": "0"})
+    assert interior["items"] == []
+
+    store.upsert_catalog_listings_batch(
+        [item(2, name="Prodej domu 5+kk", locality="Praha 2", disposition="5+kk")],
+        kind="refresh",
+        fast=True,
+    )
+    _flush_hot_json(store)
+    moved = store.catalog({"q": "Praha", "limit": 12, "include_pins": "0"})
+    localities = {row["locality"] for row in moved["items"]}
+    assert "Praha 2" in localities
+    assert "Praha 7 – Holešovice" in localities
+    gone_brno = store.catalog({"q": "Brno", "limit": 12, "include_pins": "0"})
+    assert gone_brno["items"] == []
 
 
 def test_catalog_hidden_filter_stays_off_until_listing_user_exists(tmp_path: Path):

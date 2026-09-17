@@ -445,6 +445,34 @@ def _or_likes(where: list[str], params: list[Any], column: str, patterns: list[s
     params.extend(patterns)
 
 
+# Catalog q= uses FTS5 on name/locality/disposition only (no extras/description blobs).
+# Token/prefix match, diacritics folded. Narrower than LIKE %q% for interior substrings.
+LISTINGS_FTS_EXISTS_SQL = (
+    "EXISTS (SELECT 1 FROM listings_fts "
+    "WHERE listings_fts.rowid = listings.rowid AND listings_fts MATCH ?)"
+)
+_FTS_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def listings_fts_match_query(query: str) -> str | None:
+    """Build an FTS5 MATCH string for catalog q=.
+
+    Tokens are AND'd. Length ≥3 gets a prefix (`Praha*` / `Holešov*`); shorter
+    tokens stay exact so `2+kk` is `2 AND kk` rather than `2*`. Special FTS
+    characters are stripped by the tokenizer, not passed through to MATCH.
+    """
+    parts: list[str] = []
+    for tok in _FTS_TOKEN_RE.findall(query or ""):
+        safe = tok.replace('"', "")
+        if not safe:
+            continue
+        if len(safe) < 3:
+            parts.append(f'"{safe}"')
+        else:
+            parts.append(f'"{safe}"*')
+    return " AND ".join(parts) if parts else None
+
+
 def _tri_state(where: list[str], params: list[Any], value: str, clauses: list[str], clause_params: list[Any]) -> None:
     if value not in {"s", "bez"} or not clauses:
         return
@@ -632,6 +660,7 @@ class Store:
         self._landing_preview_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._hot_json_cache: dict[str, tuple[float, Any]] = {}
         self._listing_user_status_cache: dict[str, bool] = {}
+        self._listings_fts = False
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._init()
@@ -4162,6 +4191,60 @@ class Store:
         )
         self._unify_listing_identities(conn)
         self._rekey_idnes_listing_ids(conn)
+        self._ensure_listings_fts(conn)
+
+    def _ensure_listings_fts(self, conn: sqlite3.Connection) -> None:
+        """External-content FTS5 on title/locality/disposition; skip blob columns.
+
+        Triggers ignore thin last_seen/price refreshes so the scrape writer does
+        not rewrite the search index on every upsert.
+        """
+        self._listings_fts = False
+        try:
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS listings_fts USING fts5(
+                    name,
+                    locality,
+                    disposition,
+                    content='listings',
+                    content_rowid='rowid',
+                    tokenize='unicode61 remove_diacritics 2'
+                )
+                """
+            )
+        except sqlite3.OperationalError:
+            return
+        conn.executescript(
+            """
+            DROP TRIGGER IF EXISTS listings_fts_ai;
+            DROP TRIGGER IF EXISTS listings_fts_ad;
+            DROP TRIGGER IF EXISTS listings_fts_au;
+            CREATE TRIGGER listings_fts_ai AFTER INSERT ON listings BEGIN
+              INSERT INTO listings_fts(rowid, name, locality, disposition)
+              VALUES (new.rowid, new.name, new.locality, new.disposition);
+            END;
+            CREATE TRIGGER listings_fts_ad AFTER DELETE ON listings BEGIN
+              INSERT INTO listings_fts(listings_fts, rowid, name, locality, disposition)
+              VALUES ('delete', old.rowid, old.name, old.locality, old.disposition);
+            END;
+            CREATE TRIGGER listings_fts_au AFTER UPDATE ON listings
+            WHEN IFNULL(old.name, '') != IFNULL(new.name, '')
+              OR IFNULL(old.locality, '') != IFNULL(new.locality, '')
+              OR IFNULL(old.disposition, '') != IFNULL(new.disposition, '')
+            BEGIN
+              INSERT INTO listings_fts(listings_fts, rowid, name, locality, disposition)
+              VALUES ('delete', old.rowid, old.name, old.locality, old.disposition);
+              INSERT INTO listings_fts(rowid, name, locality, disposition)
+              VALUES (new.rowid, new.name, new.locality, new.disposition);
+            END;
+            """
+        )
+        has_listing = conn.execute("SELECT 1 FROM listings LIMIT 1").fetchone()
+        has_fts = conn.execute("SELECT 1 FROM listings_fts LIMIT 1").fetchone()
+        if has_listing and not has_fts:
+            conn.execute("INSERT INTO listings_fts(listings_fts) VALUES ('rebuild')")
+        self._listings_fts = True
 
     def _rekey_idnes_listing_ids(self, conn: sqlite3.Connection) -> None:
         if conn.execute("SELECT 1 FROM meta WHERE key = 'idnes_ids_js_safe'").fetchone():
@@ -4489,6 +4572,7 @@ class Store:
             where.append(_monitor_hit_sql())
             params.append(monitor_id)
         query = (filters.get("q") or "").strip()
+        fts_match: str | None = None
         place_geoms = [item for item in (filters.get("place_geoms") or []) if isinstance(item, dict)]
         if filters.get("place_empty") and not place_geoms:
             if filters.get("pins_only"):
@@ -4497,11 +4581,16 @@ class Store:
             offset = max(int(filters.get("offset") or 0), 0)
             return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets()}
         if query and not place_geoms:
-            where.append(
-                "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ?)"
-            )
-            like = f"%{query}%"
-            params.extend([like, like, like])
+            fts_match = listings_fts_match_query(query) if self._listings_fts else None
+            if fts_match:
+                where.append(LISTINGS_FTS_EXISTS_SQL)
+                params.append(fts_match)
+            else:
+                where.append(
+                    "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ?)"
+                )
+                like = f"%{query}%"
+                params.extend([like, like, like])
         disposition = filters.get("disposition") or []
         if isinstance(disposition, str):
             disposition = [item for item in disposition.split(",") if item]
@@ -4809,6 +4898,7 @@ class Store:
         limit = min(max(int(filters.get("limit") or 36), 1), 120)
         offset = max(int(filters.get("offset") or 0), 0)
         clause = " AND ".join(where)
+        fts_q_only = bool(fts_match) and where == ["1=1", LISTINGS_FTS_EXISTS_SQL]
         identity = listing_identity_sql()
         if place_geoms:
             light_sql = f"""
@@ -4853,9 +4943,12 @@ class Store:
                 rows = [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
         else:
             fetch_limit = min((offset + limit) * 4, 2000)
+            from_listings = "listings"
+            if fts_q_only and "listings.first_seen" in order:
+                from_listings = "listings INDEXED BY idx_listings_first_seen"
             sql = f"""
                 SELECT {_LISTING_LIGHT_COLS}
-                FROM listings
+                FROM {from_listings}
                 WHERE {clause}
                 ORDER BY {order}
                 LIMIT ?
@@ -4867,9 +4960,17 @@ class Store:
                 fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
                 if not skip_count:
                     try:
-                        total = int(
-                            conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
-                        )
+                        if fts_q_only and fts_match:
+                            total = int(
+                                conn.execute(
+                                    "SELECT COUNT(*) FROM listings_fts WHERE listings_fts MATCH ?",
+                                    (fts_match,),
+                                ).fetchone()[0]
+                            )
+                        else:
+                            total = int(
+                                conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
+                            )
                     except sqlite3.OperationalError:
                         total = None
             seen_keys = set()

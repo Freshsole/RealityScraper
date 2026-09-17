@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.sreality import Listing
-from app.store import Store
+from app.store import LISTINGS_FTS_EXISTS_SQL, Store, listings_fts_match_query
 
 
 def _listing(i: int, *, blob: str) -> Listing:
@@ -156,19 +156,29 @@ def _seed(store: Store, n: int, blob_bytes: int) -> None:
 
 
 def _plans(store: Store) -> None:
+    praha = listings_fts_match_query("Praha") or "Praha"
     queries = {
-        "catalog-newest": """
-            SELECT listings.* FROM listings
+        "catalog-newest": (
+            """
+            SELECT listings.id FROM listings
             ORDER BY listings.first_seen DESC LIMIT 96
-        """,
-        "catalog-q-praha": """
-            SELECT listings.* FROM listings
-            WHERE listings.name LIKE '%Praha%' OR listings.locality LIKE '%Praha%'
-               OR listings.disposition LIKE '%Praha%'
-               OR IFNULL(listings.description, '') LIKE '%Praha%'
+            """,
+            (),
+        ),
+        "catalog-q-praha": (
+            f"""
+            SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
+            WHERE {LISTINGS_FTS_EXISTS_SQL}
             ORDER BY listings.first_seen DESC LIMIT 96
-        """,
-        "pins-bbox": """
+            """,
+            (praha,),
+        ),
+        "catalog-q-count": (
+            "SELECT COUNT(*) FROM listings_fts WHERE listings_fts MATCH ?",
+            (praha,),
+        ),
+        "pins-bbox": (
+            """
             SELECT ROUND(src.lat, 3) AS lat, ROUND(src.lon, 3) AS lon, COUNT(*) AS n
             FROM (
                 SELECT listings.lat, listings.lon, listings.listing_key
@@ -179,31 +189,42 @@ def _plans(store: Store) -> None:
                 GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)
             ) src
             GROUP BY ROUND(src.lat, 3), ROUND(src.lon, 3)
-        """,
-        "item-url": """
+            """,
+            (),
+        ),
+        "item-url": (
+            """
             SELECT listings.id FROM listings
             WHERE listings.url = ?
             ORDER BY listings.last_seen DESC LIMIT 1
-        """,
-        "listings-notified": """
-            SELECT listings.* FROM listings
+            """,
+            ("https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/80000",),
+        ),
+        "listings-notified": (
+            """
+            SELECT listings.id FROM listings
             WHERE listings.notified = 1
             ORDER BY listings.first_seen DESC LIMIT 96
-        """,
-        "watch-counts": """
-            SELECT monitor_id, COUNT(*) FROM listings GROUP BY monitor_id
-        """,
+            """,
+            (),
+        ),
+        "watch-counts": (
+            "SELECT monitor_id, COUNT(*) FROM listings GROUP BY monitor_id",
+            (),
+        ),
     }
-    url = "https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/80000"
     with store.read() as conn:
         print("EXPLAIN QUERY PLAN")
-        for name, sql in queries.items():
+        for name, (sql, params) in queries.items():
             print(f"  {name}")
-            params = (url,) if name == "item-url" else ()
             for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params):
                 print("   ", tuple(row))
         indexes = sorted(row[1] for row in conn.execute("PRAGMA index_list(listings)"))
         print("  listings indexes:", ", ".join(indexes))
+        fts = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='listings_fts'"
+        ).fetchone()
+        print("  listings_fts:", "yes" if fts else "no")
 
 
 def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
