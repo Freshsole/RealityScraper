@@ -20,10 +20,11 @@
   const ccyPill = () =>
     `<span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>`;
 
+  const TYPICAL_VANISH = "v řádu hodin";
   const vanishText = (hours, fallback) => {
     if (fallback) return fallback;
     const value = Number(hours || 0);
-    if (!value) return "v řádu minut";
+    if (!value) return TYPICAL_VANISH;
     if (value < 1) return `za ${Math.max(8, Math.round(value * 60))} min`;
     if (value < 24) return `za ${String(value.toFixed(1)).replace(".", ",")} h`;
     return `za ${Math.round(value)} h`;
@@ -143,6 +144,7 @@
     const nameInput = document.getElementById("player-name");
     let items = [];
     let index = 0;
+    let roundMeta = {};
     const guesses = [];
 
     const renderScore = () => {
@@ -191,16 +193,18 @@
         Number(item.vanish_hours) || 8,
         item.vanish_label || "",
       ]);
-      const observed = vanishRows.filter(([, label]) => label && label !== "v řádu hodin");
+      const observed = vanishRows.filter(([, label]) => label && label !== TYPICAL_VANISH);
       const fastest = (observed.length ? observed : vanishRows).reduce(
         (best, row) => (!best || row[0] < best[0] ? row : best),
         null,
       );
+      const locality = roundMeta.locality_label || "Stejná lokalita";
+      const vanish = vanishText(fastest?.[0], fastest?.[1] || roundMeta.vanish_label);
       board.innerHTML = `
-        <div class="loc-chip">Žebříček u admina</div>
+        <div class="loc-chip">${escapeHtml(locality)}</div>
         <div class="mint-banner">
           <strong>Skóre ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</strong>
-          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Nejrychlejší z těchto pěti mizí ${escapeHtml(vanishText(fastest?.[0], fastest?.[1]))} — žebříček uvidí jen admin.</span>
+          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. ${escapeHtml(roundMeta.copy_ok || `Nejrychlejší z těchto pěti mizí ${vanish}`)} — žebříček uvidí jen admin.</span>
         </div>
         ${rows}
         <div class="converter-actions">
@@ -244,8 +248,10 @@
       }
       renderScore();
       board.removeAttribute("aria-busy");
+      const locality = roundMeta.locality_label || item.locality || item.name || "Stejná lokalita";
+      const vanish = vanishText(item.vanish_hours, item.vanish_label || roundMeta.vanish_label);
       board.innerHTML = `
-        <div class="loc-chip">${escapeHtml(item.locality || item.name || "Byt")}</div>
+        <div class="loc-chip">${escapeHtml(locality)}</div>
         <img class="rent-hero-img" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="504" height="180" alt="" decoding="async" fetchpriority="high" />
         <div class="flat-meta" style="margin-bottom:16px">
           <div class="spec">${escapeHtml(specText(item))}</div>
@@ -257,13 +263,13 @@
         </label>
         <p class="rent-unit">Kč / měsíc</p>
         ${infoRows([
-          ["Lokalita", item.locality || item.name || "Byt"],
+          ["Stejná lokalita", locality],
           ["Portál", item.portal_label || ""],
-          ["Takové nabídky mizí", vanishText(item.vanish_hours, item.vanish_label)],
+          ["Takové nabídky mizí", vanish],
         ])}
         <div class="mint-banner">
           <strong>Tipněte měsíční nájem v Kč.</strong>
-          <span>Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${escapeHtml(vanishText(item.vanish_hours, item.vanish_label))}.</span>
+          <span>${escapeHtml(roundMeta.copy || `Čím blíž, tím víc bodů. Dobré ceny v této lokalitě mizí ${vanish}.`)}</span>
         </div>
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-next">${index + 1 >= items.length ? "Odeslat tipy" : "Další byt"}</button>
@@ -307,6 +313,7 @@
       const res = await fetch("/api/public/games/rent-round");
       const data = await res.json();
       items = data.items || [];
+      roundMeta = data;
       if (items.length < 1) {
         fail("Hru se teď nepodařilo načíst. Zkuste to za chvíli.");
         return;

@@ -208,6 +208,9 @@ def test_hry_html_bypasses_blocked_inner_app():
                 assert payload["cheaper"] in {"left", "right"}
             else:
                 assert len(payload["items"]) == 5
+                assert len({item.get("pair_key") for item in payload["items"]}) == 1
+                assert payload.get("pair_key")
+                assert "v řádu minut" not in (payload.get("vanish_label") or "")
         assert hit["n"] == 0
 
     asyncio.run(run())
@@ -490,6 +493,7 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
                     assert payload["left"]["locality_key"] == payload["right"]["locality_key"]
                 else:
                     assert payload["items"]
+                    assert len({item.get("pair_key") for item in payload["items"]}) == 1
             t0 = time.perf_counter()
             status, _headers, body = await _asgi_post(
                 app,
