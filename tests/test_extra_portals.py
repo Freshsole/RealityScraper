@@ -90,7 +90,16 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
-        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/Ceska-republika/"))
+        rent = realitycz_url.build_url({"offers": ["pronajem"]})
+        self.assertIn("/pronajem/byty/Ceska-republika/", rent)
+        self.assertIn("s=2", rent)
+        houses = realitycz_url.build_url({"offers": ["pronajem"], "category": "domy"})
+        self.assertIn("/pronajem/domy/Ceska-republika/", houses)
+        self.assertIn("s=2", houses)
+        self.assertEqual(
+            realitycz_url.parse_url("https://www.reality.cz/pronajem/domy/Ceska-republika/?s=2")["category"],
+            "domy",
+        )
         self.assertIn("/pronajem/byty/nejnovejsi/", ceskereality_url.build_url({"offers": ["pronajem"]}))
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
@@ -156,6 +165,62 @@ class ExtraPortalTests(unittest.TestCase):
         client = RealityczClient("https://www.reality.cz/pronajem/byty/")
         self.assertEqual(client._parse_list("Probíhá údržba serveru"), [])
 
+    def test_realitycz_fetch_page_uses_html_gps_not_photon(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        import httpx
+
+        from app.places import approx_point_from_locality
+
+        html = (FIXTURES / "realitycz_vypis.html").read_text()
+        geocode = AsyncMock(side_effect=AssertionError("list fetch must not hit Nominatim/Photon"))
+        hits: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            hits.append(str(request.url))
+            return httpx.Response(200, text=html)
+
+        async def _run() -> None:
+            client = RealityczClient("https://www.reality.cz/pronajem/byty/Ceska-republika/")
+            await client.aclose()
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+            try:
+                with patch("app.places.geocode_locality", geocode), patch(
+                    "app.places.geocode_locality_sync",
+                    side_effect=AssertionError("list fetch must not geocode"),
+                ):
+                    listings, total = await client.fetch_page(1, newest=True)
+            finally:
+                await client.aclose()
+            self.assertGreaterEqual(len(listings), 6)
+            self.assertEqual(total, 841)
+            geocode.assert_not_called()
+            self.assertTrue(any("s=2" in url for url in hits))
+            by_code = {item.advert_code: item for item in listings}
+            self.assertEqual((by_code["L00-006971"].lat, by_code["L00-006971"].lon), (49.329672, 18.003328))
+            hamry = approx_point_from_locality("Velké Hamry")
+            if hamry:
+                self.assertEqual((by_code["AUZ-N09768"].lat, by_code["AUZ-N09768"].lon), hamry)
+
+        asyncio.run(_run())
+
+    def test_bezrealitky_page_size_matches_peers(self):
+        from app.bezrealitky import PAGE_SIZE, BezrealitkyClient
+
+        self.assertEqual(PAGE_SIZE, 20)
+        client = BezrealitkyClient(
+            "https://www.bezrealitky.cz/vyhledat?offerType=PRONAJEM&estateType=BYT&order=TIMEORDER_DESC"
+        )
+        try:
+            self.assertIn("limit: 20", client._args(1))
+            self.assertIn("offset: 0", client._args(1))
+            self.assertIn("offset: 20", client._args(2))
+        finally:
+            import asyncio
+
+            asyncio.run(client.aclose())
+
     def test_ulovdomov_next_data_and_json(self):
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
         items = client._parse_list(ULOV_HTML)
@@ -184,11 +249,33 @@ class ExtraPortalTests(unittest.TestCase):
         client = RealityczClient("https://www.reality.cz/pronajem/byty/Ceska-republika/")
         vypis = client._parse_list((FIXTURES / "realitycz_vypis.html").read_text())
         novinky = client._parse_list((FIXTURES / "realitycz_novinky.html").read_text())
-        self.assertGreaterEqual(len(vypis), 2, vypis)
+        self.assertGreaterEqual(len(vypis), 6, [item.advert_code for item in vypis])
         self.assertTrue(any(item.advert_code == "DMQ-003729" for item in vypis))
         self.assertTrue(any("Troja" in f"{item.locality} {item.name}" for item in vypis))
+        by_code = {item.advert_code: item for item in vypis}
+        self.assertEqual(by_code["L00-006971"].locality, "Vsetín")
+        self.assertEqual(by_code["L00-006971"].lat, 49.329672)
+        self.assertEqual(by_code["L00-006971"].lon, 18.003328)
+        self.assertEqual(by_code["AUZ-N09768"].locality, "Velké Hamry")
+        self.assertEqual(by_code["AUZ-N09767"].locality, "Vítkovice")
+        self.assertIsNotNone(by_code["AUZ-N09767"].lat)
+        self.assertEqual(by_code["EXN-HSZJIV"].advert_code, "EXN-HSZJIV")
+        self.assertTrue(by_code["EXN-HSZJIV"].price_czk)
+        self.assertTrue(by_code["EXN-HSZJIV"].image_url)
+        self.assertIn("/thumb/", by_code["DMQ-003729"].image_url or "")
+        self.assertNotIn("makler", (by_code["DMQ-003729"].image_url or "").casefold())
+        self.assertEqual(by_code["DMQ-003729"].disposition, "2+kk")
+        self.assertEqual(by_code["DMQ-003729"].area_m2, 50)
+        self.assertEqual(client._parse_total((FIXTURES / "realitycz_vypis.html").read_text()), 841)
         self.assertGreaterEqual(len(novinky), 2)
         self.assertTrue(all(item.url.startswith("https://www.reality.cz/") for item in vypis + novinky))
+        self.assertIn("s=2", client._page_url(1, newest=True))
+        self.assertIn("g=1-2", client._page_url(2, newest=True))
+        self.assertNotIn("strana", client._page_url(2, newest=True))
+        self.assertEqual(
+            client._parse_total("Příliš široká kriteria výběru, zobrazuji prvních 1.000 nabídek."),
+            1000,
+        )
 
     def test_mmreality_jsonld_and_cloudflare_not_listings(self):
         client = MmrealityClient("https://www.mmreality.cz/nemovitosti/?typ-nabidky=pronajem")
@@ -315,7 +402,7 @@ class ExtraPortalTests(unittest.TestCase):
             "realitycz_vypis": {"before": 0, "after": len(rcz)},
         }
         self.assertGreaterEqual(report["ceskereality_cards"]["after"], 2)
-        self.assertGreaterEqual(report["realitycz_vypis"]["after"], 2)
+        self.assertGreaterEqual(report["realitycz_vypis"]["after"], 6)
         self.assertTrue(all("nemovitosti" in item.url or item.url.endswith(".html") for item in ceske))
         self.assertTrue(all(item.id in {2432970, 3895290} for item in ceske))
 
