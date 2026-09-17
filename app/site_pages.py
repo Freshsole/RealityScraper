@@ -77,10 +77,12 @@ _ASSET_TYPES = {
 }
 INSTANT_ASSET_FILES = (
     "site/site.css",
+    "site/site.js",
     "site/games.css",
     "site/games.js",
     "site/auth.css",
     "site/auth.js",
+    "t.js",
     "site/assets/logo.svg",
     "site/fonts/archivo-black-latin.woff2",
     "site/fonts/archivo-black-latin-ext.woff2",

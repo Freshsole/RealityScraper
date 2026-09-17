@@ -195,9 +195,12 @@ def test_hry_html_bypasses_blocked_inner_app():
 
         css = site_asset("site/games.css")[0]
         site_css = site_asset("site/site.css")[0]
+        site_js = site_asset("site/site.js")[0]
         for path, needle in (
             ("/static/site/games.css", b"@font-face"),
             ("/static/site/site.css", b"@font-face"),
+            ("/static/site/site.js", b"sold-cards"),
+            ("/static/t.js", b"/api/t"),
             ("/static/site/games.js", b"[^\\d]"),
             ("/static/site/fonts/archivo-black-latin.woff2", b"wOF2"),
             ("/static/site/assets/hero-apart.webp", b"WEBP"),
@@ -212,6 +215,8 @@ def test_hry_html_bypasses_blocked_inner_app():
             assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
         assert css == site_asset("site/games.css")[0]
         assert site_css == site_asset("site/site.css")[0]
+        assert site_js == site_asset("site/site.js")[0]
+        assert b"/api/t" in site_asset("t.js")[0]
 
         for path in ("/api/public/games/higher-lower", "/api/public/games/rent-round"):
             t0 = time.perf_counter()
@@ -905,6 +910,8 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
         "/static/site/fonts/archivo-black-latin.woff2",
         "/static/site/auth.css",
         "/static/site/site.css",
+        "/static/site/site.js",
+        "/static/t.js",
         "/static/styles.css",
         "/static/admin/admin.css",
     )
@@ -1155,6 +1162,174 @@ def test_hry_instant_path_stays_fast_under_sqlite_exclusive_lock(tmp_path: Path)
         locker.rollback()
         locker.close()
         reset_pool_cache()
+
+
+def test_home_auth_dashboard_ttfb_cold_warm_under_scrape_writer(tmp_path: Path):
+    """Dedicated InstantSite homepage/auth/dashboard audit vs scrape writer."""
+    reset_pool_cache()
+    store = Store(tmp_path / "home-ttfb.sqlite")
+    seed = [_hry_ttfb_listing(i) for i in range(240)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=40, fast=True)
+    stop = threading.Event()
+    hit = {"n": 0}
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_hry_ttfb_listing(800 + (n + k) % 80) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            if n % 3 == 0:
+                store.record_scrape_tick({"kind": "new_discovery", "n": n, "role": "all"})
+            n += 1
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    html_paths = ("/", "/prihlaseni", "/registrace", "/prehled", "/admin")
+    asset_paths = (
+        "/static/site/site.css",
+        "/static/site/site.js",
+        "/static/site/auth.css",
+        "/static/t.js",
+        "/static/styles.css",
+        "/static/admin/admin.css",
+    )
+    session = [(b"cookie", b"realitify_session=test-token")]
+    needles = {
+        "/": "NEJLEPŠÍ BYTY ZMIZÍ".encode(),
+        "/prihlaseni": "PŘIHLÁŠENÍ".encode(),
+        "/registrace": "VYTVOŘTE SI ÚČET".encode(),
+        "/prehled": b'id="view-overview"',
+        "/admin": "ADMIN PŘIHLÁŠENÍ".encode(),
+    }
+    cold: dict[str, float] = {}
+    warm: dict[str, list[float]] = {
+        path: [] for path in (*html_paths, *asset_paths, "/prehled unauth")
+    }
+
+    thread = threading.Thread(target=writer, name="rf-home-ttfb", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        for path in html_paths:
+            headers = session if path in {"/prehled", "/admin"} else None
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path, headers=headers)
+            cold[path] = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert needles[path] in body
+            assert b"fonts.googleapis" not in body
+        t0 = time.perf_counter()
+        status, headers, body = await _asgi_get(app, "/prehled")
+        cold["/prehled unauth"] = (time.perf_counter() - t0) * 1000
+        assert status == 303
+        assert headers[b"location"] == b"/prihlaseni"
+        assert body == b""
+        for path in asset_paths:
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path)
+            cold[path] = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert body
+        for _ in range(12):
+            for path in html_paths:
+                req_headers = session if path in {"/prehled", "/admin"} else None
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path, headers=req_headers)
+                warm[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+            t0 = time.perf_counter()
+            status, headers, body = await _asgi_get(app, "/prehled")
+            warm["/prehled unauth"].append((time.perf_counter() - t0) * 1000)
+            assert status == 303
+            assert headers[b"location"] == b"/prihlaseni"
+            for path in asset_paths:
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                warm[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+
+    try:
+        asyncio.run(run())
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+        reset_pool_cache()
+
+    assert hit["n"] == 0
+    report = []
+    for path in (*html_paths, "/prehled unauth", *asset_paths):
+        values = warm[path]
+        p50 = _percentile(values, 0.50)
+        p95 = _percentile(values, 0.95)
+        report.append(
+            f"{path} cold={cold[path]:.2f}ms warm_n={len(values)} warm_p50={p50:.2f}ms warm_p95={p95:.2f}ms"
+        )
+        assert cold[path] < 8, f"{path} cold {cold[path]:.1f}ms"
+        assert p50 < 1, f"{path} warm p50 {p50:.1f}ms {values}"
+        assert p95 < 4, f"{path} warm p95 {p95:.1f}ms {values}"
+    print("home/auth/dashboard TTFB cold/warm under scrape:\n  " + "\n  ".join(report))
+
+
+def test_home_auth_dashboard_instant_path_stays_fast_under_sqlite_exclusive_lock(tmp_path: Path):
+    store = Store(tmp_path / "home-lock.sqlite")
+    store.upsert_catalog_listings_batch(
+        [_hry_ttfb_listing(i) for i in range(40)], kind="seeded", commit_every=20, fast=True
+    )
+    locker = sqlite3.connect(store.path, timeout=30)
+    locker.execute("PRAGMA busy_timeout=30000")
+    locker.execute("BEGIN EXCLUSIVE")
+    locker.execute("UPDATE meta SET value = value")
+    hit = {"n": 0}
+    session = [(b"cookie", b"realitify_session=test-token")]
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        report = []
+        checks = (
+            ("/", None),
+            ("/prihlaseni", None),
+            ("/registrace", None),
+            ("/prehled", session),
+            ("/admin", session),
+            ("/prehled", None),
+            ("/static/site/site.js", None),
+            ("/static/t.js", None),
+        )
+        for path, headers in checks:
+            t0 = time.perf_counter()
+            status, resp_headers, body = await _asgi_get(app, path, headers=headers)
+            ms = (time.perf_counter() - t0) * 1000
+            label = "/prehled unauth" if path == "/prehled" and headers is None else path
+            report.append(f"{label} {ms:.2f}ms")
+            if path == "/prehled" and headers is None:
+                assert status == 303
+                assert resp_headers[b"location"] == b"/prihlaseni"
+            else:
+                assert status == 200, path
+                assert body
+            assert ms < 40, f"{label} under exclusive lock {ms:.1f}ms"
+        print("home InstantSite under exclusive lock:\n  " + "\n  ".join(report))
+        assert hit["n"] == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        locker.rollback()
+        locker.close()
 
 
 def test_rent_score_stays_fast_when_writer_locks_sqlite(tmp_path: Path):
