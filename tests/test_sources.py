@@ -79,6 +79,15 @@ def test_recent_shards_cover_all_portals():
     }
     assert all("/pronajmu/" in item["search_url"] or "/prodam/" in item["search_url"] for item in bazos)
     assert all("/byty/" not in item["search_url"] and "/domy/" not in item["search_url"] for item in bazos)
+    idnes = [item for item in extra if item["portal"] == "idnes"]
+    assert {item["shard_key"] for item in idnes} >= {
+        "idnes:recent:pronajem:byty",
+        "idnes:recent:prodej:byty",
+        "idnes:recent:pronajem:domy",
+        "idnes:recent:prodej:domy",
+    }
+    assert any("/s/pronajem/domy/" in item["search_url"] for item in idnes)
+    assert all("/dum/" not in item["search_url"] for item in idnes)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

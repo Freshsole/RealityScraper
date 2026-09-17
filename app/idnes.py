@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+from app import idnes_url
 from app.sreality import Listing, ListingGone, format_price
 
 SITE = "https://reality.idnes.cz"
@@ -256,15 +257,7 @@ class IdnesClient:
         return match.group(1) if match else html
 
     def _page_url(self, page: int, newest: bool) -> str:
-        split = urlsplit(self.search_url)
-        query = dict(parse_qsl(split.query, keep_blank_values=True))
-        if newest:
-            query.pop("sort", None)
-        if page <= 1:
-            query.pop("page", None)
-        else:
-            query["page"] = str(page - 1)
-        return urlunsplit((split.scheme or "https", split.netloc or "reality.idnes.cz", split.path, urlencode(query, safe="[]|"), ""))
+        return idnes_url.page_url(self.search_url, page, newest)
 
     def _parse_total(self, html: str) -> int:
         match = COUNT_RE.search(html.replace("\xa0", " "))
