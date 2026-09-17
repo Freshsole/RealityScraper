@@ -356,7 +356,8 @@ def recent_shards() -> list[dict[str, str]]:
     return sreality_recent_shards() + extra_portal_recent_shards()
 
 
-# Portals that already return list cards from this app's parsers (not M&M / proxy follow-up).
+# Portals that already return list cards from this app's parsers.
+# M&M stays out of the healthy set until a live residential proxy actually yields cards.
 HEALTHY_DISCOVERY_PORTALS = frozenset(
     {
         "sreality",

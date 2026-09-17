@@ -13,8 +13,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.block_page import classify_block
-from app.ulovdomov import UlovdomovClient, needs_hydrate, reset_ulov_caches
 from app.mmreality import MmrealityClient
+from app.scrape_proxy import redacted, url_for as scrape_proxy_url_for
+from app.ulovdomov import UlovdomovClient, needs_hydrate, reset_ulov_caches
 
 
 async def measure_ulov() -> dict:
@@ -79,6 +80,7 @@ async def measure_mm() -> dict:
         ms = (time.perf_counter() - started) * 1000
         raw = await client._client.get(url)
         signal = classify_block(raw.status_code, raw.text, raw.headers)
+        proxy = scrape_proxy_url_for("mmreality") or client._proxy_url
         return {
             "portal": "mmreality",
             "listings": len(listings),
@@ -87,6 +89,7 @@ async def measure_mm() -> dict:
             "http_status": raw.status_code,
             "cf_kind": getattr(signal, "kind", None),
             "cf_detail": getattr(signal, "detail", None),
+            "proxy": redacted(proxy) if proxy else "",
             "page1_ms": round(ms, 1),
         }
     finally:

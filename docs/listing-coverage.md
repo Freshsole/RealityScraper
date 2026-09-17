@@ -36,11 +36,11 @@ Live hydrate of the same page-1 rent cards (this agent, 2026-09-16):
 
 Sample after detail: Olomouc 2+kk 17 900 Kč, Praha-Komořany 18 500 Kč, Sokolov 1+1 7 500 Kč — all with photos. One card had photos but no numeric rent (not invented). Sitemap list yield stayed 20/3295.
 
-Limit: M&M still has no listings from this datacenter IP. Residential-proxy follow-up unchanged.
+Limit: M&M still has no listings from this datacenter IP without a live residential proxy. Worker-only `SCRAPE_HTTP_PROXY` plumbing is in this slice (mocked tests; live yield only if a proxy is actually configured).
 
 ## Healthy-portal NewDiscovery throughput
 
-Goal: more freshest listings/min from portals that already return cards (Sreality, iDNES, Bazoš, Bezrealitky, Annonce, RE/MAX, ČeskéReality, Reality.cz, Ulov sitemap+hydrate). InstantSiteASGI `/hry*`, WAL stale readers, live-catalog games, and worker-only Ulov hydrate are unchanged. No M&M residential proxy in this slice.
+Goal: more freshest listings/min from portals that already return cards (Sreality, iDNES, Bazoš, Bezrealitky, Annonce, RE/MAX, ČeskéReality, Reality.cz, Ulov sitemap+hydrate). InstantSiteASGI `/hry*`, WAL stale readers, live-catalog games, and worker-only Ulov hydrate are unchanged. M&M list fetch may use opt-in `SCRAPE_HTTP_PROXY` on the worker; without a proxy it stays 0 cards + cooldown.
 
 Shipped:
 
@@ -51,7 +51,7 @@ Shipped:
 - Rolling deep yields while NewDiscovery is in-flight (limiter priority was not enough for work already started).
 - Catalog upsert busy: keep fetched listings in `_pending_discovery` for the next tick instead of dropping them.
 
-Measure: `scripts/measure_discovery_tick.py` (synthetic held-gate vs page-1-across; `--live` for healthy page-1 probes). M&M proxy remain the documented follow-up below.
+Measure: `scripts/measure_discovery_tick.py` (synthetic held-gate vs page-1-across; `--live` for healthy page-1 probes). M&M proxy enablement is documented below.
 
 Synthetic 42-shard minute (16 conc, extras 300 ms / Sreality 40 ms, 4 pages, **0.7 s** deadline — the contention case when deep/HTML eats the gate):
 
@@ -91,7 +91,7 @@ After this branch (Annonce parser + `nabidkovy=1` + local city pins, same 12 s c
 | Annonce houses | **24** | **24** | 0.3 s | new newest shard; 24/24 locality, 22/24 price, 24/24 city pins |
 | Annonce bare `/byty-k-pronajmu.html` | **19** | 19 | 0.3 s | one `Poptávka` skipped |
 
-iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Annonce no longer skips every other slideshow card, defaults to offer-only list URLs, paginates with `?page=`, and HTML list clients pin local city centers (no Photon on page-1). Catalog writes still clear `_city_pin_cache` and now also drop landing / new-today snapshots; `_hot_json_cache` stays as the WAL-busy fallback. Synthetic page-1-across with two extra Annonce house shards: **21→44** page-1 shards / **900→2200** listings under a 0.7 s contention deadline (was 42/2100 before the house shards). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged. No M&M residential proxy.
+iDNES list fetch uses local city pins only (same as Bazoš). ČeskéReality prefers `-NNNNN.html` IDs over firm image folders, keeps `.html` hrefs even when the path contains `nejnovejsi/`, and retries nationwide `/byty/` if `/nejnovejsi/` is empty. Annonce no longer skips every other slideshow card, defaults to offer-only list URLs, paginates with `?page=`, and HTML list clients pin local city centers (no Photon on page-1). Catalog writes still clear `_city_pin_cache` and now also drop landing / new-today snapshots; `_hot_json_cache` stays as the WAL-busy fallback. Synthetic page-1-across with two extra Annonce house shards: **21→44** page-1 shards / **900→2200** listings under a 0.7 s contention deadline (was 42/2100 before the house shards). InstantSiteASGI `/hry*`, WAL readers, games, Ulov hydrate, and the scheduler are unchanged.
 
 ## M&M Reality (documented limit)
 
@@ -109,13 +109,34 @@ Shipped incremental:
 - Stronger CF classify (`hard` vs `challenge`, extra hints).
 - Portal cooldown already per-portal; **blocked shards no longer defer pages 2..N**.
 - Opt-in `SCRAPE_BROWSER_FETCH=1` **only** when `SCRAPE_ROLE` is `worker` or local `all` — never `web`. Default skips hard-blocks (`SCRAPE_BROWSER_ON_HARD_CF=0`) so Chrome is not launched for a known WAF deny.
-- Soft backends: `curl_cffi` → Playwright → system Chrome, each under `SCRAPE_BROWSER_TIMEOUT_SEC` (12s).
+- Soft backends: `curl_cffi` → Playwright → system Chrome, each under `SCRAPE_BROWSER_TIMEOUT_SEC` (12s). Worker proxy URL is forwarded to those backends when set.
 - UlovDomov worker hydrate: `v2/offer/detail` for newest unpriced cards (batch 20, fail-fast). Off on `SCRAPE_ROLE=web`. Opt out with `SCRAPE_ULOV_HYDRATE=0`.
+- Opt-in `SCRAPE_HTTP_PROXY` / `SCRAPE_HTTPS_PROXY` on the scrape worker only (see below).
+
+### Enable residential proxy (worker only)
+
+InstantSiteASGI / `/hry*` / `SCRAPE_ROLE=web` never send traffic through this proxy. Set these **on the scrape worker** (Railway `worker` process, or local `SCRAPE_ROLE=all`):
+
+```
+SCRAPE_HTTP_PROXY=http://user:pass@residential.example:8080
+SCRAPE_HTTPS_PROXY=          # optional; defaults to SCRAPE_HTTP_PROXY
+SCRAPE_PROXY_PORTALS=mmreality
+```
+
+A host:port value without a scheme is treated as `http://`. SOCKS URLs (`socks5://`) are accepted by the plumbing but not required.
+
+Do **not** use generic `HTTP_PROXY` / `HTTPS_PROXY` to “turn on M&M” — those are ignored by `app.scrape_proxy` on purpose so a shared dyno env cannot leak residential egress onto InstantSite, games, or other web httpx clients.
+
+When **unset**: M&M keeps the current hard-block classify + per-portal cooldown (0 fake listings). Challenge/block still does not defer pages 2..N.
+
+When **set** and `SCRAPE_ROLE` is `worker` or `all`: M&M list `fetch_page` (httpx) uses that HTTP(S) proxy. Other HTML portals stay on datacenter egress unless added to `SCRAPE_PROXY_PORTALS`. Worker-only `SCRAPE_BROWSER_FETCH` backends get the same URL.
+
+Live list yield is still **0** from this datacenter without a real residential egress. Re-measure with `scripts/measure_listing_yield.py` after a proxy is in place before expanding the allowlist or making anything default-on. This merge does not require a live proxy.
 
 ### Follow-up (exact)
 
-1. Run the scrape worker with a **residential / ISP proxy** (not this datacenter egress).
+1. ~~Run the scrape worker with a residential / ISP proxy~~ — **plumbing shipped** (`SCRAPE_HTTP_PROXY` on worker; mocked transport tests). Live M&M cards still need a real proxy.
 2. Persistent Playwright Chromium context on `SCRAPE_ROLE=worker` only, `SCRAPE_BROWSER_FETCH=1`, hard timeout 12s, one probe per cooldown window.
 3. If the proxy gets a **challenge** (not hard-block), keep cookies and reuse the context for list pages; parse existing JSON-LD / card HTML.
-4. Do not add Playwright or Chrome to the web dyno. Do not import `app.browser_fetch` from `app.site_pages`.
-5. Re-measure list yield (`scripts/measure_listing_yield.py`) after proxy is in place before making the flag default-on.
+4. Do not add Playwright or Chrome to the web dyno. Do not import `app.browser_fetch` or `app.scrape_proxy` from `app.site_pages`.
+5. Re-measure list yield (`scripts/measure_listing_yield.py`) after a real proxy is in place before making the flag default-on.

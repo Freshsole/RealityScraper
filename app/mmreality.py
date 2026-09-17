@@ -1,11 +1,11 @@
 """M&M Reality list/detail scraper. Live list pages are Cloudflare-gated.
 
 httpx, curl_cffi JA3, and headless Chrome from datacenter IPs all get a WAF
-hard-block (403 "Sorry, you have been blocked"). An optional worker-only
-browser/JA3 path exists behind SCRAPE_BROWSER_FETCH=1 — never on
-SCRAPE_ROLE=web / InstantSiteASGI. Follow-up: residential proxy + persistent
-Playwright on the scrape worker. Challenge HTML cools the portal for the rest
-of the tick; remaining M&M pages are not deferred.
+hard-block (403 "Sorry, you have been blocked"). Opt-in worker-only
+`SCRAPE_HTTP_PROXY` (and `SCRAPE_BROWSER_FETCH=1`) may route list fetch through
+a residential proxy — never on SCRAPE_ROLE=web / InstantSiteASGI. Without a
+proxy, hard-block detect + cooldown stays (0 fake listings). Challenge HTML
+cools the portal for the rest of the tick; remaining M&M pages are not deferred.
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ class MmrealityClient(HtmlPortalClient):
             fetched = await fetch_html(
                 url,
                 headers={"Accept": "text/html", "Referer": SITE + "/"},
+                portal=self._portal_id(),
             )
             retry = classify_block(fetched.status_code, fetched.text, fetched.headers)
             if retry is not None or fetched.backend == "skipped" or not fetched.text:

@@ -53,6 +53,8 @@ def test_challenge_cf_may_use_browser(monkeypatch):
 def test_instant_site_module_stays_off_browser_path():
     src = Path("app/site_pages.py").read_text()
     assert "browser_fetch" not in src
+    assert "scrape_proxy" not in src
+    assert "SCRAPE_HTTP_PROXY" not in src
     assert "curl_cffi" not in src
     assert "playwright" not in src
     assert "google-chrome" not in src
