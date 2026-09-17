@@ -116,6 +116,18 @@ After this branch (RE/MAX newest + DMS GPS + house shards, same 12 s cap, worker
 
 List path still does not call Photon/Nominatim: RE/MAX card `data-gps` DMS when present, otherwise local city pins. Synthetic page-1-across with two extra RE/MAX house shards: **21→48** page-1 shards / **900→2400** listings under a 0.7 s contention deadline (was 46/2300 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Reality.cz/Bezrealitky page-1 wins are unchanged.
 
+After this branch (Sreality sale/house detail URLs + newest house shards, same 12 s cap, worker `fetch_page`, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time | notes |
+|---|---|---|---|---|
+| Sreality rent byty | **22** | **11307** | ~1.2 s | already 22/22 price+image+locality+GPS, `razeni=nejnovejsi`; sale/house **detail URLs** were hardcoded `/pronajem/byt/` (houses **404**, sales 301) |
+| Sreality sale byty | **22** | **20003** | ~0.7 s | `/detail/prodej/byt/…`; price `0` is `Cena neuvedena` (was `0 Kč/nemovitost`) |
+| Sreality houses | **22** | **774** rent / **21285** sale | ~0.7–1.0 s | new newest shards `/hledani/{pronajem\|prodej}/domy?razeni=nejnovejsi`; `/detail/…/dum/rodinny/…` 200 (was `/byt/Rodinný/` 404) |
+
+List path still does not call Photon/Nominatim: Sreality JSON `locality.latitude/longitude` when present, otherwise local city pins. Synthetic page-1-across with two extra Sreality house shards: **21→50** page-1 shards / **900→2500** listings under a 0.7 s contention deadline (was 48/2400 before the house shards). InstantSiteASGI `/hry*`, games, page-1-across scheduler, Ulov hydrate, M&M `SCRAPE_HTTP_PROXY` plumbing, map freshness polling, and Reality.cz/Bezrealitky/REMAX/Annonce page-1 wins are unchanged.
+
+Measure: `scripts/measure_page1_yield.py` (healthy portals, rent/sale + houses, 12 s cap, field fill).
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |
