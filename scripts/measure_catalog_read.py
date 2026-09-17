@@ -212,6 +212,30 @@ def _plans(store: Store) -> None:
             "SELECT monitor_id, COUNT(*) FROM listings GROUP BY monitor_id",
             (),
         ),
+        "landing-brno": (
+            """
+            SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
+            WHERE listings.locality LIKE ? AND listings.price_czk <= ?
+            ORDER BY listings.first_seen DESC LIMIT 192
+            """,
+            ("%Brno%", 22000),
+        ),
+        "games-pool": (
+            """
+            SELECT listing_key FROM catalog_listings
+            WHERE gone = 0 AND price_czk BETWEEN 6000 AND 90000
+            ORDER BY last_seen DESC LIMIT 720
+            """,
+            (),
+        ),
+        "gone-fast": (
+            """
+            SELECT locality FROM listings
+            WHERE gone = 1 AND image_url != '' AND last_seen IS NOT NULL
+            ORDER BY last_seen DESC LIMIT 160
+            """,
+            (),
+        ),
     }
     with store.read() as conn:
         print("EXPLAIN QUERY PLAN")
@@ -234,11 +258,27 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         "search": [],
         "pins": [],
         "pins_tight": [],
+        "pins_mid": [],
         "listings": [],
         "watch": [],
         "item": [],
         "fresh": [],
+        "status": [],
+        "landing": [],
+        "gone": [],
+        "games": [],
+        "facets": [],
     }
+    from app.monitor import Hub
+
+    hub = object.__new__(Hub)
+    hub.store = store
+    hub.running = False
+    hub.checking = False
+    hub.last_error = None
+    hub.catalog_running = False
+    hub._status_cache = None
+    hub._status_cache_at = 0.0
     pin_filters = {
         "pins_only": True,
         "south": "49.90",
@@ -252,6 +292,13 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         "north": "50.12",
         "west": "14.42",
         "east": "14.46",
+    }
+    mid_filters = {
+        "pins_only": True,
+        "south": "50.06",
+        "north": "50.18",
+        "west": "14.38",
+        "east": "14.52",
     }
     for _ in range(n):
         if flush:
@@ -281,6 +328,12 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         if flush:
             _flush(store)
         t0 = time.perf_counter()
+        mid = store.catalog(mid_filters)
+        samples["pins_mid"].append((time.perf_counter() - t0) * 1000)
+        assert mid["items"]
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
         listings = store.recent_notified(24)
         samples["listings"].append((time.perf_counter() - t0) * 1000)
         assert listings
@@ -302,6 +355,35 @@ def _time_calls(store: Store, n: int, *, flush: bool) -> dict[str, list[float]]:
         fresh = store.catalog_freshness()
         samples["fresh"].append((time.perf_counter() - t0) * 1000)
         assert fresh.get("listing_key")
+        if flush:
+            _flush(store)
+            hub._status_cache = None
+            hub._status_cache_at = 0.0
+        t0 = time.perf_counter()
+        status = hub.status()
+        samples["status"].append((time.perf_counter() - t0) * 1000)
+        assert status.get("monitors") is not None
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
+        landing = store.landing_preview_listings()
+        samples["landing"].append((time.perf_counter() - t0) * 1000)
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
+        gone = store.public_gone_fast_rentals(days=3, limit=4)
+        samples["gone"].append((time.perf_counter() - t0) * 1000)
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
+        games = store.game_listing_pool(limit=240, budget_sec=0.2)
+        samples["games"].append((time.perf_counter() - t0) * 1000)
+        if flush:
+            _flush(store)
+        t0 = time.perf_counter()
+        facets = store.catalog_facets()
+        samples["facets"].append((time.perf_counter() - t0) * 1000)
+        assert facets.get("dispositions") is not None
     return samples
 
 

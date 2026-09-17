@@ -181,6 +181,18 @@ def main() -> int:
         )
         deadline_ok = yield_s <= 12.0
         print(f"  12s NewDiscovery write deadline: {'ok' if deadline_ok else 'STARVE'}")
+        leftover_keys = (
+            "pins_mid",
+            "listings",
+            "watch",
+            "item",
+            "fresh",
+            "status",
+            "landing",
+            "gone",
+            "games",
+            "facets",
+        )
         rows.append(
             {
                 "chunk": chunk,
@@ -188,6 +200,7 @@ def main() -> int:
                 "search_p95": _pct(writer_miss["search"], 0.95),
                 "pins_p95": _pct(writer_miss["pins"], 0.95),
                 "pins_tight_p95": _pct(writer_miss["pins_tight"], 0.95),
+                **{f"{key}_p95": _pct(writer_miss[key], 0.95) for key in leftover_keys},
                 "yield_ms": yield_s * 1000,
                 "listings_per_s": lps,
                 "overlap_listings": written[0],
@@ -217,6 +230,37 @@ def main() -> int:
             f"{int(row['chunk']):8d} {row['catalog_p95']:10.1f} {row['search_p95']:10.1f} "
             f"{row['pins_p95']:10.1f} {row['pins_tight_p95']:10.1f} "
             f"{row['yield_ms']:10.0f} {row['listings_per_s']:10.0f}"
+        )
+
+    leftover = (
+        "pins_mid",
+        "listings",
+        "watch",
+        "item",
+        "fresh",
+        "status",
+        "landing",
+        "gone",
+        "games",
+        "facets",
+    )
+    print("\nLEFTOVER writer p95 (ms)")
+    print(
+        f"{'chunk':>8} "
+        + " ".join(f"{key:>10}" for key in leftover)
+    )
+    print(
+        f"{'quiet':>8} "
+        + " ".join(f"{_pct(quiet_miss[key], 0.95):10.1f}" for key in leftover)
+    )
+    print(
+        f"{'pr51/24':>8} "
+        + " ".join(f"{_pct(pr51_miss[key], 0.95):10.1f}" for key in leftover)
+    )
+    for row in rows:
+        print(
+            f"{int(row['chunk']):8d} "
+            + " ".join(f"{row[f'{key}_p95']:10.1f}" for key in leftover)
         )
 
     live = catalog_write_chunk_size()

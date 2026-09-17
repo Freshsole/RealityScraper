@@ -296,6 +296,25 @@ Measured 2026-09-17 on this agent, same 15k fat fixture / `measure_scrape_commit
 
 Catalog/search writer p95 dropped ~3 ms each. City pins stay ~12 ms; tight-zoom ~15 ms (same leftover band as #53). Yield still inside the 12s NewDiscovery write deadline. EXPLAIN catalog newest/`q=Praha`: covering `idx_listings_first_seen` (search still `listings_fts` LIST SUBQUERY, not CORRELATED). Pins still covering `idx_listings_pin_cover`.
 
+### Neighborhood pins / leftover Hub JSON
+
+Leftover after the catalog covering-index slice was **not** search (~12–13 ms). Hub-100 uncached writer heat on the same 15k fat fixture, this agent, before = tip of #54:
+
+| path | Hub-100 p95 before → after |
+|---|---|
+| pins_mid (span ~0.26) | **54.8 → 12.2 ms** |
+| pins_tight | **18.6 → 6.5 ms** |
+| `/api/status` | 26.5 → 17.9 ms |
+| landing-listings | 23.9 → 16.9 ms |
+| `recent_notified` | 10.1 → 7.8 ms |
+| catalog / search / city pins | 9.7 / 13.2 / 11.5 → 10.4 / 13.9 / 12.3 ms |
+
+Tight/mid map pins no longer `GROUP BY` listing identity (temp B-tree over every GPS row). Covering `idx_listings_pin_cover` range scan + `LIMIT`; Python `listing_identity` already dedupes. Neighborhood span ≥ 0.25 uses the same ~100m covering grid as city pins so a district bbox never hydrates thousands of labeled pins. Street-level tight zoom stays one covering-index pin per row (cap 800 unless wide/places).
+
+List/search/landing cards and `recent_notified` use lean offer/estate from covering columns (`price_label` / `name` / `url`). Offer `pronajem`/`prodej`/`drazba` and estate `byt`/`dum`/`pozemek` filters match those columns so extras/description blobs stay off the list path. Amenity flags stay on `catalog_item`. `/api/status` skips twin/link hydrate on the overview recents. Defaults stay **500 / 100**. Yield 1500-row refresh 5438 ms / 276 listings/s (inside the 12s NewDiscovery write deadline).
+
+EXPLAIN tight pins: covering `idx_listings_pin_cover` range scan, **no** `TEMP B-TREE FOR GROUP BY`. Neighborhood/city pins: covering grid `GROUP BY` buckets. Catalog newest/`q=Praha`/landing offer+estate: covering `idx_listings_first_seen`.
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

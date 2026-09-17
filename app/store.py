@@ -417,8 +417,10 @@ _PIN_COVER_INDEX_COLS = (
     "price_label",
 )
 # Prague-wide bbox span is ~1.0; city-centroid clustering still waits for >1.5 so
-# Holešovice density stays visible. Grid ~100m cells before that.
-_PIN_GRID_SPAN = 0.35
+# Holešovice density stays visible. Grid ~100m cells from neighborhood zoom
+# (span >= 0.25) so leftover identity-pin hydrate of thousands of labels
+# never runs on a district bbox. Street-level tight zoom stays one pin per row.
+_PIN_GRID_SPAN = 0.25
 _PIN_GRID_DECIMALS = 3
 _PIN_CITY_CLUSTER_SPAN = 1.5
 
@@ -514,19 +516,79 @@ def _catalog_cover_extras(row: dict[str, Any]) -> dict[str, Any]:
     """Offer/estate for list cards without reading extras/description blobs."""
     label = str(row.get("price_label") or "")
     name = str(row.get("name") or "")
+    url = str(row.get("url") or "").lower()
     folded = name.casefold()
     extras: dict[str, Any] = {"flags": []}
-    if "měsíc" in label or "mesic" in label.casefold():
+    if (
+        "měsíc" in label
+        or "mesic" in label.casefold()
+        or "/pronajem/" in url
+        or "/pronajmu/" in url
+        or "pronájem" in folded
+        or "pronajem" in folded
+    ):
         extras["offer"] = "Pronájem"
-    elif label:
+    elif "/drazba/" in url:
+        extras["offer"] = "Dražba"
+    elif label or "/prodej/" in url:
         extras["offer"] = "Prodej"
-    if "pozemek" in folded:
+    if "pozemek" in folded or "/pozemek/" in url or "/pozemky" in url:
         extras["estate"] = "Pozemek"
-    elif "dům" in name or "dum" in folded or "domu" in folded:
+    elif "dům" in name or "dum" in folded or "domu" in folded or "/dum/" in url or "/domy/" in url:
         extras["estate"] = "Dům"
     else:
         extras["estate"] = "Byt"
     return extras
+
+
+_COVER_RENT_SQL = """(
+    listings.price_label LIKE '%měsíc%'
+    OR lower(IFNULL(listings.price_label, '')) LIKE '%mesic%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/pronajem/%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/pronajmu/%'
+    OR lower(IFNULL(listings.name, '')) LIKE '%pronájem%'
+    OR lower(IFNULL(listings.name, '')) LIKE '%pronajem%'
+)"""
+_COVER_DRAZBA_SQL = "lower(IFNULL(listings.url, '')) LIKE '%/drazba/%'"
+_COVER_POZEMEK_SQL = """(
+    lower(IFNULL(listings.name, '')) LIKE '%pozemek%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/pozemek/%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/pozemky%'
+)"""
+_COVER_DUM_SQL = """(
+    IFNULL(listings.name, '') LIKE '%dům%'
+    OR lower(IFNULL(listings.name, '')) LIKE '%dum%'
+    OR lower(IFNULL(listings.name, '')) LIKE '%domu%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/dum/%'
+    OR lower(IFNULL(listings.url, '')) LIKE '%/domy/%'
+)"""
+
+
+def _catalog_cover_offer_sql(offer: str) -> str | None:
+    """Offer filter from covering price_label/url/name — matches _catalog_cover_extras."""
+    if offer == "pronajem":
+        return _COVER_RENT_SQL
+    if offer == "prodej":
+        return f"(NOT {_COVER_RENT_SQL} AND NOT {_COVER_DRAZBA_SQL})"
+    if offer == "drazba":
+        return _COVER_DRAZBA_SQL
+    return None
+
+
+def _catalog_cover_estate_sql(estate: str) -> str | None:
+    """Estate filter from covering name — matches _catalog_cover_extras."""
+    if estate == "byt":
+        return f"(NOT {_COVER_POZEMEK_SQL} AND NOT {_COVER_DUM_SQL})"
+    if estate == "dum":
+        return f"({_COVER_DUM_SQL} AND NOT {_COVER_POZEMEK_SQL})"
+    if estate == "pozemek":
+        return _COVER_POZEMEK_SQL
+    return None
+
+
+def _clause_is_catalog_coverable(clause: str) -> bool:
+    text = clause or ""
+    return "listings.extras" not in text and "listings.description" not in text
 
 
 def _pin_grid_bucket_sql(column: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
@@ -562,13 +624,17 @@ def _pin_gps_grid_sql(gps_clause: str, *, decimals: int = _PIN_GRID_DECIMALS) ->
 
 
 def _pin_gps_tight_sql(gps_clause: str, *, pin_cap: int) -> str:
-    """Individual tight-zoom pins: covering-index labels, no extras/description."""
-    identity = listing_pin_identity_sql()
+    """Individual tight-zoom pins: covering-index labels, no extras/description.
+
+    Identity GROUP BY built a temp B-tree over every GPS row (15k fixture
+    neighborhood zoom Hub-100 ~55 ms). Duplicate listing_key copies sit
+    adjacent on idx_listings_pin_cover; Python listing_identity already
+    dedupes. LIMIT can then stop the covering range scan early.
+    """
     return f"""
         SELECT {_PIN_DISPLAY_COLS}
         FROM listings INDEXED BY idx_listings_pin_cover
         WHERE {gps_clause}
-        GROUP BY {identity}
         LIMIT {int(pin_cap)}
     """
 
@@ -4087,7 +4153,7 @@ class Store:
         params: list[Any] = []
         if since:
             sql = f"""
-                SELECT {_LISTING_LIGHT_COLS}, monitors.name AS monitor_name, hits.hit_at
+                SELECT {_LISTING_CATALOG_COVER_COLS}, monitors.name AS monitor_name, hits.hit_at
                 FROM (
                     SELECT listing_id, monitor_id, MAX(created_at) AS hit_at
                     FROM events
@@ -4109,8 +4175,8 @@ class Store:
             params.append(fetch_limit)
         else:
             sql = f"""
-                SELECT {_LISTING_LIGHT_COLS}, monitors.name AS monitor_name
-                FROM listings
+                SELECT {_LISTING_CATALOG_COVER_COLS}, monitors.name AS monitor_name
+                FROM listings INDEXED BY idx_listings_first_seen
                 LEFT JOIN monitors ON monitors.id = listings.monitor_id
                 WHERE listings.notified = 1
             """
@@ -4134,12 +4200,12 @@ class Store:
             picked.append(row)
             if len(picked) >= limit:
                 break
-        cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in picked])
         items: list[dict[str, Any]] = []
         for row in picked:
-            data = cards.get((row["monitor_id"], row["id"]), row)
+            data = dict(row)
+            data["extras"] = _catalog_cover_extras(data)
             if row.get("hit_at") is not None:
-                data = {**data, "hit_at": row["hit_at"]}
+                data["hit_at"] = row["hit_at"]
             items.append(public_listing(data))
         if extras:
             self._attach_catalog_extras(items, twins=twins)
@@ -4792,15 +4858,9 @@ class Store:
         if offers:
             offer_parts = []
             for offer in offers:
-                if offer == "pronajem":
-                    offer_parts.append("(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label LIKE ?))")
-                    params.extend(['%"offer": "Pronájem"%', "%měsíc%"])
-                elif offer == "prodej":
-                    offer_parts.append("(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label NOT LIKE ?))")
-                    params.extend(['%"offer": "Prodej"%', "%měsíc%"])
-                elif offer == "drazba":
-                    offer_parts.append("(listings.extras LIKE ? OR listings.url LIKE ?)")
-                    params.extend(['%"offer": "Dražba"%', "%/drazba/%"])
+                cover = _catalog_cover_offer_sql(offer)
+                if cover:
+                    offer_parts.append(cover)
             if offer_parts:
                 where.append("(" + " OR ".join(offer_parts) + ")")
         districts = _csv(filters.get("district"))
@@ -4855,21 +4915,10 @@ class Store:
         estates = _csv(filters.get("estate"))
         if estates:
             estate_parts = []
-            empty_extras = "(listings.extras IS NULL OR listings.extras IN ('', '{}'))"
             for estate in estates:
-                if estate == "byt":
-                    estate_parts.append(
-                        f"(listings.extras LIKE '%\"estate\": \"Byt%' OR ({empty_extras} AND listings.name LIKE '%byt%'))"
-                    )
-                elif estate == "dum":
-                    estate_parts.append(
-                        f"(listings.extras LIKE '%\"estate\": \"Dom%' OR listings.extras LIKE '%\"estate\": \"Dům%' "
-                        f"OR ({empty_extras} AND (listings.name LIKE '%dům%' OR listings.name LIKE '%Dům%' OR listings.name LIKE '%dum%')))"
-                    )
-                elif estate == "pozemek":
-                    estate_parts.append(
-                        "(listings.extras LIKE '%\"estate\": \"Pozemek%' OR listings.name LIKE '%pozemek%')"
-                    )
+                cover = _catalog_cover_estate_sql(estate)
+                if cover:
+                    estate_parts.append(cover)
                 elif estate == "projekt":
                     estate_parts.append(
                         "(listings.extras LIKE '%\"estate\": \"Projekt%' OR listings.name LIKE '%projekt%')"
@@ -5041,10 +5090,7 @@ class Store:
         offset = max(int(filters.get("offset") or 0), 0)
         clause = " AND ".join(where)
         fts_q_only = bool(fts_match) and where == ["1=1", LISTINGS_FTS_MATCH_SQL]
-        identity = listing_identity_sql()
-        catalog_cover = "listings.first_seen" in order and (
-            where == ["1=1"] or fts_q_only
-        )
+        catalog_cover = "listings.first_seen" in order and _clause_is_catalog_coverable(clause)
         if place_geoms:
             light_sql = f"""
                 SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
@@ -5075,7 +5121,7 @@ class Store:
                 holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in page)
                 flat = [item for row in page for item in (row["monitor_id"], row["id"])]
                 full_sql = f"""
-                    SELECT {_LISTING_CARD_COLS}, monitors.name AS monitor_name, monitors.search_url AS search_url
+                    SELECT {_LISTING_CATALOG_COVER_COLS}, monitors.name AS monitor_name, monitors.search_url AS search_url
                     FROM listings
                     LEFT JOIN monitors ON monitors.id = listings.monitor_id
                     WHERE {holders}
@@ -5086,6 +5132,8 @@ class Store:
                         for row in conn.execute(full_sql, flat)
                     }
                 rows = [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
+                for row in rows:
+                    row["extras"] = _catalog_cover_extras(row)
         else:
             fetch_limit = min((offset + limit) * 4, 2000)
             if catalog_cover:
@@ -5123,6 +5171,13 @@ class Store:
                                     "SELECT COUNT(*) FROM listings INDEXED BY idx_listings_first_seen"
                                 ).fetchone()[0]
                             )
+                        elif catalog_cover:
+                            total = int(
+                                conn.execute(
+                                    f"SELECT COUNT(*) FROM listings INDEXED BY idx_listings_first_seen WHERE {clause}",
+                                    params,
+                                ).fetchone()[0]
+                            )
                         else:
                             total = int(
                                 conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
@@ -5144,12 +5199,8 @@ class Store:
                 if len(fetched) >= fetch_limit:
                     total = max(unique_n, offset + len(rows) + (limit if len(rows) >= limit else 0))
             if rows:
-                if catalog_cover:
-                    for row in rows:
-                        row["extras"] = _catalog_cover_extras(row)
-                else:
-                    cards = self._listing_cards_by_ids([(row["monitor_id"], row["id"]) for row in rows])
-                    rows = [cards[key] for row in rows if (key := (row["monitor_id"], row["id"])) in cards]
+                for row in rows:
+                    row["extras"] = _catalog_cover_extras(row)
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:
@@ -5208,7 +5259,7 @@ class Store:
         if isinstance(bbox, tuple) and len(bbox) == 4:
             south, north, west, east = bbox
             wide = (north - south) + (east - west) > 1.5
-        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 else 800
+        pin_limit = 8000 if place_geoms or wide else 800
         span = float(filters.get("_bbox_span") or 0)
         cache_hit = False
         cache_key: tuple[Any, ...] | None = None
@@ -5379,13 +5430,14 @@ class Store:
                             leftover_sample,
                         )
                 else:
-                    identity = listing_pin_identity_sql()
+                    from_listings = "listings"
+                    if "listings.lat" in clause and _clause_is_catalog_coverable(clause):
+                        from_listings = "listings INDEXED BY idx_listings_pin_cover"
                     sql = f"""
                     SELECT {_PIN_DISPLAY_COLS}
-                    FROM listings
+                    FROM {from_listings}
                     WHERE {clause}
                       AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                    GROUP BY {identity}
                     LIMIT {int(pin_limit)}
                     """
                     fetched.extend(dict(row) for row in conn.execute(sql, params).fetchall())
