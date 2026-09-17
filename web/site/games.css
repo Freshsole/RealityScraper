@@ -251,11 +251,9 @@ button {
 
 /* Hub + shared hero */
 .game-hero {
-  padding: 72px var(--gutter) 40px;
+  padding: 72px var(--gutter) 32px;
   display: grid;
   gap: 24px;
-  max-width: var(--page);
-  margin: 0 auto;
 }
 
 .game-hero .display {
@@ -285,9 +283,8 @@ button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
-  padding: 8px var(--gutter) 80px;
-  max-width: var(--page);
-  margin: 0 auto;
+  padding: 24px var(--gutter) 80px;
+  background: var(--surface);
 }
 
 .game-card {
@@ -318,8 +315,8 @@ button {
 }
 
 .game-card .pill {
-  align-self: flex-start;
-  width: auto;
+  align-self: stretch;
+  width: 100%;
 }
 
 .game-band {

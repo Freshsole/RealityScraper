@@ -1,3 +1,21 @@
+@font-face {
+  font-family: "Archivo Black";
+  font-style: normal;
+  font-weight: 400;
+  font-display: optional;
+  src: url("/static/site/fonts/archivo-black-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Archivo Black";
+  font-style: normal;
+  font-weight: 400;
+  font-display: optional;
+  src: url("/static/site/fonts/archivo-black-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   --canvas: #ffffff;
   --surface: #e8ebe6;
@@ -5,9 +23,10 @@
   --mint: #e2f6d5;
   --forest: #163300;
   --ink: #0e0f0c;
-  --body: #555b54;
+  --body: #454745;
   --line: #d0d4cd;
   --green: #9fe870;
+  --green-hover: #8fd960;
   --sold: #cf2929;
   --muted: #a9b4ad;
   --footer-rule: #254d00;
@@ -16,8 +35,9 @@
   --gutter: max(var(--pad), calc((100% - var(--page)) / 2));
   --radius-card: 24px;
   --radius-pill: 9999px;
-  --font-display: "Archivo Black", sans-serif;
-  --font-ui: Inter, Helvetica, Arial, sans-serif;
+  --font-display: "Archivo Black", "Arial Black", Impact, sans-serif;
+  --font-ui: Inter, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --shadow-card: 0 18px 50px rgba(14, 15, 12, 0.08);
 }
 
 *,
@@ -78,21 +98,28 @@ button {
   background: var(--green);
   color: var(--forest);
   border-radius: var(--radius-pill);
-  font-weight: 700;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 16px;
   white-space: nowrap;
+  min-height: 48px;
+  padding: 0 24px;
+  transition: background 0.15s ease;
 }
 
-.pill:hover {
-  filter: brightness(0.96);
+.pill:hover,
+.pill:focus-visible {
+  background: var(--green-hover);
 }
 
 .pill-lg {
-  padding: 14px 28px;
-  font-size: 16px;
+  min-height: 48px;
+  padding: 0 28px;
 }
 
 .pill-nav {
-  padding: 10px 20px;
+  min-height: 32px;
+  padding: 0 16px;
   font-size: 14px;
 }
 
@@ -125,10 +152,11 @@ button {
 .display {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 400;
-  letter-spacing: -1.5px;
-  line-height: 1;
-  color: var(--forest);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+  line-height: 0.86;
+  color: var(--ink);
 }
 
 .lead {
@@ -149,7 +177,8 @@ button {
 }
 
 .section-head .display {
-  font-size: 48px;
+  font-size: clamp(36px, 5vw, 59px);
+  line-height: 0.86;
   max-width: 900px;
 }
 
@@ -268,9 +297,10 @@ button {
 }
 
 .hero-left .display {
-  font-size: 64px;
-  letter-spacing: -2.5px;
-  line-height: 1;
+  font-size: clamp(48px, 6.4vw, 90px);
+  letter-spacing: -0.03em;
+  line-height: 0.85;
+  max-width: 11ch;
 }
 
 .hero-copy {
@@ -308,13 +338,13 @@ button {
 .alert-card {
   width: 480px;
   max-width: 100%;
-  background: #fff;
+  background: var(--canvas);
   border-radius: var(--radius-card);
-  padding: 24px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  box-shadow: 0 16px 16px rgba(14, 15, 12, 0.06);
+  gap: 0;
+  box-shadow: var(--shadow-card);
 }
 
 .notif-header {
@@ -322,36 +352,38 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 20px;
 }
 
 .notif-header h2 {
   margin: 0;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--forest);
 }
 
 .notif-header p {
   margin: 2px 0 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--body);
 }
 
 .badge-mint {
   background: var(--mint);
   color: var(--forest);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 8px;
-  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
   white-space: nowrap;
 }
 
 .apart-photo {
   width: 100%;
-  height: 220px;
-  border-radius: 16px;
+  height: 180px;
+  border-radius: 19px;
   overflow: hidden;
+  margin-bottom: 20px;
 }
 
 .apart-photo img {
@@ -360,75 +392,103 @@ button {
   object-fit: cover;
 }
 
-.listing-details {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.price-row {
+.amount-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-
-.price-row strong {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--forest);
-}
-
-.chip-dark {
-  background: var(--forest);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 20px;
-  white-space: nowrap;
-}
-
-.loc-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--forest);
-}
-
-.listing-details .blurb {
-  margin: 0;
-  font-size: 13px;
-  color: var(--body);
-}
-
-.card-actions {
-  display: flex;
   gap: 12px;
 }
 
-.btn-open {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--forest);
-  color: #fff;
-  font-size: 13px;
+.amount-row strong {
+  font-variant-numeric: tabular-nums;
+  font-size: 40px;
   font-weight: 700;
-  padding: 12px;
-  border-radius: 12px;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--forest);
 }
 
-.btn-save {
-  width: 56px;
-  display: flex;
+.ccy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--forest);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px 6px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ccy-flag {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--forest);
+  color: #fff;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rent-unit {
+  margin: 6px 0 8px;
+  font-size: 14px;
+  color: var(--body);
+}
+
+.info-rows {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--body);
+}
+
+.info-row:last-child {
+  border-bottom: 0;
+}
+
+.info-row strong {
+  color: var(--forest);
+  font-weight: 600;
+  text-align: right;
+}
+
+.mint-banner {
+  background: var(--mint);
+  border-radius: 16px;
+  padding: 16px 18px;
+  color: var(--forest);
+  margin: 16px 0 20px;
+  display: grid;
+  gap: 6px;
+}
+
+.mint-banner strong {
+  font-size: 16px;
+}
+
+.mint-banner span {
+  color: var(--body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.alert-card .pill-lg {
+  width: 100%;
 }
 
 /* URGENCY */
@@ -1193,9 +1253,9 @@ body.landing-modal-open {
   background: var(--green);
   color: var(--forest);
   font-size: 13px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 6px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
 }
 
 .cmp-row.hi {
@@ -1695,6 +1755,8 @@ body.landing-modal-open {
 
   .hero-left .display {
     font-size: 48px;
+    line-height: 0.88;
+    max-width: none;
   }
 
   .faq-section {
@@ -1767,6 +1829,7 @@ body.landing-modal-open {
   .final-cta .display,
   .contact-hero .display {
     font-size: 36px;
+    line-height: 0.9;
   }
 
   .contact-cols {
@@ -3957,36 +4020,7 @@ body.article-popup-open {
   background: var(--sold);
 }
 
-/* Marketing games */
-.game-page .navbar .menu a[href="/hry"] {
-  text-decoration: underline;
-  text-underline-offset: 4px;
-}
-
-.game-hero,
-.game-board,
-.game-hub {
-  padding: 48px var(--gutter) 80px;
-}
-
-.game-hero {
-  display: grid;
-  gap: 20px;
-  max-width: var(--page);
-  margin: 0 auto;
-}
-
-.game-hero .display {
-  max-width: 18ch;
-}
-
-.game-hero .lead {
-  max-width: 640px;
-  color: var(--body);
-  font-size: 18px;
-  line-height: 1.5;
-}
-
+/* Homepage games teaser — play pages use games.css */
 .game-pills {
   display: flex;
   flex-wrap: wrap;
@@ -3995,6 +4029,10 @@ body.article-popup-open {
 
 .section-head .game-pills {
   justify-content: center;
+}
+
+.hero-left .game-pill {
+  margin-bottom: -8px;
 }
 
 .game-pill {
@@ -4012,15 +4050,14 @@ body.article-popup-open {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 24px;
-  max-width: var(--page);
-  margin: 0 auto 80px;
+  width: 100%;
 }
 
 .game-card {
   background: var(--canvas);
   border: 0;
   border-radius: var(--radius-card);
-  box-shadow: 0 18px 50px rgba(14, 15, 12, 0.08);
+  box-shadow: var(--shadow-card);
   padding: 32px;
   display: flex;
   flex-direction: column;
@@ -4040,201 +4077,17 @@ body.article-popup-open {
   margin: 0;
   color: var(--body);
   line-height: 1.5;
+  flex: 1;
 }
 
-.game-pair {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 20px;
-  align-items: stretch;
-  max-width: var(--page);
-  margin: 0 auto;
-}
-
-.flat-card {
-  background: var(--canvas);
-  border-radius: var(--radius-card);
-  box-shadow: 0 18px 40px rgba(14, 15, 12, 0.08);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-  border: 2px solid transparent;
-  min-width: 0;
-}
-
-.flat-card img {
+.game-card .pill {
+  align-self: stretch;
   width: 100%;
-  height: 220px;
-  object-fit: cover;
-  background: var(--surface);
-}
-
-.flat-card .meta {
-  padding: 20px 22px 24px;
-  display: grid;
-  gap: 8px;
-}
-
-.flat-card .loc {
-  font-weight: 700;
-  color: var(--ink);
-}
-
-.flat-card .spec,
-.flat-card .portal {
-  color: var(--body);
-  font-size: 14px;
-}
-
-.flat-card .price {
-  font-variant-numeric: tabular-nums;
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--forest);
-}
-
-.flat-card.pickable {
-  cursor: pointer;
-}
-
-.flat-card.pickable:hover,
-.flat-card.pickable:focus-visible {
-  border-color: var(--green);
-}
-
-.flat-card.win {
-  border-color: var(--green);
-  background: var(--mint);
-}
-
-.flat-card.lose {
-  opacity: 0.72;
-}
-
-.vs-mark {
-  align-self: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background: var(--forest);
-  color: var(--green);
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-}
-
-.game-status {
-  max-width: var(--page);
-  margin: 28px auto 0;
-  display: grid;
-  gap: 16px;
-}
-
-.game-status .fomo {
-  background: var(--mint);
-  border-radius: 16px;
-  padding: 16px 20px;
-  color: var(--forest);
-}
-
-.game-scoreline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  font-weight: 600;
-}
-
-.rent-grid {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 16px;
-  max-width: var(--page);
-  margin: 0 auto;
-}
-
-.rent-card {
-  background: var(--canvas);
-  border-radius: var(--radius-card);
-  box-shadow: 0 12px 28px rgba(14, 15, 12, 0.06);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.rent-card img {
-  width: 100%;
-  height: 140px;
-  object-fit: cover;
-  background: var(--surface);
-}
-
-.rent-card .meta {
-  padding: 16px;
-  display: grid;
-  gap: 8px;
-}
-
-.rent-card label {
-  font-size: 12px;
-  color: var(--body);
-}
-
-.rent-card input {
-  width: 100%;
-  border: 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 22px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  color: var(--ink);
-  padding: 4px 0;
-  outline: none;
-}
-
-.rent-card input:focus {
-  border-color: var(--forest);
-}
-
-.game-form {
-  max-width: var(--page);
-  margin: 28px auto 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-}
-
-.game-form input[type="text"] {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  padding: 10px 16px;
-  min-width: 220px;
-}
-
-.game-result {
-  max-width: var(--page);
-  margin: 24px auto 0;
-  background: var(--surface);
-  border-radius: var(--radius-card);
-  padding: 24px;
 }
 
 @media (max-width: 900px) {
-  .game-hub,
-  .game-pair,
-  .rent-grid {
+  .game-hub {
     grid-template-columns: 1fr;
-  }
-  .vs-mark {
-    display: none;
-  }
-  .game-hero .display {
-    font-size: 42px;
-    line-height: 0.9;
-  }
-  .flat-card img {
-    height: 180px;
   }
 }
 

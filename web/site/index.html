@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>REALITIFY — Nejlepší byty zmizí za minuty</title>
-    <link rel="stylesheet" href="/static/site/site.css?v=9" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" /></noscript>
+    <link rel="preload" href="/static/site/site.css?v=10" as="style" />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/static/site/assets/hero-apart.webp" as="image" />
+    <link rel="stylesheet" href="/static/site/site.css?v=10" />
   </head>
   <body>
     <header class="navbar">
@@ -31,6 +33,7 @@
 
     <section class="hero">
       <div class="hero-left">
+        <span class="game-pill">4 800+ uživatelů v ČR</span>
         <h1 class="display">NEJLEPŠÍ BYTY ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</h1>
         <p class="hero-copy">Realitify monitoruje všech 10 hlavních českých portálů (Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, UlovDomov, RE/MAX a Reality.cz) 24/7. Jakmile se objeví byt odpovídající vašim kritériím, dostanete upozornění dřív než ostatní.</p>
         <div class="hero-actions">
@@ -49,31 +52,29 @@
         <article class="alert-card">
           <div class="notif-header">
             <div>
-              <h2>Realitify • OKAMŽITÉ UPOZORNĚNÍ</h2>
-              <p>před 35 sekundami • z portálu Bezrealitky</p>
+              <h2>Realitify • okamžité upozornění</h2>
+              <p>před 35 sekundami</p>
             </div>
-            <span class="badge-mint">AKTIVNÍ</span>
+            <span class="badge-mint">Aktivní</span>
           </div>
           <div class="apart-photo">
             <img src="/static/site/assets/hero-apart.webp" width="432" height="220" alt="Byt v Praze 3" fetchpriority="high" decoding="async" />
           </div>
-          <div class="listing-details">
-            <div class="price-row">
-              <strong>16 500 Kč / měsíc</strong>
-              <span class="chip-dark">2+kk • 54 m²</span>
-            </div>
-            <div class="loc-row">
-              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/map-pin.svg" width="16" height="16" alt="" /></span>
-              Praha 3 - Žižkov, ulice Bořivojova
-            </div>
-            <p class="blurb">Nově zrekonstruovaný, zařízený byt ve 3. patře cihlového domu. K nastěhování ihned. Žádaná lokalita s výbornou dostupností...</p>
+          <div class="amount-row">
+            <strong>16 500</strong>
+            <span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>
           </div>
-          <div class="card-actions">
-            <a class="btn-open" href="/registrace">Otevřít nabídku</a>
-            <span class="btn-save">
-              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/bookmark.svg" width="16" height="16" alt="" /></span>
-            </span>
+          <p class="rent-unit">Kč / měsíc</p>
+          <div class="info-rows">
+            <div class="info-row"><span>Dispozice</span><strong>2+kk • 54 m²</strong></div>
+            <div class="info-row"><span>Lokalita</span><strong>Praha 3 – Žižkov</strong></div>
+            <div class="info-row"><span>Portál</span><strong>Bezrealitky</strong></div>
           </div>
+          <div class="mint-banner">
+            <strong>Nově zrekonstruovaný, k nastěhování ihned</strong>
+            <span>Zařízený byt ve 3. patře cihlového domu. Žádaná lokalita s výbornou dostupností.</span>
+          </div>
+          <a class="pill pill-lg" href="/registrace">Otevřít nabídku</a>
         </article>
       </div>
     </section>
@@ -164,7 +165,7 @@
           <span class="game-pill">mizí v řádu minut</span>
         </div>
       </div>
-      <div class="game-hub" style="padding-top:0">
+      <div class="game-hub">
         <article class="game-card">
           <h2>HIGHER / LOWER</h2>
           <p>Dva byty, jeden klik. Hádejte, který je levnější, a uvidíte, jak rychle podobné nabídky mizí.</p>
@@ -331,9 +332,7 @@
             <div class="col">Základní zdarma / SMS placené</div>
             <div class="col">79 Kč / profil</div>
             <div class="col">Zdarma (e-mail)</div>
-            <p class="flex-[1_0_0] font-['Inter:Bold'] font-bold min-w-px relative text-[#163300] text-center" data-node-id="6:218">
-              Od 149 Kč (všechny portály)
-            </p>
+            <div class="col is-us">Od 149 Kč (všechny portály)</div>
           </div>
           <div class="cmp-row">
             <div class="feat">Sledované portály</div>

@@ -11,9 +11,10 @@ from urllib.parse import urljoin
 
 from playwright.sync_api import sync_playwright
 
-PATHS = ("/hry", "/hry/vyssi-nizsi", "/hry/najem")
+PATHS = ("/", "/hry", "/hry/vyssi-nizsi", "/hry/najem")
 
 READY = {
+    "/": ".alert-card a.pill",
     "/hry": "a.pill[href='/hry/vyssi-nizsi']",
     "/hry/vyssi-nizsi": "button.flat-row.pickable",
     "/hry/najem": "#rent-guess",

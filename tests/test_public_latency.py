@@ -179,10 +179,13 @@ def test_hry_html_bypasses_blocked_inner_app():
             assert body
 
         css = site_asset("site/games.css")[0]
+        site_css = site_asset("site/site.css")[0]
         for path, needle in (
             ("/static/site/games.css", b"@font-face"),
+            ("/static/site/site.css", b"@font-face"),
             ("/static/site/games.js", b"[^\\d]"),
             ("/static/site/fonts/archivo-black-latin.woff2", b"wOF2"),
+            ("/static/site/assets/hero-apart.webp", b"WEBP"),
         ):
             t0 = time.perf_counter()
             status, headers, body = await _asgi_get(app, path)
@@ -193,6 +196,7 @@ def test_hry_html_bypasses_blocked_inner_app():
             assert headers[b"access-control-allow-origin"] == b"*"
             assert ms < 40, f"{path} {ms:.1f}ms while inner would block"
         assert css == site_asset("site/games.css")[0]
+        assert site_css == site_asset("site/site.css")[0]
 
         for path in ("/api/public/games/higher-lower", "/api/public/games/rent-round"):
             t0 = time.perf_counter()
