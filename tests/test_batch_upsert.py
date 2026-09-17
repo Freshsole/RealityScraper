@@ -62,7 +62,9 @@ def test_upsert_catalog_listings_batch_default_commit_stays_500(tmp_path: Path):
         cover = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_listings_pin_cover'"
         ).fetchone()
+        first_seen = [row[2] for row in conn.execute("PRAGMA index_info('idx_listings_first_seen')")]
         n_listings = conn.execute("SELECT COUNT(*) FROM listings").fetchone()[0]
     assert fts
     assert cover
+    assert first_seen[:1] == ["first_seen"]
     assert n_listings == 60

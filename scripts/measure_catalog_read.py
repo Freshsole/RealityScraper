@@ -22,6 +22,7 @@ from app.store import (
     LISTINGS_FTS_MATCH_SQL,
     Store,
     listings_fts_match_query,
+    _catalog_cover_sql,
     _pin_gps_grid_sql,
     _pin_gps_tight_sql,
 )
@@ -165,18 +166,11 @@ def _plans(store: Store) -> None:
     praha = listings_fts_match_query("Praha") or "Praha"
     queries = {
         "catalog-newest": (
-            """
-            SELECT listings.id FROM listings
-            ORDER BY listings.first_seen DESC LIMIT 96
-            """,
+            _catalog_cover_sql("1=1", limit=96),
             (),
         ),
         "catalog-q-praha": (
-            f"""
-            SELECT listings.id FROM listings INDEXED BY idx_listings_first_seen
-            WHERE {LISTINGS_FTS_MATCH_SQL}
-            ORDER BY listings.first_seen DESC LIMIT 96
-            """,
+            _catalog_cover_sql(LISTINGS_FTS_MATCH_SQL, limit=96),
             (praha,),
         ),
         "catalog-q-count": (
