@@ -254,12 +254,17 @@ button {
   padding: 72px var(--gutter) 32px;
   display: grid;
   gap: 24px;
+  min-width: 0;
 }
 
 .game-hero .display {
   font-size: clamp(48px, 7vw, 90px);
   line-height: 0.85;
   max-width: 14ch;
+}
+
+.game-hero .lead {
+  max-width: 36rem;
 }
 
 .game-pills {
@@ -285,6 +290,8 @@ button {
   gap: 24px;
   padding: 24px var(--gutter) 80px;
   background: var(--surface);
+  align-items: stretch;
+  min-width: 0;
 }
 
 .game-card {
@@ -294,8 +301,11 @@ button {
   padding: 32px;
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: 16px;
   min-height: 280px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .game-card h2 {
@@ -305,6 +315,8 @@ button {
   text-transform: uppercase;
   margin: 0;
   color: var(--ink);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .game-card p {
@@ -936,6 +948,12 @@ button {
   .navbar {
     min-height: 64px;
     gap: 10px;
+    min-width: 0;
+  }
+
+  .brand,
+  .nav-cta {
+    min-width: 0;
   }
 
   .brand {
@@ -944,7 +962,7 @@ button {
 
   .game-play,
   .game-hero {
-    padding: 24px var(--gutter) 28px;
+    padding: 24px var(--gutter) 20px;
     gap: 20px;
   }
 
@@ -957,10 +975,15 @@ button {
   .game-hero .display {
     font-size: 36px;
     line-height: 0.86;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
-  .lead {
+  .lead,
+  .game-hero .lead,
+  .game-card p {
     font-size: 16px;
+    max-width: 100%;
   }
 
   .game-play,
@@ -1071,6 +1094,11 @@ button {
     font-size: 16px;
   }
 
+  .game-hub {
+    padding: 16px var(--gutter) 40px;
+    gap: 16px;
+  }
+
   .game-hub,
   .game-card {
     padding-left: 16px;
@@ -1082,6 +1110,12 @@ button {
     min-height: 0;
     max-width: 100%;
     box-shadow: var(--shadow-card);
+  }
+
+  .game-card h2 {
+    font-size: 32px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .game-pills,
