@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 import httpx
 
 from app.block_page import PortalBlocked, classify_block
+from app.scrape_proxy import httpx_kwargs as scrape_httpx_kwargs, url_for as scrape_proxy_url_for
 from app.sreality import Listing, ListingGone, format_price
 
 JS_SAFE_ID = (1 << 53) - 1
@@ -237,11 +238,14 @@ class HtmlPortalClient:
         if self.SITE:
             headers["Referer"] = self.SITE.rstrip("/") + "/"
             headers["Origin"] = self.SITE.rstrip("/")
+        portal = self._portal_id()
+        self._proxy_url = scrape_proxy_url_for(portal)
         self._client = httpx.AsyncClient(
             headers=headers,
             follow_redirects=True,
             timeout=self.TIMEOUT,
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
+            **scrape_httpx_kwargs(portal),
         )
 
     async def aclose(self) -> None:

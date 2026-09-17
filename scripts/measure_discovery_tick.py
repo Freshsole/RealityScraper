@@ -2,7 +2,7 @@
 """Compare NewDiscovery tick yield: held-gate vs page-1-across (healthy portals).
 
 Does not hit InstantSiteASGI /hry*. Optional --live probes page 1 of healthy portals.
-M&M is excluded from the live healthy set (residential-proxy follow-up).
+M&M is excluded from the live healthy set (opt-in SCRAPE_HTTP_PROXY on the worker).
 """
 
 from __future__ import annotations

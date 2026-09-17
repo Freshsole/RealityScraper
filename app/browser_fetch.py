@@ -15,6 +15,7 @@ from typing import Any
 from app import config
 from app.block_page import classify_block
 from app.html_listing import BROWSER_HEADERS
+from app.scrape_proxy import chrome_proxy_server, playwright_proxy, url_for as scrape_proxy_url_for
 
 
 @dataclass
@@ -46,19 +47,27 @@ def _timeout() -> float:
     return float(config.SCRAPE_BROWSER_TIMEOUT_SEC)
 
 
-async def fetch_html(url: str, *, timeout: float | None = None, headers: dict[str, str] | None = None) -> BrowserFetchResult:
+async def fetch_html(
+    url: str,
+    *,
+    timeout: float | None = None,
+    headers: dict[str, str] | None = None,
+    portal: str = "",
+) -> BrowserFetchResult:
     """Fetch listing HTML via JA3 impersonation or a hard-timeout browser.
 
     Backends are optional and tried in order: curl_cffi → Playwright → system Chrome.
+    Worker-only SCRAPE_HTTP_PROXY is forwarded when `portal` is allowlisted.
     """
     budget = _timeout() if timeout is None else max(1.0, float(timeout))
     hdrs = dict(BROWSER_HEADERS)
     if headers:
         hdrs.update(headers)
+    proxy = scrape_proxy_url_for(portal) if portal else ""
     last_error = "no-backend"
     for factory in (_curl_cffi_fetch, _playwright_fetch, _chrome_dump_fetch):
         try:
-            result = await asyncio.wait_for(factory(url, budget, hdrs), timeout=budget + 0.5)
+            result = await asyncio.wait_for(factory(url, budget, hdrs, proxy), timeout=budget + 0.5)
         except Exception as exc:
             last_error = f"{factory.__name__}:{type(exc).__name__}"
             continue
@@ -72,29 +81,40 @@ def looks_blocked(result: BrowserFetchResult) -> bool:
     return classify_block(result.status_code, result.text, result.headers) is not None
 
 
-async def _curl_cffi_fetch(url: str, timeout: float, headers: dict[str, str]) -> BrowserFetchResult | None:
+async def _curl_cffi_fetch(
+    url: str, timeout: float, headers: dict[str, str], proxy: str = ""
+) -> BrowserFetchResult | None:
     try:
         from curl_cffi.requests import AsyncSession
     except ImportError:
         return None
     impersonate = os.getenv("SCRAPE_BROWSER_IMPERSONATE", "chrome").strip() or "chrome"
-    async with AsyncSession(impersonate=impersonate, timeout=timeout) as session:
+    session_kwargs: dict[str, Any] = {"impersonate": impersonate, "timeout": timeout}
+    if proxy:
+        session_kwargs["proxy"] = proxy
+    async with AsyncSession(**session_kwargs) as session:
         response = await session.get(url, headers=headers, allow_redirects=True)
     hdrs = {str(key).lower(): str(value) for key, value in (response.headers or {}).items()}
     return BrowserFetchResult(int(response.status_code or 0), response.text or "", hdrs, "curl_cffi")
 
 
-async def _playwright_fetch(url: str, timeout: float, headers: dict[str, str]) -> BrowserFetchResult | None:
+async def _playwright_fetch(
+    url: str, timeout: float, headers: dict[str, str], proxy: str = ""
+) -> BrowserFetchResult | None:
     try:
         from playwright.async_api import async_playwright
     except ImportError:
         return None
     ms = int(timeout * 1000)
+    launch_kwargs: dict[str, Any] = {
+        "headless": True,
+        "args": ["--disable-dev-shm-usage", "--no-sandbox"],
+    }
+    proxy_cfg = playwright_proxy(proxy)
+    if proxy_cfg:
+        launch_kwargs["proxy"] = proxy_cfg
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=["--disable-dev-shm-usage", "--no-sandbox"],
-        )
+        browser = await playwright.chromium.launch(**launch_kwargs)
         try:
             page = await browser.new_page(extra_http_headers=headers)
             response = await page.goto(url, wait_until="domcontentloaded", timeout=ms)
@@ -122,12 +142,14 @@ def _chrome_bin() -> str:
     return ""
 
 
-async def _chrome_dump_fetch(url: str, timeout: float, headers: dict[str, str]) -> BrowserFetchResult | None:
+async def _chrome_dump_fetch(
+    url: str, timeout: float, headers: dict[str, str], proxy: str = ""
+) -> BrowserFetchResult | None:
     chrome = _chrome_bin()
     if not chrome:
         return None
     ms = max(1000, int(timeout * 1000))
-    proc = await asyncio.create_subprocess_exec(
+    args = [
         chrome,
         "--headless=new",
         "--disable-gpu",
@@ -136,8 +158,13 @@ async def _chrome_dump_fetch(url: str, timeout: float, headers: dict[str, str]) 
         f"--virtual-time-budget={ms}",
         f"--timeout={ms}",
         f"--user-agent={headers.get('User-Agent') or BROWSER_HEADERS['User-Agent']}",
-        "--dump-dom",
-        url,
+    ]
+    proxy_server = chrome_proxy_server(proxy)
+    if proxy_server:
+        args.append(f"--proxy-server={proxy_server}")
+    args.extend(["--dump-dom", url])
+    proc = await asyncio.create_subprocess_exec(
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )

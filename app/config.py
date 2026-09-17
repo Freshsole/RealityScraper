@@ -100,6 +100,17 @@ SCRAPE_BROWSER_PORTALS = frozenset(
     if part.strip()
 )
 
+# Worker-only opt-in HTTP(S) proxy for hard-CF list fetches (M&M).
+# InstantSiteASGI / SCRAPE_ROLE=web never send traffic through this proxy.
+# Generic HTTP_PROXY / HTTPS_PROXY are intentionally ignored here.
+SCRAPE_HTTP_PROXY = (os.getenv("SCRAPE_HTTP_PROXY") or "").strip()
+SCRAPE_HTTPS_PROXY = (os.getenv("SCRAPE_HTTPS_PROXY") or "").strip()
+SCRAPE_PROXY_PORTALS = frozenset(
+    part.strip().lower()
+    for part in (os.getenv("SCRAPE_PROXY_PORTALS", "mmreality") or "mmreality").split(",")
+    if part.strip()
+)
+
 
 # Worker-only UlovDomov detail hydrate (v2/offer/detail). Off on InstantSiteASGI / web.
 SCRAPE_ULOV_HYDRATE = _flag_env("SCRAPE_ULOV_HYDRATE", True)
@@ -117,6 +128,28 @@ def browser_fetch_allowed(portal: str) -> bool:
     if SCRAPE_ROLE == "web":
         return False
     return (portal or "").strip().lower() in SCRAPE_BROWSER_PORTALS
+
+
+def scrape_proxy_url() -> str:
+    """Normalized worker proxy URL, or empty. Does not read HTTP_PROXY/HTTPS_PROXY."""
+    raw = (SCRAPE_HTTPS_PROXY or SCRAPE_HTTP_PROXY or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = "http://" + raw
+    scheme = raw.split("://", 1)[0].lower()
+    if scheme not in {"http", "https", "socks5", "socks4", "socks"}:
+        return ""
+    return raw
+
+
+def scrape_proxy_allowed(portal: str) -> bool:
+    """True only for scrape worker (or local all) when a proxy URL is set."""
+    if not scrape_proxy_url():
+        return False
+    if SCRAPE_ROLE == "web":
+        return False
+    return (portal or "").strip().lower() in SCRAPE_PROXY_PORTALS
 
 
 def _hour_env(name: str, default: int) -> int:

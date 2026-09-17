@@ -424,3 +424,4 @@ def test_throughput_helpers_stay_off_instant_site():
     assert "prepare_discovery_shards" not in src
     assert "ulov_hydrate" not in src
     assert "offer/detail" not in src
+    assert "scrape_proxy" not in src
