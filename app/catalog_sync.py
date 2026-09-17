@@ -334,6 +334,47 @@ def recent_shards() -> list[dict[str, str]]:
     return sreality_recent_shards() + extra_portal_recent_shards()
 
 
+# Portals that already return list cards from this app's parsers (not M&M / proxy follow-up).
+HEALTHY_DISCOVERY_PORTALS = frozenset(
+    {
+        "sreality",
+        "idnes",
+        "bazos",
+        "bezrealitky",
+        "annonce",
+        "remax",
+        "ceskereality",
+        "realitycz",
+        "ulovdomov",
+    }
+)
+
+
+def order_recent_shards(shards: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Nationwide extras first so a global deadline cannot starve their page 1 behind 26 Sreality sizes."""
+    extras = [item for item in shards if (item.get("portal") or "") != "sreality"]
+    sreality = [item for item in shards if (item.get("portal") or "") == "sreality"]
+    return extras + sreality
+
+
+def filter_ready_shards(shards: list[dict[str, str]], cooldown: Any | None) -> list[dict[str, str]]:
+    """Drop shards whose portal is already in a per-portal cooldown (no HTTP, no gate slot)."""
+    if cooldown is None:
+        return list(shards)
+    ready: list[dict[str, str]] = []
+    for item in shards:
+        portal = (item.get("portal") or "").strip().lower()
+        if portal and hasattr(cooldown, "active") and cooldown.active(portal):
+            continue
+        ready.append(item)
+    return ready
+
+
+def prepare_discovery_shards(cooldown: Any | None = None) -> list[dict[str, str]]:
+    """NewDiscovery batch: extras first, skip portals already cooling."""
+    return filter_ready_shards(order_recent_shards(recent_shards()), cooldown)
+
+
 def _field(listing: Any, name: str, default: Any = None) -> Any:
     if listing is None:
         return default

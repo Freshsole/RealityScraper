@@ -38,6 +38,44 @@ Sample after detail: Olomouc 2+kk 17 900 Kč, Praha-Komořany 18 500 Kč, So
 
 Limit: M&M still has no listings from this datacenter IP. Residential-proxy follow-up unchanged.
 
+## Healthy-portal NewDiscovery throughput
+
+Goal: more freshest listings/min from portals that already return cards (Sreality, iDNES, Bazoš, Bezrealitky, Annonce, RE/MAX, ČeskéReality, Reality.cz, Ulov sitemap+hydrate). InstantSiteASGI `/hry*`, WAL stale readers, live-catalog games, and worker-only Ulov hydrate are unchanged. No M&M residential proxy in this slice.
+
+Shipped:
+
+- Persist Hub `_discovery_engine` / `_deep_engine` so `SCRAPE_RECENT_PAGES` deferred leftovers actually run next minute.
+- `prepare_discovery_shards`: nationwide extras first, skip portals already on per-portal cooldown (M&M still retried after cooldown — not permanently disabled).
+- `fetch_shards(page1_across=True)`: page 1 of every ready shard before pages 2..N, so a slow HTML shard cannot hold the shard gate through 4 pages and starve later page-1s.
+- Ulov `sitemap-offers.xml` single-flight + warmup once per discovery tick (rent+sale share the 8 min cache).
+- Rolling deep yields while NewDiscovery is in-flight (limiter priority was not enough for work already started).
+- Catalog upsert busy: keep fetched listings in `_pending_discovery` for the next tick instead of dropping them.
+
+Measure: `scripts/measure_discovery_tick.py` (synthetic held-gate vs page-1-across; `--live` for healthy page-1 probes). M&M proxy remain the documented follow-up below.
+
+Synthetic 42-shard minute (16 conc, extras 300 ms / Sreality 40 ms, 4 pages, **0.7 s** deadline — the contention case when deep/HTML eats the gate):
+
+| scheduler | page-1 shards | listings | pages_ok | tick |
+|---|---|---|---|---|
+| held-gate (before) | **21** | **900** | 69 | 1.25 s |
+| page-1-across (after) | **42** | **2100** | 168 | 1.49 s |
+
+Unconstrained 50 s deadline: both finish 42 / 2100 in ~1.5 s. The gain is page-1 completeness when time is short.
+
+Live page-1 from this datacenter (2026-09-17, 12 s cap, worker clients, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time |
+|---|---|---|---|
+| Sreality (one size shard) | **20** | 1061 | 1.9 s |
+| Bazoš | **20** | 5627 | 0.5 s |
+| Bezrealitky | **15** | 2278 | 1.1 s |
+| UlovDomov sitemap | **20** | 3295 | 1.8 s |
+| Reality.cz | **24** | 841 | 1.6 s |
+| RE/MAX | **20** | 20 | list ok |
+| Annonce | **10** | 10 | 0.3 s |
+| iDNES | 0 | 0 | timeout 12 s |
+| ČeskéReality | 0 | 0 | 0.6 s empty (no block raised) |
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

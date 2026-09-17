@@ -76,11 +76,18 @@ SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40
 SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
 SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD", "8")))
 SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
+SCRAPE_PAGE1_BUDGET_FRAC = max(0.4, min(0.95, float(os.getenv("SCRAPE_PAGE1_BUDGET_FRAC", "0.72"))))
+SCRAPE_MIN_SHARD_SEC = max(0.0, min(20.0, float(os.getenv("SCRAPE_MIN_SHARD_SEC", "8"))))
 
 
 def _flag_env(name: str, default: bool = False) -> bool:
     raw = os.getenv(name, "1" if default else "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+# Page-1 of every ready shard before pages 2..N. Deep ticks wait while NewDiscovery is in-flight.
+SCRAPE_PAGE1_ACROSS_SHARDS = _flag_env("SCRAPE_PAGE1_ACROSS_SHARDS", True)
+SCRAPE_DEEP_YIELD_TO_DISCOVERY = _flag_env("SCRAPE_DEEP_YIELD_TO_DISCOVERY", True)
 
 
 # Worker-only opt-in. InstantSiteASGI / SCRAPE_ROLE=web never launch a browser.

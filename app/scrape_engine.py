@@ -108,6 +108,23 @@ class AdaptiveLimiter:
                     self._ok_streak = 0
             self._cond.notify_all()
 
+    def waiting_below(self, priority: int) -> int:
+        """How many acquire() waiters are strictly higher priority (lower number)."""
+        waiting = getattr(self, "_waiting", None) or {}
+        return sum(int(count) for queued, count in waiting.items() if queued < priority and count)
+
+
+def should_yield_deep(
+    *,
+    discovery_inflight: bool,
+    waiting_below: int = 0,
+    enabled: bool = True,
+) -> bool:
+    """Rolling deep must not start a tick that would steal slots from NewDiscovery."""
+    if not enabled:
+        return False
+    return bool(discovery_inflight or int(waiting_below) > 0)
+
 
 def _status_from_exc(exc: BaseException) -> int | None:
     response = getattr(exc, "response", None)
@@ -143,6 +160,27 @@ class ShardFetchResult:
 
 
 FetchPageFn = Callable[[int], Awaitable[tuple[list[Any], int]]]
+
+
+def merge_shard_results(first: ShardFetchResult, rest: ShardFetchResult) -> ShardFetchResult:
+    """Combine page-1 and pages-2..N results for the same shard."""
+    seen: set[int] = set()
+    listings: list[Any] = []
+    for item in list(first.listings or []) + list(rest.listings or []):
+        item_id = getattr(item, "id", None)
+        if item_id is None or item_id in seen:
+            continue
+        seen.add(int(item_id))
+        listings.append(item)
+    return ShardFetchResult(
+        shard_key=first.shard_key or rest.shard_key,
+        search_url=first.search_url or rest.search_url,
+        listings=listings,
+        total=rest.total or first.total,
+        pages_ok=int(first.pages_ok or 0) + int(rest.pages_ok or 0),
+        deferred_pages=list(rest.deferred_pages or first.deferred_pages or []),
+        error=rest.error or first.error,
+    )
 
 
 class ScrapeEngine:
@@ -219,12 +257,19 @@ class ScrapeEngine:
         deadline_monotonic: float,
         prioritize_first: bool = True,
         portal: str = "",
+        start_page: int = 1,
+        include_deferred: bool = True,
     ) -> ShardFetchResult:
-        """Fetch pages 1..max_pages (plus deferred) until deadline; leftover → deferred queue."""
-        pending = list(range(1, max(1, max_pages) + 1))
-        for page in self._take_deferred(shard_key):
-            if page not in pending:
-                pending.append(page)
+        """Fetch pages start_page..max_pages (plus deferred) until deadline; leftover → deferred queue."""
+        first_page = max(1, int(start_page))
+        last_page = max(first_page, int(max_pages))
+        pending = list(range(first_page, last_page + 1))
+        if include_deferred:
+            for page in self._take_deferred(shard_key):
+                if page < first_page:
+                    continue
+                if page not in pending:
+                    pending.append(page)
         pending = sorted(set(pending))
         if prioritize_first and 1 in pending:
             pending.remove(1)
@@ -326,6 +371,19 @@ class ScrapeEngine:
             error=last_error,
         )
 
+    def _cooling_result(self, shard: dict[str, str]) -> ShardFetchResult:
+        portal = (shard.get("portal") or "").strip().lower()
+        reason = self._cooldown().reason(portal) or "blocked"
+        return ShardFetchResult(
+            shard_key=shard.get("shard_key") or shard.get("search_url") or "",
+            search_url=shard.get("search_url") or "",
+            listings=[],
+            total=0,
+            pages_ok=0,
+            deferred_pages=[],
+            error=f"cooling:{reason}:{portal}",
+        )
+
     async def fetch_shards(
         self,
         shards: list[dict[str, str]],
@@ -333,12 +391,39 @@ class ScrapeEngine:
         client_factory: Callable[[str], Any],
         max_pages: int,
         deadline_sec: float,
+        page1_across: bool | None = None,
+        min_shard_sec: float | None = None,
     ) -> list[ShardFetchResult]:
         started = time.monotonic()
-        deadline = started + deadline_sec
-        results: list[ShardFetchResult] = []
+        deadline = started + max(0.1, float(deadline_sec))
+        if page1_across is None:
+            page1_across = bool(config.SCRAPE_PAGE1_ACROSS_SHARDS)
+        if min_shard_sec is None:
+            min_shard_sec = float(config.SCRAPE_MIN_SHARD_SEC)
 
-        async def one(shard: dict[str, str]) -> ShardFetchResult:
+        cooldown = self._cooldown()
+        ready: list[dict[str, str]] = []
+        skipped: list[ShardFetchResult] = []
+        for shard in shards:
+            portal = (shard.get("portal") or "").strip().lower()
+            if portal and cooldown.active(portal):
+                skipped.append(self._cooling_result(shard))
+            else:
+                ready.append(shard)
+
+        def shard_deadline(until: float) -> float:
+            if min_shard_sec <= 0:
+                return until
+            return max(until, time.monotonic() + float(min_shard_sec))
+
+        async def run_shard(
+            shard: dict[str, str],
+            *,
+            pages: int,
+            start_page: int,
+            include_deferred: bool,
+            until: float,
+        ) -> ShardFetchResult:
             url = shard["search_url"]
             portal = (shard.get("portal") or "").strip().lower()
             client = client_factory(url)
@@ -349,9 +434,11 @@ class ScrapeEngine:
             result = await self.fetch_pages_parallel(
                 shard_key=shard.get("shard_key") or url,
                 fetch_page=fetch_page,
-                max_pages=max_pages,
-                deadline_monotonic=deadline,
+                max_pages=pages,
+                deadline_monotonic=shard_deadline(until),
                 portal=portal,
+                start_page=start_page,
+                include_deferred=include_deferred,
             )
             result.search_url = url
             return result
@@ -359,11 +446,79 @@ class ScrapeEngine:
         # Bound fan-out of shards roughly to concurrency.
         gate = asyncio.Semaphore(max(4, self.limiter.limit))
 
-        async def gated(shard: dict[str, str]) -> ShardFetchResult:
-            async with gate:
-                return await one(shard)
+        if not ready:
+            results = skipped
+        elif page1_across and max_pages > 1:
+            frac = float(config.SCRAPE_PAGE1_BUDGET_FRAC)
+            page1_until = min(deadline, started + max(8.0, float(deadline_sec) * frac))
 
-        results = list(await asyncio.gather(*(gated(shard) for shard in shards)))
+            async def gated_page1(shard: dict[str, str]) -> ShardFetchResult:
+                async with gate:
+                    return await run_shard(
+                        shard,
+                        pages=1,
+                        start_page=1,
+                        include_deferred=False,
+                        until=page1_until,
+                    )
+
+            first = list(await asyncio.gather(*(gated_page1(shard) for shard in ready)))
+            rest_pairs: list[tuple[dict[str, str], ShardFetchResult]] = []
+            for shard, result in zip(ready, first):
+                if result.error and self._is_block_error(result.error):
+                    continue
+                if result.pages_ok <= 0:
+                    continue
+                rest_pairs.append((shard, result))
+
+            if rest_pairs and time.monotonic() < deadline:
+
+                async def run_rest(pair: tuple[dict[str, str], ShardFetchResult]) -> ShardFetchResult:
+                    shard, first_result = pair
+                    rest = await run_shard(
+                        shard,
+                        pages=max_pages,
+                        start_page=2,
+                        include_deferred=True,
+                        until=deadline,
+                    )
+                    return merge_shard_results(first_result, rest)
+
+                rest_by_key = {item.shard_key: item for item in await asyncio.gather(*(run_rest(pair) for pair in rest_pairs))}
+                ready_results = [
+                    rest_by_key.get(shard.get("shard_key") or shard["search_url"], result)
+                    for shard, result in zip(ready, first)
+                ]
+            else:
+                ready_results = first
+            by_key = {item.shard_key: item for item in ready_results + skipped}
+            results = []
+            for shard in shards:
+                key = shard.get("shard_key") or shard.get("search_url") or ""
+                if key in by_key:
+                    results.append(by_key.pop(key))
+            results.extend(by_key.values())
+        else:
+
+            async def gated(shard: dict[str, str]) -> ShardFetchResult:
+                async with gate:
+                    return await run_shard(
+                        shard,
+                        pages=max_pages,
+                        start_page=1,
+                        include_deferred=True,
+                        until=deadline,
+                    )
+
+            ready_results = list(await asyncio.gather(*(gated(shard) for shard in ready)))
+            by_key = {item.shard_key: item for item in ready_results + skipped}
+            results = []
+            for shard in shards:
+                key = shard.get("shard_key") or shard.get("search_url") or ""
+                if key in by_key:
+                    results.append(by_key.pop(key))
+            results.extend(by_key.values())
+
         self.metrics.tick_duration_ms = (time.monotonic() - started) * 1000.0
         snap = self.metrics.snapshot()
         snap["limit"] = self.limiter.limit
