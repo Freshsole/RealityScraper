@@ -11,8 +11,10 @@ from app.games import (
     higher_lower_pair,
     is_teaching_pair,
     leaderboard,
+    live_pairable_pool,
     locality_key,
     pick_same_locality_pair,
+    preferred_game_pool,
     public_card,
     public_higher_lower,
     public_rent_round,
@@ -204,10 +206,16 @@ def test_refresh_uses_live_catalog_rentals(tmp_path: Path):
     pool = refresh_pool_now(store)
     live = [item for item in pool if not str(item["id"]).startswith("seed-")]
     assert len(live) >= 6
+    assert live_pairable_pool(pool) is not None
     pair = higher_lower_pair(store)
     assert pair["seeded"] is False
     assert pair["left"]["id"] != pair["right"]["id"]
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"] == "praha-3-zizkov"
+    assert not str(pair["left"]["id"]).startswith("seed-")
+    assert not str(pair["right"]["id"]).startswith("seed-")
+    round_payload = rent_round(store)
+    assert round_payload["seeded"] is False
+    assert all(not str(item["id"]).startswith("seed-") for item in round_payload["items"])
 
 
 def test_live_pool_does_not_pair_vinohrady_with_bedihost(tmp_path: Path):
@@ -391,3 +399,88 @@ def test_public_game_helpers_are_memory_only():
     )
     assert remote["image_url"].startswith("/static/site/assets/")
     assert remote["image_url"].endswith(".webp")
+
+
+def test_live_same_locality_beats_mixed_seed():
+    pool = [
+        _flat("live-zizkov-a", "Praha 3 – Žižkov", "3+kk", 72, 17800),
+        _flat("live-zizkov-b", "Praha 3 – Žižkov", "1+kk", 31, 21400),
+        _flat("seed-zizkov-2kk", "Praha 3 – Žižkov", "2+kk", 54, 16500),
+        _flat("seed-zizkov-1kk", "Praha 3 – Žižkov", "1+kk", 38, 18900),
+    ]
+    preferred = preferred_game_pool(pool)
+    assert {item["id"] for item in preferred} == {"live-zizkov-a", "live-zizkov-b"}
+    for seed in range(80):
+        pair = pick_same_locality_pair(pool, rng=random.Random(seed))
+        assert pair["seeded"] is False
+        assert pair["left"]["id"].startswith("live-")
+        assert pair["right"]["id"].startswith("live-")
+        assert pair["left"]["locality_key"] == pair["right"]["locality_key"] == "praha-3-zizkov"
+
+
+def test_two_live_listings_are_enough_to_skip_seed(tmp_path: Path):
+    store = Store(tmp_path / "two-live.sqlite")
+    listings = [
+        Listing(
+            id=4100 + i,
+            name=f"Pronájem bytu {i}",
+            price_czk=15000 + i * 2500,
+            price_label=f"{15000 + i * 2500} Kč/měsíc",
+            disposition="2+kk" if i == 0 else "1+kk",
+            area_m2=58 - i * 16,
+            locality="Praha 3 – Žižkov",
+            url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{4100 + i}",
+            image_url=f"https://img.example/two-{i}.jpg",
+        )
+        for i in range(2)
+    ]
+    store.upsert_catalog_listings_batch(listings, kind="seeded")
+    pool = refresh_pool_now(store)
+    assert live_pairable_pool(pool) is not None
+    pair = higher_lower_pair(store)
+    assert pair["seeded"] is False
+    assert not str(pair["left"]["id"]).startswith("seed-")
+    assert not str(pair["right"]["id"]).startswith("seed-")
+    round_payload = rent_round(store)
+    live_ids = [item["id"] for item in round_payload["items"] if not str(item["id"]).startswith("seed-")]
+    assert len(live_ids) >= 2
+
+
+def test_unpaired_live_catalog_falls_back_to_seed(tmp_path: Path):
+    store = Store(tmp_path / "unpaired.sqlite")
+    listings = [
+        Listing(
+            id=4200 + i,
+            name=f"Pronájem bytu {i}",
+            price_czk=14000 + i * 3000,
+            price_label=f"{14000 + i * 3000} Kč/měsíc",
+            disposition="2+kk",
+            area_m2=50,
+            locality=loc,
+            url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{4200 + i}",
+            image_url=f"https://img.example/city-{i}.jpg",
+        )
+        for i, loc in enumerate(["Praha 1", "Brno – střed", "Ostrava – Poruba"])
+    ]
+    store.upsert_catalog_listings_batch(listings, kind="seeded")
+    pool = refresh_pool_now(store)
+    assert live_pairable_pool(pool) is None
+    assert all(str(item["id"]).startswith("seed-") for item in pool)
+    pair = higher_lower_pair(store)
+    assert pair["seeded"] is True
+    assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
+    round_payload = rent_round(store)
+    assert round_payload["seeded"] is True
+
+
+def test_preferred_game_pool_is_memory_fast():
+    live = [
+        _flat(f"live-{i}", "Praha 3 – Žižkov", "2+kk" if i % 2 == 0 else "1+kk", 40 + i, 16000 + i * 400)
+        for i in range(48)
+    ]
+    t0 = time.perf_counter()
+    for _ in range(200):
+        preferred_game_pool(live)
+        preferred_game_pool([])
+    ms = (time.perf_counter() - t0) * 1000
+    assert ms < 40, f"preferred_game_pool loop {ms:.1f}ms"

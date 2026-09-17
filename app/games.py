@@ -131,6 +131,8 @@ POINTS_PER_PROPERTY = 1000
 ERROR_ZERO_AT = 0.5  # 50 % odchylka = 0 bodů
 RENT_ROUND_SIZE = 5
 TEACHING_RATIO = 0.8
+# Prefer live catalog once at least one locality has two priced, distinct listings.
+MIN_LIVE_LOCALITY_PAIRS = 1
 # (monotonic_ts, items, seed_only)
 _CACHE: tuple[float, list[dict[str, Any]], bool] | None = None
 _CACHE_TTL = 45.0
@@ -327,6 +329,10 @@ def _seed_pool() -> list[dict[str, Any]]:
     return [dict(item) for item in SEED]
 
 
+def _is_seed_id(key: Any) -> bool:
+    return str(key or "").startswith("seed-")
+
+
 def _annotate(item: dict[str, Any]) -> dict[str, Any]:
     row = dict(item)
     loc = str(row.get("locality") or "")
@@ -335,13 +341,43 @@ def _annotate(item: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def _is_live_game_item(item: dict[str, Any]) -> bool:
+    """Priced + imaged catalog row with a locality — never a hard-coded seed."""
+    if _is_seed_id(item.get("id")):
+        return False
+    if not _as_int(item.get("price_czk")):
+        return False
+    if not str(item.get("image_url") or "").strip():
+        return False
+    loc = str(item.get("locality_key") or item.get("locality") or "").strip()
+    return bool(loc)
+
+
+def live_pairable_pool(pool: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Live same-locality listings when the catalog has enough pairs; else None."""
+    live = [_annotate(item) for item in (pool or []) if _is_live_game_item(item)]
+    groups = _groups_by_locality(live)
+    if len(groups) >= MIN_LIVE_LOCALITY_PAIRS:
+        return live
+    return None
+
+
+def preferred_game_pool(pool: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Catalog when it can pair same-locality flats; seed otherwise. Memory-only."""
+    live = live_pairable_pool(pool)
+    if live is not None:
+        return live
+    priced = [_annotate(item) for item in (pool or []) if _as_int(item.get("price_czk"))]
+    if priced and _groups_by_locality(priced):
+        return priced
+    return _seed_pool()
+
+
 def _finalize_pool(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged = list(rows or [])
-    if len(merged) < 6:
-        merged = _seed_pool() + merged
+    """Deduped priced catalog rows. Seed is a pick-time fallback, not mixed in here."""
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
-    for item in merged:
+    for item in rows or []:
         key = str(item.get("id") or "")
         price = _as_int(item.get("price_czk"))
         if not key or key in seen or not price:
@@ -392,14 +428,19 @@ def _refresh_pool(store: Any, *, background: bool = True) -> list[dict[str, Any]
         if callable(method):
             rows = method(limit=240, budget_sec=0.2) or []
         unique = _finalize_pool(rows)
-        seed_only = bool(unique) and all(str(item.get("id") or "").startswith("seed-") for item in unique)
-        if unique:
-            _CACHE = (time.monotonic(), unique, seed_only)
-        elif _CACHE is None:
+        live = live_pairable_pool(unique)
+        prev = _CACHE[1] if _CACHE else []
+        prev_live = live_pairable_pool(prev)
+        if live is not None:
+            unique = live
+            _CACHE = (time.monotonic(), unique, False)
+        elif prev_live is not None:
+            # Budget-aborted / thin refresh must not evict a pairable live pool.
+            unique = prev_live
+            _CACHE = (time.monotonic(), unique, False)
+        else:
             unique = _seed_pool()
             _CACHE = (time.monotonic(), unique, True)
-        else:
-            unique = _CACHE[1]
     except Exception:
         unique = _CACHE[1] if _CACHE else _seed_pool()
         if _CACHE is None:
@@ -503,7 +544,7 @@ def _pair_payload(
         "copy_ok": (_TEACH_OK if pair_kind == "teaching" else _RANDOM_OK).format(vanish=vanish_text),
         "copy_miss": (_TEACH_MISS if pair_kind == "teaching" else _RANDOM_MISS).format(vanish=vanish_text),
         "vanish_label": vanish_text,
-        "seeded": all(str(item.get("id") or "").startswith("seed-") for item in (left, right)),
+        "seeded": all(_is_seed_id(item.get("id")) for item in (left, right)),
     }
 
 
@@ -513,9 +554,12 @@ def pick_same_locality_pair(
     rng: random.Random | None = None,
     teaching_ratio: float = TEACHING_RATIO,
 ) -> dict[str, Any]:
-    """Always same locality_key. ~80 % pedagogical, ~20 % any same-place pair."""
+    """Always same locality_key. ~80 % pedagogical, ~20 % any same-place pair.
+
+    Live hydrated catalog wins over seed whenever it has same-locality pairs.
+    """
     rng = rng or random.Random()
-    usable = [_annotate(item) for item in pool if _as_int(item.get("price_czk"))]
+    usable = preferred_game_pool(pool)
     groups = _groups_by_locality(usable)
     if not groups:
         usable = _seed_pool()
@@ -549,7 +593,7 @@ def higher_lower_pair(
 
 
 def rent_round(store: Any) -> dict[str, Any]:
-    pool = _catalog_pool(store)
+    pool = preferred_game_pool(_catalog_pool(store))
     picked: list[dict[str, Any]] = []
     seen: set[str] = set()
     # Spread prices so the round isn't five similar flats.
@@ -574,22 +618,24 @@ def rent_round(store: Any) -> dict[str, Any]:
     chosen = picked[:RENT_ROUND_SIZE]
     for item in chosen:
         _remember_price(item)
+    seeded = all(_is_seed_id(item.get("id")) for item in chosen)
     return {
         "round_id": uuid.uuid4().hex,
         "items": [public_card(item, include_price=False) for item in chosen],
         "hidden": {str(item["id"]): int(item["price_czk"]) for item in chosen},
         "pool": chosen,
+        "seeded": seeded,
     }
 
 
 def public_higher_lower(store: Any = None) -> dict[str, Any]:
-    """Memory/seed Higher/Lower payload. Catalog refresh is background-only."""
+    """Memory Higher/Lower payload. Live catalog when pairable; seed if cold."""
     schedule_pool_refresh(store)
     return higher_lower_pair(store)
 
 
 def public_rent_round(store: Any = None) -> dict[str, Any]:
-    """Memory/seed rent-round cards. Prices stay in the in-memory hint map."""
+    """Memory rent-round cards. Live catalog when pairable; seed if cold."""
     schedule_pool_refresh(store)
     payload = rent_round(store)
     return {"round_id": payload["round_id"], "items": payload["items"]}

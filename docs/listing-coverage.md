@@ -14,7 +14,7 @@ Measured 2026-09-16 from a datacenter IP (this Cloud Agent). InstantSiteASGI / `
 | `/_next/data/{buildId}/pronajem/byty.json` | 200, `count: 3293`, **0** offers |
 | `GET /sitemap-offers.xml` | **200**, 7635 `<loc>` (3295 `pronajem-*`, 47 coliving, ~4293 sale / leading-dash slugs) |
 
-Worker now: API → sitemap cards (cached 8 min, newest-by-id pages of 20) → HTML/`_next/data` only if the sitemap fetch is not valid XML. Empty offer shard after a good sitemap returns `[]` without cooling the portal.
+Worker now: API → sitemap cards (cached 8 min, newest-by-id pages of 20) → HTML/`_next/data` only if the sitemap fetch is not valid XML. Empty offer shard after a good sitemap returns `[]` without cooling the portal. Games read those hydrated rentals from memory when a locality has two priced cards; seed stays the InstantSiteASGI cold fallback.
 
 Fixture yield: 2 rent + 1 sale cards from `tests/fixtures/ulov_sitemap_offers.xml` after a mocked 500.
 
@@ -26,7 +26,7 @@ Live `scripts/measure_listing_yield.py` (this agent, 2026-09-16):
 | UlovDomov sale | **20** | **4293** | cached | leading-dash sitemap slugs |
 | M&M Reality | **0** | 0 | 105 ms | `blocked:cloudflare:403` hard — no fake listings |
 
-Worker hydrate (`SCRAPE_ROLE!=web`, off InstantSiteASGI / `/hry*`): newest unpriced Ulov catalog rows (fallback: newest sitemap cards), `GET /v2/offer/detail?offerId=` batched (default 20, concurrency 4, 0.12 s spacing, 15 s deadline, fail-fast on 403/429 / 2 consecutive errors). `fetch_page` never calls detail. Thin sitemap upserts do not wipe a hydrated price/photo.
+Worker hydrate (`SCRAPE_ROLE!=web`, off InstantSiteASGI / `/hry*`): newest unpriced Ulov catalog rows (fallback: newest sitemap cards), `GET /v2/offer/detail?offerId=` batched (default 20, concurrency 4, 0.12 s spacing, 15 s deadline, fail-fast on 403/429 / 2 consecutive errors). `fetch_page` never calls detail. Thin sitemap upserts do not wipe a hydrated price/photo on `catalog_listings` or on the `listings` row the catalog/map reads. List/detail overlay missing price/image/GPS from `catalog_listings` so a hydrate is visible on the next read.
 
 Live hydrate of the same page-1 rent cards (this agent, 2026-09-16):
 
