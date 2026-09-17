@@ -444,24 +444,35 @@ def _ensure_pin_cover_index(conn: sqlite3.Connection) -> None:
     conn.execute(_pin_cover_index_sql())
 
 
+def _pin_grid_bucket_sql(column: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
+    """~100m GPS bucket. Integer round-half-up stays covering-index cheap vs ROUND()."""
+    scale = 10**int(decimals)
+    return f"CAST({column} * {scale} + 0.5 AS INTEGER)"
+
+
 def _pin_gps_grid_sql(gps_clause: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
-    identity = listing_pin_identity_sql()
+    """City-wide pins: covering-index ~100m grid, no identity subquery.
+
+    Inner GROUP BY listing identity forced a second temp B-tree over every GPS
+    row (15k fat fixture ~21ms). Grid buckets are ~100m; Holešovice 0.0012°
+    cells stay unique. COUNT(*) is listing rows per cell (same GPS copies
+    share a pin). Tight zoom still hydrates one pin per identity.
+    """
+    lat_b = _pin_grid_bucket_sql("listings.lat", decimals=decimals)
+    lon_b = _pin_grid_bucket_sql("listings.lon", decimals=decimals)
+    scale = float(10**int(decimals))
     return f"""
-        SELECT ROUND(src.lat, {decimals}) AS lat,
-               ROUND(src.lon, {decimals}) AS lon,
+        SELECT {lat_b} / {scale} AS lat,
+               {lon_b} / {scale} AS lon,
                COUNT(*) AS count,
-               MIN(src.id) AS id,
-               MIN(src.monitor_id) AS monitor_id,
-               MIN(src.price_czk) AS price_czk,
-               MIN(src.listing_key) AS listing_key,
-               MIN(src.canonical_key) AS canonical_key
-        FROM (
-            SELECT {_PIN_COVER_COLS}
-            FROM listings
-            WHERE {gps_clause}
-            GROUP BY {identity}
-        ) src
-        GROUP BY ROUND(src.lat, {decimals}), ROUND(src.lon, {decimals})
+               MIN(listings.id) AS id,
+               MIN(listings.monitor_id) AS monitor_id,
+               MIN(listings.price_czk) AS price_czk,
+               MIN(listings.listing_key) AS listing_key,
+               MIN(listings.canonical_key) AS canonical_key
+        FROM listings INDEXED BY idx_listings_pin_cover
+        WHERE {gps_clause}
+        GROUP BY {lat_b}, {lon_b}
     """
 
 
@@ -5191,7 +5202,7 @@ class Store:
                 elif anchors and not place_geoms:
                     # GPS-only range scan so idx_listings_pin_cover can cover the
                     # read. City-wide (span >= 0.35, still below 1.5 city centroids)
-                    # GROUP BY identity then ~100m grid instead of pulling 8000 fat rows.
+                    # ~100m covering-index grid — no identity subquery, no fat rows.
                     # Tight zoom hydrates name/url/locality from the same covering
                     # index — never extras/description blobs.
                     base_where, base_params = _without_map_bbox(where, params, filters)

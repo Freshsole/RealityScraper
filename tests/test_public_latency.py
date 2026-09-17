@@ -846,7 +846,10 @@ def test_map_pin_gps_grid_uses_covering_lat_lon_index(tmp_path: Path):
     assert "idx_listings_pin_cover" in indexes
     assert cover_cols == list(_PIN_COVER_INDEX_COLS)
     assert "name" in cover_cols and "url" in cover_cols and "locality" in cover_cols
+    assert "INDEXED BY idx_listings_pin_cover" in sql
+    assert "COALESCE" not in sql
     assert "idx_listings_pin_cover" in plan or "COVERING INDEX" in plan
+    assert "CO-ROUTINE" not in plan
     assert "SCAN listings" not in plan or "USING INDEX" in plan
     pins = store.catalog(
         {

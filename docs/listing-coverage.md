@@ -266,6 +266,21 @@ Measured 2026-09-17 on this agent, 15k fat fixture, uncached catalog/search/pins
 
 Chunk 50 is **not** a clear win: city-pin p95 only ~1 ms better than live 100, while write throughput drops 2.7× (still inside 12s, but it starves listing yield). Chunk 250/500 do not improve p95. **Leave `SCRAPE_BATCH_COMMIT=500` and `SCRAPE_WRITE_CHUNK=100`.** EXPLAIN still covering `idx_listings_pin_cover` for pins and `listings_fts` LIST SUBQUERY for `q=Praha`.
 
+### City-wide pin grid (span ≥ 0.35)
+
+Leftover after the chunk sweep was the city-grid SQL, not a shorter commit. Inner `GROUP BY` listing identity built a second temp B-tree over every GPS row (~21 ms SQL / **~27–29 ms** writer p95 on 15k). City pins now `GROUP BY` ~100m integer buckets on `idx_listings_pin_cover` (no identity subquery, `INDEXED BY`). Holešovice 0.0012° cells stay unique (`test_16`). Tight zoom is still one pin per identity with covering-index labels. Defaults stay **500 / 100**.
+
+Measured 2026-09-17 on this agent, same 15k fat fixture / `measure_scrape_commit.py --chunks 100` (no residential proxy). Before = tip of #52; after = covering-index grid.
+
+| writer | catalog p95 | search p95 | pins p95 | tight p95 | 1500-row yield | listings/s |
+|---|---|---|---|---|---|---|
+| quiet before → after | 20.6 → 21.1 ms | 23.2 → 25.7 ms | **24.1 → 11.9 ms** | 12.8 → 14.6 ms | — | — |
+| #51 harness before → after | 12.9 → 13.4 ms | 14.7 → 15.2 ms | **28.8 → 13.6 ms** | 17.2 → 18.1 ms | — | — |
+| Hub chunk **100** before → after | 11.0 → 11.4 ms | 13.4 → 14.4 ms | **24.2 → 12.0 ms** | 13.5 → 13.2 ms | 5161 → 5196 ms | 291 → 289 |
+
+City-pin writer p95 is clearly under 20 ms. Tight-zoom stays ~13–18 ms (well under the ~24 ms leftover). Catalog/`q=` FTS plans unchanged (`idx_listings_first_seen` + `listings_fts` LIST SUBQUERY). EXPLAIN city pins: covering `idx_listings_pin_cover` range scan + one `GROUP BY` temp B-tree (no `CO-ROUTINE`).
+
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |
