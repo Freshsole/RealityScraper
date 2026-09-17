@@ -23,7 +23,15 @@ from app.sources import client_for
 def _kind(shard: dict[str, str]) -> str:
     key = shard.get("shard_key") or ""
     url = (shard.get("search_url") or "").lower()
-    if key.endswith(":domy") or "/domy" in url or "/dum/" in url or "domy-a-vily" in url or "domy-k-" in url or "domy-na-" in url:
+    if (
+        key.endswith(":domy")
+        or "/domy" in url
+        or "/dum/" in url
+        or "domy-a-vily" in url
+        or "domy-k-" in url
+        or "domy-na-" in url
+        or "rodinne-domy" in url
+    ):
         return "houses"
     return "byty"
 

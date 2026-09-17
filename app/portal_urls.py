@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.url_builder import SIZES as SR_SIZES
@@ -99,15 +100,23 @@ class CeskerealityUrls:
     def sample_filters(self) -> dict:
         return sample_filters(self.source)
 
+    def kind(self, filters: dict) -> str:
+        category = str(filters.get("category") or "byty").casefold()
+        # Live house lists are /rodinne-domy/. /domy/ is an agency named Domy, spol. s r.o.
+        if "dom" in category:
+            return "rodinne-domy"
+        return "byty"
+
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
+        kind = self.kind(filters)
         districts = [str(item) for item in (filters.get("districts") or []) if item]
         region = districts[0] if len(districts) == 1 else ""
-        path = f"/{offer}/byty/"
+        path = f"/{offer}/{kind}/"
         if region and re_slug(region):
-            path = f"/{offer}/byty/{re_slug(region)}/"
+            path = f"/{offer}/{kind}/{re_slug(region)}/"
         elif (filters.get("sort") or "nejnovejsi") == "nejnovejsi":
-            path = f"/{offer}/byty/nejnovejsi/"
+            path = f"/{offer}/{kind}/nejnovejsi/"
         query: dict[str, str] = {}
         if filters.get("price_from"):
             query["cena-od"] = str(int(filters["price_from"]))
@@ -116,7 +125,13 @@ class CeskerealityUrls:
         return _join(self.site + path, query)
 
     def parse_url(self, url: str) -> dict:
-        return _parse_common(url, self.source)
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        if "/rodinne-domy/" in raw or re.search(r"/(?:pronajem|prodej)/domy(?:/|$)", raw) or "/dum/" in raw:
+            filters["category"] = "domy"
+        else:
+            filters["category"] = "byty"
+        return filters
 
 
 class AnnonceUrls:

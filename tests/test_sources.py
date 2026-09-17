@@ -88,6 +88,15 @@ def test_recent_shards_cover_all_portals():
     }
     assert any("/s/pronajem/domy/" in item["search_url"] for item in idnes)
     assert all("/dum/" not in item["search_url"] for item in idnes)
+    ceske = [item for item in extra if item["portal"] == "ceskereality"]
+    assert {item["shard_key"] for item in ceske} >= {
+        "ceskereality:recent:pronajem:byty",
+        "ceskereality:recent:prodej:byty",
+        "ceskereality:recent:pronajem:domy",
+        "ceskereality:recent:prodej:domy",
+    }
+    assert any("/pronajem/rodinne-domy/nejnovejsi/" in item["search_url"] for item in ceske)
+    assert all("/pronajem/domy/" not in item["search_url"] for item in ceske)
 
 
 def test_prepare_discovery_shards_extras_first_and_skips_cooldown():

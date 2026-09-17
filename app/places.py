@@ -145,6 +145,17 @@ CITY_CENTERS = [
     ("Slaný", 50.2305, 14.0869),
     ("Dobříš", 49.7811, 14.1672),
     ("Poděbrady", 50.1425, 15.1188),
+    ("Mariánské Lázně", 49.9646, 12.7012),
+    ("Františkovy Lázně", 50.1203, 12.3518),
+    ("Police nad Metují", 50.5276, 16.2335),
+    ("Napajedla", 49.1716, 17.5119),
+    ("Lanškroun", 49.9120, 16.6124),
+    ("Hostivice", 50.0816, 14.2586),
+    ("Štětí", 50.4531, 14.3742),
+    ("Mníšek pod Brdy", 49.8665, 14.2618),
+    ("Spálené Poříčí", 49.6139, 13.6056),
+    ("Černošín", 49.8164, 12.8839),
+    ("Zašová", 49.4478, 18.0444),
 ]
 # iDNES (and other) list cards for Croatian ads have no local Czech pin.
 GPS_PIN_ALIASES = [
