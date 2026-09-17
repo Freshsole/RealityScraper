@@ -386,6 +386,50 @@ def listing_identity_sql(alias: str = "listings") -> str:
     )
 
 
+def listing_pin_identity_sql(alias: str = "listings") -> str:
+    """Dedupe expression covered by idx_listings_pin_cover (no url / blobs)."""
+    return (
+        f"COALESCE(NULLIF({alias}.canonical_key, ''), NULLIF({alias}.listing_key, ''), "
+        f"{alias}.monitor_id || ':' || {alias}.id)"
+    )
+
+
+# Pin GPS scans stay off extras/description. Covering index matches these columns.
+_PIN_COVER_COLS = (
+    "listings.id, listings.monitor_id, listings.lat, listings.lon, "
+    "listings.price_czk, listings.listing_key, listings.canonical_key"
+)
+_PIN_DISPLAY_COLS = (
+    f"{_PIN_COVER_COLS}, listings.price_label, listings.name, listings.locality, listings.url"
+)
+# Prague-wide bbox span is ~1.0; city-centroid clustering still waits for >1.5 so
+# Holešovice density stays visible. Grid ~100m cells before that.
+_PIN_GRID_SPAN = 0.35
+_PIN_GRID_DECIMALS = 3
+_PIN_CITY_CLUSTER_SPAN = 1.5
+
+
+def _pin_gps_grid_sql(gps_clause: str, *, decimals: int = _PIN_GRID_DECIMALS) -> str:
+    identity = listing_pin_identity_sql()
+    return f"""
+        SELECT ROUND(src.lat, {decimals}) AS lat,
+               ROUND(src.lon, {decimals}) AS lon,
+               COUNT(*) AS count,
+               MIN(src.id) AS id,
+               MIN(src.monitor_id) AS monitor_id,
+               MIN(src.price_czk) AS price_czk,
+               MIN(src.listing_key) AS listing_key,
+               MIN(src.canonical_key) AS canonical_key
+        FROM (
+            SELECT {_PIN_COVER_COLS}
+            FROM listings
+            WHERE {gps_clause}
+            GROUP BY {identity}
+        ) src
+        GROUP BY ROUND(src.lat, {decimals}), ROUND(src.lon, {decimals})
+    """
+
+
 def _csv(value: Any) -> list[str]:
     if not value:
         return []
@@ -4096,6 +4140,10 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_id ON listings(id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_disposition ON listings(disposition)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_geo_notified ON listings(lat, lon, notified)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_listings_pin_cover "
+            "ON listings(lat, lon, notified, id, monitor_id, price_czk, listing_key, canonical_key)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor ON listings(monitor_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_url ON catalog_listings(url)")
         conn.executescript(
@@ -4905,12 +4953,6 @@ class Store:
         cache_key: tuple[Any, ...] | None = None
         leftover = 0
         leftover_sample: list[str] = []
-        select = """
-            SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
-                   listings.price_czk, listings.price_label, listings.name, listings.locality,
-                   listings.listing_key, listings.canonical_key, listings.url
-            FROM listings
-        """
         fetched: list[dict[str, Any]] = []
         if anchors and not place_geoms and wide and span >= 3.5:
             skip = {"south", "north", "west", "east", "lat", "lon", "radius_m", "limit", "offset", "sort", "places", "place_geoms", "place_empty"}
@@ -4921,6 +4963,23 @@ class Store:
                 cache_hit = True
                 filters["_pin_leftover"] = leftover
                 filters["_pin_leftover_sample"] = leftover_sample
+        elif anchors and not place_geoms and not wide and span >= _PIN_GRID_SPAN and isinstance(bbox, tuple):
+            skip = {"south", "north", "west", "east", "lat", "lon", "radius_m", "limit", "offset", "sort", "places", "place_geoms", "place_empty"}
+            cache_key = (
+                "pin-grid",
+                tuple(round(float(item), 4) for item in bbox),
+                tuple(
+                    sorted(
+                        (str(k), str(v))
+                        for k, v in filters.items()
+                        if not str(k).startswith("_") and k not in skip
+                    )
+                ),
+            )
+            hit = self._city_pin_cache.get(cache_key)
+            if hit and time.monotonic() - hit[0] < 2.0:
+                fetched, leftover, leftover_sample = hit[1], hit[2], hit[3]
+                cache_hit = True
         if not cache_hit:
             with self.read() as conn:
                 if anchors and not place_geoms and wide:
@@ -4985,8 +5044,9 @@ class Store:
                     if cache_key is not None:
                         self._city_pin_cache[cache_key] = (time.monotonic(), list(fetched), leftover, leftover_sample)
                 elif anchors and not place_geoms:
-                    # Piny jen se souřadnicemi ve viewportu — dřívější LIMIT 400
-                    # z celého locality-match setu podvzorkoval čtvrti (11→22 při zoomu).
+                    # GPS-only range scan so idx_listings_pin_cover can cover the
+                    # read. City-wide (span >= 0.35, still below 1.5 city centroids)
+                    # GROUP BY identity then ~100m grid instead of pulling 8000 fat rows.
                     pin_cap = max(int(pin_limit), 8000)
                     base_where, base_params = _without_map_bbox(where, params, filters)
                     gps_sql_frag = filters.get("_gps_sql") or (
@@ -4997,60 +5057,79 @@ class Store:
                     if not gps_params and isinstance(bbox, tuple) and len(bbox) == 4:
                         gps_params = [bbox[0], bbox[1], bbox[2], bbox[3]]
                     gps_clause = " AND ".join([*base_where, gps_sql_frag])
-                    gps_sql = f"""
-                    {select}
-                    WHERE {gps_clause}
-                    ORDER BY listings.notified DESC
-                    LIMIT {pin_cap}
-                    """
-                    gps_rows = [
-                        dict(row)
-                        for row in conn.execute(gps_sql, (*base_params, *gps_params)).fetchall()
-                    ]
+                    gps_bind = (*base_params, *gps_params)
+                    use_grid = span >= _PIN_GRID_SPAN
+                    if use_grid:
+                        gps_sql = _pin_gps_grid_sql(gps_clause)
+                        gps_rows = [dict(row) for row in conn.execute(gps_sql, gps_bind).fetchall()]
+                    else:
+                        identity = listing_pin_identity_sql()
+                        gps_sql = f"""
+                        SELECT {_PIN_DISPLAY_COLS}
+                        FROM listings
+                        WHERE {gps_clause}
+                        GROUP BY {identity}
+                        LIMIT {pin_cap}
+                        """
+                        gps_rows = [dict(row) for row in conn.execute(gps_sql, gps_bind).fetchall()]
                     fetched.extend(gps_rows)
-                    text_sql = str(filters.get("_text_sql") or "").strip()
-                    text_params = list(filters.get("_text_params") or [])
-                    null_parts = [
-                        *base_where,
-                        "(listings.lat IS NULL OR listings.lon IS NULL)",
-                    ]
-                    null_params = list(base_params)
-                    if text_sql:
-                        null_parts.append(f"({text_sql})")
-                        null_params.extend(text_params)
-                    null_sql = f"""
-                    {select}
-                    WHERE {" AND ".join(null_parts)}
-                    ORDER BY listings.first_seen DESC
-                    LIMIT 2000
-                    """
-                    buckets: dict[str, list[dict[str, Any]]] = {}
-                    for row in conn.execute(null_sql, null_params).fetchall():
-                        item = dict(row)
-                        loc = str(item.get("locality") or "")
-                        point = places.approx_point_from_locality(loc)
-                        if not point:
-                            continue
-                        if isinstance(bbox, tuple) and len(bbox) == 4:
-                            b_south, b_north, b_west, b_east = bbox
-                            if not (b_south <= point[0] <= b_north and b_west <= point[1] <= b_east):
+                    # Null-GPS locality pins: skip the 2000-row first_seen sort on
+                    # city-wide views once GPS already filled the viewport.
+                    take_null = (not use_grid) or len(gps_rows) < 80
+                    if take_null:
+                        text_sql = str(filters.get("_text_sql") or "").strip()
+                        text_params = list(filters.get("_text_params") or [])
+                        null_parts = [
+                            *base_where,
+                            "(listings.lat IS NULL OR listings.lon IS NULL)",
+                        ]
+                        null_params = list(base_params)
+                        if text_sql:
+                            null_parts.append(f"({text_sql})")
+                            null_params.extend(text_params)
+                        null_limit = 400 if use_grid else 2000
+                        null_sql = f"""
+                        SELECT {_PIN_DISPLAY_COLS}
+                        FROM listings
+                        WHERE {" AND ".join(null_parts)}
+                        LIMIT {null_limit}
+                        """
+                        buckets: dict[str, list[dict[str, Any]]] = {}
+                        for row in conn.execute(null_sql, null_params).fetchall():
+                            item = dict(row)
+                            loc = str(item.get("locality") or "")
+                            point = places.approx_point_from_locality(loc)
+                            if not point:
                                 continue
-                        seed = abs(int(item.get("id") or 0))
-                        item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
-                        item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
-                        item["_geo_approx"] = True
-                        key = f"{round(point[0], 2)}:{round(point[1], 2)}"
-                        bucket = buckets.setdefault(key, [])
-                        if len(bucket) < 50:
-                            bucket.append(item)
-                    for bucket in buckets.values():
-                        fetched.extend(bucket)
+                            if isinstance(bbox, tuple) and len(bbox) == 4:
+                                b_south, b_north, b_west, b_east = bbox
+                                if not (b_south <= point[0] <= b_north and b_west <= point[1] <= b_east):
+                                    continue
+                            seed = abs(int(item.get("id") or 0))
+                            item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
+                            item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
+                            item["_geo_approx"] = True
+                            key = f"{round(point[0], 2)}:{round(point[1], 2)}"
+                            bucket = buckets.setdefault(key, [])
+                            if len(bucket) < 50:
+                                bucket.append(item)
+                        for bucket in buckets.values():
+                            fetched.extend(bucket)
+                    if cache_key is not None:
+                        self._city_pin_cache[cache_key] = (
+                            time.monotonic(),
+                            list(fetched),
+                            leftover,
+                            leftover_sample,
+                        )
                 else:
+                    identity = listing_pin_identity_sql()
                     sql = f"""
-                    {select}
+                    SELECT {_PIN_DISPLAY_COLS}
+                    FROM listings
                     WHERE {clause}
                       AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                    ORDER BY listings.notified DESC, listings.rowid ASC
+                    GROUP BY {identity}
                     LIMIT {int(pin_limit)}
                     """
                     fetched.extend(dict(row) for row in conn.execute(sql, params).fetchall())

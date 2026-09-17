@@ -169,12 +169,16 @@ def _plans(store: Store) -> None:
             ORDER BY listings.first_seen DESC LIMIT 96
         """,
         "pins-bbox": """
-            SELECT listings.id, listings.monitor_id, listings.lat, listings.lon
-            FROM listings
-            WHERE listings.lat BETWEEN 49.90 AND 50.25
-              AND listings.lon BETWEEN 14.10 AND 14.75
-            ORDER BY listings.notified DESC, listings.rowid ASC
-            LIMIT 800
+            SELECT ROUND(src.lat, 3) AS lat, ROUND(src.lon, 3) AS lon, COUNT(*) AS n
+            FROM (
+                SELECT listings.lat, listings.lon, listings.listing_key
+                FROM listings
+                WHERE listings.lat IS NOT NULL AND listings.lon IS NOT NULL
+                  AND listings.lat BETWEEN 49.90 AND 50.25
+                  AND listings.lon BETWEEN 14.10 AND 14.75
+                GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), listings.listing_key)
+            ) src
+            GROUP BY ROUND(src.lat, 3), ROUND(src.lon, 3)
         """,
         "item-url": """
             SELECT listings.id FROM listings

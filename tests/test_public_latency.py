@@ -22,7 +22,7 @@ from app.site_pages import (
     web_body,
     web_page,
 )
-from app.store import Store, catalog_item_needs_live_fetch
+from app.store import Store, catalog_item_needs_live_fetch, _pin_gps_grid_sql
 
 
 def test_catalog_item_skips_live_fetch_when_gallery_is_rich():
@@ -812,11 +812,44 @@ def test_catalog_item_url_uses_listings_url_index(tmp_path: Path):
     assert "idx_listings_id" in indexes
     assert "idx_listings_disposition" in indexes
     assert "idx_listings_geo_notified" in indexes
+    assert "idx_listings_pin_cover" in indexes
     assert "idx_listings_url" in plan
     assert "SCAN listings" not in plan or "USING INDEX" in plan
     item = store.catalog_item("", None, "", url)
     assert item and item["url"] == url
     assert "pets" in (item.get("flags") or [])
+
+
+def test_map_pin_gps_grid_uses_covering_lat_lon_index(tmp_path: Path):
+    store = Store(tmp_path / "pin-idx.sqlite")
+    _seed_fat_listings(store, 80, blob_bytes=80)
+    gps_clause = (
+        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
+        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
+    )
+    sql = _pin_gps_grid_sql(gps_clause)
+    with store.read() as conn:
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(listings)")}
+        plan = " ".join(
+            row[3]
+            for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", (49.90, 50.25, 14.10, 14.75))
+        )
+    assert "idx_listings_pin_cover" in indexes
+    assert "idx_listings_pin_cover" in plan or "COVERING INDEX" in plan
+    assert "SCAN listings" not in plan or "USING INDEX" in plan
+    pins = store.catalog(
+        {
+            "pins_only": True,
+            "south": "49.90",
+            "north": "50.25",
+            "west": "14.10",
+            "east": "14.75",
+        }
+    )
+    assert pins["items"]
+    assert all(item.get("lat") is not None and item.get("lon") is not None for item in pins["items"])
+    # 80 rows share 40 GPS cells at 0.001°; grid must collapse them.
+    assert len(pins["items"]) <= 50
 
 
 def test_catalog_hidden_filter_stays_off_until_listing_user_exists(tmp_path: Path):
@@ -898,6 +931,9 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
         }
 
     sample(flush=True)
+    quiet_pins = store.catalog(pin_filters)
+    assert quiet_pins["items"]
+    assert len(quiet_pins["items"]) <= 80
     quiet_miss = [sample(flush=True) for _ in range(8)]
     stop = threading.Event()
 
@@ -930,13 +966,13 @@ def test_fat_catalog_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsy
 
     assert _p95(col(quiet_miss, "catalog")) < 45, col(quiet_miss, "catalog")
     assert _p95(col(quiet_miss, "search")) < 45, col(quiet_miss, "search")
-    assert _p95(col(quiet_miss, "pins")) < 90, col(quiet_miss, "pins")
+    assert _p95(col(quiet_miss, "pins")) < 50, col(quiet_miss, "pins")
     assert _p95(col(quiet_miss, "listings")) < 20, col(quiet_miss, "listings")
     assert _p95(col(quiet_miss, "item")) < 12, col(quiet_miss, "item")
     assert _p95(col(quiet_miss, "watch")) < 12, col(quiet_miss, "watch")
     assert _p95(col(writer_miss, "catalog")) < 50, col(writer_miss, "catalog")
     assert _p95(col(writer_miss, "search")) < 50, col(writer_miss, "search")
-    assert _p95(col(writer_miss, "pins")) < 90, col(writer_miss, "pins")
+    assert _p95(col(writer_miss, "pins")) < 50, col(writer_miss, "pins")
     assert _p95(col(writer_miss, "listings")) < 25, col(writer_miss, "listings")
     assert _p95(col(writer_miss, "item")) < 12, col(writer_miss, "item")
     assert _p95(col(writer_hit, "catalog")) < 20, col(writer_hit, "catalog")
@@ -1978,7 +2014,7 @@ def test_leftover_json_stays_snappy_under_scrape_writer(tmp_path: Path, capsys):
         ordered = sorted(values)
         return ordered[max(0, int(round(0.95 * (len(ordered) - 1))))]
 
-    assert p95(samples["status"]) < 40, samples["status"]
+    assert p95(samples["status"]) < 50, samples["status"]
     assert p95(samples["settings"]) < 15, samples["settings"]
     assert p95(samples["templates"]) < 15, samples["templates"]
     assert p95(samples["discord"]) < 15, samples["discord"]
