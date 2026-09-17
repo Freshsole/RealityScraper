@@ -9,13 +9,13 @@ from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card
 from app.portal_urls import annonce_url
 
 SITE = annonce_url.site
-# Lookahead so the next card opener is not consumed (live pages interleave slideshow cards).
+# Lookahead so the next card opener is not consumed (apartments: ext-item; houses: slideshow item).
 CARD_RE = re.compile(
-    r'<div class="box q ext-item[^"]*">(.*?)(?=<div class="(?:box q ext-item|rows js-more)|$)',
+    r'<div class="box q (?:ext-item|slideshow item)[^"]*">(.*?)(?=<div class="box q (?:ext-item|slideshow item)|<div class="rows js-more|$)',
     re.S | re.I,
 )
 CARD2_RE = re.compile(
-    r'class="box q ext-item[^"]*"(.*?)(?=class="box q ext-item|js-more-ads|$)',
+    r'class="box q (?:ext-item|slideshow item)[^"]*"(.*?)(?=class="box q (?:ext-item|slideshow item)|js-more-ads|$)',
     re.S | re.I,
 )
 INZERAT_RE = re.compile(r"""href=["'](/inzerat/[^"']*?-(\d{6,})-[a-z0-9]+\.html)["']""", re.I)

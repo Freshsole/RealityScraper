@@ -118,14 +118,16 @@ class ExtraPortalTests(unittest.TestCase):
         client = AnnonceClient("https://www.annonce.cz/byty-k-pronajmu.html")
         items = client._parse_list(html)
         ids = [item.id for item in items]
-        self.assertEqual(ids, [88323899, 88695951, 88672809, 88159057])
+        self.assertEqual(ids, [88323899, 88695951, 88672809, 88696077, 88159057])
         self.assertEqual(items[0].locality, "Praha 4")
         self.assertEqual(items[0].price_czk, 13500)
         self.assertIn("attachment", items[0].image_url or "")
         self.assertEqual(items[1].disposition, "3+1")
         self.assertEqual(items[1].locality, "Karlovy Vary")
         self.assertNotIn(88693793, ids)
-        self.assertTrue(items[3].url.endswith("88159057-w2713c.html"))
+        self.assertEqual(items[3].locality, "Praha 5")
+        self.assertEqual(items[3].price_czk, 26000)
+        self.assertTrue(items[4].url.endswith("88159057-w2713c.html"))
         self.assertEqual(client._page_url(2), "https://www.annonce.cz/byty-k-pronajmu.html?page=2")
 
     def test_remax_list(self):
