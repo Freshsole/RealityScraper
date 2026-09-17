@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Tipněte nájem — REALITIFY</title>
-    <link rel="preload" href="/static/site/games.css?v=14" as="style" />
-    <link rel="preload" href="/static/site/games.js?v=12" as="script" />
+    <link rel="preload" href="/static/site/games.css?v=15" as="style" />
+    <link rel="preload" href="/static/site/games.js?v=13" as="script" />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="/static/site/games.css?v=14" />
+    <link rel="stylesheet" href="/static/site/games.css?v=15" />
   </head>
   <body class="game-page game-rent">
     <header class="navbar">
@@ -31,7 +31,7 @@
       <section class="game-copy">
         <p class="eyebrow">TIP NÁJMU · STEJNÁ LOKALITA</p>
         <h1 class="display">KOLIK STOJÍ MĚSÍC?</h1>
-        <p class="lead">Pět bytů ze stejné čtvrti — výhodné kousky vedle přestřelených cen. Čím blíž jste, tím víc bodů. Žebříček uvidí admin.</p>
+        <p class="lead">Pět bytů ze stejné čtvrti — výhodné kousky vedle přestřelených cen. Čím blíž jste, tím víc bodů. Ve hře skóre uvidíte jen vy — žebříček zůstane adminovi.</p>
         <div class="game-scoreline" id="rent-score">
           <span class="score-chip">Byt <strong>1 / 5</strong></span>
           <span class="score-chip">Tipy <strong>—</strong></span>
@@ -66,6 +66,13 @@
           <div class="info-row"><span>Stejná lokalita</span><strong>Načítám…</strong></div>
           <div class="info-row"><span>Takové nabídky mizí</span><strong>v řádu hodin</strong></div>
         </div>
+        <div class="board-tease" aria-label="Náhled žebříčku">
+          <div class="board-tease-head"><span>Žebříček</span><strong>jen admin</strong></div>
+          <div class="info-row"><span>1. —</span><strong>— — —</strong></div>
+          <div class="info-row"><span>2. —</span><strong>— — —</strong></div>
+          <div class="info-row"><span>3. —</span><strong>— — —</strong></div>
+          <p class="board-tease-note">Tipy jdou do interního žebříčku. Ve hře skóre uvidíte jen vy.</p>
+        </div>
       </section>
     </main>
     <section class="game-band">
@@ -77,6 +84,6 @@
         <a class="pill pill-lg" href="/registrace">Hlídání zdarma</a>
       </div>
     </section>
-    <script src="/static/site/games.js?v=12"></script>
+    <script src="/static/site/games.js?v=13"></script>
   </body>
 </html>

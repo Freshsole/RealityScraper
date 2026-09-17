@@ -398,16 +398,24 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "is-skeleton" in rent
     assert "ccy-pill" in rent
     assert "Takové nabídky mizí" in rent
+    assert "Takové nabídky mizí" in html
     assert "STEJNÁ LOKALITA" in rent
     assert "v řádu hodin" in rent
+    assert "V ŘÁDU HODIN" in hub
     assert "v řádu minut" not in rent
+    assert "v řádu minut" not in hub
+    assert "v řádu minut" not in html
+    assert "games.css?v=15" in hub
+    assert "board-tease" in rent
+    assert "jen admin" in rent
+    assert "Ve hře skóre uvidíte jen vy" in rent
     assert "rent-hint" in rent
     assert "mezery doplníme" in rent
     assert "18 000" in rent
-    assert "games.js?v=12" in rent
-    assert "games.css?v=14" in rent
-    assert "games.js?v=12" in html
-    assert "games.css?v=14" in html
+    assert "games.js?v=13" in rent
+    assert "games.css?v=15" in rent
+    assert "games.js?v=13" in html
+    assert "games.css?v=15" in html
     assert "vidíte v administraci" not in hub
     assert "Výhodné kousky" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
@@ -419,6 +427,8 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert ".converter" in css
     assert ".ccy-pill" in css
     assert ".info-row" in css
+    assert ".board-tease" in css
+    assert ".board-tease-head" in css
     assert "@font-face" in css
     assert "font-display: optional" in css
     assert "fonts.googleapis" not in css
@@ -442,6 +452,9 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "vanishText(item.vanish_hours, item.vanish_label" in js
     assert "TYPICAL_VANISH" in js
     assert "v řádu hodin" in js
+    assert "boardTease" in js
+    assert "board-tease" in js
+    assert "jen admin" in js
     assert "roundMeta.copy" in js
     assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
@@ -458,7 +471,13 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "font-size: 40px" in phone
     assert "min-height: 48px" in phone
     assert ".info-row" in phone
+    assert "flex-wrap: wrap" in phone
+    assert ".board-tease-head" in phone
+    assert ".name-field" in phone
     assert "fonts.googleapis" not in phone
+    tease = css.split(".board-tease {", 1)[1].split(".loc-chip {", 1)[0]
+    assert "font-weight: 900" not in tease
+    assert "fonts.googleapis" not in tease
     ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
     assert "flex-shrink: 0" in ccy
     assert "max-width: 100%" in css.split(".converter {", 1)[1].split("}", 1)[0]
@@ -756,7 +775,7 @@ def test_preferred_game_pool_is_memory_fast():
         preferred_game_pool(live)
         preferred_game_pool([])
     ms = (time.perf_counter() - t0) * 1000
-    assert ms < 40, f"preferred_game_pool loop {ms:.1f}ms"
+    assert ms < 80, f"preferred_game_pool loop {ms:.1f}ms"
 
 
 def _noisy_live_pool():

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from app.games import reset_pool_cache, wait_refresh
 from app.site_pages import (
     InstantSiteASGI,
     app_shell_redirect,
@@ -468,6 +469,29 @@ def _latency_listing(i: int):
     )
 
 
+def _hry_ttfb_listing(i: int):
+    """Mixed-size flats so warm JSON still scores teaching contrast."""
+    from app.sreality import Listing
+
+    disposition = ("1+kk", "2+kk", "3+kk", "4+kk")[i % 4]
+    area = 28 + (i % 7) * 8
+    price = 11_500 + (i % 13) * 1700 + (i % 5) * 250
+    return Listing(
+        id=30_000 + i,
+        name=f"Pronájem bytu {disposition}",
+        price_czk=price,
+        price_label=f"{price} Kč/měsíc",
+        disposition=disposition,
+        area_m2=area,
+        locality=f"Praha {(i % 8) + 1}",
+        url=f"https://www.sreality.cz/detail/pronajem/byt/{disposition}/praha/{30_000 + i}",
+        image_url=f"https://img.example/hry-{i}.jpg",
+        lat=50.08 + (i % 20) * 0.001,
+        lon=14.42 + (i % 20) * 0.001,
+        extras={"offer": "Pronájem", "estate": "Byt", "portal": "sreality"},
+    )
+
+
 def test_readonly_connect_is_wal_query_only_not_mode_ro(tmp_path: Path, monkeypatch):
     seen: list[tuple[tuple, dict]] = []
     real = sqlite3.connect
@@ -822,6 +846,7 @@ async def _asgi_post(app, path: str, payload: dict) -> tuple[int, dict[bytes, by
 
 
 def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
+    reset_pool_cache()
     store = Store(tmp_path / "game-scrape.sqlite")
     seed = [_latency_listing(i) for i in range(80)]
     store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=20, fast=True)
@@ -976,13 +1001,160 @@ def test_game_json_and_hry_html_ttfb_under_scrape_writer(tmp_path: Path):
     assert hit["n"] == 0
     report = []
     for path, values in samples.items():
+        cold = values[0]
+        warm = values[1:] or values
         p50 = _percentile(values, 0.50)
         p95 = _percentile(values, 0.95)
-        report.append(f"{path} n={len(values)} p50={p50:.2f}ms p95={p95:.2f}ms")
+        warm_p95 = _percentile(warm, 0.95)
+        report.append(
+            f"{path} n={len(values)} cold={cold:.2f}ms p50={p50:.2f}ms p95={p95:.2f}ms warm_p95={warm_p95:.2f}ms"
+        )
         html = path in html_paths or path in app_html_paths or path in asset_paths or path.endswith("unauth")
         assert p50 < (8 if html else 15), f"{path} p50 {p50:.1f}ms {values}"
         assert p95 < (25 if html else 40), f"{path} p95 {p95:.1f}ms {values}"
+        assert warm_p95 < (8 if html else 25), f"{path} warm p95 {warm_p95:.1f}ms {warm}"
     print("game TTFB under scrape:\n  " + "\n  ".join(report))
+
+
+def test_hry_routes_ttfb_cold_warm_under_scrape_writer(tmp_path: Path):
+    """Dedicated InstantSite /hry* audit: HTML memory path + seed/live JSON vs scrape writer."""
+    reset_pool_cache()
+    store = Store(tmp_path / "hry-ttfb.sqlite")
+    seed = [_hry_ttfb_listing(i) for i in range(240)]
+    store.upsert_catalog_listings_batch(seed, kind="seeded", commit_every=40, fast=True)
+    stop = threading.Event()
+    hit = {"n": 0}
+
+    def writer() -> None:
+        n = 0
+        while not stop.is_set():
+            batch = [_hry_ttfb_listing(800 + (n + k) % 80) for k in range(24)]
+            store.upsert_catalog_listings_batch(batch, kind="refresh", commit_every=24, fast=True)
+            if n % 3 == 0:
+                store.record_scrape_tick({"kind": "new_discovery", "n": n, "role": "all"})
+            n += 1
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    html_paths = ("/hry", "/hry/vyssi-nizsi", "/hry/najem")
+    json_paths = ("/api/public/games/higher-lower", "/api/public/games/rent-round")
+    cold: dict[str, float] = {}
+    warm: dict[str, list[float]] = {path: [] for path in (*html_paths, *json_paths)}
+
+    thread = threading.Thread(target=writer, name="rf-hry-ttfb", daemon=True)
+    thread.start()
+    time.sleep(0.05)
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        for path in (*html_paths, *json_paths):
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path)
+            cold[path] = (time.perf_counter() - t0) * 1000
+            assert status == 200, path
+            assert body
+            if path in json_paths:
+                payload = json.loads(body)
+                if path.endswith("higher-lower"):
+                    assert payload["left"]["locality_key"] == payload["right"]["locality_key"]
+                    assert payload.get("seeded") is True
+                else:
+                    assert payload["items"]
+                    assert payload.get("seeded") is True
+                    assert "v řádu minut" not in (payload.get("vanish_label") or "")
+            else:
+                assert b"fonts.googleapis" not in body
+                assert b"board-tease" in body or path != "/hry/najem"
+                if path == "/hry":
+                    assert "V ŘÁDU HODIN".encode() in body
+                    assert "V ŘÁDU MINUT".encode() not in body
+        wait_refresh(0.8)
+        for _ in range(12):
+            for path in (*html_paths, *json_paths):
+                t0 = time.perf_counter()
+                status, _headers, body = await _asgi_get(app, path)
+                warm[path].append((time.perf_counter() - t0) * 1000)
+                assert status == 200, path
+                assert body
+                if path in json_paths:
+                    payload = json.loads(body)
+                    if path.endswith("higher-lower"):
+                        assert payload["left"]["locality_key"] == payload["right"]["locality_key"]
+                    else:
+                        assert payload["items"]
+                        assert "v řádu minut" not in (payload.get("vanish_label") or "")
+
+    try:
+        asyncio.run(run())
+    finally:
+        stop.set()
+        thread.join(timeout=8)
+        reset_pool_cache()
+
+    assert hit["n"] == 0
+    report = []
+    for path in (*html_paths, *json_paths):
+        values = warm[path]
+        p50 = _percentile(values, 0.50)
+        p95 = _percentile(values, 0.95)
+        html = path in html_paths
+        report.append(
+            f"{path} cold={cold[path]:.2f}ms warm_n={len(values)} warm_p50={p50:.2f}ms warm_p95={p95:.2f}ms"
+        )
+        assert cold[path] < (8 if html else 15), f"{path} cold {cold[path]:.1f}ms"
+        assert p50 < (4 if html else 12), f"{path} warm p50 {p50:.1f}ms {values}"
+        assert p95 < (8 if html else 25), f"{path} warm p95 {p95:.1f}ms {values}"
+    print("hry TTFB cold/warm under scrape:\n  " + "\n  ".join(report))
+
+
+def test_hry_instant_path_stays_fast_under_sqlite_exclusive_lock(tmp_path: Path):
+    reset_pool_cache()
+    store = Store(tmp_path / "hry-lock.sqlite")
+    store.upsert_catalog_listings_batch(
+        [_hry_ttfb_listing(i) for i in range(40)], kind="seeded", commit_every=20, fast=True
+    )
+    locker = sqlite3.connect(store.path, timeout=30)
+    locker.execute("PRAGMA busy_timeout=30000")
+    locker.execute("BEGIN EXCLUSIVE")
+    locker.execute("UPDATE meta SET value = value")
+    hit = {"n": 0}
+
+    async def inner(scope, receive, send):
+        hit["n"] += 1
+        await asyncio.sleep(2)
+        await send({"type": "http.response.start", "status": 503, "headers": []})
+        await send({"type": "http.response.body", "body": b"slow"})
+
+    async def run() -> None:
+        app = InstantSiteASGI(inner, store=store)
+        report = []
+        for path in (
+            "/hry",
+            "/hry/vyssi-nizsi",
+            "/hry/najem",
+            "/api/public/games/higher-lower",
+            "/api/public/games/rent-round",
+        ):
+            t0 = time.perf_counter()
+            status, _headers, body = await _asgi_get(app, path)
+            ms = (time.perf_counter() - t0) * 1000
+            report.append(f"{path} {ms:.2f}ms")
+            assert status == 200, path
+            assert body
+            assert ms < 40, f"{path} under exclusive lock {ms:.1f}ms"
+        print("hry InstantSite under exclusive lock:\n  " + "\n  ".join(report))
+        assert hit["n"] == 0
+
+    try:
+        asyncio.run(run())
+    finally:
+        locker.rollback()
+        locker.close()
+        reset_pool_cache()
 
 
 def test_rent_score_stays_fast_when_writer_locks_sqlite(tmp_path: Path):

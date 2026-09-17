@@ -65,6 +65,15 @@
       )
       .join("")}</div>`;
 
+  const boardTease = () => `
+    <div class="board-tease">
+      <div class="board-tease-head"><span>Žebříček</span><strong>jen admin</strong></div>
+      <div class="info-row"><span>1. —</span><strong>— — —</strong></div>
+      <div class="info-row"><span>2. —</span><strong>— — —</strong></div>
+      <div class="info-row"><span>3. —</span><strong>— — —</strong></div>
+      <p class="board-tease-note">Tipy jdou do interního žebříčku. Ve hře skóre uvidíte jen vy.</p>
+    </div>`;
+
   const rowHtml = (item, { revealed = false, state = "", priority = false } = {}) => `
     <button type="button" class="flat-row${state ? ` ${state}` : ""}${revealed ? "" : " pickable"}" data-side="${escapeHtml(item.side || "")}" ${revealed ? "disabled" : 'tabindex="0"'}>
       <img class="flat-thumb" src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" width="96" height="96" alt="" decoding="async"${priority ? ' fetchpriority="high"' : ""} />
@@ -230,9 +239,10 @@
         <div class="loc-chip">${escapeHtml(locality)}</div>
         <div class="mint-banner">
           <strong>Skóre ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</strong>
-          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. ${escapeHtml(roundMeta.copy_ok || `Nejrychlejší z těchto pěti mizí ${vanish}`)} — žebříček uvidí jen admin.</span>
+          <span>Přesnost ${String(scored.accuracy).replace(".", ",")} %. ${escapeHtml(roundMeta.copy_ok || `Nejrychlejší z těchto pěti mizí ${vanish}`)} Ve hře skóre uvidíte jen vy.</span>
         </div>
         ${rows}
+        ${boardTease()}
         <div class="converter-actions">
           <button class="pill pill-lg" type="button" id="rent-again">Další kolo</button>
           <a class="pill-ghost" href="/registrace">Hlídat podobné byty</a>
@@ -295,6 +305,7 @@
           ["Portál", item.portal_label || ""],
           ["Takové nabídky mizí", vanish],
         ])}
+        ${boardTease()}
         <div class="mint-banner">
           <strong>Kolik stojí měsíc v Kč?</strong>
           <span>${escapeHtml(roundMeta.copy || `Pět bytů ze stejné čtvrti. Čím blíž, tím víc bodů. Dobré nabídky mizí ${vanish}.`)}</span>
