@@ -146,6 +146,40 @@ CITY_CENTERS = [
     ("Dobříš", 49.7811, 14.1672),
     ("Poděbrady", 50.1425, 15.1188),
 ]
+# iDNES (and other) list cards for Croatian ads have no local Czech pin.
+GPS_PIN_ALIASES = [
+    ("Rijeka", 45.3271, 14.4422),
+    ("Opatija", 45.3378, 14.3052),
+    ("Pula", 44.8666, 13.8496),
+    ("Zadar", 44.1194, 15.2314),
+    ("Split", 43.5081, 16.4402),
+    ("Zagreb", 45.8150, 15.9819),
+    ("Dubrovnik", 42.6507, 18.0944),
+    ("Osijek", 45.5550, 18.6955),
+    ("Šibenik", 43.7350, 15.8952),
+    ("Poreč", 45.2272, 13.5952),
+    ("Rovinj", 45.0811, 13.6387),
+    ("Medulin", 44.8225, 13.9350),
+    ("Labin", 45.0950, 14.1194),
+    ("Pazin", 45.2403, 13.9367),
+    ("Umag", 45.4314, 13.5225),
+    ("Novi Vinodolski", 45.1283, 14.7889),
+    ("Crikvenica", 45.1733, 14.6925),
+    ("Vodnjan", 44.9594, 13.8514),
+    ("Bakar", 45.3083, 14.5344),
+    ("Vrsar", 45.1492, 13.6053),
+    ("Fažana", 44.9278, 13.8036),
+    ("Svetvinčenat", 45.0822, 13.8836),
+    ("Kanfanar", 45.1217, 13.8392),
+    ("Viškovo", 45.3775, 14.3861),
+    ("Matulji", 45.3636, 14.3253),
+    ("Sveti Petar", 45.1106, 13.8364),
+]
+# Country names are a last-resort pin so they cannot steal a longer city match.
+COUNTRY_PIN_ALIASES = [
+    ("chorvatsko", "Chorvatsko", 45.1, 15.2),
+    ("hrvatska", "Chorvatsko", 45.1, 15.2),
+]
 _ANCHORS: list[tuple[str, float, float]] | None = None
 
 
@@ -178,7 +212,7 @@ def locality_anchors() -> list[tuple[str, float, float]]:
             continue
         seen.add(key)
         items.append((label, lat, lon))
-    for label, lat, lon in CITY_CENTERS:
+    for label, lat, lon in CITY_CENTERS + GPS_PIN_ALIASES:
         key = _fold_label(label)
         if key in seen:
             continue
@@ -324,6 +358,12 @@ def locality_anchor_match(text: str, collapse_prague: bool = False) -> tuple[str
                 continue
             found = _anchor_from_folded(_fold_label(part), collapse_prague)
             if found:
+                break
+    if not found:
+        folded = _fold_label(raw)
+        for needle, label, lat, lon in COUNTRY_PIN_ALIASES:
+            if needle in folded:
+                found = (label, lat, lon)
                 break
     _MATCH_CACHE[cache_key] = found
     return found

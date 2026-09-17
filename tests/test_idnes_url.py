@@ -42,6 +42,29 @@ class IdnesUrlTests(unittest.TestCase):
         self.assertIn("/pronajem/komercni-nemovitosti/praha/", url)
         parsed = idnes_url.parse_url("https://reality.idnes.cz/s/prodej/male-objekty-garaze/brno/")
         self.assertEqual(parsed["category"], "male-objekty-garaze")
+        self.assertEqual(idnes_url.canonical_category("dum"), "domy")
+        self.assertEqual(idnes_url.canonical_category("byt"), "byty")
+        self.assertEqual(idnes_url.canonical_category("pozemek"), "pozemky")
+        self.assertIn("/pronajem/domy/", idnes_url.build_url({"offers": ["pronajem"], "category": "dum"}))
+        self.assertNotIn("/byty/", idnes_url.build_url({"offers": ["pronajem"], "category": "dum"}))
+
+    def test_nationwide_parse_does_not_inject_praha(self):
+        parsed = idnes_url.parse_url("https://reality.idnes.cz/s/pronajem/byty/")
+        self.assertEqual(parsed["districts"], [])
+        self.assertEqual(parsed["category"], "byty")
+        self.assertEqual(idnes_url.build_url(parsed), "https://reality.idnes.cz/s/pronajem/byty/")
+        self.assertEqual(
+            normalize_search_url("https://reality.idnes.cz/s/pronajem/dum/"),
+            "https://reality.idnes.cz/s/pronajem/domy/",
+        )
+        self.assertEqual(
+            normalize_search_url("https://reality.idnes.cz/s/prodej/domy/"),
+            "https://reality.idnes.cz/s/prodej/domy/",
+        )
+        self.assertEqual(
+            idnes_url.page_url("https://reality.idnes.cz/s/pronajem/byt/?s-l-rq=1", 1),
+            "https://reality.idnes.cz/s/pronajem/byty/",
+        )
 
     def test_search_urls_include_idnes(self):
         urls = search_urls_for_portals(
@@ -54,7 +77,7 @@ class IdnesUrlTests(unittest.TestCase):
 
     def test_normalize_portals(self):
         self.assertEqual(normalize_portals("idnes"), "idnes")
-        self.assertEqual(normalize_search_url("https://reality.idnes.cz/s/prodej/domy/").startswith("https://reality.idnes.cz/"), True)
+        self.assertEqual(normalize_search_url("https://reality.idnes.cz/s/prodej/domy/"), "https://reality.idnes.cz/s/prodej/domy/")
 
     def test_daily_shards_use_real_idnes_paths(self):
         from app.catalog_sync import daily_shards

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app import localities
 
@@ -19,11 +19,16 @@ CATEGORIES = [
     ("male-objekty-garaze", "Garáže a objekty"),
     ("projekty", "Projekty"),
 ]
+# Sreality/Bazoš singulars 404 on iDNES list paths (/s/pronajem/dum/, /s/pronajem/byt/).
 CATEGORY_ALIASES = {
+    "byt": "byty",
+    "dum": "domy",
+    "pozemek": "pozemky",
     "komercni": "komercni-nemovitosti",
     "ostatni": "male-objekty-garaze",
     "garaze": "male-objekty-garaze",
 }
+CAT_KEYS = {key for key, _ in CATEGORIES}
 SIZES = [
     ("1-kk", "1+kk"),
     ("1-1", "1+1"),
@@ -98,11 +103,14 @@ EQUIP_KEYS = [key for key, _ in EQUIPPED]
 EXTRA_KEYS = [key for key, _ in EXTRAS]
 
 
+def canonical_category(raw, default: str = "byty") -> str:
+    key = CATEGORY_ALIASES.get(str(raw or "").strip().lower(), str(raw or "").strip().lower())
+    return key if key in CAT_KEYS else default
+
+
 def _category(raw) -> str:
     value = raw[0] if isinstance(raw, list) and raw else raw
-    key = CATEGORY_ALIASES.get(str(value or "byty"), str(value or "byty"))
-    allowed = {item for item, _ in CATEGORIES}
-    return key if key in allowed else "byty"
+    return canonical_category(value, "byty")
 
 
 def catalog() -> dict:
@@ -210,14 +218,34 @@ def build_url(filters: dict) -> str:
     return f"{BASE}/{path}/" + (f"?{encoded}" if encoded else "")
 
 
+def page_url(search_url: str, page: int = 1, newest: bool = True) -> str:
+    """Canonical list URL: /s/pronajem/domy/, never the 404 /s/pronajem/dum/."""
+    filters = parse_url(search_url)
+    built = build_url(filters)
+    split = urlsplit(built)
+    query = dict(parse_qsl(split.query, keep_blank_values=True))
+    if newest:
+        query.pop("sort", None)
+    page = max(1, int(page or 1))
+    if page <= 1:
+        query.pop("page", None)
+    else:
+        query["page"] = str(page - 1)
+    return urlunsplit(
+        (split.scheme or "https", split.netloc or "reality.idnes.cz", split.path, urlencode(query, safe="[]|"), "")
+    )
+
+
 def parse_url(url: str) -> dict:
     filters = default_filters()
+    # Nationwide list URLs have no locality segment; do not keep the form default (Praha).
+    filters["districts"] = []
     split = urlsplit(url)
     parts = [item for item in split.path.split("/") if item and item != "s"]
     if parts and parts[0] in {key for key, _ in OFFERS}:
         filters["offers"] = [parts[0]]
     if len(parts) > 1:
-        filters["category"] = _category(parts[1])
+        filters["category"] = canonical_category(parts[1])
     if len(parts) > 2:
         filters["districts"] = [parts[2]]
     query = parse_qs(split.query, keep_blank_values=True)

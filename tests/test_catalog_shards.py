@@ -55,6 +55,25 @@ def test_sreality_recent_shards_cover_sizes():
     assert all("velikost=" not in item["search_url"] for item in houses)
 
 
+def test_idnes_newest_and_house_shards():
+    daily = [item for item in daily_shards() if item["portal"] == "idnes"]
+    recent = [item for item in extra_portal_recent_shards() if item["portal"] == "idnes"]
+    assert any(item["shard_key"].startswith("idnes:domy:pronajem:") for item in daily)
+    assert {item["shard_key"] for item in recent} >= {
+        "idnes:recent:pronajem:byty",
+        "idnes:recent:prodej:byty",
+        "idnes:recent:pronajem:domy",
+        "idnes:recent:prodej:domy",
+    }
+    assert any("/s/pronajem/domy/" in item["search_url"] for item in recent)
+    assert any("/s/prodej/domy/" in item["search_url"] for item in recent)
+    assert any("/s/pronajem/byty/" in item["search_url"] for item in recent)
+    assert all("/s/pronajem/dum/" not in item["search_url"] for item in daily + recent)
+    assert all("/s/pronajem/byt/" not in item["search_url"] for item in daily + recent)
+    houses = [item for item in recent if item["shard_key"].endswith(":domy")]
+    assert all("/praha/" not in item["search_url"] for item in houses)
+
+
 def test_bazos_newest_and_house_shards():
     daily = [item for item in daily_shards() if item["portal"] == "bazos"]
     recent = [item for item in extra_portal_recent_shards() if item["portal"] == "bazos"]

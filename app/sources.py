@@ -58,7 +58,7 @@ PORTALS: tuple[PortalSpec, ...] = (
         url_likes=("%idnes.cz%",),
         client=IdnesClient,
         urls=idnes_url,
-        default_search="https://reality.idnes.cz/s/pronajem/byty/?s-l-rq=1",
+        default_search="https://reality.idnes.cz/s/pronajem/byty/",
     ),
     PortalSpec(
         id="bazos",
