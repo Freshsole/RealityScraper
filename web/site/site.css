@@ -2082,7 +2082,7 @@ body.landing-modal-open {
   background: #fff;
   border: 1px solid var(--surface);
   border-radius: var(--radius-card);
-  filter: drop-shadow(0 16px 16px rgba(14, 15, 12, 0.06));
+  box-shadow: var(--shadow-card);
 }
 
 .form-panel h2,
@@ -2090,8 +2090,10 @@ body.landing-modal-open {
   margin: 0;
   font-family: var(--font-display);
   font-size: 28px;
-  font-weight: 400;
-  line-height: normal;
+  font-weight: 900;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
   color: var(--forest);
   white-space: nowrap;
 }
@@ -2428,7 +2430,7 @@ body.landing-modal-open {
 .section-badge {
   display: inline-flex;
   padding: 6px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   background: var(--mint);
   font-size: 12px;
   font-weight: 700;
@@ -4219,6 +4221,15 @@ body.article-popup-open {
   margin-bottom: -8px;
 }
 
+.contact-hero .game-pill {
+  margin-bottom: 0;
+}
+
+.stories-hero .game-pill {
+  background: var(--green);
+  color: var(--forest);
+}
+
 .game-pill {
   display: inline-flex;
   align-items: center;
@@ -4273,6 +4284,95 @@ body.article-popup-open {
   .game-hub {
     grid-template-columns: 1fr;
   }
+}
+
+/* /byt landing — Wise converter card + room stage + typewriter */
+.byt-page {
+  overflow-x: clip;
+}
+
+.byt-page .hero,
+.byt-page .hero-right {
+  overflow: visible;
+}
+
+.byt-converter {
+  overflow: visible;
+}
+
+.room-stage {
+  width: 100%;
+  aspect-ratio: 1420 / 1200;
+  position: relative;
+  overflow: visible;
+  pointer-events: none;
+  margin: 0 0 20px;
+}
+
+.room-scene {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  --p: 0;
+}
+
+.room-scene img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+  transform-origin: center center;
+}
+
+.room-dum { left: 0; top: 0; width: 100%; height: 100%; z-index: 1; }
+.room-kuchyne { left: 29.72%; top: 50.67%; width: 28.80%; height: 22.42%; z-index: 2; --dx: -70%; --dy: 48%; --rot: -14deg; }
+.room-kytka { left: 58.52%; top: 61.92%; width: 10.70%; height: 25.67%; z-index: 3; --dx: 72%; --dy: 52%; --rot: 12deg; }
+.room-nabytek { left: 4.93%; top: 69.67%; width: 55.63%; height: 26.42%; z-index: 4; --dx: -12%; --dy: 85%; --rot: 8deg; }
+.room-skrin { left: 58.52%; top: 0.67%; width: 33.03%; height: 40.00%; z-index: 5; --dx: 78%; --dy: -58%; --rot: 10deg; }
+.room-televize { left: 1.55%; top: 48.00%; width: 33.52%; height: 34.92%; z-index: 6; --dx: -86%; --dy: 12%; --rot: -16deg; }
+.room-postel { left: 27.25%; top: 6.00%; width: 52.04%; height: 42.00%; z-index: 7; --dx: -58%; --dy: -72%; --rot: -9deg; }
+
+.room-fly {
+  z-index: 8;
+  transform: translate3d(calc(var(--p) * var(--dx)), calc(var(--p) * var(--dy)), 0) rotate(calc(var(--p) * var(--rot)));
+  filter: blur(calc(var(--p) * 4px));
+  will-change: transform, filter;
+}
+
+.type-slot {
+  display: inline-grid;
+  vertical-align: baseline;
+  max-width: 100%;
+}
+
+.type-ghost {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.type-live {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+}
+
+.type-caret {
+  font-family: var(--font-ui);
+  font-weight: 400;
+  letter-spacing: 0;
+  margin-left: 0.04em;
+  color: var(--forest);
+  animation: type-blink 1.05s step-end infinite;
+}
+
+@keyframes type-blink {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .type-caret { animation: none; }
 }
 
 /* After later page blocks so 390px tokens win the cascade */
@@ -4347,6 +4447,42 @@ body.article-popup-open {
   .cookies-hero .legal-crumbs,
   .article-crumbs {
     flex-wrap: wrap;
+  }
+
+  .byt-page .hero-left .display {
+    font-size: 32px;
+    line-height: 0.9;
+  }
+
+  .byt-page .type-slot {
+    display: inline-grid;
+    width: max-content;
+    max-width: 100%;
+    justify-items: start;
+  }
+
+  .byt-page .type-ghost {
+    display: none;
+  }
+
+  .byt-page .type-rest {
+    display: block;
+  }
+
+  .byt-converter {
+    width: 100%;
+    max-width: 100%;
+    padding: 16px;
+  }
+
+  .room-stage {
+    max-width: 100%;
+    margin-bottom: 16px;
+  }
+
+  .byt-converter .pill-lg {
+    width: 100%;
+    min-height: 48px;
   }
 }
 

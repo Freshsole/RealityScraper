@@ -4,81 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>REALITIFY — Byt</title>
-    <link rel="preload" href="/static/site/site.css?v=13" as="style" />
+    <link rel="preload" href="/static/site/site.css?v=14" as="style" />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="/static/site/site.css?v=13" />
+    <link rel="stylesheet" href="/static/site/site.css?v=14" />
     <link rel="preload" as="image" href="/static/site/assets/room/dum.webp" fetchpriority="high" />
-    <style>
-      html, body { overflow-x: clip; }
-      .hero { overflow: visible; }
-      .hero-right { overflow: visible; }
-      .room-stage {
-        width: min(100%, 560px);
-        aspect-ratio: 1420 / 1200;
-        position: relative;
-        overflow: visible;
-        pointer-events: none;
-      }
-      .room-scene {
-        position: absolute;
-        inset: 0;
-        overflow: visible;
-        --p: 0;
-      }
-      .room-scene img {
-        position: absolute;
-        display: block;
-        max-width: none;
-        pointer-events: none;
-        user-select: none;
-        transform-origin: center center;
-      }
-      .room-dum { left: 0; top: 0; width: 100%; height: 100%; z-index: 1; }
-      .room-kuchyne { left: 29.72%; top: 50.67%; width: 28.80%; height: 22.42%; z-index: 2; --dx: -70%; --dy: 48%; --rot: -14deg; }
-      .room-kytka { left: 58.52%; top: 61.92%; width: 10.70%; height: 25.67%; z-index: 3; --dx: 72%; --dy: 52%; --rot: 12deg; }
-      .room-nabytek { left: 4.93%; top: 69.67%; width: 55.63%; height: 26.42%; z-index: 4; --dx: -12%; --dy: 85%; --rot: 8deg; }
-      .room-skrin { left: 58.52%; top: 0.67%; width: 33.03%; height: 40.00%; z-index: 5; --dx: 78%; --dy: -58%; --rot: 10deg; }
-      .room-televize { left: 1.55%; top: 48.00%; width: 33.52%; height: 34.92%; z-index: 6; --dx: -86%; --dy: 12%; --rot: -16deg; }
-      .room-postel { left: 27.25%; top: 6.00%; width: 52.04%; height: 42.00%; z-index: 7; --dx: -58%; --dy: -72%; --rot: -9deg; }
-      .room-fly {
-        z-index: 8;
-        transform: translate3d(calc(var(--p) * var(--dx)), calc(var(--p) * var(--dy)), 0) rotate(calc(var(--p) * var(--rot)));
-        filter: blur(calc(var(--p) * 4px));
-        will-change: transform, filter;
-      }
-      .type-slot {
-        display: inline-grid;
-        vertical-align: baseline;
-      }
-      .type-ghost {
-        grid-area: 1 / 1;
-        visibility: hidden;
-        white-space: nowrap;
-        pointer-events: none;
-      }
-      .type-live {
-        grid-area: 1 / 1;
-        white-space: nowrap;
-      }
-      .type-caret {
-        font-family: var(--font-ui);
-        font-weight: 400;
-        letter-spacing: 0;
-        margin-left: 0.04em;
-        color: var(--forest);
-        animation: type-blink 1.05s step-end infinite;
-      }
-      @keyframes type-blink {
-        50% { opacity: 0; }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .type-caret { animation: none; }
-      }
-    </style>
-
   </head>
-  <body>
+  <body class="byt-page">
     <header class="navbar">
       <a class="brand" href="/">
         <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
@@ -100,7 +32,8 @@
 
     <section class="hero">
       <div class="hero-left">
-        <h1 class="display">NEJLEPŠÍ <span class="type-slot"><span class="type-ghost" aria-hidden="true">NEMOVITOSTI</span><span class="type-live"><span id="type-word">BYTY</span><span class="type-caret" aria-hidden="true">|</span></span></span> ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</h1>
+        <span class="game-pill">Hlídání bytů v ČR</span>
+        <h1 class="display">NEJLEPŠÍ <span class="type-slot"><span class="type-ghost" aria-hidden="true">NEMOVITOSTI</span><span class="type-live"><span id="type-word">BYTY</span><span class="type-caret" aria-hidden="true">|</span></span></span> <span class="type-rest">ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</span></h1>
         <p class="hero-copy">Realitify monitoruje všechny hlavní české realitní portály (Sreality, Bezrealitky, Reality.cz a další) 24/7 v reálném čase. Jakmile se objeví byt odpovídající vašim kritériím, dostanete okamžité upozornění na mobil či e-mail dřív než ostatní.</p>
         <div class="hero-actions">
           <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
@@ -115,17 +48,41 @@
         </div>
       </div>
       <div class="hero-right">
-        <div class="room-stage" id="room-stage">
-          <div class="room-scene" id="room-scene">
-            <img class="room-dum" src="/static/site/assets/room/dum.webp" width="1420" height="1200" alt="" fetchpriority="high" decoding="async" />
-            <img class="room-fly room-kuchyne" src="/static/site/assets/room/kuchyne.webp" width="409" height="269" alt="" decoding="async" />
-            <img class="room-fly room-kytka" src="/static/site/assets/room/kytka.webp" width="152" height="308" alt="" decoding="async" />
-            <img class="room-fly room-nabytek" src="/static/site/assets/room/nabytek.webp" width="790" height="317" alt="" decoding="async" />
-            <img class="room-fly room-skrin" src="/static/site/assets/room/skrin.webp" width="469" height="480" alt="" decoding="async" />
-            <img class="room-fly room-televize" src="/static/site/assets/room/televize.webp" width="476" height="419" alt="" decoding="async" />
-            <img class="room-fly room-postel" src="/static/site/assets/room/postel.webp" width="739" height="504" alt="" decoding="async" />
+        <article class="alert-card byt-converter">
+          <div class="notif-header">
+            <div>
+              <h2>Realitify • nový byt</h2>
+              <p>před 48 sekundami</p>
+            </div>
+            <span class="badge-mint">Právě teď</span>
           </div>
-        </div>
+          <div class="room-stage" id="room-stage">
+            <div class="room-scene" id="room-scene">
+              <img class="room-dum" src="/static/site/assets/room/dum.webp" width="1420" height="1200" alt="" fetchpriority="high" decoding="async" />
+              <img class="room-fly room-kuchyne" src="/static/site/assets/room/kuchyne.webp" width="409" height="269" alt="" decoding="async" />
+              <img class="room-fly room-kytka" src="/static/site/assets/room/kytka.webp" width="152" height="308" alt="" decoding="async" />
+              <img class="room-fly room-nabytek" src="/static/site/assets/room/nabytek.webp" width="790" height="317" alt="" decoding="async" />
+              <img class="room-fly room-skrin" src="/static/site/assets/room/skrin.webp" width="469" height="480" alt="" decoding="async" />
+              <img class="room-fly room-televize" src="/static/site/assets/room/televize.webp" width="476" height="419" alt="" decoding="async" />
+              <img class="room-fly room-postel" src="/static/site/assets/room/postel.webp" width="739" height="504" alt="" decoding="async" />
+            </div>
+          </div>
+          <div class="amount-row">
+            <strong>16 500</strong>
+            <span class="ccy-pill"><span class="ccy-flag">CZ</span> Kč</span>
+          </div>
+          <p class="rent-unit">Kč / měsíc</p>
+          <div class="info-rows">
+            <div class="info-row"><span>Dispozice</span><strong>2+kk • 54 m²</strong></div>
+            <div class="info-row"><span>Lokalita</span><strong>Praha 3 – Žižkov</strong></div>
+            <div class="info-row"><span>Na trhu</span><strong>48 sekund</strong></div>
+          </div>
+          <div class="mint-banner">
+            <strong>Zmizí za minuty — buďte u toho</strong>
+            <span>Jakmile se objeví byt podle vašich kritérií, pošleme upozornění dřív než ostatní.</span>
+          </div>
+          <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
+        </article>
       </div>
     </section>
 

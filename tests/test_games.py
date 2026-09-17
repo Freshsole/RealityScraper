@@ -543,7 +543,7 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".mint-banner" in css
     assert "fonts.googleapis" not in css
     assert "--font-ui: system-ui" in css
-    assert "site.css?v=13" in html
+    assert "site.css?v=14" in html
     ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
     assert "flex-shrink: 0" in ccy
     assert "@media (max-width: 480px)" in css
@@ -621,12 +621,30 @@ def test_auth_and_marketing_html_is_self_hosted_wise():
     assert ".contact-hero .display" in last_phone
     assert ".cookie-card" in last_phone
     assert "white-space: normal" in last_phone
+    assert ".type-slot" in last_phone
+    assert ".type-rest" in last_phone
+    assert ".byt-converter" in last_phone
+    assert ".room-stage" in last_phone
     assert "/static/site/inquiries.js" in site_html("kontakt.html")
     assert "/static/site/stories-list.js" in site_html("uspechy.html")
     assert "/static/site/legal.js" in site_html("obchodni-podminky.html")
     assert "/static/site/cookies.js" in site_html("nastaveni-cookies.html")
     assert "/static/site/landing-search.js" in site_html("byt.html")
     assert "/static/site/stories-articles.js" in site_html("clanek.html")
+    byt = site_html("byt.html")
+    assert "ccy-pill" in byt
+    assert "mint-banner" in byt
+    assert "badge-mint" in byt
+    assert "game-pill" in byt
+    assert "byt-converter" in byt
+    assert "Hlídání bytů v ČR" in byt
+    assert "site.css?v=14" in byt
+    assert "fonts.googleapis" not in byt
+    kontakt = site_html("kontakt.html")
+    uspechy = site_html("uspechy.html")
+    assert "Odpovíme do 2 hodin" in kontakt
+    assert "Skutečné příběhy" in uspechy
+    assert "game-pill" in kontakt and "game-pill" in uspechy
 
 
 def test_dashboard_and_admin_shells_are_self_hosted_wise():
@@ -640,6 +658,8 @@ def test_dashboard_and_admin_shells_are_self_hosted_wise():
     assert "Inter:" not in leftover
     assert "data-node-id" not in leftover
     assert "col is-us" in leftover
+    assert "byt-converter" in leftover
+    assert "ccy-pill" in leftover
     for name, html in (
         ("index.html", shell),
         ("admin/index.html", admin),
