@@ -34,11 +34,13 @@ _ASSET_TYPES = {
     ".webp": b"image/webp",
 }
 INSTANT_ASSET_FILES = (
+    "site/site.css",
     "site/games.css",
     "site/games.js",
     "site/assets/logo.svg",
     "site/fonts/archivo-black-latin.woff2",
     "site/fonts/archivo-black-latin-ext.woff2",
+    "site/assets/hero-apart.webp",
     "site/assets/sold-1.webp",
     "site/assets/sold-2.webp",
     "site/assets/sold-3.webp",

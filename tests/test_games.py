@@ -367,6 +367,9 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "font-display: optional" in css
     assert "fonts.googleapis" not in css
     assert "system-ui" in css
+    assert ".game-hub" in css
+    assert "background: var(--surface)" in css
+    assert ".game-card .pill" in css
     assert "ccy-pill" in js
     assert "info-rows" in js
     assert "pill-ghost" in js
@@ -410,10 +413,26 @@ def test_homepage_html_is_memory_fast_and_uses_webp():
     assert ".png" not in html
     assert "hero-apart.webp" in html
     assert "sold-1.webp" in html
-    assert 'media="print"' in html
+    assert "fonts.googleapis" not in html
+    assert "fonts.gstatic" not in html
+    assert "archivo-black-latin.woff2" in html
+    assert "ccy-pill" in html
+    assert "mint-banner" in html
+    assert "Otevřít nabídku" in html
     assert "ceny v Kč" in html
     assert "dobré ceny mizí" in html
     assert "admin žebříčku" not in html
+    assert "data-node-id" not in html
+    css = (Path(__file__).resolve().parents[1] / "web" / "site" / "site.css").read_text(encoding="utf-8")
+    assert "@font-face" in css
+    assert "font-display: optional" in css
+    assert "#163300" in css
+    assert "#9fe870" in css
+    assert "font-weight: 900" in css
+    assert "text-transform: uppercase" in css
+    assert ".ccy-pill" in css
+    assert ".mint-banner" in css
+    assert "fonts.googleapis" not in css
     assert cold_ms < 80, f"cold homepage HTML {cold_ms:.1f}ms"
     assert warm_ms < 5, f"cached homepage HTML {warm_ms:.1f}ms"
     response = site_page("index.html")
