@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.store import Store
+from app.store import CATALOG_MONITOR_ID, Store
 from app.ulovdomov import (
     DETAIL_API,
     UlovdomovClient,
@@ -187,9 +187,60 @@ def test_sitemap_refresh_does_not_wipe_hydrated_price(tmp_path: Path):
     assert rows == []
     with store.connect() as conn:
         row = dict(conn.execute("SELECT price_czk, image_url, name FROM catalog_listings").fetchone())
+        seen = dict(
+            conn.execute(
+                "SELECT price_czk, image_url, lat FROM listings WHERE monitor_id = ?",
+                (CATALOG_MONITOR_ID,),
+            ).fetchone()
+        )
     assert row["price_czk"] == 6000
     assert row["image_url"]
     assert "1+kk" in row["name"]
+    assert seen["price_czk"] == 6000
+    assert seen["image_url"]
+    assert seen["lat"] == pytest.approx(50.65715)
+
+
+def test_catalog_list_overlays_hydrated_fields(tmp_path: Path):
+    store = Store(tmp_path / "ulov-overlay.sqlite")
+    client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+    url = "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443"
+    stub = client.listing_from_sitemap_url(url, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    detailed = listing_from_detail_payload(DETAIL, keep_url=url)
+    merge_detail(stub, detailed)
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE listings SET price_czk = NULL, price_label = '', image_url = '', lat = NULL, lon = NULL"
+        )
+        conn.commit()
+    page = store.catalog({"limit": 12, "include_pins": "0"})
+    assert page["items"]
+    item = page["items"][0]
+    assert item["price_czk"] == 6000
+    assert item["image_url"]
+    detail = store.catalog_item(CATALOG_MONITOR_ID, 3496443, "", url)
+    assert detail is not None
+    assert detail["price_czk"] == 6000
+    assert detail["lat"] == pytest.approx(50.65715)
+
+
+def test_hydrate_write_invalidates_city_pin_cache(tmp_path: Path):
+    store = Store(tmp_path / "ulov-pins.sqlite")
+    client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+    url = "https://www.ulovdomov.cz/inzerat/pronajem-brno-veveri-bayerova-2-kk/3496443"
+    stub = client.listing_from_sitemap_url(url, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    detailed = listing_from_detail_payload(DETAIL, keep_url=url)
+    merge_detail(stub, detailed)
+    store._city_pin_cache[("wide",)] = (0.0, [], 0, [])
+    store.upsert_catalog_listing(stub, kind="refresh", fast=True)
+    assert store._city_pin_cache == {}
+    store._city_pin_cache[("wide",)] = (0.0, [], 0, [])
+    again = client.listing_from_sitemap_url(url, "pronajem", "pronajem-brno-veveri-bayerova-2-kk", 3496443)
+    store.upsert_catalog_listing(again, kind="refresh", fast=True)
+    assert ("wide",) in store._city_pin_cache
 
 
 def test_unpriced_ulov_reader_prefers_missing_price(tmp_path: Path):

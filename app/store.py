@@ -100,6 +100,37 @@ def _is_thin_catalog_card(listing: Any) -> bool:
     return price is None and not image and not photos
 
 
+def _overlay_hydrated_fields(item: dict[str, Any], hydrated: dict[str, Any]) -> bool:
+    """Fill missing list/map fields from catalog_listings after a worker hydrate."""
+    changed = False
+    try:
+        dest_price = int(item["price_czk"]) if item.get("price_czk") not in (None, "") else 0
+    except (TypeError, ValueError):
+        dest_price = 0
+    try:
+        src_price = int(hydrated["price_czk"]) if hydrated.get("price_czk") not in (None, "") else 0
+    except (TypeError, ValueError):
+        src_price = 0
+    if dest_price <= 0 and src_price > 0:
+        item["price_czk"] = src_price
+        if hydrated.get("price_label"):
+            item["price_label"] = hydrated["price_label"]
+        changed = True
+    if not str(item.get("image_url") or "").strip() and hydrated.get("image_url"):
+        item["image_url"] = hydrated["image_url"]
+        if not item.get("photos"):
+            item["photos"] = _photo_urls([hydrated["image_url"]])
+        changed = True
+    if item.get("lat") is None and hydrated.get("lat") is not None:
+        item["lat"] = hydrated["lat"]
+        item["lon"] = hydrated.get("lon")
+        changed = True
+    if not str(item.get("locality") or "").strip() and hydrated.get("locality"):
+        item["locality"] = hydrated["locality"]
+        changed = True
+    return changed
+
+
 def _is_game_rental(row: dict[str, Any]) -> bool:
     """Rent filter for games without reading extras (avoids huge JSON blobs)."""
     url = str(row.get("url") or "").lower()
@@ -494,6 +525,10 @@ class Store:
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._init()
+
+    def _invalidate_catalog_pins(self) -> None:
+        """Drop wide-map city clusters so newly hydrated GPS/price show on next read."""
+        self._city_pin_cache.clear()
 
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         """Open SQLite with a reader/writer split.
@@ -2679,7 +2714,8 @@ class Store:
         key = listing_key(listing.url)
         now = utc_now()
         portal = portal_from_url(listing.url)
-        cm = self.connect() if conn is None else nullcontext(conn)
+        owns_conn = conn is None
+        cm = self.connect() if owns_conn else nullcontext(conn)
         with cm as conn:
             canon = self._resolve_canonical(conn, listing, fast=fast)
             prev_row = conn.execute(
@@ -2687,6 +2723,7 @@ class Store:
                 (canon, key),
             ).fetchone()
             prev = dict(prev_row) if prev_row else None
+            thin_refresh = bool(prev) and _is_thin_catalog_card(listing)
             changed = False
             if prev and prev.get("price_czk") is not None and listing.price_czk is not None:
                 try:
@@ -2717,7 +2754,7 @@ class Store:
                 portal,
                 canon,
             )
-            if prev and _is_thin_catalog_card(listing):
+            if thin_refresh:
                 # Sitemap / list stubs must not wipe a worker detail hydrate.
                 conn.execute(
                     """
@@ -2738,6 +2775,15 @@ class Store:
                         canon,
                         prev["listing_key"],
                     ),
+                )
+                listing = _listing_from_catalog_dict(
+                    {
+                        **prev,
+                        "url": listing.url or prev.get("url"),
+                        "name": listing.name or prev.get("name"),
+                        "disposition": listing.disposition or prev.get("disposition"),
+                        "locality": listing.locality or prev.get("locality"),
+                    }
                 )
             elif prev:
                 extras_json = _extras_json(listing.extras)
@@ -2802,7 +2848,17 @@ class Store:
                     (key, *values),
                 )
             self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind=kind, conn=conn)
-        return {"listing_key": canon, "url_key": key, "canonical_key": canon, "new": prev is None, "changed": changed, "prev": prev}
+        if owns_conn and (prev is None or not thin_refresh or changed):
+            self._invalidate_catalog_pins()
+        return {
+            "listing_key": canon,
+            "url_key": key,
+            "canonical_key": canon,
+            "new": prev is None,
+            "changed": changed,
+            "prev": prev,
+            "thin": thin_refresh,
+        }
 
     def upsert_catalog_listings_batch(
         self,
@@ -2816,18 +2872,25 @@ class Store:
             return {"n": 0, "new": 0, "updated": 0, "same": 0}
         every = max(50, int(commit_every or config.SCRAPE_BATCH_COMMIT))
         new = updated = same = 0
+        pin_dirty = False
         with self.connect() as conn:
             conn.execute("PRAGMA busy_timeout=8000")
             for index, listing in enumerate(listings, start=1):
                 result = self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
                 if result.get("new"):
                     new += 1
+                    pin_dirty = True
                 elif result.get("changed"):
                     updated += 1
+                    pin_dirty = True
                 else:
                     same += 1
+                    if not result.get("thin"):
+                        pin_dirty = True
                 if index % every == 0:
                     conn.commit()
+        if pin_dirty:
+            self._invalidate_catalog_pins()
         return {"n": len(listings), "new": new, "updated": updated, "same": same}
 
     def upsert_catalog_listings_results(
@@ -2841,12 +2904,16 @@ class Store:
         if not listings:
             return []
         results: list[dict[str, Any]] = []
+        pin_dirty = False
         with self.connect() as conn:
             conn.execute("PRAGMA busy_timeout=8000")
             for listing in listings:
-                results.append(
-                    self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
-                )
+                result = self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
+                results.append(result)
+                if result.get("new") or result.get("changed") or not result.get("thin"):
+                    pin_dirty = True
+        if pin_dirty:
+            self._invalidate_catalog_pins()
         return results
 
     def record_scrape_tick(self, tick: dict[str, Any], *, keep: int = 120) -> None:
@@ -3246,6 +3313,7 @@ class Store:
                       AND portal = 'ulovdomov'
                       AND (price_czk IS NULL OR price_czk <= 0 OR IFNULL(image_url, '') = '')
                     ORDER BY CASE WHEN price_czk IS NULL OR price_czk <= 0 THEN 0 ELSE 1 END,
+                             first_seen DESC,
                              id DESC
                     LIMIT ?
                     """,
@@ -3351,12 +3419,24 @@ class Store:
                     description, extras, last_seen, gone
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(monitor_id, id) DO UPDATE SET
-                    name = excluded.name,
-                    price_czk = excluded.price_czk,
-                    price_label = excluded.price_label,
-                    disposition = excluded.disposition,
-                    area_m2 = excluded.area_m2,
-                    locality = excluded.locality,
+                    name = CASE WHEN IFNULL(excluded.name, '') = '' THEN listings.name ELSE excluded.name END,
+                    price_czk = CASE
+                        WHEN excluded.price_czk IS NULL OR excluded.price_czk <= 0
+                        THEN listings.price_czk ELSE excluded.price_czk
+                    END,
+                    price_label = CASE
+                        WHEN IFNULL(excluded.price_label, '') = ''
+                        THEN listings.price_label ELSE excluded.price_label
+                    END,
+                    disposition = CASE
+                        WHEN IFNULL(excluded.disposition, '') = ''
+                        THEN listings.disposition ELSE excluded.disposition
+                    END,
+                    area_m2 = COALESCE(excluded.area_m2, listings.area_m2),
+                    locality = CASE
+                        WHEN IFNULL(excluded.locality, '') = ''
+                        THEN listings.locality ELSE excluded.locality
+                    END,
                     listing_key = listings.listing_key,
                     canonical_key = excluded.canonical_key,
                     image_url = COALESCE(excluded.image_url, listings.image_url),
@@ -4741,7 +4821,29 @@ class Store:
                     return item
             if not row:
                 return None
-            item = public_listing(dict(row))
+            data = dict(row)
+            if (
+                not data.get("price_czk")
+                or not str(data.get("image_url") or "").strip()
+                or data.get("lat") is None
+            ):
+                cat = None
+                look_key = str(data.get("listing_key") or data.get("canonical_key") or listing_key or "")
+                look_url = str(data.get("url") or url or "")
+                if look_key or look_url:
+                    cat = conn.execute(
+                        """
+                        SELECT price_czk, price_label, image_url, lat, lon, locality
+                        FROM catalog_listings
+                        WHERE listing_key = ? OR canonical_key = ? OR url = ?
+                        ORDER BY last_seen DESC
+                        LIMIT 1
+                        """,
+                        (look_key or look_url, look_key or look_url, look_url or look_key),
+                    ).fetchone()
+                if cat is not None:
+                    _overlay_hydrated_fields(data, dict(cat))
+            item = public_listing(data)
             monitor_id = item["monitor_id"]
             listing_id = item["id"]
             item["photos"] = _photo_urls(
@@ -5044,6 +5146,8 @@ class Store:
                 FROM catalog_listings
                 WHERE gone = 0
                   AND price_czk BETWEEN 6000 AND 90000
+                  AND IFNULL(image_url, '') != ''
+                  AND IFNULL(locality, '') != ''
                 ORDER BY last_seen DESC
                 LIMIT ?
                 """,
@@ -5322,6 +5426,47 @@ class Store:
                 monitor_params.extend(canons)
             monitor_sql += " GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), NULLIF(listings.listing_key, ''), listings.url), monitors.id ORDER BY monitors.name"
             monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall() if monitor_params else []
+            hydrate_map: dict[str, dict[str, Any]] = {}
+            thin = [
+                item
+                for item in items
+                if not item.get("price_czk")
+                or not str(item.get("image_url") or "").strip()
+                or item.get("lat") is None
+            ]
+            thin_keys = [listing_identity(item) for item in thin if listing_identity(item)]
+            thin_urls = [str(item.get("url") or "") for item in thin if item.get("url")]
+            if thin_keys or thin_urls:
+                holders_k = ",".join("?" * len(thin_keys)) if thin_keys else ""
+                holders_u = ",".join("?" * len(thin_urls)) if thin_urls else ""
+                clauses = []
+                hydrate_params: list[Any] = []
+                if thin_keys:
+                    clauses.append(
+                        f"listing_key IN ({holders_k}) OR canonical_key IN ({holders_k})"
+                    )
+                    hydrate_params.extend(thin_keys)
+                    hydrate_params.extend(thin_keys)
+                if thin_urls:
+                    clauses.append(f"url IN ({holders_u})")
+                    hydrate_params.extend(thin_urls)
+                for row in conn.execute(
+                    f"""
+                    SELECT listing_key, canonical_key, url, price_czk, price_label,
+                           image_url, lat, lon, locality
+                    FROM catalog_listings
+                    WHERE {' OR '.join(clauses)}
+                    """,
+                    hydrate_params,
+                ):
+                    payload = dict(row)
+                    for map_key in (
+                        payload.get("listing_key"),
+                        payload.get("canonical_key"),
+                        payload.get("url"),
+                    ):
+                        if map_key:
+                            hydrate_map[str(map_key)] = payload
             history = {}
             hist_keys = [(item.get("monitor_id"), item.get("id")) for item in items if item.get("monitor_id") and item.get("id") is not None]
             if hist_keys:
@@ -5348,6 +5493,10 @@ class Store:
                     bucket[map_key].append(entry)
         for item in items:
             identity = listing_identity(item)
+            hydrated = hydrate_map.get(identity) or hydrate_map.get(str(item.get("url") or ""))
+            if hydrated:
+                _overlay_hydrated_fields(item, hydrated)
+                identity = listing_identity(item)
             item["canonical_key"] = identity
             item["listing_key"] = identity
             links = links_map.get(identity) or []
