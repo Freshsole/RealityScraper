@@ -62,4 +62,5 @@ def test_sreality_house_daily_shards():
     assert "sreality:domy:prodej:cz" in keys
     houses = [item for item in daily if item["shard_key"].startswith("sreality:domy:")]
     assert all("razeni=nejnovejsi" in item["search_url"] for item in houses)
-    assert any("/pronajem/domy/" in item["search_url"] for item in houses)
+    assert any("/pronajem/domy" in item["search_url"] for item in houses)
+    assert all("velikost=" not in item["search_url"] for item in houses)

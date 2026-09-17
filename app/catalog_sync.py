@@ -252,12 +252,15 @@ def daily_shards() -> list[dict[str, str]]:
 
 
 def _sreality_url(offer: str, category: str, sizes: list[str] | None = None) -> str:
+    # Houses: nationwide /domy (no region list) matches the 22-card page-1 list.
+    # Apartment size slices keep Czech regions in the path, same as before.
+    districts = list(localities.SREALITY_CZECH_REGIONS) if category != "domy" else []
     return url_builder.build_url(
         {
             "source": "sreality",
             "offers": [offer],
             "category": category,
-            "districts": list(localities.SREALITY_CZECH_REGIONS),
+            "districts": districts,
             "sizes": sizes or [],
             "sort": "nejnovejsi",
             "price_from": None,
