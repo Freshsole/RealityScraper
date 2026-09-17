@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
 from app.portal_urls import ceskereality_url
@@ -16,6 +17,7 @@ LISTING_HREF_RE = re.compile(
     re.I,
 )
 ID_ATTR_RE = re.compile(r'id-nemovitosti=["\'](\d+)["\']', re.I)
+HTML_ID_RE = re.compile(r"-(\d{5,})\.html(?:$|[?#])", re.I)
 ID_RE = re.compile(r"(?:-|/)(\d{5,})(?:\.html(?:$|[?#])|[-/]|$)")
 IMG_ID_RE = re.compile(r"img-cache\.ceskereality\.cz/nemovitosti/(?![\w-]*x[\w-]*/)[^/]+/(\d+)/", re.I)
 TITLE_RE = re.compile(r"<h2[^>]*>(.*?)</h2>", re.S | re.I)
@@ -25,7 +27,8 @@ PRICE_BOX_RE = re.compile(
     re.S | re.I,
 )
 TOTAL_RE = re.compile(r"(?:vybírat ze|máme tady)\s+([\d\s\u00a0]+)\s+byt", re.I)
-SKIP_HREF = ("muj-profil", "redirect=", "/mapa/", "?sff=", "nejnovejsi/", "nejlevnejsi/")
+NAV_SKIP = ("muj-profil", "redirect=", "/mapa/", "?sff=")
+SORT_SKIP = ("/nejnovejsi/", "/nejlevnejsi/", "/nejdrazsi/")
 
 
 class CeskerealityClient(HtmlPortalClient):
@@ -36,6 +39,28 @@ class CeskerealityClient(HtmlPortalClient):
     def _context(self) -> str:
         path = (self.search_url or "").lower()
         return "prodej" if "/prodej/" in path else "pronajem"
+
+    def _nationwide_url(self, *, newest: bool) -> str:
+        offer = self._context()
+        suffix = "nejnovejsi/" if newest else ""
+        return f"{SITE}/{offer}/byty/{suffix}"
+
+    def _fallback_search_url(self) -> str:
+        current = urlsplit(self.search_url or "")
+        if "/nejnovejsi/" in (current.path or ""):
+            return self._nationwide_url(newest=False)
+        return self._nationwide_url(newest=True)
+
+    async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
+        listings, total = await super().fetch_page(page, newest=newest)
+        if listings or page > 1:
+            return listings, total
+        fallback = self._fallback_search_url()
+        primary = (self.search_url or "").split("?")[0].rstrip("/")
+        if fallback.rstrip("/") == primary:
+            return listings, total
+        self.search_url = fallback
+        return await super().fetch_page(page, newest=newest)
 
     def _parse_total(self, html: str) -> int:
         match = TOTAL_RE.search((html or "").replace("\xa0", " "))
@@ -63,27 +88,34 @@ class CeskerealityClient(HtmlPortalClient):
         for href in LISTING_HREF_RE.findall(html or ""):
             raw = href.split("#")[0]
             folded = raw.casefold()
-            if any(skip in folded for skip in SKIP_HREF):
+            if any(skip in folded for skip in NAV_SKIP):
                 continue
-            if ".html" in folded or ID_RE.search(raw):
+            if ".html" in folded:
+                return raw
+            if any(skip in folded for skip in SORT_SKIP):
+                continue
+            if ID_RE.search(raw):
                 return raw
         return ""
+
+    def _listing_id(self, html: str, url: str) -> str:
+        attr = ID_ATTR_RE.search(html or "")
+        if attr:
+            return attr.group(1)
+        html_id = HTML_ID_RE.search(url or "") or HTML_ID_RE.search(html or "")
+        if html_id:
+            return html_id.group(1)
+        if url:
+            id_m = ID_RE.search(url)
+            if id_m:
+                return id_m.group(1)
+        img_id = IMG_ID_RE.search(html or "")
+        return img_id.group(1) if img_id else ""
 
     def _parse_card(self, html: str, offer: str) -> Listing | None:
         href = self._listing_href(html)
         url = abs_url(href, SITE) if href else ""
-        listing_id = ""
-        attr = ID_ATTR_RE.search(html or "")
-        if attr:
-            listing_id = attr.group(1)
-        if not listing_id and url:
-            id_m = ID_RE.search(url)
-            listing_id = id_m.group(1) if id_m else ""
-        if not listing_id:
-            img_id = IMG_ID_RE.search(html or "")
-            if img_id:
-                listing_id = img_id.group(1)
-                url = url or f"{SITE}/{offer}/byty/{listing_id}/"
+        listing_id = self._listing_id(html or "", url)
         if not listing_id:
             return None
         if not url or "muj-profil" in url:

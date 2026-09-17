@@ -143,6 +143,7 @@ async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", default="")
     parser.add_argument("--live", action="store_true")
+    parser.add_argument("--portals", default="", help="Comma-separated live portal ids (default: healthy set)")
     parser.add_argument("--deadline", type=float, default=0.7)
     parser.add_argument("--pages", type=int, default=4)
     args = parser.parse_args()
@@ -158,7 +159,8 @@ async def main() -> None:
         "page1_delta": after["page1_ok"] - before["page1_ok"],
     }
     if args.live:
-        report["live_page1"] = await measure_live(set(HEALTHY_DISCOVERY_PORTALS))
+        wanted = {item.strip().lower() for item in args.portals.split(",") if item.strip()}
+        report["live_page1"] = await measure_live(wanted or set(HEALTHY_DISCOVERY_PORTALS))
     text = json.dumps(report, ensure_ascii=False, indent=2)
     print(text)
     if args.out:
