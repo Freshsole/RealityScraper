@@ -53,12 +53,17 @@ class Hub:
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
-        from app.scrape_engine import AdaptiveLimiter, ScrapeEngine
+        self._scrape_limiter = None
+        self._monitor_engine = None
+        self._discovery_engine = None
+        self._deep_engine = None
+        if config.scrape_owned_here():
+            from app.scrape_engine import AdaptiveLimiter, ScrapeEngine
 
-        self._scrape_limiter = AdaptiveLimiter()
-        self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
-        self._discovery_engine = ScrapeEngine(self._scrape_limiter, priority=1)
-        self._deep_engine = ScrapeEngine(self._scrape_limiter, priority=2)
+            self._scrape_limiter = AdaptiveLimiter()
+            self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
+            self._discovery_engine = ScrapeEngine(self._scrape_limiter, priority=1)
+            self._deep_engine = ScrapeEngine(self._scrape_limiter, priority=2)
         self._discovery_inflight = False
         self._pending_discovery: list[Listing] = []
         self._status_cache: dict[str, Any] | None = None
@@ -67,6 +72,10 @@ class Hub:
         self.ui_pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="rf-ui")
         self.auth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-auth")
         self.job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-job")
+
+    def _owns_scrape(self) -> bool:
+        """False on InstantSite/API dyno. Worker and local all own scrape engines."""
+        return config.scrape_owned_here()
 
     def client_for(self, search_url: str):
         client = self.clients.get(search_url)
@@ -165,6 +174,7 @@ class Hub:
         self.last_error = None
         role = config.SCRAPE_ROLE
         # Heavy scrape lives in scrape_worker when role=web; role=all keeps legacy single-process.
+        # InstantSite + API never start NewDiscovery / rolling-deep / Ulov hydrate / ScrapeEngine loops.
         if role == "worker":
             return
         if role == "all":
@@ -181,7 +191,7 @@ class Hub:
             self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
             self._ulov_hydrate_task = asyncio.create_task(self._ulov_hydrate_loop(), name="sreality-ulov-hydrate")
         elif role == "web":
-            # Digests only — listing polls / catalog / sold run in scrape_worker.
+            # Digests + ping/discord only — listing polls / catalog / sold run in scrape_worker.
             self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
         if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
@@ -249,6 +259,8 @@ class Hub:
         self.clients.clear()
 
     async def _loop(self) -> None:
+        if not self._owns_scrape():
+            return
         await asyncio.sleep(1)
         while self.running:
             started = time.monotonic()
@@ -691,6 +703,8 @@ class Hub:
 
     async def _recent_catalog_loop(self) -> None:
         """Continuously discover new listings, independent of monitors and deep crawl."""
+        if not self._owns_scrape():
+            return
         await asyncio.sleep(2)
         while self.running:
             tick_started = time.monotonic()
@@ -723,6 +737,8 @@ class Hub:
 
     async def _deep_catalog_loop(self) -> None:
         """Continuously consume low-priority full-market shards."""
+        if not self._owns_scrape():
+            return
         from app.scrape_engine import should_yield_deep
 
         await asyncio.sleep(4)
@@ -813,6 +829,8 @@ class Hub:
         return {"ok": True, "scheduled": True, "job": saved}
 
     async def run_due_scrape_schedules(self) -> int:
+        if not self._owns_scrape():
+            return 0
         due = await self._job_db(self.store.claim_due_scrape_schedules)
         for job in due:
             scope = str(job.get("scope") or "url")
@@ -828,6 +846,12 @@ class Hub:
         return len(due)
 
     async def _run_scrape_search_url(self, cleaned: str, pages: int) -> None:
+        if not self._owns_scrape():
+            self.store.set_meta(
+                "scrape_url_request",
+                json.dumps({"url": cleaned, "max_pages": pages}, ensure_ascii=False),
+            )
+            return
         try:
             await self.scrape_search_url(cleaned, max_pages=pages)
         except Exception as exc:
@@ -857,6 +881,8 @@ class Hub:
         """Upsert in lock-scoped chunks so minute discovery can interleave."""
         if not listings:
             return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
+        if not self._owns_scrape():
+            return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": len(listings)}
         # Keep individual SQLite writer holds short; large 500-row transactions
         # blocked admin/auth/tick writes for tens of seconds on a 1GB database.
         chunk_size = max(50, min(100, int(config.SCRAPE_BATCH_COMMIT)))
@@ -896,6 +922,11 @@ class Hub:
         """Prefer minute cadence: skip write if catalog sync holds the lock too long."""
         if not listings:
             return {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}, None
+        if not self._owns_scrape():
+            return (
+                {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": len(listings)},
+                "write-deferred:web-role",
+            )
         try:
             await asyncio.wait_for(self._catalog_write.acquire(), timeout=max(0.5, timeout_sec))
         except asyncio.TimeoutError:
@@ -956,6 +987,8 @@ class Hub:
 
     async def _recent_catalog_tick(self) -> None:
         """High-priority NewDiscovery; never waits for rolling deep."""
+        if not self._owns_scrape() or self._discovery_engine is None:
+            return
         recent_all = recent_shards()
         recent = prepare_discovery_shards(self._scrape_limiter.cooldown)
         if not recent:
@@ -1045,11 +1078,16 @@ class Hub:
 
     async def _deep_catalog_tick(self) -> None:
         """Low-priority rolling crawl; monitor and discovery requests preempt its queue."""
+        if not self._owns_scrape():
+            return
         from app.scrape_engine import should_yield_deep
 
+        limiter = getattr(self, "_scrape_limiter", None)
+        if limiter is None:
+            return
         if should_yield_deep(
             discovery_inflight=self._discovery_inflight,
-            waiting_below=self._scrape_limiter.waiting_below(2),
+            waiting_below=limiter.waiting_below(2),
             enabled=bool(config.SCRAPE_DEEP_YIELD_TO_DISCOVERY),
         ):
             return
@@ -1057,7 +1095,9 @@ class Hub:
         if not deep:
             return
         started = time.monotonic()
-        engine = self._deep_engine
+        engine = getattr(self, "_deep_engine", None)
+        if engine is None:
+            return
         listings: list[Listing] = []
         pages_ok = 0
         deferred = 0
@@ -1138,6 +1178,12 @@ class Hub:
         if not cleaned:
             return {"ok": False, "error": "Chybí URL hledání"}
         pages = max(1, min(200, int(max_pages or 40)))
+        if not self._owns_scrape():
+            self.store.set_meta(
+                "scrape_url_request",
+                json.dumps({"url": cleaned, "max_pages": pages}, ensure_ascii=False),
+            )
+            return {"ok": True, "queued": True, "url": cleaned, "max_pages": pages}
         client = self.client_for(cleaned)
         engine = ScrapeEngine()
         started = time.monotonic()
@@ -1186,6 +1232,8 @@ class Hub:
         }
 
     async def _catalog_loop(self) -> None:
+        if not self._owns_scrape():
+            return
         await asyncio.sleep(8)
         while self.running:
             try:
@@ -1200,6 +1248,8 @@ class Hub:
                 raise
 
     async def _dedupe_loop(self) -> None:
+        if not self._owns_scrape():
+            return
         await asyncio.sleep(90)
         while self.running:
             try:
@@ -1234,6 +1284,9 @@ class Hub:
         return True
 
     async def maybe_run_dedupe(self) -> dict[str, Any]:
+        if not self._owns_scrape():
+            self.store.set_meta("dedupe_request", "1")
+            return {"ok": True, "queued": True}
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         # Dedupe holds long write locks — never overlap with catalog sync / recent scrape.
@@ -1244,6 +1297,9 @@ class Hub:
         return await self.run_dedupe()
 
     def start_dedupe(self) -> dict[str, Any]:
+        if not self._owns_scrape():
+            self.store.set_meta("dedupe_request", "1")
+            return {"ok": True, "queued": True}
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         if self.catalog_running or self.catalog_running_portals:
@@ -1252,12 +1308,18 @@ class Hub:
         return {"ok": True, "started": True}
 
     def start_dedupe_scan(self) -> dict[str, Any]:
+        if not self._owns_scrape():
+            self.store.set_meta("dedupe_scan_request", "1")
+            return {"ok": True, "queued": True}
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         asyncio.create_task(self.run_dedupe_scan(), name="dedupe-scan")
         return {"ok": True, "started": True}
 
     async def run_dedupe(self) -> dict[str, Any]:
+        if not self._owns_scrape():
+            self.store.set_meta("dedupe_request", "1")
+            return {"ok": True, "queued": True}
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         self.dedupe_running = True
@@ -1275,6 +1337,9 @@ class Hub:
             self.dedupe_running = False
 
     async def run_dedupe_scan(self) -> dict[str, Any]:
+        if not self._owns_scrape():
+            self.store.set_meta("dedupe_scan_request", "1")
+            return {"ok": True, "queued": True}
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         self.dedupe_scanning = True
@@ -1314,6 +1379,8 @@ class Hub:
         return bool(self._due_catalog_portals())
 
     async def maybe_run_catalog_sync(self, force: bool = False) -> dict[str, Any]:
+        if not self._owns_scrape():
+            return {"ok": False, "reason": "web-role"}
         portals = None if force else await self._job_db(self._due_catalog_portals)
         if not force and not portals:
             return {"ok": False, "reason": "not-due"}
@@ -1353,6 +1420,14 @@ class Hub:
         self, portals: list[str] | None = None, rerun: bool = False, claimed: bool = False
     ) -> dict[str, Any]:
         wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        if not self._owns_scrape():
+            self.store.set_meta("catalog_sync_request", json.dumps(sorted(wanted)))
+            return {
+                "ok": True,
+                "queued": True,
+                "portals": sorted(wanted),
+                "status": self.store.catalog_sync_status(),
+            }
         if not claimed:
             to_start = wanted - self.catalog_running_portals
             if not to_start:
@@ -1561,6 +1636,8 @@ class Hub:
             return False
 
     async def _sold_loop(self) -> None:
+        if not self._owns_scrape():
+            return
         await asyncio.sleep(15)
         while self.running:
             try:
@@ -1710,11 +1787,15 @@ class Hub:
 
     async def _ulov_hydrate_loop(self) -> None:
         # Lazy import so InstantSiteASGI / web request modules stay off this path.
+        if not self._owns_scrape():
+            return
         from app import ulov_hydrate
 
         await ulov_hydrate.loop(self)
 
     async def backfill_missing_coords(self) -> None:
+        if not self._owns_scrape():
+            return
         rows = self.store.missing_coords(notified_only=True)
         for row in rows:
             listing = Listing(

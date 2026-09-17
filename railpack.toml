@@ -1,2 +1,3 @@
 [deploy]
+# web (app.asgi, SCRAPE_ROLE=web) + worker (app.scrape_worker) — see Procfile / supervisord.conf
 startCommand = "supervisord -c supervisord.conf"

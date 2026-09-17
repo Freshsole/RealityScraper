@@ -35,7 +35,7 @@ def allowed() -> bool:
     """True only on scrape worker / local all. Never InstantSiteASGI web."""
     if not config.SCRAPE_ULOV_HYDRATE:
         return False
-    return config.SCRAPE_ROLE != "web"
+    return config.scrape_owned_here()
 
 
 def _search_url() -> str:

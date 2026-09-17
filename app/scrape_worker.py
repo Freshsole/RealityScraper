@@ -7,6 +7,7 @@ import traceback
 from typing import Any
 
 from app import config
+from app.config import ensure_worker_role
 from app.catalog_sync import (
     daily_shards,
     listing_is_new_for_monitor,
@@ -30,6 +31,12 @@ class ScrapeWorker:
         self.last_tick: dict[str, Any] = {}
 
     async def run(self) -> None:
+        if not config.scrape_owned_here():
+            print(
+                "scrape_worker refused: SCRAPE_ROLE=web (InstantSite/API only)",
+                flush=True,
+            )
+            return
         self.running = True
         self.hub.running = True
         print(
@@ -59,6 +66,7 @@ class ScrapeWorker:
                 try:
                     await self._maybe_scrape_url_request()
                     await self._maybe_forced_catalog()
+                    await self._maybe_dedupe_request()
                     await self.hub.maybe_run_catalog_sync(force=False)
                 except asyncio.CancelledError:
                     raise
@@ -315,6 +323,17 @@ class ScrapeWorker:
             pages = 40
         await self.hub._run_scrape_search_url(url, pages)
 
+    async def _maybe_dedupe_request(self) -> None:
+        """Admin on SCRAPE_ROLE=web queues merge/scan; this process holds the writer."""
+        raw = await self.hub._job_db(self.hub.store.get_meta, "dedupe_request")
+        if raw:
+            await self.hub._job_db(self.hub.store.set_meta, "dedupe_request", None)
+            await self.hub.run_dedupe()
+        raw = await self.hub._job_db(self.hub.store.get_meta, "dedupe_scan_request")
+        if raw:
+            await self.hub._job_db(self.hub.store.set_meta, "dedupe_scan_request", None)
+            await self.hub.run_dedupe_scan()
+
 
 async def _amain() -> None:
     worker = ScrapeWorker()
@@ -322,6 +341,7 @@ async def _amain() -> None:
 
 
 def main() -> None:
+    ensure_worker_role()
     asyncio.run(_amain())
 
 
