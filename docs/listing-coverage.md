@@ -53,6 +53,29 @@ Shipped:
 
 Measure: `scripts/measure_discovery_tick.py` (synthetic held-gate vs page-1-across; `--live` for healthy page-1 probes). M&M proxy remain the documented follow-up below.
 
+Synthetic 42-shard minute (16 conc, extras 300 ms / Sreality 40 ms, 4 pages, **0.7 s** deadline — the contention case when deep/HTML eats the gate):
+
+| scheduler | page-1 shards | listings | pages_ok | tick |
+|---|---|---|---|---|
+| held-gate (before) | **21** | **900** | 69 | 1.25 s |
+| page-1-across (after) | **42** | **2100** | 168 | 1.49 s |
+
+Unconstrained 50 s deadline: both finish 42 / 2100 in ~1.5 s. The gain is page-1 completeness when time is short.
+
+Live page-1 from this datacenter (2026-09-17, 12 s cap, worker clients, not `/hry*`):
+
+| Portal | page 1 | catalog total | page-1 time |
+|---|---|---|---|
+| Sreality (one size shard) | **20** | 1061 | 1.9 s |
+| Bazoš | **20** | 5627 | 0.5 s |
+| Bezrealitky | **15** | 2278 | 1.1 s |
+| UlovDomov sitemap | **20** | 3295 | 1.8 s |
+| Reality.cz | **24** | 841 | 1.6 s |
+| RE/MAX | **20** | 20 | list ok |
+| Annonce | **10** | 10 | 0.3 s |
+| iDNES | 0 | 0 | timeout 12 s |
+| ČeskéReality | 0 | 0 | 0.6 s empty (no block raised) |
+
 ## M&M Reality (documented limit)
 
 | Client | `GET /nemovitosti/?typ-nabidky=pronajem…` |

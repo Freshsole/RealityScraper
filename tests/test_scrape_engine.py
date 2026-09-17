@@ -345,14 +345,14 @@ def test_persisted_engine_retries_deferred_pages_next_tick():
 
         async def fetch_page(page: int):
             calls.append(page)
-            await asyncio.sleep(0.025)
+            await asyncio.sleep(0.08)
             return [_listing(page)], 60
 
         first = await engine.fetch_pages_parallel(
             shard_key="idnes:recent:pronajem:byty",
             fetch_page=fetch_page,
             max_pages=3,
-            deadline_monotonic=asyncio.get_running_loop().time() + 0.03,
+            deadline_monotonic=asyncio.get_running_loop().time() + 0.05,
             portal="idnes",
         )
         assert first.pages_ok == 1
@@ -376,11 +376,13 @@ def test_pending_discovery_listings_carry_across_busy_write():
     from app.monitor import Hub
 
     class Fake:
-        _pending_discovery = [_listing(1), _listing(2)]
+        pass
 
-    merged = Hub._merge_pending_discovery(Fake(), [_listing(2), _listing(3)])
+    fake = Fake()
+    fake._pending_discovery = [_listing(1), _listing(2)]
+    merged = Hub._merge_pending_discovery(fake, [_listing(2), _listing(3)])
     assert [item.id for item in merged] == [2, 3, 1]
-    assert Fake._pending_discovery == []
+    assert fake._pending_discovery == []
 
 
 def test_next_deep_shards_skips_cooled_portal():

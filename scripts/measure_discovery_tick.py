@@ -115,13 +115,18 @@ async def measure_live(portals: set[str]) -> list[dict]:
         listings = []
         total = 0
         try:
-            listings, total = await client.fetch_page(1, newest=True)
+            listings, total = await asyncio.wait_for(client.fetch_page(1, newest=True), timeout=12.0)
+        except TimeoutError:
+            error = "timeout"
         except Exception as exc:
-            error = str(exc)[:200]
+            error = str(exc)[:200] or exc.__class__.__name__
         finally:
             closer = getattr(client, "aclose", None)
             if closer is not None:
-                await closer()
+                try:
+                    await asyncio.wait_for(closer(), timeout=2.0)
+                except Exception:
+                    pass
         rows.append(
             {
                 "portal": item["portal"],
