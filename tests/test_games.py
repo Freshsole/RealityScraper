@@ -383,6 +383,17 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
     assert ".converter-actions .pill" in css
+    assert ".converter-actions .pill-ghost" in css
+    assert "@media (max-width: 480px)" in css
+    phone = css.split("@media (max-width: 480px)", 1)[1]
+    assert "--pad: 16px" in phone
+    assert "grid-column: 1 / -1" in phone
+    assert "font-size: 40px" in phone
+    assert "min-height: 48px" in phone
+    assert ".info-row" in phone
+    assert "fonts.googleapis" not in phone
+    ccy = css.split(".ccy-pill {", 1)[1].split("}", 1)[0]
+    assert "flex-shrink: 0" in ccy
 
 
 def test_admin_games_leaderboard_uses_five_column_wise_grid():
