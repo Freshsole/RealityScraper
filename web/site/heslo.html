@@ -4,12 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Obnovení hesla — REALITIFY</title>
-    <link rel="preload" href="/static/site/site.css?v=14" as="style" />
-    <link rel="preload" href="/static/site/auth.css?v=14" as="style" />
+    <link rel="preload" href="/static/site/site.css?v=16" as="style" />
+    <link rel="preload" href="/static/site/auth.css?v=16" as="style" />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/static/site/fonts/archivo-black-latin-ext.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="/static/site/site.css?v=14" />
-    <link rel="stylesheet" href="/static/site/auth.css?v=14" />
+    <link rel="stylesheet" href="/static/site/site.css?v=16" />
+    <link rel="stylesheet" href="/static/site/auth.css?v=16" />
   </head>
   <body class="auth-page">
     <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
@@ -21,12 +21,17 @@
       </a>
       <form class="auth-card" id="forgot-form">
         <div class="auth-head">
+          <span class="game-pill">Zpět k hlídání</span>
           <h1 class="auth-h">OBNOVTE SI HESLO</h1>
           <p class="auth-lead">Zadejte e-mail spojený s vaším účtem a pošleme vám odkaz pro obnovení hesla.</p>
         </div>
         <div class="field">
           <label for="email">E-mailová adresa</label>
           <div class="field-input"><input id="email" name="email" type="email" placeholder="např. jan.novak@email.cz" required /></div>
+        </div>
+        <div class="mint-banner">
+          <strong>Odkaz do schránky za pár sekund</strong>
+          <span>Pak jste zase u hlídání — byty dál mizí v řádu minut.</span>
         </div>
         <button class="auth-btn" type="submit">Odeslat odkaz</button>
         <a class="back-login" href="/prihlaseni">
