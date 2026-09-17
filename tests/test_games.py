@@ -17,6 +17,7 @@ from app.games import (
     live_pairable_pool,
     locality_key,
     pair_locality_key,
+    pick_rent_round,
     pick_same_locality_pair,
     preferred_game_pool,
     public_card,
@@ -205,6 +206,7 @@ def test_cold_path_does_not_block_on_slow_catalog(tmp_path: Path):
     assert pair["seeded"] is True
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
     assert len(round_payload["items"]) == 5
+    assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
 
 
 def test_refresh_uses_live_catalog_rentals(tmp_path: Path):
@@ -237,6 +239,8 @@ def test_refresh_uses_live_catalog_rentals(tmp_path: Path):
     round_payload = rent_round(store)
     assert round_payload["seeded"] is False
     assert all(not str(item["id"]).startswith("seed-") for item in round_payload["items"])
+    assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
+    assert round_payload["pair_key"] == "praha-3"
 
 
 def test_live_pool_does_not_pair_vinohrady_with_bedihost(tmp_path: Path):
@@ -345,8 +349,11 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "is-skeleton" in rent
     assert "ccy-pill" in rent
     assert "Takové nabídky mizí" in rent
+    assert "STEJNÁ LOKALITA" in rent
+    assert "v řádu hodin" in rent
+    assert "v řádu minut" not in rent
     assert "vidíte v administraci" not in hub
-    assert "dobré ceny mizí" in hub
+    assert "Výhodné kousky" in hub
     css = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.css").read_text(encoding="utf-8")
     js = (Path(__file__).resolve().parents[1] / "web" / "site" / "games.js").read_text(encoding="utf-8")
     assert "#163300" in css
@@ -366,7 +373,10 @@ def test_hry_html_is_memory_fast_and_nonblocking():
     assert "rent-unit" in js
     assert "replace(/[^\\d]/g, \"\")" in js
     assert "Takové nabídky mizí" in js
-    assert "vanishText(item.vanish_hours, item.vanish_label)" in js
+    assert "vanishText(item.vanish_hours, item.vanish_label" in js
+    assert "TYPICAL_VANISH" in js
+    assert "v řádu hodin" in js
+    assert "roundMeta.copy" in js
     assert "prettyGuess" in js
     assert "TEACHING_RATIO" not in js
     assert ".converter-actions .pill" in css
@@ -431,6 +441,10 @@ def test_public_game_helpers_are_memory_only():
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
     assert len(round_payload["items"]) == 5
     assert all(item.get("vanish_hours") is not None for item in round_payload["items"])
+    assert all(item.get("vanish_label") for item in round_payload["items"])
+    assert "v řádu minut" not in (round_payload.get("vanish_label") or "")
+    assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
+    assert round_payload.get("pair_key")
     assert scored["ok"] is True
     assert scored["score"] == 1000
     assert ms < 40, f"public game helpers {ms:.1f}ms"
@@ -491,6 +505,8 @@ def test_two_live_listings_are_enough_to_skip_seed(tmp_path: Path):
     round_payload = rent_round(store)
     live_ids = [item["id"] for item in round_payload["items"] if not str(item["id"]).startswith("seed-")]
     assert len(live_ids) >= 2
+    assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
+    assert round_payload["pair_key"] == "praha-3"
 
 
 def test_unpaired_live_catalog_falls_back_to_seed(tmp_path: Path):
@@ -518,6 +534,8 @@ def test_unpaired_live_catalog_falls_back_to_seed(tmp_path: Path):
     assert pair["left"]["locality_key"] == pair["right"]["locality_key"]
     round_payload = rent_round(store)
     assert round_payload["seeded"] is True
+    assert len({item.get("pair_key") for item in round_payload["items"]}) == 1
+    assert round_payload["pair_key"] in {"praha-3", "praha-2", "brno-stred"}
 
 
 def test_preferred_game_pool_is_memory_fast():
@@ -704,3 +722,174 @@ def test_live_catalog_vanish_uses_last_seen(tmp_path: Path):
     assert pair["vanish_hours"] == 3.0
     assert pair["vanish_label"] == "za 3,0 h"
     assert "za 3,0 h" in pair["copy_ok"]
+    rent_payload = rent_round(store, rng=random.Random(3), teaching_ratio=1.0)
+    assert rent_payload["seeded"] is False
+    assert rent_payload["vanish_hours"] == 3.0
+    assert rent_payload["vanish_label"] == "za 3,0 h"
+    assert "za 3,0 h" in rent_payload["copy"]
+    assert len({item.get("pair_key") for item in rent_payload["items"]}) == 1
+
+
+def test_rent_round_never_mixes_districts():
+    pool = _noisy_live_pool()
+    for seed in range(250):
+        row = pick_rent_round(pool, rng=random.Random(seed))
+        keys = {item.get("pair_key") for item in row["items"]}
+        assert len(keys) == 1
+        assert keys == {row["pair_key"]}
+        ids = {item["id"] for item in row["items"]}
+        zizkov = {item for item in ids if str(item).startswith("live-z") or "zizkov" in str(item)}
+        vinohrady = {item for item in ids if str(item).startswith("live-v") or "vinohrady" in str(item)}
+        assert not (zizkov and vinohrady)
+        assert row["seeded"] is False or row["pair_key"] in {"praha-3", "praha-2", "brno-stred"}
+
+
+def test_rent_teaching_distribution_is_about_80_percent():
+    pool = _noisy_live_pool()
+    rng = random.Random(7)
+    n = 400
+    kinds = [
+        pick_rent_round(pool, rng=rng, teaching_ratio=TEACHING_RATIO)["round_kind"]
+        for _ in range(n)
+    ]
+    rate = kinds.count("teaching") / n
+    assert 0.72 <= rate <= 0.88, f"rent teaching rate {rate:.3f}"
+    forced = [
+        pick_rent_round(pool, rng=random.Random(i), teaching_ratio=1.0)
+        for i in range(80)
+    ]
+    assert all(row["round_kind"] == "teaching" for row in forced)
+    for row in forced:
+        assert any(
+            is_teaching_pair(left, right)
+            for index, left in enumerate(row["pool"])
+            for right in row["pool"][index + 1 :]
+        )
+
+
+def test_rent_round_live_aliases_same_district():
+    pool = [
+        _flat("z-full", "Praha 3 – Žižkov", "3+kk", 76, 17800),
+        _flat("z-district", "Praha 3", "1+kk", 30, 22900),
+        _flat("z-alias", "Žižkov, Praha 3", "2+kk", 52, 19600),
+        _flat("z-deal", "Praha 3 – Žižkov", "4+kk", 90, 18800),
+        _flat("z-dear", "Praha 3", "2+1", 44, 25100),
+        _flat("v-full", "Praha 2 – Vinohrady", "3+kk", 80, 20000),
+        _flat("v-alias", "Vinohrady, Praha 2", "1+kk", 32, 25000),
+    ]
+    for seed in range(80):
+        row = pick_rent_round(pool, rng=random.Random(seed), teaching_ratio=1.0)
+        assert row["pair_key"] in {"praha-3", "praha-2"}
+        assert all(item.get("pair_key") == row["pair_key"] for item in row["items"])
+        live_ids = [item["id"] for item in row["items"] if not str(item["id"]).startswith("seed-")]
+        assert live_ids
+        if row["pair_key"] == "praha-3":
+            assert all(str(item).startswith("z-") for item in live_ids)
+            assert row["seeded"] is False
+
+
+def test_rent_round_vanish_hours_from_last_seen_is_honest():
+    observed = pick_rent_round(
+        [
+            _flat(
+                "r-a",
+                "Praha 3 – Žižkov",
+                "3+kk",
+                76,
+                17800,
+                first_seen="2026-09-17T07:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "r-b",
+                "Praha 3 – Žižkov",
+                "1+kk",
+                30,
+                22900,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "r-c",
+                "Praha 3 – Žižkov",
+                "2+kk",
+                52,
+                19600,
+                first_seen="2026-09-17T07:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "r-d",
+                "Praha 3 – Žižkov",
+                "4+kk",
+                90,
+                18800,
+                first_seen="2026-09-17T07:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+            _flat(
+                "r-e",
+                "Praha 3 – Žižkov",
+                "2+1",
+                44,
+                25100,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            ),
+        ],
+        rng=random.Random(1),
+        teaching_ratio=1.0,
+    )
+    assert observed["vanish_hours"] == 3.0
+    assert observed["vanish_label"] == "za 3,0 h"
+    assert "za 3,0 h" in observed["copy"]
+    assert "minut" not in observed["copy"]
+    assert observed["seeded"] is False
+    fresh = pick_rent_round(
+        [
+            _flat(
+                f"f-{name}",
+                "Praha 3 – Žižkov",
+                disp,
+                area,
+                price,
+                first_seen="2026-09-17T10:00:00+00:00",
+                last_seen="2026-09-17T10:00:00+00:00",
+            )
+            for name, disp, area, price in (
+                ("a", "3+kk", 76, 17800),
+                ("b", "1+kk", 30, 22900),
+                ("c", "2+kk", 52, 19600),
+                ("d", "4+kk", 90, 18800),
+                ("e", "2+1", 44, 25100),
+            )
+        ],
+        rng=random.Random(1),
+        teaching_ratio=1.0,
+    )
+    assert fresh["vanish_label"] == TYPICAL_VANISH_LABEL
+    assert TYPICAL_VANISH_LABEL in fresh["copy"]
+    assert "minut" not in fresh["copy"]
+    assert all(item.get("vanish_label") == TYPICAL_VANISH_LABEL for item in fresh["items"])
+
+
+def test_rent_cold_seed_stays_same_district():
+    row = pick_rent_round([], rng=random.Random(0))
+    assert row["seeded"] is True
+    assert len(row["items"]) == 5
+    assert len({item.get("pair_key") for item in row["items"]}) == 1
+    assert row["pair_key"] in {"praha-3", "praha-2", "brno-stred"}
+    assert "v řádu minut" not in (row.get("copy") or "")
+
+
+def test_pick_rent_round_is_memory_fast():
+    live = [
+        _flat(f"live-{i}", "Praha 3 – Žižkov", "2+kk" if i % 2 == 0 else "1+kk", 40 + i, 16000 + i * 400)
+        for i in range(48)
+    ]
+    t0 = time.perf_counter()
+    for index in range(20):
+        pick_rent_round(live, rng=random.Random(index))
+        pick_rent_round([], rng=random.Random(index))
+    ms = (time.perf_counter() - t0) * 1000
+    assert ms < 80, f"pick_rent_round loop {ms:.1f}ms"

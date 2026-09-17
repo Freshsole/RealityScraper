@@ -106,14 +106,20 @@ SEED: list[dict[str, Any]] = [
     _seed("seed-zizkov-2kk", locality="Praha 3 – Žižkov", disposition="2+kk", area_m2=54, price_czk=16500, portal="bezrealitky", vanish_hours=3.1, image=_IMG["s1"]),
     _seed("seed-zizkov-1kk", locality="Praha 3 – Žižkov", disposition="1+kk", area_m2=38, price_czk=18900, portal="sreality", vanish_hours=11.0, image=_IMG["s2"]),
     _seed("seed-zizkov-3kk", locality="Praha 3 – Žižkov", disposition="3+kk", area_m2=72, price_czk=21400, portal="idnes", vanish_hours=6.4, image=_IMG["d1"]),
+    _seed("seed-zizkov-4kk", locality="Praha 3 – Žižkov", disposition="4+kk", area_m2=91, price_czk=19900, portal="ulovdomov", vanish_hours=1.6, image=_IMG["d3"]),
+    _seed("seed-zizkov-21", locality="Praha 3 – Žižkov", disposition="2+1", area_m2=47, price_czk=24200, portal="annonce", vanish_hours=15.0, image=_IMG["s4"]),
     _seed("seed-vinohrady-3kk", locality="Praha 2 – Vinohrady", disposition="3+kk", area_m2=82, price_czk=21900, portal="bezrealitky", vanish_hours=1.2, image=_IMG["s3"]),
     _seed("seed-vinohrady-2kk", locality="Praha 2 – Vinohrady", disposition="2+kk", area_m2=46, price_czk=26800, portal="sreality", vanish_hours=9.5, image=_IMG["s4"]),
     _seed("seed-vinohrady-1kk", locality="Praha 2 – Vinohrady", disposition="1+kk", area_m2=32, price_czk=14200, portal="idnes", vanish_hours=5.4, image=_IMG["d2"]),
+    _seed("seed-vinohrady-4kk", locality="Praha 2 – Vinohrady", disposition="4+kk", area_m2=108, price_czk=24800, portal="ulovdomov", vanish_hours=2.4, image=_IMG["s1"]),
+    _seed("seed-vinohrady-11", locality="Praha 2 – Vinohrady", disposition="1+1", area_m2=35, price_czk=23500, portal="remax", vanish_hours=13.5, image=_IMG["d3"]),
     _seed("seed-smichov-3kk", locality="Praha 5 – Smíchov", disposition="3+kk", area_m2=78, price_czk=27500, portal="sreality", vanish_hours=0.8, image=_IMG["s2"]),
     _seed("seed-smichov-2kk", locality="Praha 5 – Smíchov", disposition="2+kk", area_m2=51, price_czk=31800, portal="remax", vanish_hours=14.0, image=_IMG["s1"]),
     _seed("seed-brno-3kk", locality="Brno – střed", disposition="3+kk", area_m2=64, price_czk=17200, portal="ulovdomov", vanish_hours=4.1, image=_IMG["d3"]),
     _seed("seed-brno-2kk", locality="Brno – střed", disposition="2+kk", area_m2=48, price_czk=18900, portal="ulovdomov", vanish_hours=6.2, image=_IMG["s1"]),
     _seed("seed-brno-1kk", locality="Brno – střed", disposition="1+kk", area_m2=28, price_czk=21000, portal="annonce", vanish_hours=18.0, image=_IMG["s4"]),
+    _seed("seed-brno-4kk", locality="Brno – střed", disposition="4+kk", area_m2=86, price_czk=18100, portal="idnes", vanish_hours=2.8, image=_IMG["s2"]),
+    _seed("seed-brno-over", locality="Brno – střed", disposition="2+kk", area_m2=40, price_czk=22800, portal="sreality", vanish_hours=16.5, image=_IMG["s3"]),
     _seed("seed-karlin-3kk", locality="Praha 8 – Karlín", disposition="3+kk", area_m2=74, price_czk=22900, portal="bezrealitky", vanish_hours=1.1, image=_IMG["s3"]),
     _seed("seed-karlin-2kk", locality="Praha 8 – Karlín", disposition="2+kk", area_m2=61, price_czk=24500, portal="remax", vanish_hours=1.5, image=_IMG["s2"]),
     _seed("seed-holesovice-3kk", locality="Praha 7 – Holešovice", disposition="3+kk", area_m2=82, price_czk=31500, portal="ceskereality", vanish_hours=4.0, image=_IMG["d1"]),
@@ -170,6 +176,17 @@ _RANDOM_OK = (
 )
 _RANDOM_MISS = (
     "Špatně. Levnější byt ve stejné lokalitě už často není. Podobné nabídky mizí {vanish}."
+)
+_RENT_INTRO = (
+    "Všechny byty jsou ve stejné lokalitě. Tipněte nájem — "
+    "vedle sebe uvidíte výhodné kousky i přestřelené ceny. "
+    "Dobré nabídky mizí {vanish}."
+)
+_RENT_TEACH = (
+    "Ve stejné čtvrti může větší byt stát míň. Takové nabídky mizí {vanish}."
+)
+_RENT_RANDOM = (
+    "Ve stejné lokalitě se ceny hodně rozcházejí — výhodné kousky mizí {vanish}."
 )
 
 _DISP_RE = re.compile(r"(\d+)\s*\+?\s*(kk|1)?", re.I)
@@ -560,7 +577,8 @@ def _catalog_pool(store: Any) -> list[dict[str, Any]]:
     return _seed_pool()
 
 
-def _groups_by_locality(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def _locality_buckets(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Same-place buckets, including thin groups used to pad a rent round."""
     groups: dict[str, list[dict[str, Any]]] = {}
     homes: dict[str, str] = {}
     for item in pool:
@@ -582,7 +600,11 @@ def _groups_by_locality(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, 
         home = homes.get(key)
         if home and home != key and key in groups:
             groups.setdefault(home, []).extend(groups.pop(key))
-    return {key: items for key, items in groups.items() if _pairable(items)}
+    return groups
+
+
+def _groups_by_locality(pool: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    return {key: items for key, items in _locality_buckets(pool).items() if _pairable(items)}
 
 
 def _pairable(items: list[dict[str, Any]]) -> bool:
@@ -609,6 +631,19 @@ def _candidate_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], 
 
 def _teaching_pairs(items: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     return [pair for pair in _candidate_pairs(items) if is_teaching_pair(*pair)]
+
+
+def _has_teaching_pair(items: list[dict[str, Any]]) -> bool:
+    if len(items) < 2:
+        return False
+    ordered = sorted(items, key=_unit_price)
+    if is_teaching_pair(ordered[0], ordered[-1]):
+        return True
+    for index, left in enumerate(items):
+        for right in items[index + 1 :]:
+            if is_teaching_pair(left, right):
+                return True
+    return False
 
 
 def _pick_teaching_pair(
@@ -768,30 +803,202 @@ def higher_lower_pair(
     return pick_same_locality_pair(source, rng=rng, teaching_ratio=teaching_ratio)
 
 
-def rent_round(store: Any) -> dict[str, Any]:
-    pool = preferred_game_pool(_catalog_pool(store))
-    picked: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    # Spread prices so the round isn't five similar flats.
-    ordered = sorted(pool, key=lambda item: int(item.get("price_czk") or 0))
-    step = max(1, len(ordered) // RENT_ROUND_SIZE)
-    for index in range(0, len(ordered), step):
-        item = ordered[index]
-        if item["id"] in seen:
-            continue
-        seen.add(item["id"])
-        picked.append(item)
-        if len(picked) >= RENT_ROUND_SIZE:
+def _unit_price(item: dict[str, Any]) -> float:
+    """Kč per m² when area is known; disposition-scaled fallback otherwise."""
+    price = _as_int(item.get("price_czk")) or 0
+    area = _as_int(item.get("area_m2"))
+    if area and area > 0:
+        return price / area
+    rank = disposition_rank(str(item.get("disposition") or ""))
+    if rank > 0:
+        return price / (rank * 22.0)
+    return float(price)
+
+
+def _spread_pick(ordered: list[dict[str, Any]], need: int) -> list[dict[str, Any]]:
+    """Even sample of the deal spectrum, always keeping the cheap and dear ends."""
+    if need <= 0:
+        return []
+    if need >= len(ordered):
+        return list(ordered)
+    if need == 1:
+        return [ordered[0]]
+    last = len(ordered) - 1
+    indexes: list[int] = []
+    seen: set[int] = set()
+    for step in range(need):
+        idx = int(round(step * last / (need - 1)))
+        if idx not in seen:
+            seen.add(idx)
+            indexes.append(idx)
+    for idx in range(len(ordered)):
+        if len(indexes) >= need:
             break
-    if len(picked) < RENT_ROUND_SIZE:
-        for item in SEED:
-            if item["id"] in seen:
-                continue
-            picked.append(item)
-            if len(picked) >= RENT_ROUND_SIZE:
+        if idx not in seen:
+            seen.add(idx)
+            indexes.append(idx)
+    return [ordered[idx] for idx in indexes[:need]]
+
+
+def _pick_rent_flats(
+    items: list[dict[str, Any]],
+    *,
+    rng: random.Random,
+    size: int = RENT_ROUND_SIZE,
+    teaching: bool = True,
+) -> list[dict[str, Any]]:
+    """Same-place flats: live first, then a teaching contrast + deal-spectrum fill."""
+    unique: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item.get("id") or "")
+        if not key or key in seen or not _as_int(item.get("price_czk")):
+            continue
+        seen.add(key)
+        unique.append(item)
+    live = [item for item in unique if not _is_seed_id(item.get("id"))]
+    seed = [item for item in unique if _is_seed_id(item.get("id"))]
+    if 0 < len(live) < size:
+        chosen = list(live)
+        chosen_ids = {str(item.get("id")) for item in chosen}
+        rest = [item for item in unique if str(item.get("id")) not in chosen_ids]
+        if teaching and not _has_teaching_pair(chosen):
+            extra = _pick_teaching_pair(unique, rng)
+            if extra:
+                for item in extra:
+                    eid = str(item.get("id"))
+                    if eid not in chosen_ids:
+                        chosen.append(item)
+                        chosen_ids.add(eid)
+                rest = [item for item in rest if str(item.get("id")) not in chosen_ids]
+        chosen.extend(_spread_pick(sorted(rest, key=_unit_price), size - len(chosen)))
+        rng.shuffle(chosen)
+        return chosen[:size]
+    pool = live if len(live) >= size else [*live, *seed]
+    if teaching and not _has_teaching_pair(pool) and _has_teaching_pair(unique):
+        pool = unique
+    if len(pool) <= size:
+        rng.shuffle(pool)
+        return pool
+    chosen = []
+    if teaching:
+        live_pair = _pick_teaching_pair(live, rng) if len(live) >= 2 else None
+        picked = live_pair or _pick_teaching_pair(pool, rng)
+        if picked:
+            chosen.extend(picked)
+    chosen_ids = {str(item.get("id")) for item in chosen}
+    rest = [item for item in pool if str(item.get("id")) not in chosen_ids]
+    chosen.extend(_spread_pick(sorted(rest, key=_unit_price), size - len(chosen)))
+    rng.shuffle(chosen)
+    return chosen[:size]
+
+
+def _round_locality_label(items: list[dict[str, Any]], pair_key: str) -> str:
+    labels = [str(item.get("locality") or "").strip() for item in items]
+    labels = [label for label in labels if label]
+    if not labels:
+        return pair_key or ""
+    return max(labels, key=len)
+
+
+def _round_vanish(items: list[dict[str, Any]]) -> tuple[float, str]:
+    stamped = [item for item in items if item.get("first_seen") or item.get("last_seen")]
+    source = stamped or items
+    observed: list[tuple[float, str]] = []
+    typical: list[float] = []
+    for item in source:
+        hours, label = _item_vanish(item)
+        if label != TYPICAL_VANISH_LABEL:
+            observed.append((hours, label))
+        typical.append(hours)
+    if observed:
+        hours = min(row[0] for row in observed)
+        return hours, _vanish_label(hours)
+    return min(typical or [DEFAULT_VANISH_HOURS]), TYPICAL_VANISH_LABEL
+
+
+def _rent_candidates(
+    groups: dict[str, list[dict[str, Any]]],
+    seed_buckets: dict[str, list[dict[str, Any]]],
+    key: str,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = list(groups.get(key) or [])
+    seen = {str(item.get("id")) for item in out}
+    for extra in seed_buckets.get(key) or []:
+        eid = str(extra.get("id") or "")
+        if eid and eid not in seen:
+            seen.add(eid)
+            out.append(extra)
+    return out
+
+
+def _has_live(items: list[dict[str, Any]]) -> bool:
+    return any(not _is_seed_id(item.get("id")) for item in items)
+
+
+def pick_rent_round(
+    pool: list[dict[str, Any]],
+    *,
+    rng: random.Random | None = None,
+    teaching_ratio: float = TEACHING_RATIO,
+) -> dict[str, Any]:
+    """Five flats, one district. ~80 % include a pedagogical deal-vs-overpriced contrast.
+
+    Live catalog listings in that district win; same-district seed only pads a
+    thin live group. Never mix Vinohrady with Žižkov. Cold path uses seed.
+    """
+    rng = rng or random.Random()
+    live = live_pairable_pool(pool)
+    seed = _seed_pool()
+    buckets = _locality_buckets([*(live or []), *seed])
+    groups = {key: items for key, items in buckets.items() if _pairable(items)}
+    seed_buckets = _locality_buckets(seed)
+    if not groups:
+        groups = _groups_by_locality(seed)
+
+    filled = {key: _rent_candidates(groups, seed_buckets, key) for key in groups}
+    live_full = {key: items for key, items in filled.items() if _has_live(items) and len(items) >= RENT_ROUND_SIZE}
+    seed_full = {key: items for key, items in filled.items() if len(items) >= RENT_ROUND_SIZE}
+    source = live_full or seed_full or filled
+
+    want_teaching = rng.random() < max(0.0, min(1.0, float(teaching_ratio)))
+    pair_kind = "random"
+    key = ""
+    candidates: list[dict[str, Any]] = []
+    if want_teaching:
+        teaching_keys = [name for name, items in source.items() if _has_teaching_pair(items)]
+        if teaching_keys:
+            full = [name for name in teaching_keys if len(source[name]) >= RENT_ROUND_SIZE]
+            key = rng.choice(full or teaching_keys)
+            candidates = source[key]
+            pair_kind = "teaching"
+    if not candidates:
+        key = rng.choice(list(source))
+        candidates = source[key]
+        pair_kind = "random"
+
+    chosen = _pick_rent_flats(candidates, rng=rng, teaching=(pair_kind == "teaching"))
+    if pair_kind == "teaching" and not _teaching_pairs(chosen):
+        pair_kind = "random"
+    if len(chosen) < RENT_ROUND_SIZE:
+        seen = {str(item.get("id")) for item in chosen}
+        for item in seed_buckets.get(key) or []:
+            eid = str(item.get("id") or "")
+            if eid and eid not in seen:
+                seen.add(eid)
+                chosen.append(item)
+            if len(chosen) >= RENT_ROUND_SIZE:
                 break
-    random.shuffle(picked)
-    chosen = picked[:RENT_ROUND_SIZE]
+        chosen = chosen[:RENT_ROUND_SIZE]
+    if len(chosen) < RENT_ROUND_SIZE and seed_full:
+        key = rng.choice(list(seed_full))
+        chosen = _pick_rent_flats(seed_full[key], rng=rng, teaching=want_teaching)
+        pair_kind = "teaching" if want_teaching and _teaching_pairs(chosen) else "random"
+
+    vanish, vanish_text = _round_vanish(chosen)
+    pair_key = key or str(chosen[0].get("pair_key") or "")
+    loc = _round_locality_label(chosen, pair_key)
+    copy = (_RENT_TEACH if pair_kind == "teaching" else _RENT_RANDOM).format(vanish=vanish_text)
     for item in chosen:
         _remember_price(item)
     seeded = all(_is_seed_id(item.get("id")) for item in chosen)
@@ -801,7 +1008,26 @@ def rent_round(store: Any) -> dict[str, Any]:
         "hidden": {str(item["id"]): int(item["price_czk"]) for item in chosen},
         "pool": chosen,
         "seeded": seeded,
+        "round_kind": pair_kind,
+        "locality_key": chosen[0].get("locality_key") or locality_key(loc),
+        "pair_key": pair_key,
+        "locality_label": loc,
+        "copy": _RENT_INTRO.format(vanish=vanish_text),
+        "copy_ok": copy,
+        "vanish_hours": vanish,
+        "vanish_label": vanish_text,
     }
+
+
+def rent_round(
+    store: Any,
+    *,
+    rng: random.Random | None = None,
+    pool: list[dict[str, Any]] | None = None,
+    teaching_ratio: float = TEACHING_RATIO,
+) -> dict[str, Any]:
+    source = pool if pool is not None else _catalog_pool(store)
+    return pick_rent_round(source, rng=rng, teaching_ratio=teaching_ratio)
 
 
 def public_higher_lower(store: Any = None) -> dict[str, Any]:
@@ -814,7 +1040,19 @@ def public_rent_round(store: Any = None) -> dict[str, Any]:
     """Memory rent-round cards. Live catalog when pairable; seed if cold."""
     schedule_pool_refresh(store)
     payload = rent_round(store)
-    return {"round_id": payload["round_id"], "items": payload["items"]}
+    return {
+        "round_id": payload["round_id"],
+        "items": payload["items"],
+        "locality_label": payload.get("locality_label"),
+        "locality_key": payload.get("locality_key"),
+        "pair_key": payload.get("pair_key"),
+        "vanish_hours": payload.get("vanish_hours"),
+        "vanish_label": payload.get("vanish_label"),
+        "copy": payload.get("copy"),
+        "copy_ok": payload.get("copy_ok"),
+        "round_kind": payload.get("round_kind"),
+        "seeded": payload.get("seeded"),
+    }
 
 
 def public_rent_score(
