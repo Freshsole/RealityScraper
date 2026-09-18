@@ -1120,6 +1120,10 @@ function paintBillingPrices(promo) {
     status.hidden = false;
     status.classList.remove("is-error");
     status.textContent = `Kód ${promo.code}: −${promo.percent} % na první platbu.`;
+  } else if (promo?.code && promo.deferred) {
+    status.hidden = false;
+    status.classList.remove("is-error");
+    status.textContent = `Kód ${promo.code} se uplatní při platbě.`;
   }
 }
 
@@ -1161,6 +1165,7 @@ async function applyBillingPromo(persist) {
     code: data.code || code.toUpperCase(),
     percent: Number(data.percent || 0),
     amount_czk: Number(data.amount_czk || 0),
+    deferred: Boolean(data.deferred),
   };
   try {
     sessionStorage.setItem("realitify_promo", billingPromo.code);
@@ -1174,7 +1179,11 @@ async function applyBillingPromo(persist) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: billingPromo.code }),
     });
-    toast(`Slevový kód ${billingPromo.code} je připravený na první objednávku`);
+    if (billingPromo.deferred) {
+      toast(`Kód ${billingPromo.code} je uložený a uplatní se při platbě`);
+    } else {
+      toast(`Slevový kód ${billingPromo.code} je připravený na první objednávku`);
+    }
   }
 }
 

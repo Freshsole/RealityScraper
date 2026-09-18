@@ -375,7 +375,8 @@ class ScrapeEngine:
             )
 
         limiter = self.limiter_for(portal)
-        global_lim = self.registry.global_limiter if self.registry is not None else None
+        use_global = self.registry is not None and self.pipeline != "catalog_sync"
+        global_lim = self.registry.global_limiter if use_global else None
         await limiter.acquire(self.priority)
         limiter_at = limiter.limit
         ok = False

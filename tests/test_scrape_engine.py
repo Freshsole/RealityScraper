@@ -78,7 +78,40 @@ class ScrapeEngineTests(unittest.TestCase):
             config.SCRAPE_CONCURRENCY_OVERRIDES.clear()
             config.SCRAPE_CONCURRENCY_OVERRIDES.update(previous)
 
-    def test_per_portal_limiters_do_not_share_slots(self):
+    def test_fragile_html_portals_default_to_low_concurrency(self) -> None:
+        self.assertEqual(LimiterRegistry.ceiling_for("realitycz"), 1)
+        self.assertEqual(LimiterRegistry.ceiling_for("ulovdomov"), 1)
+        self.assertEqual(LimiterRegistry.ceiling_for("mmreality"), 2)
+
+    def test_catalog_sync_skips_global_limiter(self) -> None:
+        async def _run() -> bool:
+            registry = LimiterRegistry()
+            for _ in range(registry.global_limiter.limit):
+                await registry.global_limiter.acquire(0)
+            engine = ScrapeEngine(registry=registry, priority=1, pipeline="catalog_sync")
+
+            async def fetch(_page: int):
+                return [Listing(
+                    id=1,
+                    name="x",
+                    price_czk=1,
+                    price_label="1",
+                    disposition="2+kk",
+                    area_m2=40,
+                    locality="Praha",
+                    url="https://reality.idnes.cz/detail/pronajem/byt/x/1/",
+                    image_url=None,
+                )], 1
+
+            result = await asyncio.wait_for(
+                engine.fetch_one_page(fetch, 1, portal="idnes"),
+                timeout=0.5,
+            )
+            return bool(result.listings) and not result.error
+
+        self.assertTrue(asyncio.run(_run()))
+
+    def test_per_portal_limiters_do_not_share_slots(self) -> None:
         async def _run() -> float:
             registry = LimiterRegistry()
             busy = registry.for_portal("sreality")

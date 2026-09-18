@@ -237,7 +237,9 @@ class SrealityClient:
         note_httpx(response)
         parse_started = time.monotonic()
         payload = await asyncio.to_thread(json.loads, response.content)
-        listings, total = await asyncio.to_thread(parse_search_payload, payload.get("pageProps") or payload)
+        listings, total = await asyncio.to_thread(
+            parse_search_payload, payload.get("pageProps") or payload, self.search_url
+        )
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         return listings, total
 
@@ -255,7 +257,9 @@ class SrealityClient:
         def _parse(blob: bytes) -> tuple[list[Listing], int, str | None]:
             html = blob.decode("utf-8", "replace")
             data = _next_data_json(html)
-            listings, total = parse_search_payload(data.get("props", {}).get("pageProps", {}))
+            listings, total = parse_search_payload(
+                data.get("props", {}).get("pageProps", {}), self.search_url
+            )
             build_id = data.get("buildId")
             return listings, total, str(build_id) if build_id else None
 
@@ -481,7 +485,11 @@ def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None
     locality = format_locality(loc) if isinstance(loc, dict) else str(loc or "")
     lat, lon = coords_from_locality(loc) if isinstance(loc, dict) else (None, None)
     photos = image_urls(estate.get("images") or params.get("images") or [])
-    detail_url = (url or "").strip() or build_detail_url(estate if "locality" in estate else {**estate, "id": listing_id})
+    built = build_detail_url(estate if "locality" in estate else {**estate, "id": listing_id})
+    detail_url = (url or "").strip() or built
+    offer = offer_slug_from_raw(estate if isinstance(estate, dict) else {})
+    if offer:
+        detail_url = rewrite_sreality_detail_offer(detail_url, offer)
     if not detail_url.startswith("http"):
         detail_url = urljoin("https://www.sreality.cz", detail_url)
 
@@ -672,7 +680,7 @@ def format_cz_date(value: str | None) -> str:
         return value
 
 
-def parse_search_payload(page_props: dict[str, Any]) -> tuple[list[Listing], int]:
+def parse_search_payload(page_props: dict[str, Any], search_url: str = "") -> tuple[list[Listing], int]:
     queries = (
         page_props.get("dehydratedState", {}).get("queries", [])
         if isinstance(page_props, dict)
@@ -684,12 +692,12 @@ def parse_search_payload(page_props: dict[str, Any]) -> tuple[list[Listing], int
             data = (query.get("state") or {}).get("data") or {}
             results = data.get("results") or []
             total = int((data.get("pagination") or {}).get("total") or 0)
-            listings = [item for raw in results if (item := listing_from_raw(raw))]
+            listings = [item for raw in results if (item := listing_from_raw(raw, search_url=search_url))]
             return listings, total
     return [], 0
 
 
-def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
+def listing_from_raw(raw: dict[str, Any], search_url: str = "") -> Listing | None:
     listing_id = raw.get("id")
     name = (raw.get("name") or "").replace("\xa0", " ").strip()
     if not listing_id or not name:
@@ -709,9 +717,14 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
     loc = raw.get("locality") or {}
     locality = format_locality(loc)
     lat, lon = coords_from_locality(loc)
-    url = build_detail_url(raw)
+    url = build_detail_url(raw, search_url=search_url)
     photos = image_urls(raw.get("images") or [])
-    extras = {"flags": ["roommate"]} if disposition.lower() == "pokoj" else {}
+    extras: dict[str, Any] = {}
+    if disposition.lower() == "pokoj":
+        extras["flags"] = ["roommate"]
+    offer_name = _param_label(raw.get("categoryTypeCb"))
+    if offer_name:
+        extras["offer"] = offer_name
     return Listing(
         id=int(listing_id),
         name=name,
@@ -815,7 +828,103 @@ def _locality_house_number(loc: dict[str, Any]) -> str:
     return ""
 
 
-def build_detail_url(raw: dict[str, Any]) -> str:
+_OFFER_SLUGS = {
+    "prodej": "prodej",
+    "sale": "prodej",
+    "pronajem": "pronajem",
+    "pronájem": "pronajem",
+    "rent": "pronajem",
+    "drazba": "drazby",
+    "dražba": "drazby",
+    "drazby": "drazby",
+    "podil": "podily",
+    "podíl": "podily",
+    "podily": "podily",
+}
+_KIND_SLUGS = {
+    "byty": "byt",
+    "byt": "byt",
+    "domy": "dum",
+    "dum": "dum",
+    "dům": "dum",
+    "pozemky": "pozemek",
+    "pozemek": "pozemek",
+    "komercni": "komercni",
+    "komerční": "komercni",
+    "ostatni": "ostatni",
+    "ostatní": "ostatni",
+}
+
+
+def _fold_slug(value: str) -> str:
+    return (
+        (value or "")
+        .casefold()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("ě", "e")
+        .replace("í", "i")
+        .replace("ý", "y")
+        .replace("ó", "o")
+        .replace("ú", "u")
+        .replace("ů", "u")
+        .replace("ž", "z")
+        .replace("š", "s")
+        .replace("č", "c")
+        .replace("ř", "r")
+        .replace("ď", "d")
+        .replace("ť", "t")
+        .replace("ň", "n")
+    )
+
+
+def offer_slug_from_raw(raw: dict[str, Any], search_url: str = "") -> str:
+    name = _fold_slug(_param_label(raw.get("categoryTypeCb")) or "")
+    for key, slug in _OFFER_SLUGS.items():
+        if key in name:
+            return slug
+    path = f"/{_fold_slug(search_url)}/"
+    for slug in ("drazby", "podily", "prodej", "pronajem"):
+        if f"/{slug}/" in path:
+            return slug
+    return "pronajem"
+
+
+def kind_slug_from_raw(raw: dict[str, Any]) -> str:
+    name = _fold_slug(_param_label(raw.get("categoryMainCb")) or "")
+    for key, slug in _KIND_SLUGS.items():
+        if key in name:
+            return slug
+    return "byt"
+
+
+def rewrite_sreality_detail_offer(url: str, offer: str) -> str:
+    raw = (url or "").strip()
+    slug = _OFFER_SLUGS.get(_fold_slug(offer), "") or _fold_slug(offer)
+    if slug not in {"prodej", "pronajem", "drazby", "podily"}:
+        return raw
+    return re.sub(r"/detail/(pronajem|prodej|drazby|podily)/", f"/detail/{slug}/", raw, count=1, flags=re.I)
+
+
+def sreality_row_is_sale(extras: Any, price_label: str, price_czk: int | None) -> bool:
+    data = extras if isinstance(extras, dict) else {}
+    offer = _fold_slug(str(data.get("offer") or ""))
+    if "prodej" in offer or offer == "sale":
+        return True
+    if "pronajem" in offer or offer == "rent":
+        return False
+    label = (price_label or "").casefold()
+    if "nemovitost" in label:
+        return True
+    if "měsíc" in label or "mesic" in label:
+        return False
+    try:
+        return int(price_czk or 0) >= 150_000
+    except (TypeError, ValueError):
+        return False
+
+
+def build_detail_url(raw: dict[str, Any], search_url: str = "") -> str:
     loc = raw.get("locality") or {}
     slug = "-".join(
         part
@@ -826,8 +935,8 @@ def build_detail_url(raw: dict[str, Any]) -> str:
         )
         if part
     )
-    offer = "pronajem"
-    kind = "byt"
+    offer = offer_slug_from_raw(raw, search_url)
+    kind = kind_slug_from_raw(raw)
     disposition = ((raw.get("categorySubCb") or {}).get("name") or "byt").replace(" ", "")
     return f"https://www.sreality.cz/detail/{offer}/{kind}/{disposition}/{slug}/{raw['id']}"
 

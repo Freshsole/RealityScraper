@@ -308,15 +308,29 @@ class ScrapeWorker:
         raw = await self.hub._job_db(self.hub.store.get_meta, "catalog_sync_request")
         if not raw:
             return
-        await self.hub._job_db(self.hub.store.set_meta, "catalog_sync_request", None)
         portals = None
         try:
             payload = json.loads(str(raw))
             if isinstance(payload, list):
-                portals = [str(item) for item in payload]
+                portals = [str(item) for item in payload if str(item).strip()]
         except json.JSONDecodeError:
             portals = None
-        await self.hub.run_catalog_sync(portals=portals, rerun=True)
+        wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        to_start = wanted - self.hub.catalog_running_portals
+        if not to_start:
+            return
+        leftover = sorted(wanted - to_start)
+        await self.hub._job_db(
+            self.hub.store.set_meta,
+            "catalog_sync_request",
+            json.dumps(leftover) if leftover else None,
+        )
+        self.hub.catalog_running_portals |= to_start
+        self.hub.catalog_running = True
+        asyncio.create_task(
+            self.hub.run_catalog_sync(portals=sorted(to_start), rerun=True, claimed=True),
+            name="forced-catalog",
+        )
 
     async def _maybe_scrape_url_request(self) -> None:
         raw = await self.hub._job_db(self.hub.store.get_meta, "scrape_url_request")

@@ -284,6 +284,149 @@ class AppBridgeTests(unittest.TestCase):
         portals = json.loads(str(hub.store.get_meta("catalog_sync_request")))
         self.assertEqual(portals, ["sreality"])
 
+    def test_web_role_merges_catalog_queue(self) -> None:
+        with (
+            patch.object(config, "DB_PATH", self.db),
+            patch.object(config, "SCRAPE_ROLE", "web"),
+        ):
+            hub = Hub()
+            first = hub.start_catalog_sync(portals=["sreality"])
+            second = hub.start_catalog_sync(portals=["idnes"])
+        self.assertTrue(first.get("queued"))
+        self.assertTrue(second.get("queued"))
+        portals = json.loads(str(hub.store.get_meta("catalog_sync_request")))
+        self.assertEqual(portals, ["idnes", "sreality"])
+
+    def test_catalog_progress_shows_running_and_queued(self) -> None:
+        job = self.store.ensure_scrape_job(
+            kind="catalog_daily",
+            portal="sreality",
+            shard_key="sreality:byty:pronajem:praha-1:2kk",
+            search_url="https://www.sreality.cz/hledani/pronajem/byty/praha-1?velikost=2%2Bkk",
+        )
+        self.store.update_scrape_job(
+            job["id"],
+            status="running",
+            page=4,
+            upserts=80,
+            last_total=200,
+            started_at="2026-09-17T10:00:00+00:00",
+        )
+        self.store.set_meta("catalog_sync_request", json.dumps(["idnes"]))
+        progress = self.store.catalog_progress()
+        self.assertEqual(progress["status"], "running")
+        self.assertTrue(progress["active"])
+        self.assertEqual(progress["queued_portals"], ["idnes"])
+        self.assertEqual(progress["running_jobs"][0]["shard_key"], "sreality:byty:pronajem:praha-1:2kk")
+        sreality = next(item for item in progress["portals"] if item["id"] == "sreality")
+        self.assertEqual(sreality["state"], "running")
+        self.assertEqual(sreality["page"], 4)
+        idnes = next(item for item in progress["portals"] if item["id"] == "idnes")
+        self.assertEqual(idnes["state"], "queued")
+        self.assertEqual(idnes["pct"], 0)
+
+    def test_catalog_progress_pending_without_runner_is_active(self) -> None:
+        job = self.store.ensure_scrape_job(
+            kind="catalog_daily",
+            portal="idnes",
+            shard_key="idnes:byty:pronajem:praha",
+            search_url="https://reality.idnes.cz/s/pronajem/byty/praha/",
+        )
+        self.store.update_scrape_job(job["id"], status="pending", page=1, upserts=0)
+        self.store.set_meta("catalog_sync_status", "partial")
+        progress = self.store.catalog_progress()
+        self.assertEqual(progress["status"], "pending")
+        self.assertTrue(progress["active"])
+        from app.admin import catalog_progress_payload
+
+        payload = catalog_progress_payload(self.store)
+        self.assertIn("žádný neběží", payload["headline"])
+
+    def test_worker_keeps_catalog_request_when_already_running(self) -> None:
+        from app.scrape_worker import ScrapeWorker
+
+        async def _run() -> list[str]:
+            with (
+                patch.object(config, "DB_PATH", self.db),
+                patch.object(config, "SCRAPE_ROLE", "worker"),
+            ):
+                worker = ScrapeWorker()
+                worker.hub.catalog_running = True
+                worker.hub.catalog_running_portals.add("sreality")
+                worker.hub.store.set_meta("catalog_sync_request", json.dumps(["sreality"]))
+                await worker._maybe_forced_catalog()
+                raw = worker.hub.store.get_meta("catalog_sync_request")
+            return json.loads(str(raw))
+
+        self.assertEqual(asyncio.run(_run()), ["sreality"])
+
+    def test_worker_starts_forced_catalog_without_waiting(self) -> None:
+        from app.scrape_worker import ScrapeWorker
+
+        async def _run() -> tuple[float, str | None, bool]:
+            with (
+                patch.object(config, "DB_PATH", self.db),
+                patch.object(config, "SCRAPE_ROLE", "worker"),
+            ):
+                worker = ScrapeWorker()
+                worker.hub.store.set_meta("catalog_sync_request", json.dumps(["idnes"]))
+
+                async def _slow(*_args, **_kwargs):
+                    await asyncio.sleep(2)
+                    return {"ok": True}
+
+                with patch.object(worker.hub, "run_catalog_sync", new=_slow):
+                    started = time.monotonic()
+                    await worker._maybe_forced_catalog()
+                    elapsed = time.monotonic() - started
+                    for task in asyncio.all_tasks():
+                        if task.get_name() == "forced-catalog":
+                            task.cancel()
+                return elapsed, worker.hub.store.get_meta("catalog_sync_request"), "idnes" in worker.hub.catalog_running_portals
+
+        elapsed, raw, claimed = asyncio.run(_run())
+        self.assertLess(elapsed, 0.5)
+        self.assertTrue(raw in {None, ""})
+        self.assertTrue(claimed)
+
+    def test_worker_recover_requeues_interrupted_catalog_job(self) -> None:
+        job = self.store.ensure_scrape_job(
+            kind="catalog_daily",
+            portal="idnes",
+            shard_key="idnes:byty:pronajem:jihomoravsky-kraj",
+            search_url="https://reality.idnes.cz/s/pronajem/byty/jihomoravsky-kraj/",
+        )
+        self.store.update_scrape_job(
+            job["id"],
+            status="partial",
+            last_error="Obnoveno po restartu — job zůstal ve stavu running.",
+        )
+        with (
+            patch.object(config, "DB_PATH", self.db),
+            patch.object(config, "SCRAPE_ROLE", "worker"),
+        ):
+            hub = Hub()
+        self.assertIn("idnes", hub.store.catalog_queued_portals())
+        fresh = hub.store.list_scrape_jobs("catalog_daily")[0]
+        self.assertEqual(fresh["status"], "pending")
+        self.assertFalse(fresh.get("last_error"))
+
+    def test_web_reload_does_not_interrupt_running_catalog_job(self) -> None:
+        job = self.store.ensure_scrape_job(
+            kind="catalog_daily",
+            portal="idnes",
+            shard_key="idnes:byty:pronajem:jihomoravsky-kraj",
+            search_url="https://reality.idnes.cz/s/pronajem/byty/jihomoravsky-kraj/",
+        )
+        self.store.update_scrape_job(job["id"], status="running")
+        with (
+            patch.object(config, "DB_PATH", self.db),
+            patch.object(config, "SCRAPE_ROLE", "web"),
+        ):
+            Hub()
+        fresh = self.store.list_scrape_jobs("catalog_daily")[0]
+        self.assertEqual(fresh["status"], "running")
+
     def test_web_start_skips_crawl_loops(self) -> None:
         async def _run() -> tuple[bool, bool, bool]:
             with (
@@ -306,6 +449,73 @@ class AppBridgeTests(unittest.TestCase):
         self.assertTrue(recent_off)
         self.assertTrue(deep_off)
         self.assertTrue(web_loop_on)
+
+    def test_deep_loop_pauses_while_catalog_sync_runs(self) -> None:
+        async def _run() -> tuple[int, list[float]]:
+            with (
+                patch.object(config, "DB_PATH", self.db),
+                patch.object(config, "SCRAPE_ROLE", "worker"),
+            ):
+                hub = Hub()
+                hub.running = True
+                hub.catalog_running = True
+                ticks = 0
+
+                async def tick() -> None:
+                    nonlocal ticks
+                    ticks += 1
+
+                hub._deep_catalog_tick = tick
+                sleeps: list[float] = []
+
+                async def fake_sleep(delay: float) -> None:
+                    sleeps.append(float(delay))
+                    if len(sleeps) >= 3:
+                        hub.running = False
+
+                with patch("app.monitor.asyncio.sleep", fake_sleep):
+                    await hub._deep_catalog_loop()
+                return ticks, sleeps
+
+        ticks, sleeps = asyncio.run(_run())
+        self.assertEqual(ticks, 0)
+        self.assertIn(0.5, sleeps)
+
+    def test_catalog_job_bypasses_global_limiter(self) -> None:
+        job = self.store.ensure_scrape_job(
+            kind="catalog_daily",
+            portal="idnes",
+            shard_key="idnes:byty:pronajem:jihocesky-kraj",
+            search_url="https://reality.idnes.cz/s/pronajem/byty/jihocesky-kraj/",
+        )
+        engines: list[ScrapeEngine] = []
+        real = ScrapeEngine
+
+        def wrap(*args: object, **kwargs: object) -> ScrapeEngine:
+            engine = real(*args, **kwargs)
+            engines.append(engine)
+            return engine
+
+        class Client:
+            async def fetch_page(self, page: int, newest: bool = True):
+                return [], 0
+
+        async def _run() -> None:
+            with (
+                patch.object(config, "DB_PATH", self.db),
+                patch.object(config, "SCRAPE_ROLE", "worker"),
+                patch("app.scrape_engine.ScrapeEngine", wrap),
+            ):
+                hub = Hub()
+                hub.client_for = lambda url: Client()  # type: ignore[method-assign]
+                await hub._run_catalog_job({**job, "page": 1, "upserts": 0, "last_total": 0})
+
+        asyncio.run(_run())
+        catalog = [item for item in engines if item.pipeline == "catalog_sync"]
+        self.assertTrue(catalog)
+        self.assertIsNotNone(catalog[0].registry)
+        self.assertEqual(catalog[0].priority, 0)
+        self.assertEqual(catalog[0].pipeline, "catalog_sync")
 
     def test_client_for_routes_url_to_portal_client(self) -> None:
         url = "https://reality.idnes.cz/s/pronajem/byty/"

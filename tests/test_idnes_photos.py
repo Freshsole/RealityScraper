@@ -1,4 +1,6 @@
+import asyncio
 import unittest
+from unittest.mock import patch
 
 from app.idnes import IdnesClient, parse_photos, upgrade_photo
 from app.sreality import Listing
@@ -41,3 +43,32 @@ class IdnesPhotoTests(unittest.TestCase):
         )
         self.assertEqual(len(listing.photos), 2)
         self.assertIn("gt=r", listing.image_url)
+
+
+class IdnesCoordTests(unittest.TestCase):
+    def test_list_fetch_does_not_hit_nominatim(self) -> None:
+        listing = Listing(
+            id=1,
+            name="x",
+            price_czk=1,
+            price_label="1",
+            disposition="2+kk",
+            area_m2=50,
+            locality="Karlovy Vary",
+            url="https://reality.idnes.cz/detail/pronajem/byt/x/aaaaaaaaaaaaaaaaaaaaaaaa/",
+            image_url=None,
+        )
+
+        async def _run() -> None:
+            called = False
+
+            async def boom(text: str):
+                nonlocal called
+                called = True
+                raise AssertionError(f"network geocode {text}")
+
+            with patch("app.places.geocode_locality", boom):
+                await IdnesClient("https://reality.idnes.cz/s/pronajem/byty/")._attach_coords([listing])
+            self.assertFalse(called)
+
+        asyncio.run(_run())

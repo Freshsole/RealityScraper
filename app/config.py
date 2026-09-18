@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 
 def _frozen() -> bool:
@@ -25,9 +25,21 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _apply_dotenv(path: Path) -> None:
+    """Fill os.environ from .env. Keep real process/Railway values; replace empty placeholders."""
+    if not path.is_file():
+        return
+    for key, value in (dotenv_values(path) or {}).items():
+        if value is None:
+            continue
+        current = os.environ.get(key)
+        if current is None or not str(current).strip() or "..." in str(current):
+            os.environ[key] = value
+
+
 ROOT = app_root()
-load_dotenv(ROOT / ".env")
-load_dotenv(Path.cwd() / ".env", override=False)
+_apply_dotenv(ROOT / ".env")
+_apply_dotenv(Path.cwd() / ".env")
 
 DEFAULT_SEARCH_URL = (
     "https://www.sreality.cz/hledani/pronajem/byty/"
@@ -42,6 +54,14 @@ def _webhook_env(name: str) -> str:
         return ""
     lowered = raw.lower()
     if "webhooks/id/token" in lowered or "/webhooks/id/" in lowered:
+        return ""
+    return raw
+
+
+def _api_key_env(name: str) -> str:
+    """Ignore .env.example placeholders like sk_test_... so we never call Stripe with them."""
+    raw = os.getenv(name, "").strip()
+    if not raw or "..." in raw:
         return ""
     return raw
 
@@ -90,15 +110,22 @@ SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SH
 SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
 # Per-page scrape_metrics_log + parse/fetch split. Off in production.
 SCRAPE_METRICS_DETAIL = os.getenv("SCRAPE_METRICS_DETAIL", "0").strip().lower() in {"1", "true", "yes"}
-# JSON dict of portal → concurrency ceiling, e.g. '{"sreality":24,"mmreality":4}'
+# JSON dict of portal → concurrency ceiling, e.g. '{"sreality":24,"mmreality":4}'.
+# Fragile HTML portals default to 1–2 so a 16-wide crawl does not 429 them.
+_DEFAULT_CONCURRENCY_OVERRIDES = {
+    "realitycz": 1,
+    "ulovdomov": 1,
+    "mmreality": 2,
+}
 _raw_scrape_overrides = (os.getenv("SCRAPE_CONCURRENCY_OVERRIDES", "") or "").strip()
 try:
-    SCRAPE_CONCURRENCY_OVERRIDES = {
+    _env_overrides = {
         str(key).strip().lower(): max(1, min(64, int(value)))
         for key, value in (json.loads(_raw_scrape_overrides) if _raw_scrape_overrides else {}).items()
     }
 except (json.JSONDecodeError, TypeError, ValueError):
-    SCRAPE_CONCURRENCY_OVERRIDES = {}
+    _env_overrides = {}
+SCRAPE_CONCURRENCY_OVERRIDES = {**_DEFAULT_CONCURRENCY_OVERRIDES, **_env_overrides}
 # Split connect/read so they cannot stack into 50s+ zombie waits.
 # Successful Sreality/Bazos fetches are typically <1s; 8s is ~10× that p95.
 SCRAPE_HTTP_CONNECT_TIMEOUT = max(1.0, min(15.0, float(os.getenv("SCRAPE_HTTP_CONNECT_TIMEOUT", "5"))))
@@ -135,9 +162,9 @@ SOLD_INVENTORY_SEC = max(120, int(os.getenv("SOLD_INVENTORY_SEC", "600")))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
 PORT = int(os.getenv("PORT", "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
-STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "").strip()
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+STRIPE_PUBLISHABLE_KEY = _api_key_env("STRIPE_PUBLISHABLE_KEY")
+STRIPE_SECRET_KEY = _api_key_env("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = _api_key_env("STRIPE_WEBHOOK_SECRET")
 UPDATE_FEED = os.getenv("UPDATE_FEED", "").strip()
 UPDATE_TOKEN = os.getenv("UPDATE_TOKEN", "").strip()
 AUTO_UPDATE = os.getenv("AUTO_UPDATE", "1").strip() in {"1", "true", "yes"}

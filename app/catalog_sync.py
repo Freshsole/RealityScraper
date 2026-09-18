@@ -166,21 +166,23 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": url,
                 }
             )
-    # iDNES stops returning new pages around ~150; Praha-wide searches exceed that.
-    # "projekty" is a mixed view of the same ads and is too large to paginate.
+    # iDNES stops returning new pages around ~150; Praha-wide byty/domy/pozemky exceed that.
+    # Dražba and tiny categories stay nationwide so a full sync is ~140 shards, not 345.
     idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
         f"praha-{i}" for i in range(1, 11)
     ]
+    idnes_regional = {"byty", "domy", "pozemky"}
     idnes_categories = [key for key, _ in idnes_url.CATEGORIES if key != "projekty"]
-    for offer in ("pronajem", "prodej", "drazba"):
+    for offer in ("pronajem", "prodej"):
         for category in idnes_categories:
-            for region in idnes_localities:
+            regions = idnes_localities if category in idnes_regional else [""]
+            for region in regions:
                 url = idnes_url.build_url(
                     {
                         "source": "idnes",
                         "offers": [offer],
                         "category": category,
-                        "districts": [region],
+                        "districts": [region] if region else [],
                         "sizes": [],
                         "sort": "nejnovejsi",
                         "price_from": None,
@@ -193,7 +195,7 @@ def daily_shards() -> list[dict[str, str]]:
                     {
                         "kind": "catalog_daily",
                         "portal": "idnes",
-                        "shard_key": f"idnes:{category}:{offer}:{region}",
+                        "shard_key": f"idnes:{category}:{offer}:{region or 'cz'}",
                         "search_url": url,
                     }
                 )

@@ -146,21 +146,21 @@ class IdnesClient:
             headers=HEADERS, follow_redirects=True, max_redirects=3, timeout=scrape_timeout()
         )
 
-    async def _attach_coords(self, listings: list[Listing]) -> None:
+    async def _attach_coords(self, listings: list[Listing], *, network: bool = False) -> None:
         missing = [item for item in listings if item.lat is None or item.lon is None]
         if not missing:
             return
-        from app.places import geocode_locality
+        from app.places import approx_point_from_locality, geocode_locality
 
         keys = list(dict.fromkeys((item.locality or "").strip() for item in missing if (item.locality or "").strip()))
         found: dict[str, tuple[float, float] | None] = {}
-        lock = asyncio.Semaphore(4)
-
-        async def locate(key: str) -> None:
-            async with lock:
+        for key in keys:
+            found[key] = approx_point_from_locality(key)
+        if network:
+            for key in keys:
+                if found.get(key):
+                    continue
                 found[key] = await geocode_locality(key)
-
-        await asyncio.gather(*(locate(key) for key in keys))
         for item in missing:
             point = found.get((item.locality or "").strip())
             if point:

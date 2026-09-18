@@ -1527,14 +1527,93 @@
         <div class="muted">${esc(row.run_at_rel || "")}</div>
         <button class="ad-btn outline" type="button" data-cancel-schedule="${esc(row.id || "")}">Zrušit</button>
       </div>`;
-    const portalOpts = (data.scrape_portals || [
-      { id: "sreality", name: "Sreality" },
-      { id: "bezrealitky", name: "Bezrealitky" },
-      { id: "idnes", name: "Reality.iDNES" },
-      { id: "bazos", name: "Bazoš" },
-    ])
-      .map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`)
-      .join("");
+    const portalOpts = [
+      `<option value="all">Všechny portály</option>`,
+      ...(data.scrape_portals || [
+        { id: "sreality", name: "Sreality" },
+        { id: "bezrealitky", name: "Bezrealitky" },
+        { id: "idnes", name: "Reality.iDNES" },
+        { id: "bazos", name: "Bazoš" },
+      ]).map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`),
+    ].join("");
+    const shardLabel = (key) => {
+      const parts = String(key || "").split(":").filter(Boolean);
+      return parts.slice(1).join(" · ") || key || "—";
+    };
+    const catalogStateClass = (state) => {
+      if (state === "running" || state === "done") return "ok";
+      if (state === "error") return "bad";
+      if (state === "queued" || state === "pending" || state === "partial") return "warn";
+      return "";
+    };
+    const catalogProgressHtml = (p) => {
+      const progress = p || {};
+      const portals = progress.portals || [];
+      const errors = progress.recent_errors || [];
+      const running = progress.running_jobs || [];
+      const jobs = Number(progress.jobs || 0);
+      const done = Number(progress.done || 0);
+      const pct = jobs ? Math.min(100, Math.round((100 * done) / jobs)) : 0;
+      const timeoutBits = [];
+      if (Number(progress.timeout_monitors || 0)) {
+        timeoutBits.push(`${fmtN(progress.timeout_monitors)} hlídačů hlásí search timeout — další cyklus je zkusí znovu.`);
+      }
+      if (Number(progress.timeout_jobs || 0)) {
+        timeoutBits.push(`${fmtN(progress.timeout_jobs)} shardů katalogu skončilo timeoutem.`);
+      }
+      const portalRows = portals.map((row) => {
+        let current = "—";
+        if (row.state === "queued") {
+          current = `${fmtN(row.shards || 0)} shardů · čeká na worker`;
+        } else if (row.state !== "idle") {
+          const bits = [`${fmtN(row.done || 0)} / ${fmtN(row.shards || 0)} shardů`];
+          if (row.current_shard) bits.push(esc(shardLabel(row.current_shard)));
+          if (row.page) bits.push(`strana ${fmtN(row.page)}`);
+          if (row.last_total) bits.push(`${fmtN(row.current_upserts || 0)} / ${fmtN(row.last_total)} listingů`);
+          else if (row.current_upserts) bits.push(`${fmtN(row.current_upserts)} listingů`);
+          if (row.started_rel) bits.push(esc(row.started_rel));
+          current = bits.join(" · ");
+        }
+        return `<div class="ad-catalog-portal">
+            <div class="ad-catalog-portal-top">
+              <strong>${esc(row.name || row.id || "")}</strong>
+              <span class="ad-nstat ${catalogStateClass(row.state)}">${esc(row.state_label || row.state || "")}</span>
+            </div>
+            <div class="ad-bar thin"><i style="width:${Math.max(0, Math.min(100, Number(row.pct || 0)))}%"></i></div>
+            <p class="muted">${current}</p>
+          </div>`;
+      }).join("");
+      const errorRows = errors.map((row) => `<div class="ad-catalog-err">
+          <strong>${esc(row.portal_name || row.portal || "")}</strong>
+          <span class="muted">${esc(shardLabel(row.shard_key))}${row.when_rel ? ` · ${esc(row.when_rel)}` : ""}</span>
+          <p>${esc(row.last_error || "")}</p>
+        </div>`).join("");
+      const runRows = running.length > 1
+        ? `<div class="ad-catalog-running">${running.map((row) => `<p><strong>${esc(row.portal_name || row.portal || "")}</strong> ${esc(shardLabel(row.shard_key))} · strana ${fmtN(row.page || 1)}${row.started_rel ? ` · ${esc(row.started_rel)}` : ""}</p>`).join("")}</div>`
+        : "";
+      return `<div class="ad-catalog-progress">
+          <div class="ad-catalog-head">
+            <h3 class="ad-sec sm">Průběh katalogu</h3>
+            <span class="ad-nstat ${catalogStateClass(progress.status)}">${esc(progress.status_label || progress.status || "Klid")}</span>
+          </div>
+          <p class="ad-catalog-headline">${esc(progress.headline || "Žádný full scrape teď neběží.")}</p>
+          <div class="ad-catalog-kpis">
+            <div><span class="lbl">Shardy</span><strong>${fmtN(done)} / ${fmtN(jobs)}</strong></div>
+            <div><span class="lbl">Upserty</span><strong>${fmtN(progress.upserts || 0)}</strong></div>
+            <div><span class="lbl">Chyby</span><strong>${fmtN(progress.error || 0)}</strong></div>
+            <div><span class="lbl">Poslední běh</span><strong>${esc(progress.last_run_rel || "zatím ne")}</strong></div>
+          </div>
+          <div class="ad-bar"><i style="width:${pct}%"></i></div>
+          ${timeoutBits.length ? `<p class="ad-catalog-timeout">${esc(timeoutBits.join(" "))}</p>` : ""}
+          ${runRows}
+          <div class="ad-catalog-portals">${portalRows}</div>
+          ${errorRows ? `<div class="ad-catalog-errors"><h4 class="ad-sec sm">Poslední chyby shardů</h4>${errorRows}</div>` : ""}
+        </div>`;
+    };
+    const paintCatalogProgress = (payload) => {
+      const box = $("o-catalog-progress");
+      if (box) box.innerHTML = catalogProgressHtml(payload);
+    };
     const sampleRow = (row) => `<div class="ad-utbl-row">
         <span>${esc(row.name || row.canonical || "")}</span>
         <span class="muted">${esc(row.disposition || "—")}${row.area_m2 ? ` · ${esc(row.area_m2)} m²` : ""}</span>
@@ -1711,7 +1790,7 @@
           </div>
           <div class="ad-ops-block">
             <h3 class="ad-sec sm">Ruční scrape</h3>
-            <p class="ad-dedupe-lead">Spusť scrape konkrétní URL hledání, nebo celý katalog vybraného portálu. Můžeš spustit hned, nebo naplánovat na konkrétní čas.</p>
+            <p class="ad-dedupe-lead">Spusť scrape konkrétní URL hledání, nebo celý katalog vybraného portálu. Frontu a průběh vidíš hned pod formulářem — obnovuje se samo.</p>
             <div class="ad-scrape-form">
               <div class="ad-scrape-row">
                 <div>
@@ -1752,6 +1831,7 @@
                 <button class="ad-btn" type="button" id="o-scrape-run">Spustit scrape</button>
                 <p class="ad-dedupe-note" id="o-scrape-note"></p>
               </div>
+              <div id="o-catalog-progress">${catalogProgressHtml(data.catalog_progress)}</div>
               <div id="o-schedule-list-wrap" ${(data.scrape_schedules || []).length ? "" : "hidden"}>
                 <h3 class="ad-sec sm">Naplánované scrapy</h3>
                 <div class="ad-scrape-schedule-list" id="o-schedule-list">${(data.scrape_schedules || []).map(scheduleRow).join("")}</div>
@@ -1946,9 +2026,12 @@
           if (r.scheduled) {
             note.textContent = `Naplánováno na ${esc(r.job?.run_at || runAt)}.`;
           } else if (scope === "portal") {
+            const names = (r.portals || []).join(", ");
+            const label = portal === "all" ? "všech portálů" : portal;
             note.textContent = r.queued
-              ? `Celý katalog ${esc(portal)} zařazen do fronty.`
-              : `Katalog sync ${esc(portal)} spuštěn.`;
+              ? `Katalog ${label} ve frontě${names ? ` (${names})` : ""}. Průběh je níže.`
+              : `Katalog ${label} spuštěn. Průběh je níže.`;
+            if (res.ops?.catalog_progress) paintCatalogProgress(res.ops.catalog_progress);
           } else {
             note.textContent = r.queued
               ? `Zařazeno do fronty (${esc(r.url || url)}). Objeví se v „Poslední minutové běhy“.`
@@ -2033,6 +2116,17 @@
     bindChoice("o-when-choice");
     syncScrapeForm();
     bindCancelSchedule();
+    const pollCatalogProgress = async () => {
+      if (currentRoute() !== "provoz") return;
+      try {
+        const fresh = await api("/api/admin/scrape-progress");
+        paintCatalogProgress(fresh);
+        setTimeout(pollCatalogProgress, fresh.active ? 2500 : 8000);
+      } catch {
+        setTimeout(pollCatalogProgress, 6000);
+      }
+    };
+    setTimeout(pollCatalogProgress, 2500);
     if (d.busy) pollDedupe();
   }
 

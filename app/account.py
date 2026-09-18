@@ -121,6 +121,8 @@ def user_from_session(store: Store, token: str | None) -> dict[str, Any] | None:
 
 
 def register(store: Store, name: str, email: str, password: str, promo_code: str = "") -> tuple[dict[str, Any], str]:
+    from app.billing import pending_promo_for_signup
+
     email_norm = (email or "").strip().lower()
     if not email_norm or "@" not in email_norm:
         raise ValueError("Zadej platný e-mail")
@@ -136,10 +138,8 @@ def register(store: Store, name: str, email: str, password: str, promo_code: str
                 existing["last"] = last
             if existing_email != email_norm:
                 existing["email"] = email_norm
-            promo = (promo_code or "").strip().upper().replace(" ", "")
+            promo = pending_promo_for_signup(promo_code)
             if promo:
-                from app import billing as stripe_billing
-                promo = stripe_billing.lookup_promotion_code(promo)["code"]
                 existing["pending_promo_code"] = promo
             save_account(store, existing)
             billing = store.billing_record() or {}
@@ -154,10 +154,7 @@ def register(store: Store, name: str, email: str, password: str, promo_code: str
     first, last = split_name(name)
     if not first:
         raise ValueError("Zadej jméno a příjmení")
-    promo = (promo_code or "").strip().upper().replace(" ", "")
-    if promo:
-        from app import billing as stripe_billing
-        promo = stripe_billing.lookup_promotion_code(promo)["code"]
+    promo = pending_promo_for_signup(promo_code)
     hashed, salt = _hash_password(password)
     payload = {
         "first": first,

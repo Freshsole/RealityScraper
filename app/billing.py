@@ -1508,6 +1508,58 @@ def normalize_promo_code(code: str) -> str:
     return (code or "").strip().upper().replace(" ", "")
 
 
+def _promo_format_ok(code: str) -> bool:
+    return bool(re.fullmatch(r"[A-Z0-9-]{3,32}", code))
+
+
+def resolve_promo_code(code: str) -> dict[str, Any]:
+    """Validate format; look up percent in Stripe when configured.
+
+    Without a real Stripe key, keep the code for checkout later instead of
+    failing registration / the billing form.
+    """
+    code = normalize_promo_code(code)
+    if not code:
+        return {"ok": True, "code": "", "percent": 0, "amount_czk": 0, "first_order": True}
+    if not _promo_format_ok(code):
+        raise ValueError("Neplatný formát slevového kódu")
+    if not config.STRIPE_SECRET_KEY:
+        return {
+            "ok": True,
+            "code": code,
+            "percent": 0,
+            "amount_czk": 0,
+            "first_order": True,
+            "deferred": True,
+        }
+    try:
+        return lookup_promotion_code(code)
+    except stripe.AuthenticationError as extra:
+        return {
+            "ok": True,
+            "code": code,
+            "percent": 0,
+            "amount_czk": 0,
+            "first_order": True,
+            "deferred": True,
+        }
+    except ValueError as extra:
+        if "nejsou dostupné" in str(extra).lower():
+            return {
+                "ok": True,
+                "code": code,
+                "percent": 0,
+                "amount_czk": 0,
+                "first_order": True,
+                "deferred": True,
+            }
+        raise
+
+
+def pending_promo_for_signup(code: str) -> str:
+    return str(resolve_promo_code(code).get("code") or "")
+
+
 def lookup_promotion_code(code: str) -> dict[str, Any]:
     code = normalize_promo_code(code)
     if not re.fullmatch(r"[A-Z0-9-]{3,32}", code):
@@ -1515,7 +1567,10 @@ def lookup_promotion_code(code: str) -> dict[str, Any]:
     if not config.STRIPE_SECRET_KEY:
         raise ValueError("Slevové kódy teď nejsou dostupné")
     _configure()
-    found = stripe.PromotionCode.list(code=code, limit=1, expand=["data.promotion.coupon"])
+    try:
+        found = stripe.PromotionCode.list(code=code, limit=1, expand=["data.promotion.coupon"])
+    except stripe.AuthenticationError as exc:
+        raise ValueError("Slevové kódy teď nejsou dostupné") from exc
     if not found.data:
         raise ValueError("Slevový kód neexistuje")
     promo = found.data[0]
@@ -1544,7 +1599,7 @@ def save_pending_promo(store: Store, code: str) -> dict[str, Any]:
         record["pending_promo_code"] = ""
         store.save_billing_record(record)
         return {"ok": True, "code": "", "percent": 0, "amount_czk": 0, "first_order": True}
-    looked = lookup_promotion_code(code)
+    looked = resolve_promo_code(code)
     record["pending_promo_code"] = looked["code"]
     store.save_billing_record(record)
     return looked

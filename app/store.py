@@ -25,7 +25,15 @@ from app.identity import (
     same_listing,
     url_canonical,
 )
-from app.sreality import IMAGE_TRANSFORM, Listing, cdn_image_url, google_maps_url, listing_from_dict
+from app.sreality import (
+    IMAGE_TRANSFORM,
+    Listing,
+    cdn_image_url,
+    google_maps_url,
+    listing_from_dict,
+    rewrite_sreality_detail_offer,
+    sreality_row_is_sale,
+)
 from app.sources import is_discord_webhook, usable_discord_webhook, webhook_for
 from app.templates import default_template_config
 
@@ -750,11 +758,80 @@ class Store:
             done = conn.execute("SELECT value FROM meta WHERE key = 'perf_indexes_v1'").fetchone()
         except sqlite3.OperationalError:
             return
+        if not done:
+            conn.execute("UPDATE listings SET gone = 0 WHERE gone IS NULL")
+            conn.execute("UPDATE catalog_listings SET gone = 0 WHERE gone IS NULL")
+            conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('perf_indexes_v1', '1')")
+        self._repair_sreality_offer_urls(conn)
+
+    def _repair_sreality_offer_urls(self, conn: sqlite3.Connection) -> None:
+        try:
+            done = conn.execute("SELECT value FROM meta WHERE key = 'sreality_offer_urls_v1'").fetchone()
+        except sqlite3.OperationalError:
+            return
         if done:
             return
-        conn.execute("UPDATE listings SET gone = 0 WHERE gone IS NULL")
-        conn.execute("UPDATE catalog_listings SET gone = 0 WHERE gone IS NULL")
-        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('perf_indexes_v1', '1')")
+
+        def extras_of(row: sqlite3.Row) -> dict[str, Any]:
+            raw = row["extras"]
+            if isinstance(raw, dict):
+                return raw
+            if not raw:
+                return {}
+            try:
+                data = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                return {}
+            return data if isinstance(data, dict) else {}
+
+        for table in ("catalog_listings", "listings"):
+            filter_sql = "url LIKE '%/detail/pronajem/%'"
+            if table == "catalog_listings":
+                filter_sql += " AND IFNULL(portal, 'sreality') IN ('sreality', '')"
+            try:
+                rows = conn.execute(
+                    f"""
+                    SELECT rowid, url, listing_key, canonical_key, extras, price_label, price_czk
+                    FROM {table}
+                    WHERE {filter_sql}
+                    """
+                ).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            for row in rows:
+                if not sreality_row_is_sale(extras_of(row), str(row["price_label"] or ""), row["price_czk"]):
+                    continue
+                old_url = str(row["url"] or "")
+                new_url = rewrite_sreality_detail_offer(old_url, "prodej")
+                if new_url == old_url:
+                    continue
+                old_key = str(row["listing_key"] or listing_key(old_url))
+                new_key = listing_key(new_url)
+                canon = row["canonical_key"]
+                new_canon = new_key if (not canon or str(canon) == old_key) else str(canon)
+                conn.execute(
+                    f"""
+                    UPDATE {table}
+                    SET url = ?, listing_key = ?, canonical_key = ?
+                    WHERE rowid = ?
+                    """,
+                    (new_url, new_key, new_canon, int(row["rowid"])),
+                )
+                if table == "catalog_listings":
+                    conn.execute(
+                        """
+                        UPDATE listing_links
+                        SET url = ?, url_key = ?,
+                            canonical_key = CASE WHEN canonical_key = ? THEN ? ELSE canonical_key END
+                        WHERE portal = 'sreality' AND (url_key = ? OR url = ?)
+                        """,
+                        (new_url, new_key, old_key, new_canon, old_key, old_url),
+                    )
+                    conn.execute(
+                        "UPDATE monitor_hits SET listing_key = ? WHERE listing_key = ?",
+                        (new_key, old_key),
+                    )
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sreality_offer_urls_v1', '1')")
 
     def _refresh_hidden_flag(self) -> None:
         try:
@@ -3531,6 +3608,208 @@ class Store:
             "last_error": errors[0] if errors else self.get_meta("catalog_sync_error"),
             "listings": total,
             "upserts": sum(int(item.get("upserts") or 0) for item in jobs),
+        }
+
+    def catalog_queued_portals(self) -> list[str]:
+        raw = self.get_meta("catalog_sync_request")
+        if not raw:
+            return []
+        try:
+            payload = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return []
+        if isinstance(payload, list):
+            return [str(item) for item in payload if str(item).strip()]
+        return []
+
+    def catalog_progress(self) -> dict[str, Any]:
+        from app.catalog_sync import daily_shards
+        from app.sources import PORTAL_LABELS, PORTAL_ORDER
+
+        expected: dict[str, int] = {}
+        for shard in daily_shards():
+            portal = str(shard.get("portal") or "")
+            if portal:
+                expected[portal] = expected.get(portal, 0) + 1
+
+        queued = self.catalog_queued_portals()
+        queued_set = set(queued)
+
+        with self.connect() as conn:
+            counts = conn.execute(
+                """
+                SELECT portal, status, COUNT(*) AS n, COALESCE(SUM(upserts), 0) AS upserts
+                FROM scrape_jobs
+                WHERE kind = 'catalog_daily'
+                GROUP BY portal, status
+                """
+            ).fetchall()
+            running_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT portal, shard_key, page, upserts, last_total, started_at, last_error
+                    FROM scrape_jobs
+                    WHERE kind = 'catalog_daily' AND status = 'running'
+                    ORDER BY COALESCE(started_at, '') DESC
+                    """
+                ).fetchall()
+            ]
+            error_rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT portal, shard_key, status, page, upserts, last_total, last_error,
+                           started_at, finished_at
+                    FROM scrape_jobs
+                    WHERE kind = 'catalog_daily' AND IFNULL(last_error, '') != ''
+                    ORDER BY COALESCE(finished_at, started_at, '') DESC
+                    LIMIT 8
+                    """
+                ).fetchall()
+            ]
+            timeout_monitors = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM monitors
+                    WHERE IFNULL(last_error, '') LIKE '%timeout%'
+                    """
+                ).fetchone()[0]
+            )
+            timeout_jobs = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM scrape_jobs
+                    WHERE kind = 'catalog_daily' AND IFNULL(last_error, '') LIKE '%timeout%'
+                    """
+                ).fetchone()[0]
+            )
+            listings = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
+
+        blank = {
+            "pending": 0,
+            "running": 0,
+            "done": 0,
+            "partial": 0,
+            "error": 0,
+            "upserts": 0,
+        }
+        by_portal: dict[str, dict[str, Any]] = {}
+        for portal, shards in expected.items():
+            by_portal[portal] = {
+                "id": portal,
+                "name": PORTAL_LABELS.get(portal, portal.title()),
+                "shards": shards,
+                **blank,
+            }
+        for row in counts:
+            portal = str(row["portal"] or "")
+            item = by_portal.setdefault(
+                portal,
+                {
+                    "id": portal,
+                    "name": PORTAL_LABELS.get(portal, portal.title()),
+                    "shards": expected.get(portal, 0),
+                    **{key: 0 for key in blank},
+                },
+            )
+            status = str(row["status"] or "pending")
+            n = int(row["n"] or 0)
+            if status in blank:
+                item[status] = n
+            item["upserts"] += int(row["upserts"] or 0)
+
+        running_by_portal = {str(item.get("portal") or ""): item for item in running_rows}
+        portals: list[dict[str, Any]] = []
+        total_shards = 0
+        total_done = 0
+        total_pending = 0
+        total_running = 0
+        total_error = 0
+        total_upserts = 0
+        for portal in sorted(
+            by_portal,
+            key=lambda key: (PORTAL_ORDER.index(key) if key in PORTAL_ORDER else 99, key),
+        ):
+            item = by_portal[portal]
+            counted = int(item["pending"]) + int(item["running"]) + int(item["done"]) + int(item["partial"]) + int(item["error"])
+            unstarted = max(0, int(item["shards"]) - counted)
+            if portal in queued_set:
+                item["pending"] = int(item["pending"]) + unstarted
+                unstarted = 0
+            finished = int(item["done"]) + int(item["partial"])
+            shards = max(int(item["shards"]), counted, 1)
+            pct = int(round(100 * finished / shards)) if shards else 0
+            if item["running"]:
+                state = "running"
+            elif portal in queued_set:
+                state = "queued"
+            elif item["pending"]:
+                state = "pending"
+            elif item["error"] and finished < int(item["shards"]):
+                state = "error"
+            elif item["partial"] or (finished and finished < int(item["shards"])):
+                state = "partial"
+            elif int(item["done"]) and finished >= int(item["shards"]):
+                state = "done"
+            else:
+                state = "idle"
+            if state == "queued":
+                pct = 0
+            current = running_by_portal.get(portal)
+            item.update(
+                {
+                    "unstarted": unstarted,
+                    "pct": min(100, pct),
+                    "state": state,
+                    "current_shard": (current or {}).get("shard_key") or "",
+                    "page": int((current or {}).get("page") or 0),
+                    "last_total": int((current or {}).get("last_total") or 0),
+                    "current_upserts": int((current or {}).get("upserts") or 0),
+                    "started_at": (current or {}).get("started_at") or "",
+                }
+            )
+            portals.append(item)
+            total_shards += int(item["shards"])
+            total_done += int(item["done"])
+            total_pending += int(item["pending"])
+            total_running += int(item["running"])
+            total_error += int(item["error"])
+            total_upserts += int(item["upserts"])
+
+        overall = self.get_meta("catalog_sync_status") or ""
+        if queued and not total_running:
+            status = "queued"
+        elif total_running:
+            status = "running"
+        elif total_pending:
+            status = "pending"
+        elif overall in {"running", "done", "partial", "error", "idle"}:
+            status = overall
+        elif total_error:
+            status = "error"
+        else:
+            status = "idle"
+
+        active = bool(queued or total_running or total_pending)
+        return {
+            "status": status,
+            "active": active,
+            "queued_portals": queued,
+            "jobs": total_shards,
+            "done": total_done,
+            "pending": total_pending,
+            "running": total_running,
+            "error": total_error,
+            "upserts": total_upserts,
+            "listings": listings,
+            "last_run": self.get_meta("catalog_sync_last") or "",
+            "last_error": self.get_meta("catalog_sync_error") or "",
+            "timeout_monitors": timeout_monitors,
+            "timeout_jobs": timeout_jobs,
+            "portals": portals,
+            "running_jobs": running_rows,
+            "recent_errors": error_rows,
         }
 
     def upsert_seen(

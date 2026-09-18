@@ -79,7 +79,11 @@ async def lifespan(_app: FastAPI):
             "V Railway → Volume přidej disk a připoj ho na /data."
         )
     elif not config.DISCORD_BOT_TOKEN and not config.DISCORD_WEBHOOK_URL:
-        hub.last_error = "Chybí Discord bot (DISCORD_BOT_TOKEN, DISCORD_GUILD_ID) nebo DISCORD_WEBHOOK_URL"
+        print(
+            "Discord not configured — email/push still work. "
+            "Set DISCORD_BOT_TOKEN+DISCORD_GUILD_ID or DISCORD_WEBHOOK_URL for Discord alerts.",
+            flush=True,
+        )
     asyncio.create_task(maybe_auto_update())
     try:
         yield
@@ -711,6 +715,12 @@ async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="re
     return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
 
 
+@app.get("/api/admin/scrape-progress")
+async def admin_scrape_progress(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    await asyncio.to_thread(_admin_user, realitify_admin)
+    return await asyncio.to_thread(admin_panel.catalog_progress_payload, hub.store, hub)
+
+
 @app.get("/api/admin/games")
 async def admin_games(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     from app import games as marketing_games
@@ -749,9 +759,12 @@ async def admin_scrape_url(
 
     if scope == "portal":
         portal = str(body.get("portal") or "").strip().lower()
-        if portal not in config.CATALOG_SYNC_HOURS:
+        if portal in {"", "all", "*"}:
+            result = hub.start_catalog_sync()
+        elif portal not in config.CATALOG_SYNC_HOURS:
             raise HTTPException(400, "Neznámý portál")
-        result = hub.start_catalog_sync(portals=[portal])
+        else:
+            result = hub.start_catalog_sync(portals=[portal])
         if not result.get("ok") and result.get("reason") != "already-running":
             raise HTTPException(409, str(result.get("reason") or "Katalog sync selhal"))
         return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
@@ -2062,8 +2075,12 @@ async def billing_status() -> dict:
             hub._status_cache = None
             state = stripe_billing.billing_state(hub.store)
         return {**state, "invoices": stripe_billing.list_invoices(hub.store)}
-    except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+    except Exception as extra:
+        if not config.STRIPE_SECRET_KEY or "Invalid API Key" in str(extra):
+            state = stripe_billing.billing_state(hub.store)
+            state["configured"] = False
+            return {**state, "invoices": []}
+        raise HTTPException(502, f"Stripe: {extra}") from extra
 
 
 @app.post("/api/billing/checkout")
@@ -2093,7 +2110,7 @@ async def billing_promo_lookup(code: str = Query("")) -> dict:
             if not pending:
                 return {"ok": True, "code": "", "percent": 0, "amount_czk": 0, "first_order": True}
             raw = str(pending)
-        return stripe_billing.lookup_promotion_code(raw)
+        return stripe_billing.resolve_promo_code(raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
