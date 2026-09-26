@@ -1,7 +1,7 @@
 """Production process supervisor (no pkg_resources / supervisord).
 
 Mirrors supervisord.conf: uvicorn SCRAPE_ROLE=web + delayed scrape_worker.
-Use when supervisord is unavailable: `python -m app.run_prod`
+Start: `python -m app.run_prod`
 """
 
 from __future__ import annotations
@@ -43,25 +43,41 @@ def _kill(proc: subprocess.Popen[bytes] | None) -> None:
             pass
 
 
-def main() -> None:
+def _spawn_web() -> subprocess.Popen[bytes]:
     port = os.environ.get("PORT") or str(config.PORT)
-    web_cmd = [
-        sys.executable,
-        "-m",
-        "uvicorn",
-        "app.main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        str(port),
-    ]
-    worker_cmd = [sys.executable, "-m", "app.scrape_worker"]
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(port),
+        ],
+        cwd=str(ROOT),
+        env=_env("web"),
+    )
 
-    web = subprocess.Popen(web_cmd, cwd=str(ROOT), env=_env("web"))
+
+def _spawn_worker() -> subprocess.Popen[bytes]:
+    return subprocess.Popen(
+        [sys.executable, "-m", "app.scrape_worker"],
+        cwd=str(ROOT),
+        env=_env("worker"),
+    )
+
+
+def main() -> None:
+    web = _spawn_web()
     time.sleep(WORKER_DELAY_S)
-    worker = subprocess.Popen(worker_cmd, cwd=str(ROOT), env=_env("worker"))
+    worker = _spawn_worker()
+    stopping = False
 
     def shutdown(_signum: int = 0, _frame: object = None) -> None:
+        nonlocal stopping
+        stopping = True
         _kill(worker)
         _kill(web)
         raise SystemExit(0)
@@ -70,13 +86,13 @@ def main() -> None:
     signal.signal(signal.SIGTERM, shutdown)
 
     try:
-        while True:
+        while not stopping:
             if web.poll() is not None:
-                _kill(worker)
-                raise SystemExit(web.returncode or 1)
+                print("web exited, restarting", flush=True)
+                web = _spawn_web()
             if worker.poll() is not None:
                 print("scrape_worker exited, restarting", flush=True)
-                worker = subprocess.Popen(worker_cmd, cwd=str(ROOT), env=_env("worker"))
+                worker = _spawn_worker()
             time.sleep(0.5)
     except KeyboardInterrupt:
         shutdown()
