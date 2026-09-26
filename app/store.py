@@ -978,6 +978,8 @@ class Store:
         row = listing if isinstance(listing, dict) else self._listing_dict(listing)
         url = str(row.get("url") or "")
         url_key = listing_key(url)
+        portal = portal_from_url(url)
+        native = row.get("id")
         found = ""
         if url:
             link = conn.execute(
@@ -986,6 +988,32 @@ class Store:
             ).fetchone()
             if link and link["canonical_key"]:
                 found = str(link["canonical_key"])
+        # Prefer stable (portal, native_id) over URL slug — Sreality rewrites path on edit.
+        if native not in (None, "", 0, "0"):
+            by_id = conn.execute(
+                """
+                SELECT canonical_key FROM listing_links
+                WHERE portal = ? AND native_id = ? AND IFNULL(canonical_key, '') != ''
+                ORDER BY CASE WHEN IFNULL(gone, 0) = 0 THEN 0 ELSE 1 END, last_seen DESC
+                LIMIT 1
+                """,
+                (portal, str(native)),
+            ).fetchone()
+            if not by_id:
+                by_id = conn.execute(
+                    """
+                    SELECT canonical_key FROM catalog_listings
+                    WHERE portal = ? AND id = ? AND IFNULL(canonical_key, '') != ''
+                    ORDER BY CASE WHEN IFNULL(gone, 0) = 0 THEN 0 ELSE 1 END, last_seen DESC
+                    LIMIT 1
+                    """,
+                    (portal, native),
+                ).fetchone()
+            if by_id and by_id["canonical_key"]:
+                keep = str(by_id["canonical_key"])
+                if found and found != keep:
+                    self._retarget_canonical(conn, found, keep)
+                return keep
         if fast and found:
             return found
         if (fast or skip_nearby) and url_key:
@@ -2665,9 +2693,26 @@ class Store:
         conn: sqlite3.Connection | None = None,
         fast: bool = False,
     ) -> dict[str, Any]:
+        from app.catalog_sync import is_apartment_listing
+        from app.html_listing import sanitize_area_m2
+
         key = listing_key(listing.url)
         now = utc_now()
         portal = portal_from_url(listing.url)
+        # Normalize junk metrics before any write.
+        if listing.price_czk is not None and int(listing.price_czk) <= 0:
+            listing = replace(
+                listing,
+                price_czk=None,
+                price_label=(listing.price_label if listing.price_label and "0 Kč" not in listing.price_label else "Cena na dotaz"),
+            )
+        estate = ""
+        if isinstance(listing.extras, dict):
+            estate = str(listing.extras.get("estate") or listing.extras.get("category") or "")
+        cleaned_area = sanitize_area_m2(listing.area_m2, estate=estate)
+        if cleaned_area != listing.area_m2:
+            listing = replace(listing, area_m2=cleaned_area)
+        is_flat = is_apartment_listing(listing.url, listing.extras if isinstance(listing.extras, dict) else {}, listing.name)
         cm = self.connect() if conn is None else nullcontext(conn)
         with cm as conn:
             skip_nearby = fast or kind == "refresh"
@@ -2677,6 +2722,29 @@ class Store:
                 (canon, key),
             ).fetchone()
             prev = dict(prev_row) if prev_row else None
+            if not is_flat:
+                # Do not grow/refresh non-apartment rows in the live flat catalog.
+                if prev is None:
+                    return {
+                        "listing_key": canon,
+                        "url_key": key,
+                        "canonical_key": canon,
+                        "new": False,
+                        "changed": False,
+                        "skipped": "non_apartment",
+                        "prev": None,
+                    }
+                # Keep history but stop refreshing last_seen so staleness sweep can retire them.
+                self._upsert_listing_link(conn, listing, canon, gone=True)
+                return {
+                    "listing_key": prev.get("canonical_key") or canon,
+                    "url_key": key,
+                    "canonical_key": prev.get("canonical_key") or canon,
+                    "new": False,
+                    "changed": False,
+                    "skipped": "non_apartment",
+                    "prev": prev,
+                }
             changed = False
             if prev and prev.get("price_czk") is not None and listing.price_czk is not None:
                 try:
@@ -2712,12 +2780,14 @@ class Store:
                 conn.execute(
                     """
                     UPDATE catalog_listings SET
+                        id = COALESCE(?, id),
                         name = ?,
                         price_czk = ?,
                         price_label = ?,
                         disposition = ?,
                         area_m2 = ?,
                         locality = ?,
+                        url = ?,
                         image_url = COALESCE(?, image_url),
                         created_on = COALESCE(?, created_on),
                         edited_on = COALESCE(?, edited_on),
@@ -2731,16 +2801,19 @@ class Store:
                         END,
                         last_seen = ?,
                         gone = 0,
+                        portal = COALESCE(?, portal),
                         canonical_key = ?
                     WHERE listing_key = ?
                     """,
                     (
+                        listing.id,
                         listing.name,
                         listing.price_czk,
                         listing.price_label,
                         listing.disposition,
                         listing.area_m2,
                         listing.locality,
+                        listing.url,
                         cdn_image_url(listing.image_url),
                         listing.created_on,
                         listing.edited_on,
@@ -2754,6 +2827,7 @@ class Store:
                         extras_json,
                         extras_json,
                         now,
+                        portal,
                         canon,
                         prev["listing_key"],
                     ),
@@ -2835,7 +2909,30 @@ class Store:
         listing_rows: list[tuple[Any, ...]] = []
         seen_keys: set[str] = set()
         new = updated = same = 0
+        from app.catalog_sync import is_apartment_listing
+        from app.html_listing import sanitize_area_m2
+
         for listing in listings:
+            if listing.price_czk is not None and int(listing.price_czk) <= 0:
+                listing = replace(
+                    listing,
+                    price_czk=None,
+                    price_label=(
+                        listing.price_label
+                        if listing.price_label and "0 Kč" not in (listing.price_label or "")
+                        else "Cena na dotaz"
+                    ),
+                )
+            estate = ""
+            if isinstance(listing.extras, dict):
+                estate = str(listing.extras.get("estate") or listing.extras.get("category") or "")
+            cleaned_area = sanitize_area_m2(listing.area_m2, estate=estate)
+            if cleaned_area != listing.area_m2:
+                listing = replace(listing, area_m2=cleaned_area)
+            if not is_apartment_listing(
+                listing.url, listing.extras if isinstance(listing.extras, dict) else {}, listing.name
+            ):
+                continue
             key = listing_key(listing.url)
             prev = existing.get(key)
             if prev:
@@ -3494,6 +3591,264 @@ class Store:
         for key in gone_keys:
             self._fanout_catalog_gone(key)
         return len(gone_keys)
+
+    def sweep_catalog_stale_gone(self, max_age_hours: int = 72) -> int:
+        """Mark live catalog rows gone when last_seen is older than max_age_hours.
+
+        Independent of portal sync completion — stuck/error syncs must not leave
+        stale gone=0 rows in the 'current market' forever.
+
+        Bulk path skips per-row sold fanout (would lock SQLite for minutes on
+        100k+ rows); rolling deep / monitors will reconcile individually.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        hours = max(24, int(max_age_hours or 72))
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE catalog_listings
+                SET gone = 1
+                WHERE IFNULL(gone, 0) = 0
+                  AND (last_seen IS NULL OR last_seen < ?)
+                """,
+                (cutoff,),
+            )
+            n = int(cur.rowcount or 0)
+            conn.execute(
+                """
+                UPDATE listing_links
+                SET gone = 1
+                WHERE IFNULL(gone, 0) = 0
+                  AND (last_seen IS NULL OR last_seen < ?)
+                """,
+                (cutoff,),
+            )
+        self.set_meta("catalog_stale_sweep_last", utc_now())
+        self.set_meta("catalog_stale_sweep_count", str(n))
+        return n
+
+    def merge_portal_native_duplicates(self) -> dict[str, int]:
+        """Collapse catalog rows that share (portal, native id) but differ in listing_key."""
+        merged = 0
+        marked_gone = 0
+        with self.connect() as conn:
+            groups = conn.execute(
+                """
+                SELECT portal, id, COUNT(*) AS n
+                FROM catalog_listings
+                WHERE id IS NOT NULL AND CAST(id AS TEXT) NOT IN ('', '0')
+                GROUP BY portal, id
+                HAVING n > 1
+                """
+            ).fetchall()
+            for group in groups:
+                portal, native = group["portal"], group["id"]
+                rows = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                        SELECT listing_key, canonical_key, url, last_seen, gone
+                        FROM catalog_listings
+                        WHERE portal = ? AND id = ?
+                        ORDER BY CASE WHEN IFNULL(gone, 0) = 0 THEN 0 ELSE 1 END,
+                                 last_seen DESC
+                        """,
+                        (portal, native),
+                    )
+                ]
+                if len(rows) < 2:
+                    continue
+                keep = rows[0]
+                keep_canon = keep.get("canonical_key") or url_canonical(str(keep.get("url") or ""))
+                for drop in rows[1:]:
+                    drop_key = drop["listing_key"]
+                    drop_canon = drop.get("canonical_key") or ""
+                    if drop_canon and drop_canon != keep_canon:
+                        self._retarget_canonical(conn, drop_canon, keep_canon)
+                    conn.execute(
+                        "UPDATE catalog_listings SET canonical_key = ?, gone = 1 WHERE listing_key = ?",
+                        (keep_canon, drop_key),
+                    )
+                    conn.execute(
+                        "UPDATE listing_links SET canonical_key = ?, gone = 1 WHERE url_key = ?",
+                        (keep_canon, drop_key),
+                    )
+                    marked_gone += 1
+                    merged += 1
+                conn.execute(
+                    "UPDATE catalog_listings SET canonical_key = ?, gone = 0 WHERE listing_key = ?",
+                    (keep_canon, keep["listing_key"]),
+                )
+        return {"groups": len(groups), "merged": merged, "marked_gone": marked_gone}
+
+    def repair_zero_prices(self) -> int:
+        """Convert price_czk=0 placeholders (cena na dotaz) to NULL."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE catalog_listings
+                SET price_czk = NULL,
+                    price_label = CASE
+                        WHEN IFNULL(price_label, '') IN ('', '0 Kč', '0 Kč/měsíc', '0 Kč/nemovitost', '0 Kč/ks')
+                        THEN 'Cena na dotaz'
+                        ELSE price_label
+                    END
+                WHERE price_czk = 0
+                """
+            )
+            return int(cur.rowcount or 0)
+
+    def catalog_quality_dry_run(self, max_age_hours: int = 72) -> dict[str, Any]:
+        """Counts only — safe to run against a backup or via admin before mutating prod."""
+        from datetime import datetime, timedelta, timezone
+
+        from app.catalog_sync import is_apartment_listing
+
+        hours = max(24, int(max_age_hours or 72))
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        with self.connect() as conn:
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except sqlite3.OperationalError:
+                pass
+            total = int(conn.execute("SELECT COUNT(*) FROM catalog_listings").fetchone()[0])
+            live = int(
+                conn.execute("SELECT COUNT(*) FROM catalog_listings WHERE IFNULL(gone, 0) = 0").fetchone()[0]
+            )
+            stale = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM catalog_listings
+                    WHERE IFNULL(gone, 0) = 0
+                      AND (last_seen IS NULL OR last_seen < ?)
+                    """,
+                    (cutoff,),
+                ).fetchone()[0]
+            )
+            price0 = int(conn.execute("SELECT COUNT(*) FROM catalog_listings WHERE price_czk = 0").fetchone()[0])
+            dup_groups = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT portal, id FROM catalog_listings
+                        WHERE id IS NOT NULL AND CAST(id AS TEXT) NOT IN ('', '0')
+                        GROUP BY portal, id HAVING COUNT(*) > 1
+                    )
+                    """
+                ).fetchone()[0]
+            )
+            area_bad = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM catalog_listings WHERE area_m2 = 990100 OR area_m2 > 10000"
+                ).fetchone()[0]
+            )
+            non_apt = 0
+            for row in conn.execute(
+                "SELECT url, extras, name FROM catalog_listings WHERE IFNULL(gone, 0) = 0"
+            ):
+                extras: dict[str, Any] = {}
+                raw = row["extras"]
+                if raw:
+                    try:
+                        extras = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    except (TypeError, json.JSONDecodeError):
+                        extras = {}
+                if not is_apartment_listing(str(row["url"] or ""), extras, str(row["name"] or "")):
+                    non_apt += 1
+        return {
+            "total": total,
+            "live": live,
+            "stale_live_hours": hours,
+            "stale_live": stale,
+            "non_apartment_live": non_apt,
+            "dup_portal_id_groups": dup_groups,
+            "price_czk_zero": price0,
+            "area_suspicious": area_bad,
+            "cutoff": cutoff,
+        }
+
+    def mark_non_apartment_catalog_gone(self, *, chunk_size: int = 80) -> int:
+        """Separate historically scraped non-flat estates from the live apartment market.
+
+        Commits every ``chunk_size`` updates so a live worker can interleave writes
+        (same pattern as Wave 2 batch upserts). Do not run via a second sqlite process.
+        """
+        from app.catalog_sync import is_apartment_listing
+
+        every = max(20, min(200, int(chunk_size or 80)))
+        gone = 0
+        pending: list[str] = []
+        with self.connect() as conn:
+            conn.execute("PRAGMA busy_timeout=8000")
+            rows = conn.execute(
+                "SELECT listing_key, url, extras, name FROM catalog_listings WHERE IFNULL(gone, 0) = 0"
+            ).fetchall()
+            for row in rows:
+                extras: dict[str, Any] = {}
+                raw = row["extras"]
+                if raw:
+                    try:
+                        extras = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                    except (TypeError, json.JSONDecodeError):
+                        extras = {}
+                if is_apartment_listing(str(row["url"] or ""), extras, str(row["name"] or "")):
+                    continue
+                pending.append(row["listing_key"])
+                if len(pending) >= every:
+                    holders = ",".join("?" * len(pending))
+                    conn.execute(
+                        f"UPDATE catalog_listings SET gone = 1 WHERE listing_key IN ({holders})",
+                        pending,
+                    )
+                    gone += len(pending)
+                    pending.clear()
+                    conn.commit()
+            if pending:
+                holders = ",".join("?" * len(pending))
+                conn.execute(
+                    f"UPDATE catalog_listings SET gone = 1 WHERE listing_key IN ({holders})",
+                    pending,
+                )
+                gone += len(pending)
+                conn.commit()
+        return gone
+
+    def run_catalog_quality_cleanup(
+        self,
+        *,
+        max_age_hours: int = 72,
+        dry_run: bool = False,
+        chunk_size: int = 80,
+    ) -> dict[str, Any]:
+        """Ordered one-shot cleanup for production (via hub job_pool, not a side process).
+
+        Order matters:
+        1) mark non-apartments (fresh houses still last_seen < 72h)
+        2) merge portal+id slug duplicates
+        3) repair price_czk=0
+        4) clear known area garbage
+        5) sweep stale live flats (>72h)
+        """
+        before = self.catalog_quality_dry_run(max_age_hours)
+        if dry_run:
+            return {"dry_run": True, "before": before, "applied": {}}
+        applied = {
+            "non_apartment_gone": self.mark_non_apartment_catalog_gone(chunk_size=chunk_size),
+            "portal_id_merge": self.merge_portal_native_duplicates(),
+            "zero_prices": self.repair_zero_prices(),
+        }
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE catalog_listings SET area_m2 = NULL WHERE area_m2 = 990100"
+            )
+            applied["area_990100_cleared"] = int(cur.rowcount or 0)
+        applied["stale_swept"] = self.sweep_catalog_stale_gone(max_age_hours)
+        after = self.catalog_quality_dry_run(max_age_hours)
+        self.set_meta("catalog_quality_cleanup_last", utc_now())
+        self.set_meta("catalog_quality_cleanup_result", json.dumps({"applied": applied, "after": after}))
+        return {"dry_run": False, "before": before, "applied": applied, "after": after}
 
     def mark_catalog_listing_gone(self, key: str) -> None:
         if not key:
@@ -6077,6 +6432,12 @@ def public_listing(row: dict[str, Any]) -> dict[str, Any]:
     item["flags"] = item["extras"].get("flags") or []
     item["gone"] = bool(item.get("gone"))
     item["links"] = item.get("links") or []
+    from app.html_listing import sanitize_price_label
+
+    rent = str(item["extras"].get("offer") or "").casefold() in {"pronájem", "pronajem"} or "pronaj" in str(
+        item.get("url") or ""
+    ).casefold()
+    item["price_label"] = sanitize_price_label(item.get("price_czk"), item.get("price_label"), rent=rent)
     _apply_discount(item, [])
     return item
 
