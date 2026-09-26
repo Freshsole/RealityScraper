@@ -166,61 +166,55 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": url,
                 }
             )
-    # iDNES stops returning new pages around ~150; Praha-wide byty/domy/pozemky exceed that.
-    # Dražba and tiny categories stay nationwide so a full sync is ~140 shards, not 345.
+    # iDNES: apartments only. Praha-wide byt shards exceed ~150 page depth, so split by region.
     idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
         f"praha-{i}" for i in range(1, 11)
     ]
-    idnes_regional = {"byty", "domy", "pozemky"}
-    idnes_categories = [key for key, _ in idnes_url.CATEGORIES if key != "projekty"]
     for offer in ("pronajem", "prodej"):
-        for category in idnes_categories:
-            regions = idnes_localities if category in idnes_regional else [""]
-            for region in regions:
-                url = idnes_url.build_url(
-                    {
-                        "source": "idnes",
-                        "offers": [offer],
-                        "category": category,
-                        "districts": [region] if region else [],
-                        "sizes": [],
-                        "sort": "nejnovejsi",
-                        "price_from": None,
-                        "price_to": None,
-                        "area_from": None,
-                        "area_to": None,
-                    }
-                )
-                shards.append(
-                    {
-                        "kind": "catalog_daily",
-                        "portal": "idnes",
-                        "shard_key": f"idnes:{category}:{offer}:{region or 'cz'}",
-                        "search_url": url,
-                    }
-                )
-    # Nationwide category crawls cover the whole of Bazos realty (including Praha).
-    for offer in ("pronajem", "prodej"):
-        for category, _label in bazos_url.CATEGORIES:
+        for region in idnes_localities:
+            url = idnes_url.build_url(
+                {
+                    "source": "idnes",
+                    "offers": [offer],
+                    "category": "byty",
+                    "districts": [region],
+                    "sizes": [],
+                    "sort": "nejnovejsi",
+                    "price_from": None,
+                    "price_to": None,
+                    "area_from": None,
+                    "area_to": None,
+                }
+            )
             shards.append(
                 {
                     "kind": "catalog_daily",
-                    "portal": "bazos",
-                    "shard_key": f"bazos:{category}:{offer}:cz",
-                    "search_url":                     bazos_url.build_url(
-                        {
-                            "source": "bazos",
-                            "offers": [offer],
-                            "category": category,
-                            "districts": list(localities.SREALITY_CZECH_REGIONS),
-                            "sizes": [],
-                            "price_from": None,
-                            "price_to": None,
-                            "radius": 0,
-                        }
-                    ),
+                    "portal": "idnes",
+                    "shard_key": f"idnes:byty:{offer}:{region}",
+                    "search_url": url,
                 }
             )
+    # Bazoš: apartments only (byt). Other categories are kept in DB history but no longer scraped.
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "bazos",
+                "shard_key": f"bazos:byt:{offer}:cz",
+                "search_url": bazos_url.build_url(
+                    {
+                        "source": "bazos",
+                        "offers": [offer],
+                        "category": "byt",
+                        "districts": list(localities.SREALITY_CZECH_REGIONS),
+                        "sizes": [],
+                        "price_from": None,
+                        "price_to": None,
+                        "radius": 0,
+                    }
+                ),
+            }
+        )
     for portal_id, urls in EXTRA_URLS.items():
         for offer in ("pronajem", "prodej"):
             shards.append(
@@ -365,6 +359,92 @@ def _extras(listing: Any) -> dict[str, Any]:
         except json.JSONDecodeError:
             extras = {}
     return extras if isinstance(extras, dict) else {}
+
+
+_NON_APARTMENT_PATH = (
+    "/dum/",
+    "/domy/",
+    "/pozemek/",
+    "/pozemky/",
+    "/garaz/",
+    "/garaze/",
+    "/chata/",
+    "/zahrada/",
+    "/sklad/",
+    "/kancelar/",
+    "/prostory/",
+    "/restaurace/",
+    "/projekty/",
+    "/komercni-nemovitosti/",
+    "/komercni/",
+    "/male-objekty-garaze/",
+    "/male-objekty/",
+    "/podnajem/",
+    "/prodam/dum/",
+    "/pronajmu/dum/",
+    "/prodam/pozemek/",
+    "/pronajmu/pozemek/",
+    "/prodam/garaz/",
+    "/pronajmu/garaz/",
+    "/prodam/chata/",
+    "/pronajmu/chata/",
+    "/prodam/zahrada/",
+    "/prodam/sklad/",
+    "/prodam/kancelar/",
+    "/prodam/prostory/",
+    "/prodam/restaurace/",
+    "/prodam/ostatni/",
+)
+_APARTMENT_PATH = ("/byt/", "/byty/", "/pronajmu/byt/", "/prodam/byt/")
+_NON_APARTMENT_ESTATE = {
+    "dum",
+    "dům",
+    "domy",
+    "pozemek",
+    "pozemky",
+    "garaz",
+    "garáž",
+    "garaze",
+    "chata",
+    "chalupa",
+    "zahrada",
+    "sklad",
+    "kancelar",
+    "kancelář",
+    "prostory",
+    "restaurace",
+    "komercni",
+    "komerční",
+    "projekty",
+    "ostatni",
+    "house",
+    "land",
+}
+_APARTMENT_ESTATE = {"byt", "byty", "flat", "apartment", "apartmán", "apartman"}
+
+
+def is_apartment_listing(url: str = "", extras: Any = None, name: str = "") -> bool:
+    """True when the listing is an apartment — catalog scrapes flats only."""
+    path = (url or "").lower()
+    extras = extras if isinstance(extras, dict) else {}
+    estate = str(extras.get("estate") or extras.get("category") or "").casefold().strip()
+    if any(token in path for token in _NON_APARTMENT_PATH):
+        return False
+    if estate in _NON_APARTMENT_ESTATE or any(token in estate for token in ("pozem", "dům", "dum", "garaz", "chata")):
+        return False
+    if any(token in path for token in _APARTMENT_PATH):
+        return True
+    if estate in _APARTMENT_ESTATE:
+        return True
+    # Sreality/Bezrealitky apartment URLs often lack /byt/ in every form — allow unknown
+    # only when nothing points at a non-apartment category.
+    if "sreality.cz" in path or "bezrealitky.cz" in path:
+        return True
+    if "bazos.cz" in path or "idnes.cz" in path:
+        # Listing detail URLs without category in path: trust extras when present,
+        # otherwise keep (legacy rows) — shard URLs are already byt-only.
+        return not estate or estate in _APARTMENT_ESTATE
+    return True
 
 
 def listing_offer(listing: Any) -> str:

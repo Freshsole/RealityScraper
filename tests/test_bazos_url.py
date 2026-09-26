@@ -47,13 +47,17 @@ class BazosUrlTests(unittest.TestCase):
         self.assertEqual(normalize_portals("bazos"), "bazos")
         self.assertTrue(normalize_search_url("https://reality.bazos.cz/prodam/dum/").startswith("https://reality.bazos.cz/"))
 
-    def test_daily_shards_cover_flats_and_houses(self):
+    def test_daily_shards_cover_flats_only(self):
+        from app.catalog_sync import daily_shards
+
+        daily_shards.cache_clear()
         shards = [item for item in daily_shards() if item["portal"] == "bazos"]
         urls = {item["search_url"] for item in shards}
-        self.assertTrue(any("/prodam/dum/" in url for url in urls))
-        self.assertTrue(any("/pronajmu/byt/" in url and "hlokalita=" not in url for url in urls))
-        self.assertTrue(any("/prodam/pozemek/" in url and "hlokalita=" not in url for url in urls))
-        self.assertEqual(len(shards), 26)
+        self.assertTrue(any("/pronajmu/byt/" in url for url in urls))
+        self.assertTrue(any("/prodam/byt/" in url for url in urls))
+        self.assertFalse(any("/prodam/dum/" in url for url in urls))
+        self.assertFalse(any("/prodam/pozemek/" in url for url in urls))
+        self.assertEqual(len(shards), 2)
 
     def test_sr_to_bazos_sizes(self):
         dst, skipped, notes = sr_to_bazos({"offers": ["pronajem"], "sizes": ["2+kk", "6-a-vice"], "districts": ["praha"]})

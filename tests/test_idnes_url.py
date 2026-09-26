@@ -59,16 +59,18 @@ class IdnesUrlTests(unittest.TestCase):
     def test_daily_shards_use_real_idnes_paths(self):
         from app.catalog_sync import daily_shards
 
+        daily_shards.cache_clear()
         shards = [item for item in daily_shards() if item["portal"] == "idnes"]
         urls = {item["search_url"] for item in shards}
-        self.assertTrue(any("/komercni-nemovitosti/" in url for url in urls))
-        self.assertTrue(any("/male-objekty-garaze/" in url for url in urls))
-        self.assertFalse(any("/s/pronajem/komercni/" in url for url in urls))
+        self.assertTrue(any("/byty/" in url for url in urls))
+        self.assertFalse(any("/komercni-nemovitosti/" in url for url in urls))
+        self.assertFalse(any("/male-objekty-garaze/" in url for url in urls))
+        self.assertFalse(any("/domy/" in url for url in urls))
+        self.assertFalse(any("/pozemky/" in url for url in urls))
         self.assertFalse(any(":drazba:" in item["shard_key"] for item in shards))
-        self.assertTrue(any(item["shard_key"].endswith(":cz") for item in shards))
         self.assertTrue(any("jihocesky-kraj" in item["shard_key"] for item in shards))
-        self.assertGreater(len(shards), 80)
-        self.assertLess(len(shards), 200)
+        self.assertGreater(len(shards), 20)
+        self.assertLess(len(shards), 80)
         value = oid_to_int("6a5a0f6686ba1a60050d59cb")
         self.assertLessEqual(value, JS_SAFE_ID)
         self.assertEqual(value, oid_to_int("6a5a0f6686ba1a60050d59cb"))
