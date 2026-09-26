@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import traceback
 from typing import Any
@@ -52,6 +53,7 @@ class ScrapeWorker:
         self.hub._sold_task = asyncio.create_task(self.hub._sold_loop(), name="worker-sold")
         self.hub._coords_task = asyncio.create_task(self.hub.backfill_missing_coords(), name="worker-coords")
         self.hub._dedupe_task = asyncio.create_task(self.hub._dedupe_loop(), name="worker-dedupe")
+        self._stale_sweep_task = asyncio.create_task(self._stale_sweep_loop(), name="worker-stale-sweep")
         watch = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
@@ -70,11 +72,27 @@ class ScrapeWorker:
         finally:
             self.running = False
             watch.cancel()
+            self._stale_sweep_task.cancel()
             try:
                 await self.hub._flush_scrape_metrics()
             except Exception:
                 pass
             await self.hub.close()
+
+    async def _stale_sweep_loop(self) -> None:
+        """Hourly independent staleness sweep — does not wait for portal sync completion."""
+        await asyncio.sleep(45)
+        while self.running:
+            try:
+                hours = int(os.getenv("CATALOG_STALE_HOURS", "72") or 72)
+                n = await self.hub._job_db(self.hub.store.sweep_catalog_stale_gone, hours)
+                if n:
+                    print(f"catalog stale sweep gone={n} hours={hours}", flush=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"catalog stale sweep error: {exc}", flush=True)
+            await asyncio.sleep(3600)
 
     async def _watchdog_loop(self) -> None:
         from app.scrape_timing import watchdog_sample, watchdog_snapshot
