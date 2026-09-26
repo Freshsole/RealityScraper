@@ -795,8 +795,9 @@ label .optional {
   width: 100%;
 }
 
-.step-panel[hidden] {
-  display: none;
+.step-panel[hidden],
+.auth-card[hidden] {
+  display: none !important;
 }
 
 @media (max-width: 560px) {
