@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "supervisord -c supervisord.conf"
+startCommand = "python -m app.run_prod"
