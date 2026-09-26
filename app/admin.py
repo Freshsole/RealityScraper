@@ -2119,8 +2119,20 @@ def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str)
         _audit(store, f"{'pozastavil' if item.get('enabled') else 'aktivoval'} monitor {item.get('name')}", actor)
         return {"ok": True}
     if action == "reset_password":
-        _audit(store, "reset hesla není dokončený (chybí e-mailový tok)", actor)
-        raise ValueError("Reset hesla e-mailem ještě není napojený")
+        from app import email_notify as mail
+
+        email = (user_account.account_record(store).get("email") or "").strip().lower()
+        if not email:
+            raise ValueError("Účet nemá e-mail")
+        if not mail.configured():
+            raise ValueError("Nastav SMTP_HOST a SMTP_FROM pro odeslání resetu hesla")
+        token = user_account.create_password_reset(store, email)
+        if not token:
+            raise ValueError("Reset hesla se nepodařilo vytvořit")
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"
+        mail.send_password_reset(email, f"{base}/heslo?token={token}")
+        _audit(store, f"odeslal odkaz pro obnovení hesla na {email}", actor)
+        return {"ok": True, "email": email}
     if action == "delete_user":
         _audit(store, "GDPR smazání účtu — akce je zablokovaná v této instanci", actor)
         raise ValueError("Smazání účtu je v lokální instanci vypnuté")
