@@ -46,6 +46,16 @@ def _funlock(fh: Any) -> None:
         pass
 
 
+def _should_log_line(line: str) -> bool:
+    """Drop console/progress access noise so the admin view stays readable."""
+    plain = line.replace("\x1b[", "")
+    if "/api/admin/scrape-console" in plain:
+        return False
+    if "/api/admin/scrape-progress" in plain:
+        return False
+    return bool(line.strip())
+
+
 def _append_file(text: str) -> None:
     path = _path()
     try:
@@ -120,7 +130,7 @@ class _TeeStream:
         self._buf += data
         while "\n" in self._buf:
             line, self._buf = self._buf.split("\n", 1)
-            if line.strip():
+            if _should_log_line(line):
                 _append_file(line)
         return n
 
@@ -129,9 +139,9 @@ class _TeeStream:
             self._stream.flush()
         except Exception:
             pass
-        if self._buf.strip():
+        if _should_log_line(self._buf):
             _append_file(self._buf)
-            self._buf = ""
+        self._buf = ""
 
     def fileno(self) -> int:
         return self._stream.fileno()
