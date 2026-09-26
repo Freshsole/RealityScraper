@@ -829,6 +829,43 @@ async def admin_dedupe_scan(realitify_admin: str | None = Cookie(default=None, a
     return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
 
 
+@app.get("/api/admin/catalog-quality")
+async def admin_catalog_quality_dry_run(
+    max_age_hours: int = 72,
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    """Dry-run counts via hub job_pool Store connection (not a side-process sqlite)."""
+    _admin_user(realitify_admin)
+    hours = max(24, min(720, int(max_age_hours or 72)))
+    return await hub.catalog_quality_dry_run(hours)
+
+
+@app.post("/api/admin/catalog-quality/run")
+async def admin_catalog_quality_run(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    """Ordered one-shot cleanup through the same Store + job_pool as the worker."""
+    _admin_user(realitify_admin)
+    body = payload or {}
+    dry_run = bool(body.get("dry_run", False))
+    try:
+        hours = max(24, min(720, int(body.get("max_age_hours", 72))))
+    except (TypeError, ValueError):
+        hours = 72
+    try:
+        chunk = max(20, min(200, int(body.get("chunk_size", 80))))
+    except (TypeError, ValueError):
+        chunk = 80
+    result = await hub.run_catalog_quality_cleanup(
+        max_age_hours=hours, dry_run=dry_run, chunk_size=chunk
+    )
+    if not result.get("ok"):
+        reason = result.get("reason") or result.get("error") or "cleanup failed"
+        raise HTTPException(409 if result.get("reason") == "already-running" else 500, str(reason))
+    return result
+
+
 @app.get("/api/admin/billing")
 async def admin_billing(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _admin_user(realitify_admin)

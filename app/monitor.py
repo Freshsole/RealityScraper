@@ -50,6 +50,7 @@ class Hub:
         self._deep_shard_idx = 0
         self.dedupe_running = False
         self.dedupe_scanning = False
+        self.catalog_quality_running = False
         self.last_error: str | None = None
         if config.SCRAPE_ROLE != "web":
             self._recover_stuck_catalog_meta()
@@ -1314,6 +1315,37 @@ class Hub:
             return {"ok": False, "reason": "already-running"}
         asyncio.create_task(self.run_dedupe_scan(), name="dedupe-scan")
         return {"ok": True, "started": True}
+
+    async def catalog_quality_dry_run(self, max_age_hours: int = 72) -> dict[str, Any]:
+        """Counts via job_pool Store connection — never a side-process sqlite connect."""
+        return await self._job_db(self.store.catalog_quality_dry_run, max_age_hours)
+
+    async def run_catalog_quality_cleanup(
+        self,
+        *,
+        max_age_hours: int = 72,
+        dry_run: bool = False,
+        chunk_size: int = 80,
+    ) -> dict[str, Any]:
+        """Ordered catalog cleanup via job_pool (chunked commits; do not side-process sqlite)."""
+        if self.catalog_quality_running:
+            return {"ok": False, "reason": "already-running"}
+        self.catalog_quality_running = True
+        try:
+            # No long _catalog_write hold: mark_non_apartment commits every chunk_size
+            # rows so the scrape worker can interleave (Wave 2 pattern).
+            result = await self._job_db(
+                self.store.run_catalog_quality_cleanup,
+                max_age_hours=max_age_hours,
+                dry_run=dry_run,
+                chunk_size=chunk_size,
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            print(f"catalog quality cleanup failed: {exc}", flush=True)
+            return {"ok": False, "error": str(exc)[:300]}
+        finally:
+            self.catalog_quality_running = False
 
     async def run_dedupe(self) -> dict[str, Any]:
         if self.dedupe_running or self.dedupe_scanning:
