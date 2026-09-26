@@ -179,6 +179,9 @@ def same_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if listing_key(url_a) and listing_key(url_a) == listing_key(url_b):
         return True
     same_portal = portal_from_url(url_a) == portal_from_url(url_b)
+    id_a, id_b = left.get("id"), right.get("id")
+    if same_portal and id_a not in (None, "", 0, "0") and str(id_a) == str(id_b):
+        return True
     offer_a = offer_kind(url_a, extras_a, str(left.get("price_label") or ""))
     offer_b = offer_kind(url_b, extras_b, str(right.get("price_label") or ""))
     if offer_a != offer_b or offer_a == "unknown":
