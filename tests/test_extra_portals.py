@@ -144,6 +144,23 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(parse_total(blob), 0)
         self.assertLess(__import__("time").perf_counter() - started, 0.05)
 
+    def test_parse_price_never_returns_card_blob(self):
+        from app.html_listing import parse_price, sanitize_price_label
+
+        blob = (
+            "Pronájem bytu 2+kk 62 m² - Olomouc. ID nabídky: - inzerát | inzerce na Annonce.cz "
+            "dataLayer = []; dataLayer.push({\"version\":\"live\"}); Olomouc 19 900 Kč Pronájem"
+        )
+        amount, label = parse_price(blob)
+        self.assertEqual(amount, 19900)
+        self.assertEqual(label, "19 900 Kč")
+        self.assertNotIn("dataLayer", label)
+        cleaned = sanitize_price_label(19900, blob, rent=True)
+        self.assertEqual(cleaned, "19 900 Kč/měsíc")
+        # Even without price_czk, recover the amount from a junk blob.
+        self.assertEqual(sanitize_price_label(None, blob), "19 900 Kč")
+        self.assertEqual(sanitize_price_label(None, "dataLayer = [];"), "Cena neuvedena")
+
 
 if __name__ == "__main__":
     unittest.main()

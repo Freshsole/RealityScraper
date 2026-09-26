@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
-from app.html_listing import PRICE_RE, clean as _clean, extract_listing_html
+from app.html_listing import PRICE_RE, clean as _clean, extract_listing_html, parse_area
 from app.sreality import Listing, ListingGone, format_price
 
 SITE = "https://reality.bazos.cz"
@@ -18,7 +18,6 @@ PAGE_SIZE = 20
 CATALOG_CONCURRENCY = 6
 ID_RE = re.compile(r"/inzerat/(\d{4,12})/([^\"'?]{1,300})")
 COUNT_RE = re.compile(r"Zobrazeno\s+\d{1,7}[–-]\d{1,7}\s+inzerátů z\s+([\d\s]{1,24})", re.I)
-AREA_RE = re.compile(r"(\d{1,6}(?:[.,]\d{1,2})?)\s*m", re.I)
 DISP_RE = re.compile(r"(\d{1,2})\s*\+\s*(kk|1)|(\d{1,2})\s*kk|garson|atyp|pokoj", re.I)
 DATE_RE = re.compile(r"\[(\d{1,2})\.(\d{1,2})\.\s*(\d{4})\]")
 MAPS_RE = re.compile(r"maps/place/(-?\d{1,3}\.\d{1,10}),(-?\d{1,3}\.\d{1,10})")
@@ -125,16 +124,6 @@ def parse_disposition(text: str) -> str:
     return ""
 
 
-def parse_area(text: str) -> int | None:
-    match = AREA_RE.search((text or "").replace(",", "."))
-    if not match:
-        return None
-    try:
-        return int(round(float(match.group(1))))
-    except ValueError:
-        return None
-
-
 def parse_price(text: str) -> tuple[int | None, str]:
     label = _clean(text)
     if "dohod" in label.casefold() or "inzerát" in label.casefold():
@@ -143,7 +132,10 @@ def parse_price(text: str) -> tuple[int | None, str]:
     if not match:
         return None, label
     digits = re.sub(r"\D", "", match.group(1))
-    return (int(digits) if digits else None), label
+    amount = int(digits) if digits else None
+    if amount is not None and amount <= 0:
+        return None, label or "Cena na dotaz"
+    return amount, label
 
 
 def parse_created(text: str) -> str | None:

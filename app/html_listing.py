@@ -15,7 +15,11 @@ import httpx
 from app.sreality import Listing, ListingGone, format_price
 
 JS_SAFE_ID = (1 << 53) - 1
-AREA_RE = re.compile(r"(\d{1,6}(?:[.,]\d{1,2})?)\s*m", re.I)
+# Require m² / m2 / bare "m" not followed by a letter (avoids "721990100 Mail" → 990100).
+AREA_RE = re.compile(r"(?<!\d)(\d{1,5}(?:[.,]\d{1,2})?)\s*(?:m²|m2|m(?![a-záčďéěíňóřšťúůýž]))", re.I)
+HA_RE = re.compile(r"(?<!\d)(\d{1,4}(?:[.,]\d{1,2})?)\s*ha\b", re.I)
+FLAT_AREA_MAX_M2 = 10_000
+LAND_AREA_MAX_M2 = 5_000_000
 PRICE_RE = re.compile(r"(\d{1,3}(?:[\s\u00a0.]\d{3}){1,4}|\d{4,8})\s*Kč", re.I)
 DISP_RE = re.compile(r"(\d{1,2})\s*\+\s*(kk|1)|(\d{1,2})\s*kk|garson|atyp|pokoj", re.I)
 COUNT_RE = re.compile(
@@ -186,28 +190,107 @@ def parse_disposition(text: str) -> str:
     return ""
 
 
-def parse_area(text: str) -> int | None:
-    match = AREA_RE.search((text or "").replace(",", "."))
-    if not match:
+def _estate_is_land(estate: str = "") -> bool:
+    folded = (estate or "").casefold()
+    return any(token in folded for token in ("pozem", "land", "zahrad", "pole", "orná", "orna"))
+
+
+def sanitize_area_m2(value: int | None, *, estate: str = "") -> int | None:
+    """Drop impossible areas (phone digits, HTML junk). Land may be larger."""
+    if value is None:
         return None
     try:
-        return int(round(float(match.group(1))))
-    except ValueError:
+        area = int(value)
+    except (TypeError, ValueError):
         return None
+    if area <= 0:
+        return None
+    cap = LAND_AREA_MAX_M2 if _estate_is_land(estate) else FLAT_AREA_MAX_M2
+    if area > cap:
+        return None
+    return area
+
+
+def parse_area(text: str, *, estate: str = "") -> int | None:
+    blob = (text or "").replace(",", ".")
+    match = AREA_RE.search(blob)
+    if match:
+        try:
+            return sanitize_area_m2(int(round(float(match.group(1)))), estate=estate)
+        except ValueError:
+            pass
+    ha = HA_RE.search(blob)
+    if ha:
+        try:
+            return sanitize_area_m2(int(round(float(ha.group(1)) * 10_000)), estate=estate or "pozemek")
+        except ValueError:
+            return None
+    return None
 
 
 def parse_price(text: str) -> tuple[int | None, str]:
-    label = clean(text)
-    if len(label) > _PARSE_PRICE_CHARS:
-        label = label[:_PARSE_PRICE_CHARS]
-    folded = label.casefold()
-    if "dohod" in folded or "info v rk" in folded or "cena v rk" in folded:
-        return None, label or "Cena dohodou"
-    match = PRICE_RE.search(label.replace("\xa0", " "))
+    raw = clean(text)
+    if len(raw) > _PARSE_PRICE_CHARS:
+        raw = raw[:_PARSE_PRICE_CHARS]
+    folded = raw.casefold()
+    if (
+        "dohod" in folded
+        or "info v rk" in folded
+        or "cena v rk" in folded
+        or "na dotaz" in folded
+        or "cenudotaz" in folded.replace(" ", "")
+    ):
+        # Keep short "dohodou" labels; never return a whole HTML blob.
+        short = raw if len(raw) <= 48 else "Cena dohodou"
+        return None, short or "Cena dohodou"
+    normalized = raw.replace("\xa0", " ")
+    match = PRICE_RE.search(normalized)
     if not match:
-        return None, label
+        # Only keep a label when it already looks like a short price string.
+        if len(raw) <= 48 and re.search(r"\d", raw):
+            return None, raw
+        return None, ""
     digits = re.sub(r"\D", "", match.group(1))
-    return (int(digits) if digits else None), label
+    amount = int(digits) if digits else None
+    if amount is None or amount <= 0:
+        return None, "Cena na dotaz" if amount == 0 else ""
+    # Always return a compact display label — never the surrounding card HTML.
+    label = f"{amount:,} Kč".replace(",", " ")
+    return amount, label
+
+
+def sanitize_price_label(price_czk: int | None, price_label: str | None, *, rent: bool = False) -> str:
+    """Rebuild a safe UI price label from known amount / reject scraped junk."""
+    label = clean(price_label or "")
+    junk_markers = (
+        "datalayer",
+        "inzerát | inzerce",
+        "inzerce na ",
+        "<script",
+        '{"imports"',
+        '{ "imports"',
+        "gtm-",
+        "id nabídky",
+    )
+    folded = label.casefold()
+    is_junk = len(label) > 64 or any(marker in folded for marker in junk_markers)
+    amount = None
+    try:
+        if price_czk not in (None, ""):
+            amount = int(price_czk)
+    except (TypeError, ValueError):
+        amount = None
+    if amount is None and label:
+        parsed_amount, _ = parse_price(label)
+        amount = parsed_amount
+    if amount is not None:
+        unit = "měsíc" if rent or "měs" in folded else ""
+        if unit:
+            return f"{amount:,} Kč/{unit}".replace(",", " ")
+        return f"{amount:,} Kč".replace(",", " ")
+    if is_junk or not label:
+        return "Cena neuvedena"
+    return label
 
 
 def parse_total(html: str) -> int:

@@ -86,11 +86,17 @@ class AnnonceClient(HtmlPortalClient):
             digits = re.sub(r"[^\d]", "", area_raw.split("m")[0])
             area = int(digits) if digits else None
         price_m = PRICE_RE.search(html)
-        price_czk, price_label = parse_price(price_m.group(1) if price_m else html)
+        if price_m:
+            price_czk, price_label = parse_price(price_m.group(1))
+        else:
+            # Never fall back to the whole card HTML — that stores title/scripts as price_label.
+            price_czk, price_label = None, ""
         img_m = IMG_RE.search(html)
         img = img_m.group(1) if img_m else ""
         date_m = DATE_RE.search(html)
         created = parse_annonce_date(date_m.group(1) if date_m else "")
+        if title:
+            title = re.sub(r"\s*ID nabídky:\s*$", "", title, flags=re.I).strip(" .–-")
         return listing_from_card(
             listing_id=numeric_id(listing_id, url),
             name=title,

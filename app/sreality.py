@@ -461,6 +461,8 @@ def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None
         price_czk = int(price) if price is not None else None
     except (TypeError, ValueError):
         price_czk = None
+    if price_czk is not None and price_czk <= 0:
+        price_czk = None
     unit = _param_label(estate.get("priceUnitCb")) or "měsíc"
     if "/prodej/" in (url or "").lower():
         unit = unit if unit and unit != "měsíc" else "ks"
@@ -711,9 +713,13 @@ def listing_from_raw(raw: dict[str, Any], search_url: str = "") -> Listing | Non
         price_czk = int(price) if price is not None else None
     except (TypeError, ValueError):
         price_czk = None
+    if price_czk is not None and price_czk <= 0:
+        price_czk = None
     unit = ((raw.get("priceUnitCb") or {}).get("name") or "za měsíc").strip()
     price_label = format_price(price_czk, unit)
     area = parse_area(name, price_czk, raw.get("priceCzkPerSqM"))
+    if area is not None and area > 10_000:
+        area = None
     loc = raw.get("locality") or {}
     locality = format_locality(loc)
     lat, lon = coords_from_locality(loc)
@@ -755,7 +761,7 @@ def parse_area(name: str, price: int | None, per_sqm: Any) -> int | None:
 
 
 def format_price(price: int | None, unit: str) -> str:
-    if price is None:
+    if price is None or price <= 0:
         return "Cena neuvedena"
     formatted = f"{price:,}".replace(",", " ")
     return f"{formatted} Kč/{unit.replace('za ', '')}"

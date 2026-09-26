@@ -65,7 +65,10 @@ class CeskerealityClient(HtmlPortalClient):
         title_m = TITLE_RE.search(html) or ALT_RE.search(html)
         title = clean(title_m.group(1) if title_m else "")
         price_m = PRICE_BOX_RE.search(html)
-        price_czk, price_label = parse_price(price_m.group(1) if price_m else html)
+        if price_m:
+            price_czk, price_label = parse_price(price_m.group(1))
+        else:
+            price_czk, price_label = None, ""
         locality = ""
         if title:
             parts = re.split(r"\s+\d+\s*m", title, maxsplit=1)
