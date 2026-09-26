@@ -522,7 +522,9 @@ class Store:
 
     def _init(self) -> None:
         last_error: sqlite3.OperationalError | None = None
-        for attempt in range(12):
+        # Railway volume bind-mounts can return "disk I/O error" for a few seconds
+        # while web + worker both open SQLite; retry beyond "database is locked".
+        for attempt in range(24):
             conn = self._connect_bootstrap()
             try:
                 with conn:
@@ -599,11 +601,27 @@ class Store:
                 return
             except sqlite3.OperationalError as exc:
                 last_error = exc
-                if "locked" not in str(exc).lower() or attempt == 11:
+                msg = str(exc).lower()
+                transient = (
+                    "locked" in msg
+                    or "busy" in msg
+                    or "disk i/o" in msg
+                    or "i/o error" in msg
+                    or "unable to open" in msg
+                )
+                if not transient or attempt == 23:
                     raise
-                time.sleep(0.15 * (attempt + 1))
+                delay = min(4.0, 0.2 * (attempt + 1))
+                print(
+                    f"store init retry {attempt + 1}/24 after {delay:.1f}s: {exc}",
+                    flush=True,
+                )
+                time.sleep(delay)
             finally:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
         if last_error:
             raise last_error
 
