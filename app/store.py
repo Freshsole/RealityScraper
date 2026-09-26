@@ -520,7 +520,42 @@ class Store:
         conn.execute("PRAGMA busy_timeout=60000")
         return conn
 
+    def _wait_volume_ready(self) -> None:
+        """Railway bind-mounts can lag a few seconds after process start."""
+        probe = self.path.parent / ".rf_volume_probe"
+        last: OSError | None = None
+        for _attempt in range(30):
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                probe.write_text(str(time.time()), encoding="utf-8")
+                probe.unlink(missing_ok=True)
+                return
+            except OSError as exc:
+                last = exc
+                time.sleep(0.5)
+        if last:
+            raise last
+
     def _init(self) -> None:
+        """Serialize schema init across supervisord web + worker on one volume."""
+        self._wait_volume_ready()
+        lock_path = self.path.parent / ".store_init.lock"
+        lock_fh = open(lock_path, "a+", encoding="utf-8")
+        try:
+            import fcntl
+
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            self._init_unlocked()
+        finally:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_fh.close()
+
+    def _init_unlocked(self) -> None:
         last_error: sqlite3.OperationalError | None = None
         # Railway volume bind-mounts can return "disk I/O error" for a few seconds
         # while web + worker both open SQLite; retry beyond "database is locked".
