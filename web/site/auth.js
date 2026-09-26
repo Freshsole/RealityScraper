@@ -67,6 +67,7 @@ document.querySelectorAll(".pw-toggle").forEach((btn) => {
 });
 
 bindStrength(document.querySelector("#reg-password"));
+bindStrength(document.querySelector("#reset-password"));
 
 const PROMO_STORE = "realitify_promo";
 
@@ -251,14 +252,73 @@ if (loginForm) {
 }
 
 const forgotForm = document.querySelector("#forgot-form");
+const resetForm = document.querySelector("#reset-form");
+const forgotSuccess = document.querySelector("#forgot-success");
+const resetToken = new URLSearchParams(location.search).get("token") || "";
+
+if (forgotForm && resetForm && resetToken) {
+  forgotForm.hidden = true;
+  resetForm.hidden = false;
+  if (forgotSuccess) forgotSuccess.hidden = true;
+  fetch(`/api/auth/reset?token=${encodeURIComponent(resetToken)}`)
+    .then(async (response) => {
+      if (response.ok) return;
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.detail || "Odkaz je neplatný nebo vypršel");
+    })
+    .catch((err) => {
+      resetForm.hidden = true;
+      toast(err.message || "Odkaz je neplatný nebo vypršel");
+      setTimeout(() => {
+        location.href = "/heslo";
+      }, 1800);
+    });
+}
+
 if (forgotForm) {
-  forgotForm.addEventListener("submit", (e) => {
+  forgotForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const email = forgotForm.querySelector("input[type=email]").value.trim();
     const ok = document.querySelector("#forgot-success");
-    forgotForm.hidden = true;
-    ok.hidden = false;
-    ok.querySelector("[data-email]").textContent = email;
+    const btn = forgotForm.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+    try {
+      await postJson("/api/auth/forgot", { email });
+      forgotForm.hidden = true;
+      if (ok) {
+        ok.hidden = false;
+        const label = ok.querySelector("[data-email]");
+        if (label) label.textContent = email;
+      }
+    } catch (err) {
+      toast(err.message || "Odeslání se nepovedlo");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+}
+
+if (resetForm) {
+  const resetPw = resetForm.querySelector("#reset-password");
+  const resetPw2 = resetForm.querySelector("#reset-password2");
+  bindPasswordPair(resetPw, resetPw2);
+  resetForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!passwordsMatch(resetPw, resetPw2, true)) return;
+    const password = resetPw?.value || "";
+    if (password.length < 8) {
+      toast("Heslo musí mít alespoň 8 znaků");
+      return;
+    }
+    const btn = resetForm.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+    try {
+      await postJson("/api/auth/reset", { token: resetToken, password });
+      location.href = "/prehled";
+    } catch (err) {
+      toast(err.message || "Obnovení hesla se nepovedlo");
+      if (btn) btn.disabled = false;
+    }
   });
 }
 

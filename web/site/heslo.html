@@ -33,13 +33,49 @@
           Zpět na přihlášení
         </a>
       </form>
+      <form class="auth-card" id="reset-form" hidden>
+        <div class="auth-head">
+          <h1 class="auth-h">NOVÉ HESLO</h1>
+          <p class="auth-lead">Zvolte nové heslo k účtu. Po uložení budete rovnou přihlášeni.</p>
+        </div>
+        <div class="auth-fields">
+          <div class="field">
+            <label for="reset-password">Nové heslo</label>
+            <div class="field-input">
+              <input id="reset-password" name="password" type="password" autocomplete="new-password" minlength="8" required />
+              <button class="pw-toggle" type="button">
+                <span class="icon" style="width:16px;height:16px">
+                  <img class="eye-open" src="/static/site/assets/eye.svg" width="16" height="16" alt="" />
+                  <img class="eye-closed" src="/static/site/assets/eye-closed.svg" width="16" height="16" alt="" />
+                </span>
+                <span class="txt">Ukázat</span>
+              </button>
+            </div>
+            <div class="strength" data-level="0">
+              <div class="strength-bars" data-level="0"><span></span><span></span><span></span></div>
+              <p class="strength-label">Zadejte heslo</p>
+            </div>
+          </div>
+          <div class="field">
+            <label for="reset-password2">Heslo znovu</label>
+            <div class="field-input">
+              <input id="reset-password2" name="password2" type="password" autocomplete="new-password" minlength="8" required />
+            </div>
+          </div>
+        </div>
+        <button class="auth-btn" type="submit">Uložit heslo</button>
+        <a class="back-login" href="/prihlaseni">
+          <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/arrow-left.svg" width="14" height="14" alt="" /></span>
+          Zpět na přihlášení
+        </a>
+      </form>
       <div class="auth-card success" id="forgot-success" hidden>
         <div class="success-mark">
           <span class="icon" style="width:24px;height:24px"><img src="/static/site/assets/check-circle.svg" width="24" height="24" alt="" /></span>
         </div>
         <div class="auth-head">
           <h1 class="auth-h">ODKAZ ODESLÁN!</h1>
-          <p class="auth-lead">Zkontrolujte svou e-mailovou schránku <strong data-email></strong>. Odkaz pro obnovení hesla vám doručíme během několika sekund.</p>
+          <p class="auth-lead">Pokud účet s e-mailem <strong data-email></strong> existuje, pošleme odkaz během několika sekund.</p>
         </div>
         <div class="info-alert">
           <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/alert-circle.svg" width="18" height="18" alt="" /></span>
@@ -52,7 +88,7 @@
       </div>
       <p class="auth-hint">Vrátíme vás zpět do hry za pár minut.</p>
     </div>
-    <script src="/static/site/auth.js?v=1.2.0-n2"></script>
+    <script src="/static/site/auth.js?v=1.2.0-n4"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>

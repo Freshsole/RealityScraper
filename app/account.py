@@ -12,9 +12,11 @@ from app import config
 from app.store import Store
 
 LINK_TTL_SEC = 20 * 60
+RESET_TTL_SEC = 24 * 60 * 60
 
 SESSION_COOKIE = "realitify_session"
 _ITERATIONS = 200_000
+_RESET_META = "password_reset"
 
 
 def _now() -> str:
@@ -224,7 +226,85 @@ def change_password(store: Store, current: str, new: str) -> str:
     data["password_hash"] = hashed
     data["password_salt"] = salt
     save_account(store, data)
+    clear_password_reset(store)
     return _new_session(store)
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def clear_password_reset(store: Store) -> None:
+    store.set_meta(_RESET_META, None)
+
+
+def _password_reset_payload(store: Store) -> dict[str, Any] | None:
+    raw = store.get_meta(_RESET_META) or ""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not data.get("token_hash"):
+        return None
+    try:
+        expires_at = float(data.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        clear_password_reset(store)
+        return None
+    if expires_at <= time.time():
+        clear_password_reset(store)
+        return None
+    data["expires_at"] = expires_at
+    return data
+
+
+def create_password_reset(store: Store, email: str) -> str | None:
+    """Vytvoří jednorázový token. Vrátí raw token jen když e-mail sedí na účet."""
+    email_norm = (email or "").strip().lower()
+    data = account_record(store)
+    stored = (data.get("email") or "").strip().lower()
+    if not email_norm or email_norm != stored or not data.get("password_hash"):
+        return None
+    token = secrets.token_urlsafe(32)
+    store.set_meta(
+        _RESET_META,
+        json.dumps(
+            {
+                "token_hash": _hash_reset_token(token),
+                "email": email_norm,
+                "expires_at": time.time() + RESET_TTL_SEC,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return token
+
+
+def password_reset_ok(store: Store, token: str) -> bool:
+    payload = _password_reset_payload(store)
+    given = (token or "").strip()
+    if not payload or not given:
+        return False
+    return hmac.compare_digest(str(payload.get("token_hash") or ""), _hash_reset_token(given))
+
+
+def reset_password_with_token(store: Store, token: str, new_password: str) -> tuple[dict[str, Any], str]:
+    if not password_reset_ok(store, token):
+        raise ValueError("Odkaz pro obnovení hesla je neplatný nebo vypršel")
+    if len(new_password or "") < 8:
+        raise ValueError("Nové heslo musí mít alespoň 8 znaků")
+    data = account_record(store)
+    if not data.get("email"):
+        clear_password_reset(store)
+        raise ValueError("Účet není založený")
+    hashed, salt = _hash_password(new_password)
+    data["password_hash"] = hashed
+    data["password_salt"] = salt
+    save_account(store, data)
+    clear_password_reset(store)
+    return public_account(store), _new_session(store)
 
 
 def discord_webhook_url(store: Store) -> str:

@@ -156,3 +156,15 @@ async def notify_digest(store: Store, items: list[dict[str, Any]], *, test: bool
         body = "\n\n".join(lines)
     await asyncio.to_thread(send_message, account_email(store), subject, body)
     return True
+
+
+def send_password_reset(to: str, reset_url: str) -> None:
+    subject = "Obnovení hesla Realitify"
+    body = (
+        "Dobrý den,\n\n"
+        "požádali jste o obnovení hesla k účtu Realitify.\n\n"
+        f"Otevřete tento odkaz (platí 24 hodin):\n{reset_url}\n\n"
+        "Pokud jste o reset nežádali, e-mail ignorujte — heslo zůstane beze změny.\n\n"
+        "Realitify"
+    )
+    send_message(to, subject, body)

@@ -443,6 +443,49 @@ async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
     return response
 
 
+@app.post("/api/auth/forgot")
+async def auth_forgot_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    email = str(body.get("email") or "").strip().lower()
+    token = await _auth_db(user_account.create_password_reset, hub.store, email)
+    if token:
+        if not mail_notify.configured():
+            raise HTTPException(503, "Odesílání e-mailů není nastavené (SMTP_HOST / SMTP_FROM)")
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"
+        reset_url = f"{base}/heslo?token={token}"
+        try:
+            await asyncio.to_thread(mail_notify.send_password_reset, email, reset_url)
+        except Exception as exc:
+            raise HTTPException(502, f"E-mail se nepodařilo odeslat: {exc}") from exc
+    # Stejná odpověď i když účet neexistuje — neprozrazujeme e-maily.
+    return {"ok": True}
+
+
+@app.get("/api/auth/reset")
+async def auth_reset_check(token: str = "") -> dict:
+    ok = await _auth_db(user_account.password_reset_ok, hub.store, token)
+    if not ok:
+        raise HTTPException(400, "Odkaz pro obnovení hesla je neplatný nebo vypršel")
+    return {"ok": True}
+
+
+@app.post("/api/auth/reset")
+async def auth_reset_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+    body = payload or {}
+    try:
+        user, session = await _auth_db(
+            user_account.reset_password_with_token,
+            hub.store,
+            str(body.get("token") or ""),
+            str(body.get("password") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    response = JSONResponse(user)
+    _set_session_cookie(response, session)
+    return response
+
+
 @app.post("/api/auth/logout")
 async def auth_logout_api() -> dict:
     await _auth_db(user_account.clear_session, hub.store)
