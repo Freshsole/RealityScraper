@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
 from app.identity import portal_from_url
-from app.sources import is_bazos, is_bezrealitky, is_idnes
+from app.portal_urls import MODULES as EXTRA_URLS
+from app.sources import PORTAL_IDS, is_bazos, is_bezrealitky, is_idnes, portal_of
 
 KRAJ_HINTS = {
     "praha": ["praha"],
@@ -66,6 +68,12 @@ def normalize_search_url(url: str) -> str:
     raw = (url or "").strip()
     if not raw:
         return ""
+    portal = portal_of(raw)
+    extra = EXTRA_URLS.get(portal)
+    if extra:
+        filters = extra.parse_url(raw)
+        filters["sort"] = "nejnovejsi"
+        return extra.build_url(filters)
     if is_idnes(raw):
         filters = idnes_url.parse_url(raw)
         filters["sort"] = "nejnovejsi"
@@ -86,6 +94,7 @@ def normalize_search_url(url: str) -> str:
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query, doseq=True), ""))
 
 
+@lru_cache(maxsize=1)
 def daily_shards() -> list[dict[str, str]]:
     shards: list[dict[str, str]] = []
     # Sreality: never crawl whole Praha as one shard (portal page depth cannot cover it).
@@ -157,57 +166,63 @@ def daily_shards() -> list[dict[str, str]]:
                     "search_url": url,
                 }
             )
-    # iDNES stops returning new pages around ~150; Praha-wide searches exceed that.
-    # "projekty" is a mixed view of the same ads and is too large to paginate.
+    # iDNES: apartments only. Praha-wide byt shards exceed ~150 page depth, so split by region.
     idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
         f"praha-{i}" for i in range(1, 11)
     ]
-    idnes_categories = [key for key, _ in idnes_url.CATEGORIES if key != "projekty"]
-    for offer in ("pronajem", "prodej", "drazba"):
-        for category in idnes_categories:
-            for region in idnes_localities:
-                url = idnes_url.build_url(
-                    {
-                        "source": "idnes",
-                        "offers": [offer],
-                        "category": category,
-                        "districts": [region],
-                        "sizes": [],
-                        "sort": "nejnovejsi",
-                        "price_from": None,
-                        "price_to": None,
-                        "area_from": None,
-                        "area_to": None,
-                    }
-                )
-                shards.append(
-                    {
-                        "kind": "catalog_daily",
-                        "portal": "idnes",
-                        "shard_key": f"idnes:{category}:{offer}:{region}",
-                        "search_url": url,
-                    }
-                )
-    # Nationwide category crawls cover the whole of Bazos realty (including Praha).
     for offer in ("pronajem", "prodej"):
-        for category, _label in bazos_url.CATEGORIES:
+        for region in idnes_localities:
+            url = idnes_url.build_url(
+                {
+                    "source": "idnes",
+                    "offers": [offer],
+                    "category": "byty",
+                    "districts": [region],
+                    "sizes": [],
+                    "sort": "nejnovejsi",
+                    "price_from": None,
+                    "price_to": None,
+                    "area_from": None,
+                    "area_to": None,
+                }
+            )
             shards.append(
                 {
                     "kind": "catalog_daily",
-                    "portal": "bazos",
-                    "shard_key": f"bazos:{category}:{offer}:cz",
-                    "search_url": bazos_url.build_url(
-                        {
-                            "source": "bazos",
-                            "offers": [offer],
-                            "category": category,
-                            "districts": list(localities.SREALITY_CZECH_REGIONS),
-                            "sizes": [],
-                            "price_from": None,
-                            "price_to": None,
-                            "radius": 0,
-                        }
-                    ),
+                    "portal": "idnes",
+                    "shard_key": f"idnes:byty:{offer}:{region}",
+                    "search_url": url,
+                }
+            )
+    # Bazoš: apartments only (byt). Other categories are kept in DB history but no longer scraped.
+    for offer in ("pronajem", "prodej"):
+        shards.append(
+            {
+                "kind": "catalog_daily",
+                "portal": "bazos",
+                "shard_key": f"bazos:byt:{offer}:cz",
+                "search_url": bazos_url.build_url(
+                    {
+                        "source": "bazos",
+                        "offers": [offer],
+                        "category": "byt",
+                        "districts": list(localities.SREALITY_CZECH_REGIONS),
+                        "sizes": [],
+                        "price_from": None,
+                        "price_to": None,
+                        "radius": 0,
+                    }
+                ),
+            }
+        )
+    for portal_id, urls in EXTRA_URLS.items():
+        for offer in ("pronajem", "prodej"):
+            shards.append(
+                {
+                    "kind": "catalog_daily",
+                    "portal": portal_id,
+                    "shard_key": f"{portal_id}:byty:{offer}:cz",
+                    "search_url": urls.build_url({"source": portal_id, "offers": [offer], "category": "byty"}),
                 }
             )
     return shards
@@ -243,6 +258,80 @@ def sreality_recent_shards() -> list[dict[str, str]]:
     return shards
 
 
+def extra_portal_recent_shards() -> list[dict[str, str]]:
+    """Newest-first nationwide apartment shards for every non-Sreality portal."""
+    shards: list[dict[str, str]] = []
+    extras = {
+        "bezrealitky": lambda offer: bezrealitky_url.build_url(
+            {
+                "source": "bezrealitky",
+                "offers": ["PRONAJEM" if offer == "pronajem" else "PRODEJ"],
+                "estates": ["BYT"],
+                "sizes": [],
+                "districts": [localities.CZECH_OSM],
+                "osm_value": "Česko",
+                "boundary_points": localities.CZ_BOUNDARY_POINTS,
+                "flags": ["includeImports", "includeShortTerm"],
+                "currency": "CZK",
+                "location": "exact",
+                "sort": "TIMEORDER_DESC",
+                "price_from": None,
+                "price_to": None,
+                "area_from": None,
+                "area_to": None,
+            }
+        ),
+        "idnes": lambda offer: idnes_url.build_url(
+            {
+                "source": "idnes",
+                "offers": [offer],
+                "category": "byty",
+                "districts": list(localities.SREALITY_CZECH_REGIONS),
+                "sizes": [],
+                "sort": "nejnovejsi",
+                "price_from": None,
+                "price_to": None,
+                "area_from": None,
+                "area_to": None,
+            }
+        ),
+        "bazos": lambda offer: bazos_url.build_url(
+            {
+                "source": "bazos",
+                "offers": [offer],
+                "category": "byt",
+                "districts": list(localities.SREALITY_CZECH_REGIONS),
+                "sizes": [],
+                "price_from": None,
+                "price_to": None,
+                "radius": 0,
+            }
+        ),
+    }
+    extras.update(
+        {
+            key: (lambda offer, urls=urls: urls.build_url({"offers": [offer], "category": "byty"}))
+            for key, urls in EXTRA_URLS.items()
+        }
+    )
+    for portal, builder in extras.items():
+        for offer in ("pronajem", "prodej"):
+            shards.append(
+                {
+                    "kind": "catalog_recent",
+                    "portal": portal,
+                    "shard_key": f"{portal}:recent:{offer}:byty",
+                    "search_url": builder(offer),
+                }
+            )
+    return shards
+
+
+def recent_shards() -> list[dict[str, str]]:
+    """Minute NewDiscovery shards: Sreality size slices + newest apartments on every other portal."""
+    return sreality_recent_shards() + extra_portal_recent_shards()
+
+
 def _field(listing: Any, name: str, default: Any = None) -> Any:
     if listing is None:
         return default
@@ -272,6 +361,92 @@ def _extras(listing: Any) -> dict[str, Any]:
     return extras if isinstance(extras, dict) else {}
 
 
+_NON_APARTMENT_PATH = (
+    "/dum/",
+    "/domy/",
+    "/pozemek/",
+    "/pozemky/",
+    "/garaz/",
+    "/garaze/",
+    "/chata/",
+    "/zahrada/",
+    "/sklad/",
+    "/kancelar/",
+    "/prostory/",
+    "/restaurace/",
+    "/projekty/",
+    "/komercni-nemovitosti/",
+    "/komercni/",
+    "/male-objekty-garaze/",
+    "/male-objekty/",
+    "/podnajem/",
+    "/prodam/dum/",
+    "/pronajmu/dum/",
+    "/prodam/pozemek/",
+    "/pronajmu/pozemek/",
+    "/prodam/garaz/",
+    "/pronajmu/garaz/",
+    "/prodam/chata/",
+    "/pronajmu/chata/",
+    "/prodam/zahrada/",
+    "/prodam/sklad/",
+    "/prodam/kancelar/",
+    "/prodam/prostory/",
+    "/prodam/restaurace/",
+    "/prodam/ostatni/",
+)
+_APARTMENT_PATH = ("/byt/", "/byty/", "/pronajmu/byt/", "/prodam/byt/")
+_NON_APARTMENT_ESTATE = {
+    "dum",
+    "dům",
+    "domy",
+    "pozemek",
+    "pozemky",
+    "garaz",
+    "garáž",
+    "garaze",
+    "chata",
+    "chalupa",
+    "zahrada",
+    "sklad",
+    "kancelar",
+    "kancelář",
+    "prostory",
+    "restaurace",
+    "komercni",
+    "komerční",
+    "projekty",
+    "ostatni",
+    "house",
+    "land",
+}
+_APARTMENT_ESTATE = {"byt", "byty", "flat", "apartment", "apartmán", "apartman"}
+
+
+def is_apartment_listing(url: str = "", extras: Any = None, name: str = "") -> bool:
+    """True when the listing is an apartment — catalog scrapes flats only."""
+    path = (url or "").lower()
+    extras = extras if isinstance(extras, dict) else {}
+    estate = str(extras.get("estate") or extras.get("category") or "").casefold().strip()
+    if any(token in path for token in _NON_APARTMENT_PATH):
+        return False
+    if estate in _NON_APARTMENT_ESTATE or any(token in estate for token in ("pozem", "dům", "dum", "garaz", "chata")):
+        return False
+    if any(token in path for token in _APARTMENT_PATH):
+        return True
+    if estate in _APARTMENT_ESTATE:
+        return True
+    # Sreality/Bezrealitky apartment URLs often lack /byt/ in every form — allow unknown
+    # only when nothing points at a non-apartment category.
+    if "sreality.cz" in path or "bezrealitky.cz" in path:
+        return True
+    if "bazos.cz" in path or "idnes.cz" in path:
+        # Listing detail URLs without category in path: trust extras when present,
+        # otherwise keep (legacy rows) — shard URLs are already byt-only.
+        return not estate or estate in _APARTMENT_ESTATE
+    return True
+
+
 def listing_offer(listing: Any) -> str:
     extras = _extras(listing)
     offer = str(extras.get("offer") or "").casefold()
@@ -287,9 +462,21 @@ def listing_offer(listing: Any) -> str:
     path = str(_field(listing, "url") or "").lower()
     if "/drazba/" in path:
         return "drazba"
-    if "/pronajmu/" in path or "/pronajem/" in path:
+    if (
+        "/pronajmu/" in path
+        or "/pronajem/" in path
+        or "byty-k-pronajmu" in path
+        or "typ-nabidky=pronajem" in path
+        or "sale=2" in path
+    ):
         return "pronajem"
-    if "/prodam/" in path or "/prodej/" in path:
+    if (
+        "/prodam/" in path
+        or "/prodej/" in path
+        or "byty-na-prodej" in path
+        or "typ-nabidky=prodej" in path
+        or "sale=1" in path
+    ):
         return "prodej"
     return "prodej"
 
@@ -302,14 +489,8 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
     disposition = str(_field(listing, "disposition") or "")
     url = str(_field(listing, "url") or "")
     source = str(data.get("source") or "")
-    if not ignore_source:
-        if source == "idnes" and "idnes" not in url:
-            return False
-        if source == "bezrealitky" and "bezrealitky" not in url:
-            return False
-        if source == "bazos" and "bazos" not in url:
-            return False
-        if source == "sreality" and ("bezrealitky" in url or "idnes" in url or "bazos" in url):
+    if not ignore_source and source in PORTAL_IDS:
+        if portal_of(url) != source:
             return False
     low = data.get("price_from")
     high = data.get("price_to")
@@ -352,6 +533,10 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
     url = (search_url or "").strip()
     if not url:
         return False
+    portal = portal_of(url)
+    extra = EXTRA_URLS.get(portal)
+    if extra:
+        return listing_matches_filters(listing, extra.parse_url(url), ignore_source=ignore_source)
     if is_idnes(url):
         return listing_matches_filters(listing, idnes_url.parse_url(url), ignore_source=ignore_source)
     if is_bazos(url):
@@ -363,7 +548,7 @@ def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool
 
 def normalize_portals(value: str | None) -> str:
     raw = (value or "all").strip().lower()
-    if raw in {"sreality", "bezrealitky", "idnes", "bazos"}:
+    if raw in PORTAL_IDS:
         return raw
     return "all"
 

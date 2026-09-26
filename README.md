@@ -1,16 +1,18 @@
-# Sreality monitor
+# Realitify — Czech real-estate monitor
 
-Hlídá konkrétní hledání na [Sreality](https://www.sreality.cz) a při novém inzerátu pošle na Discord foto, cenu, dispozici, lokalitu, rozlohu a proklik.
+Hlídá hledání na **10 portálech** a při novém inzerátu pošle upozornění (Discord / e-mail / push) s fotkou, cenou, dispozicí, lokalitou a proklikem.
+
+Pokryté portály: Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&M Reality, UlovDomov, RE/MAX, Reality.cz.
 
 ## Jak to pozná nový byt
 
-Sreality je Next.js aplikace. Výsledky hledání přijdou v JSON (`/_next/data/...` nebo `__NEXT_DATA__` v HTML), ne z lámání HTML karet.
+Sreality (a kde to jde i další) bereme JSON / `_next/data` / veřejné API. Ostatní portály mají HTML parsery s fixture testy. Minutová fronta `NewDiscovery` tahá nejnovější shards **všech 10 portálů** paralelně (Sreality po dispozicích, ostatní nationwide newest-first). Rolling deep rotuje denní shards napříč portály. Denní katalog sync má pro každý portál vlastní hodinu (`CATALOG_SYNC_HOUR_*`).
 
-1. Filtry z tvého URL zůstanou. Řazení se pro detekci přepne na **nejnovější** — u „nejlevnější“ by nový dražší byt na první stránce nebyl.
+1. Filtry z URL zůstanou. Řazení se pro detekci přepne na **nejnovější**.
 2. Stabilní ID inzerátu se ukládá do SQLite (`data/monitor.sqlite`).
-3. **První běh** si potichu uloží celou aktuální nabídku. Nic nejde na Discord.
-4. Další kontroly berou první dvě stránky nejnovějších a u neznámého ID stáhnou detail (`since` / `edited` / případnou starou cenu).
-5. Discord jde u **nového** inzerátu (vložen v posledních 2 dnech) a u **starého, když se změní cena** (porovnání s uloženou cenou, nebo sleva ze Sreality). Holý bump bez změny ceny se neposílá.
+3. **První běh** si potichu uloží aktuální nabídku. Nic nejde na Discord.
+4. Další kontroly berou první stránky nejnovějších; u neznámého ID jde detail.
+5. Notifikace u **nového** inzerátu (vložen v posledních 2 dnech) a u **změny ceny**.
 
 ## Windows
 
@@ -35,7 +37,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-Lokálně default `SCRAPE_ROLE=all` (web + scrape v jednom procesu). Na Railway startuje `supervisord` (`railpack.toml`) se dvěma procesy: `web` (`SCRAPE_ROLE=web`) a `worker` (`python -m app.scrape_worker`). Pád scrapru neshodí web a naopak (`autorestart` per proces).
+`make dev` spouští dva procesy: uvicorn `SCRAPE_ROLE=web` a `python -m app.scrape_worker`. Scrape tak nedrží GIL HTTP loopu (jinak TTFB stránky skáče na desítky sekund). Jednoprocesový režim: `SCRAPE_ROLE=all make dev`. Na Railway totéž řeší `supervisord` (`railpack.toml`).
 
 Dashboard: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 
@@ -43,8 +45,14 @@ Webhook a výchozí URL hledání jsou v `.env`. Další hledání, Discord šab
 
 Výchozí interval je 60 s. Dashboard umí víc monitorů najednou, start/stop, ruční kontrolu a testovací zprávu.
 
+Marketing: `/` landing, hry `/hry` (Higher/Lower + tip nájmu), admin žebříček `/admin/hry`.
+
+Kompletní mapa scrapingu (procesy, HTTP, SQLite, rate limity, napojení na appku): [`docs/scraping.md`](docs/scraping.md).
+
 ### Scrape worker (minutové SLA)
 
-- **NewDiscovery:** všechny Sreality „nejnovější“ size shards každou minutu (paralelní list/`_next/data`).
-- **MonitorRefresh:** deduplikované URL aktivních monitorů; nad `SCRAPE_FULL_MARKET_URLS` přepne na list shard crawl.
+- **NewDiscovery:** newest-first shards všech 10 portálů každou minutu (paralelní list / JSON, deadline `SCRAPE_DISCOVERY_DEADLINE_SEC`).
+- **MonitorRefresh:** deduplikované URL aktivních monitorů + rolling deep mix všech portálů.
 - Env knoby: `SCRAPE_CONCURRENCY` (default 16), `SCRAPE_CONCURRENCY_FLOOR` (4), `SCRAPE_RECENT_PAGES` (4), `SCRAPE_DISCOVERY_DEADLINE_SEC` (50), `SCRAPE_MONITOR_DEADLINE_SEC` (55), `SCRAPE_FULL_MARKET_DEADLINE_SEC` (70), `SCRAPE_BATCH_COMMIT` (500), `SCRAPE_ERROR_RATE_ALERT` (0.10).
+
+Známá omezení živého webu: M&M Reality často vrací Cloudflare 403; Reality.cz mívá maintenance stránku; UlovDomov `offer/find` POST občas 500 — klient padá na `__NEXT_DATA__` / HTML. Parsery jsou fixture-testované a běží v minutové frontě i tak.

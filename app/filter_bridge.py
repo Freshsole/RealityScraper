@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
+from app.portal_urls import MODULES as EXTRA_URLS
 from app.sources import is_bazos, is_bezrealitky, is_idnes, portal_of, source_name
 
 SR_OFFERS = {"pronajem": "PRONAJEM", "prodej": "PRODEJ"}
@@ -73,7 +74,24 @@ BR_EXTRA_LABELS = {key: label for key, label in bezrealitky_url.EXTRAS}
 
 
 def convert_search_url(url: str) -> dict[str, Any]:
-    if is_idnes(url):
+    extra = EXTRA_URLS.get(portal_of(url))
+    if extra:
+        parsed = extra.parse_url(url)
+        filters = url_builder.default_filters()
+        filters["offers"] = parsed.get("offers") or ["pronajem"]
+        filters["districts"] = parsed.get("districts") or []
+        filters["sizes"] = parsed.get("sizes") or []
+        filters["price_from"] = parsed.get("price_from")
+        filters["price_to"] = parsed.get("price_to")
+        filters["area_from"] = parsed.get("area_from")
+        filters["area_to"] = parsed.get("area_to")
+        filters["source"] = "sreality"
+        filters = localities.normalize_filters(filters)
+        target_url = url_builder.build_url(filters)
+        target = "Sreality"
+        skipped: list[str] = []
+        notes = ["Převod z dalšího portálu bere základní filtry (nabídka, lokalita, cena)."]
+    elif is_idnes(url):
         filters, skipped, notes = idnes_to_sr(idnes_url.parse_url(url))
         filters["source"] = "sreality"
         filters = localities.normalize_filters(filters)
@@ -410,7 +428,18 @@ SHARED_EXTRAS = {
 
 
 def to_sreality_filters(url: str) -> dict[str, Any]:
-    if is_idnes(url):
+    extra = EXTRA_URLS.get(portal_of(url))
+    if extra:
+        parsed = extra.parse_url(url)
+        filters = url_builder.default_filters()
+        filters["offers"] = parsed.get("offers") or ["pronajem"]
+        filters["districts"] = parsed.get("districts") or []
+        filters["sizes"] = parsed.get("sizes") or []
+        filters["price_from"] = parsed.get("price_from")
+        filters["price_to"] = parsed.get("price_to")
+        filters["area_from"] = parsed.get("area_from")
+        filters["area_to"] = parsed.get("area_to")
+    elif is_idnes(url):
         filters, _, _ = idnes_to_sr(idnes_url.parse_url(url))
     elif is_bazos(url):
         filters, _, _ = bazos_to_sr(bazos_url.parse_url(url))
@@ -450,6 +479,21 @@ def search_urls_for_portals(url: str) -> dict[str, str]:
         built["bazos"] = normalize_search_url(bazos_url.build_url(bz_filters))
     except Exception:
         built["bazos"] = ""
+    for portal_id, urls in EXTRA_URLS.items():
+        try:
+            extra_filters = {
+                "offers": canonical.get("offers") or ["pronajem"],
+                "category": canonical.get("category") or "byty",
+                "districts": canonical.get("districts") or [],
+                "sizes": canonical.get("sizes") or [],
+                "price_from": canonical.get("price_from"),
+                "price_to": canonical.get("price_to"),
+                "area_from": canonical.get("area_from"),
+                "area_to": canonical.get("area_to"),
+            }
+            built[portal_id] = normalize_search_url(urls.build_url(extra_filters))
+        except Exception:
+            built[portal_id] = ""
     original = normalize_search_url(url)
     if original:
         built[primary] = original

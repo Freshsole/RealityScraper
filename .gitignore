@@ -2,6 +2,10 @@
 .venv/
 .run/
 .cursor/
+scripts/perf/out/
+perf_audit/*.sqlite
+perf_audit/*.prof
+perf_audit/startup_data/
 __pycache__/
 *.pyc
 .pytest_cache/

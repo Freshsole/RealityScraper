@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=6" />
+    <link rel="stylesheet" href="/static/site/site.css?v=7" />
   </head>
   <body>
     <header class="navbar">
@@ -18,6 +18,7 @@
       <nav class="menu">
         <a href="/#jak-to-funguje">Jak to funguje</a>
         <a href="/#databaze">Databáze bytů</a>
+        <a href="/hry">Hry</a>
         <a href="/uspechy">Vaše úspěchy</a>
         <a href="/#srovnani">Srovnání</a>
         <a href="/#cenik">Ceník</a>
@@ -32,7 +33,7 @@
     <section class="hero">
       <div class="hero-left">
         <h1 class="display">NEJLEPŠÍ BYTY ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</h1>
-        <p class="hero-copy">Realitify monitoruje všechny hlavní české realitní portály (Sreality, Bezrealitky, Reality.cz a další) 24/7 v reálném čase. Jakmile se objeví byt odpovídající vašim kritériím, dostanete okamžité upozornění na mobil či e-mail dřív než ostatní.</p>
+        <p class="hero-copy">Realitify monitoruje všech 10 hlavních českých portálů (Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, UlovDomov, RE/MAX a Reality.cz) 24/7. Jakmile se objeví byt odpovídající vašim kritériím, dostanete upozornění dřív než ostatní.</p>
         <div class="hero-actions">
           <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
           <a class="link-row" href="#jak-to-funguje">
@@ -153,6 +154,26 @@
       </div>
     </section>
 
+    <section class="how-section" id="hry">
+      <div class="section-head">
+        <p class="eyebrow">HRY Z REÁLNÝCH CEN</p>
+        <h2 class="display">ZKUSTE TREFIT CENU, NEŽ BYT ZMIZÍ</h2>
+        <p class="lead" style="max-width:720px">Higher / Lower a tip nájmu z katalogu. Skvělé byty existují — mizí ale v řádu minut.</p>
+      </div>
+      <div class="game-hub" style="padding-top:0">
+        <article class="game-card">
+          <h2>HIGHER / LOWER</h2>
+          <p>Dva byty, jeden klik. Hádejte, který je levnější, a uvidíte, jak rychle podobné nabídky mizí.</p>
+          <a class="pill" href="/hry/vyssi-nizsi">Hrát</a>
+        </article>
+        <article class="game-card">
+          <h2>TIPNĚTE NÁJEM</h2>
+          <p>Pět nabídek, pět tipů měsíčního nájmu. Skóre jde do admin žebříčku.</p>
+          <a class="pill" href="/hry/najem">Hrát</a>
+        </article>
+      </div>
+    </section>
+
     <section class="how-section" id="jak-to-funguje">
       <div class="section-head">
         <p class="eyebrow">JAK REALITIFY FUNGUJE</p>
@@ -175,8 +196,8 @@
             <p class="step-num">02</p>
           </div>
           <div>
-            <h3>Hlídáme 12+ portálů</h3>
-            <p>Náš systém nepřetržitě skenuje Sreality, Bezrealitky, Reality.cz a další servery každých 60 sekund.</p>
+            <h3>Hlídáme 10 portálů</h3>
+            <p>Náš systém skenuje Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, UlovDomov, RE/MAX a Reality.cz každých 60 sekund.</p>
           </div>
         </article>
         <article class="step-card">
@@ -481,7 +502,7 @@
             <span>Které české portály systém aktuálně hlídá?</span>
             <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
           </button>
-          <p class="faq-a">Sledujeme Sreality, Bezrealitky, Reality.cz, Idnes Reality, UlovDomov, Reality.iDNES, a řadu dalších menších regionálních serverů včetně inzerátů na sociálních sítích.</p>
+          <p class="faq-a">Sledujeme přesně těchto 10 portálů: Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, UlovDomov, RE/MAX a Reality.cz. Každých ~60 sekund bereme nejnovější nabídky.</p>
         </div>
         <div class="faq-item">
           <button class="faq-q" type="button">
@@ -539,6 +560,7 @@
             <h3>Zdroje</h3>
             <a href="#databaze">Vyhledávací databáze</a>
             <a href="#faq">Časté dotazy</a>
+            <a href="/hry">Hry</a>
             <a href="/uspechy">Blog o bydlení</a>
             <a href="/kontakt">Kontakt</a>
           </div>

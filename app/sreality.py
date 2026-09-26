@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
@@ -21,7 +23,34 @@ BROWSER_HEADERS = {
 }
 
 IMAGE_TRANSFORM = "fl=res,800,600,3|shr,,20|jpg,80"
-AREA_RE = re.compile(r"(\d+)\s*m", re.IGNORECASE)
+AREA_RE = re.compile(r"(\d{1,6})\s*m", re.IGNORECASE)
+log = logging.getLogger(__name__)
+
+
+def _next_data_json(html: str) -> dict[str, Any]:
+    marker = '<script id="__NEXT_DATA__"'
+    start = html.find(marker)
+    if start < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    gt = html.find(">", start)
+    if gt < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    end = html.find("</script>", gt)
+    if end < 0:
+        raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
+    return json.loads(html[gt + 1 : end])
+
+
+def _build_id_from_html(html: str) -> str:
+    marker = '"buildId":"'
+    start = html.find(marker)
+    if start < 0:
+        raise RuntimeError("Could not resolve Sreality buildId")
+    start += len(marker)
+    end = html.find('"', start)
+    if end < 0:
+        raise RuntimeError("Could not resolve Sreality buildId")
+    return html[start:end]
 
 
 class ListingGone(Exception):
@@ -116,10 +145,12 @@ _SHARED_BUILD_ID: str | None = None
 class SrealityClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
+        from app.scrape_http import scrape_timeout
+
         self._client = httpx.AsyncClient(
             headers=BROWSER_HEADERS,
             follow_redirects=True,
-            timeout=25.0,
+            timeout=scrape_timeout(),
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=32),
         )
 
@@ -168,7 +199,10 @@ class SrealityClient:
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         try:
             return await self._fetch_next_data(page, newest)
-        except Exception:
+        except httpx.TimeoutException:
+            raise
+        except Exception as exc:
+            log.warning("sreality JSON API failed page=%s: %s; falling back to __NEXT_DATA__", page, exc)
             return await self._fetch_html(page, newest)
 
     async def _fetch_next_data(self, page: int, newest: bool) -> tuple[list[Listing], int]:
@@ -177,8 +211,12 @@ class SrealityClient:
         if page > 1:
             query["strana"] = str(page)
         data_path = f"/_next/data/{build_id}/cs/hledani/{path}.json"
+        from app.scrape_http import bounded_request
+
         url = urljoin("https://www.sreality.cz", data_path) + "?" + urlencode(query, doseq=True)
-        response = await self._client.get(
+        response = await bounded_request(
+            self._client,
+            "GET",
             url,
             headers={"Accept": "application/json", "x-nextjs-data": "1"},
         )
@@ -187,31 +225,50 @@ class SrealityClient:
             build_id = await self._resolve_build_id()
             data_path = f"/_next/data/{build_id}/cs/hledani/{path}.json"
             url = urljoin("https://www.sreality.cz", data_path) + "?" + urlencode(query, doseq=True)
-            response = await self._client.get(
+            response = await bounded_request(
+                self._client,
+                "GET",
                 url,
                 headers={"Accept": "application/json", "x-nextjs-data": "1"},
             )
         response.raise_for_status()
-        payload = response.json()
-        return parse_search_payload(payload.get("pageProps") or payload)
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
+        parse_started = time.monotonic()
+        payload = await asyncio.to_thread(json.loads, response.content)
+        listings, total = await asyncio.to_thread(
+            parse_search_payload, payload.get("pageProps") or payload, self.search_url
+        )
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
+        return listings, total
 
     async def _fetch_html(self, page: int, newest: bool) -> tuple[list[Listing], int]:
-        url = self._html_url(page, newest)
-        response = await self._client.get(url, headers={"Accept": "text/html"})
-        response.raise_for_status()
-        match = re.search(
-            r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
-            response.text,
-        )
-        if not match:
-            raise RuntimeError("Sreality HTML does not contain __NEXT_DATA__")
-        import json
+        from app.scrape_http import bounded_request
 
-        data = json.loads(match.group(1))
-        build_id = data.get("buildId")
+        url = self._html_url(page, newest)
+        response = await bounded_request(self._client, "GET", url, headers={"Accept": "text/html"})
+        response.raise_for_status()
+        from app.scrape_timing import note, note_httpx
+
+        note_httpx(response)
+        raw = response.content
+
+        def _parse(blob: bytes) -> tuple[list[Listing], int, str | None]:
+            html = blob.decode("utf-8", "replace")
+            data = _next_data_json(html)
+            listings, total = parse_search_payload(
+                data.get("props", {}).get("pageProps", {}), self.search_url
+            )
+            build_id = data.get("buildId")
+            return listings, total, str(build_id) if build_id else None
+
+        parse_started = time.monotonic()
+        listings, total, build_id = await asyncio.to_thread(_parse, raw)
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         if build_id:
-            self._set_build_id(str(build_id))
-        return parse_search_payload(data.get("props", {}).get("pageProps", {}))
+            self._set_build_id(build_id)
+        return listings, total
 
     def _set_build_id(self, value: str | None) -> None:
         global _SHARED_BUILD_ID
@@ -221,15 +278,20 @@ class SrealityClient:
         self._set_build_id(None)
 
     async def _resolve_build_id(self) -> str:
+        from app.scrape_http import bounded_request
+
         if _SHARED_BUILD_ID:
             return _SHARED_BUILD_ID
-        response = await self._client.get(self._html_url(1, True), headers={"Accept": "text/html"})
+        response = await bounded_request(
+            self._client, "GET", self._html_url(1, True), headers={"Accept": "text/html"}
+        )
         response.raise_for_status()
-        match = re.search(r'"buildId":"([^"]+)"', response.text)
-        if not match:
-            raise RuntimeError("Could not resolve Sreality buildId")
-        self._set_build_id(match.group(1))
-        return match.group(1)
+        raw = response.content
+        build_id = await asyncio.to_thread(
+            lambda blob: _build_id_from_html(blob.decode("utf-8", "replace")), raw
+        )
+        self._set_build_id(build_id)
+        return build_id
 
     def _search_parts(self, newest: bool) -> tuple[str, dict[str, str]]:
         split = urlsplit(self.search_url)
@@ -292,7 +354,11 @@ class SrealityClient:
         if response.status_code == 404:
             raise ListingGone(listing.url)
         response.raise_for_status()
-        return apply_detail(listing, response.json())
+        payload = await asyncio.to_thread(json.loads, response.content)
+        listing = await asyncio.to_thread(apply_detail, listing, payload)
+        from app.places import refine_listing_location_async
+
+        return await refine_listing_location_async(listing)
 
 
 def apply_detail(listing: Listing, payload: dict[str, Any]) -> Listing:
@@ -395,6 +461,8 @@ def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None
         price_czk = int(price) if price is not None else None
     except (TypeError, ValueError):
         price_czk = None
+    if price_czk is not None and price_czk <= 0:
+        price_czk = None
     unit = _param_label(estate.get("priceUnitCb")) or "měsíc"
     if "/prodej/" in (url or "").lower():
         unit = unit if unit and unit != "měsíc" else "ks"
@@ -419,7 +487,11 @@ def listing_from_estate(estate: dict[str, Any], url: str = "") -> Listing | None
     locality = format_locality(loc) if isinstance(loc, dict) else str(loc or "")
     lat, lon = coords_from_locality(loc) if isinstance(loc, dict) else (None, None)
     photos = image_urls(estate.get("images") or params.get("images") or [])
-    detail_url = (url or "").strip() or build_detail_url(estate if "locality" in estate else {**estate, "id": listing_id})
+    built = build_detail_url(estate if "locality" in estate else {**estate, "id": listing_id})
+    detail_url = (url or "").strip() or built
+    offer = offer_slug_from_raw(estate if isinstance(estate, dict) else {})
+    if offer:
+        detail_url = rewrite_sreality_detail_offer(detail_url, offer)
     if not detail_url.startswith("http"):
         detail_url = urljoin("https://www.sreality.cz", detail_url)
 
@@ -610,7 +682,7 @@ def format_cz_date(value: str | None) -> str:
         return value
 
 
-def parse_search_payload(page_props: dict[str, Any]) -> tuple[list[Listing], int]:
+def parse_search_payload(page_props: dict[str, Any], search_url: str = "") -> tuple[list[Listing], int]:
     queries = (
         page_props.get("dehydratedState", {}).get("queries", [])
         if isinstance(page_props, dict)
@@ -622,12 +694,12 @@ def parse_search_payload(page_props: dict[str, Any]) -> tuple[list[Listing], int
             data = (query.get("state") or {}).get("data") or {}
             results = data.get("results") or []
             total = int((data.get("pagination") or {}).get("total") or 0)
-            listings = [item for raw in results if (item := listing_from_raw(raw))]
+            listings = [item for raw in results if (item := listing_from_raw(raw, search_url=search_url))]
             return listings, total
     return [], 0
 
 
-def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
+def listing_from_raw(raw: dict[str, Any], search_url: str = "") -> Listing | None:
     listing_id = raw.get("id")
     name = (raw.get("name") or "").replace("\xa0", " ").strip()
     if not listing_id or not name:
@@ -641,15 +713,24 @@ def listing_from_raw(raw: dict[str, Any]) -> Listing | None:
         price_czk = int(price) if price is not None else None
     except (TypeError, ValueError):
         price_czk = None
+    if price_czk is not None and price_czk <= 0:
+        price_czk = None
     unit = ((raw.get("priceUnitCb") or {}).get("name") or "za měsíc").strip()
     price_label = format_price(price_czk, unit)
     area = parse_area(name, price_czk, raw.get("priceCzkPerSqM"))
+    if area is not None and area > 10_000:
+        area = None
     loc = raw.get("locality") or {}
     locality = format_locality(loc)
     lat, lon = coords_from_locality(loc)
-    url = build_detail_url(raw)
+    url = build_detail_url(raw, search_url=search_url)
     photos = image_urls(raw.get("images") or [])
-    extras = {"flags": ["roommate"]} if disposition.lower() == "pokoj" else {}
+    extras: dict[str, Any] = {}
+    if disposition.lower() == "pokoj":
+        extras["flags"] = ["roommate"]
+    offer_name = _param_label(raw.get("categoryTypeCb"))
+    if offer_name:
+        extras["offer"] = offer_name
     return Listing(
         id=int(listing_id),
         name=name,
@@ -680,7 +761,7 @@ def parse_area(name: str, price: int | None, per_sqm: Any) -> int | None:
 
 
 def format_price(price: int | None, unit: str) -> str:
-    if price is None:
+    if price is None or price <= 0:
         return "Cena neuvedena"
     formatted = f"{price:,}".replace(",", " ")
     return f"{formatted} Kč/{unit.replace('za ', '')}"
@@ -753,7 +834,103 @@ def _locality_house_number(loc: dict[str, Any]) -> str:
     return ""
 
 
-def build_detail_url(raw: dict[str, Any]) -> str:
+_OFFER_SLUGS = {
+    "prodej": "prodej",
+    "sale": "prodej",
+    "pronajem": "pronajem",
+    "pronájem": "pronajem",
+    "rent": "pronajem",
+    "drazba": "drazby",
+    "dražba": "drazby",
+    "drazby": "drazby",
+    "podil": "podily",
+    "podíl": "podily",
+    "podily": "podily",
+}
+_KIND_SLUGS = {
+    "byty": "byt",
+    "byt": "byt",
+    "domy": "dum",
+    "dum": "dum",
+    "dům": "dum",
+    "pozemky": "pozemek",
+    "pozemek": "pozemek",
+    "komercni": "komercni",
+    "komerční": "komercni",
+    "ostatni": "ostatni",
+    "ostatní": "ostatni",
+}
+
+
+def _fold_slug(value: str) -> str:
+    return (
+        (value or "")
+        .casefold()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("ě", "e")
+        .replace("í", "i")
+        .replace("ý", "y")
+        .replace("ó", "o")
+        .replace("ú", "u")
+        .replace("ů", "u")
+        .replace("ž", "z")
+        .replace("š", "s")
+        .replace("č", "c")
+        .replace("ř", "r")
+        .replace("ď", "d")
+        .replace("ť", "t")
+        .replace("ň", "n")
+    )
+
+
+def offer_slug_from_raw(raw: dict[str, Any], search_url: str = "") -> str:
+    name = _fold_slug(_param_label(raw.get("categoryTypeCb")) or "")
+    for key, slug in _OFFER_SLUGS.items():
+        if key in name:
+            return slug
+    path = f"/{_fold_slug(search_url)}/"
+    for slug in ("drazby", "podily", "prodej", "pronajem"):
+        if f"/{slug}/" in path:
+            return slug
+    return "pronajem"
+
+
+def kind_slug_from_raw(raw: dict[str, Any]) -> str:
+    name = _fold_slug(_param_label(raw.get("categoryMainCb")) or "")
+    for key, slug in _KIND_SLUGS.items():
+        if key in name:
+            return slug
+    return "byt"
+
+
+def rewrite_sreality_detail_offer(url: str, offer: str) -> str:
+    raw = (url or "").strip()
+    slug = _OFFER_SLUGS.get(_fold_slug(offer), "") or _fold_slug(offer)
+    if slug not in {"prodej", "pronajem", "drazby", "podily"}:
+        return raw
+    return re.sub(r"/detail/(pronajem|prodej|drazby|podily)/", f"/detail/{slug}/", raw, count=1, flags=re.I)
+
+
+def sreality_row_is_sale(extras: Any, price_label: str, price_czk: int | None) -> bool:
+    data = extras if isinstance(extras, dict) else {}
+    offer = _fold_slug(str(data.get("offer") or ""))
+    if "prodej" in offer or offer == "sale":
+        return True
+    if "pronajem" in offer or offer == "rent":
+        return False
+    label = (price_label or "").casefold()
+    if "nemovitost" in label:
+        return True
+    if "měsíc" in label or "mesic" in label:
+        return False
+    try:
+        return int(price_czk or 0) >= 150_000
+    except (TypeError, ValueError):
+        return False
+
+
+def build_detail_url(raw: dict[str, Any], search_url: str = "") -> str:
     loc = raw.get("locality") or {}
     slug = "-".join(
         part
@@ -764,8 +941,8 @@ def build_detail_url(raw: dict[str, Any]) -> str:
         )
         if part
     )
-    offer = "pronajem"
-    kind = "byt"
+    offer = offer_slug_from_raw(raw, search_url)
+    kind = kind_slug_from_raw(raw)
     disposition = ((raw.get("categorySubCb") or {}).get("name") or "byt").replace(" ", "")
     return f"https://www.sreality.cz/detail/{offer}/{kind}/{disposition}/{slug}/{raw['id']}"
 

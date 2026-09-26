@@ -76,6 +76,7 @@ class CatalogPlaceTests(unittest.TestCase):
                 "limit": 20,
                 "offset": 0,
                 "status": "all",
+                "include_pins": "1",
             }
         )
         self.assertEqual(data["total"], 1)
@@ -99,7 +100,7 @@ class CatalogPlaceTests(unittest.TestCase):
             ),
             kind="seeded",
         )
-        data = self.store.catalog({"place_geoms": [PRAHA7], "limit": 20, "offset": 0, "status": "all"})
+        data = self.store.catalog({"place_geoms": [PRAHA7], "limit": 20, "offset": 0, "status": "all", "include_pins": "1"})
         pts = {(round(pin["lat"], 4), round(pin["lon"], 4)) for pin in data["pins"]}
         self.assertEqual(len(data["pins"]), 2)
         self.assertEqual(len(pts), 2)

@@ -4,7 +4,6 @@ import asyncio
 import json
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,11 +12,20 @@ from app import push as web_push
 from app import email_notify as mail_notify
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
-from app.sources import client_for, source_name
-from app.catalog_sync import daily_shards, listing_is_new_for_monitor, sreality_recent_shards
+from app.sources import PORTAL_LABELS, client_for, source_name
+from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_shards
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
+
+
+def _is_notify_config_noise(message: object) -> bool:
+    raw = str(message or "")
+    return raw.startswith("Monitor search timeout") or "chybí Discord webhook" in raw
+
+
+def _is_restart_noise(message: object) -> bool:
+    return "Obnoveno po restartu" in str(message or "")
 
 
 class Hub:
@@ -35,27 +43,33 @@ class Hub:
         self._discord_task: asyncio.Task[None] | None = None
         self._coords_task: asyncio.Task[None] | None = None
         self._dedupe_task: asyncio.Task[None] | None = None
+        self._prune_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.catalog_running_portals: set[str] = set()
         self._recent_shard_idx = 0
         self._deep_shard_idx = 0
         self.dedupe_running = False
         self.dedupe_scanning = False
+        self.catalog_quality_running = False
         self.last_error: str | None = None
-        self._recover_stuck_catalog_meta()
+        if config.SCRAPE_ROLE != "web":
+            self._recover_stuck_catalog_meta()
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
-        from app.scrape_engine import AdaptiveLimiter, ScrapeEngine
+        from app.scrape_engine import LimiterRegistry, ScrapeEngine
+        from app.perf_diag import CountedPool
 
-        self._scrape_limiter = AdaptiveLimiter()
-        self._monitor_engine = ScrapeEngine(self._scrape_limiter, priority=0)
+        self._scrape_registry = LimiterRegistry()
+        self._monitor_engine = ScrapeEngine(
+            registry=self._scrape_registry, priority=0, pipeline="monitor"
+        )
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
-        self.ui_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rf-ui")
-        self.auth_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-auth")
-        self.job_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rf-job")
+        self.ui_pool = CountedPool(max_workers=4, thread_name_prefix="rf-ui", pool_name="ui")
+        self.auth_pool = CountedPool(max_workers=2, thread_name_prefix="rf-auth", pool_name="auth")
+        self.job_pool = CountedPool(max_workers=4, thread_name_prefix="rf-job", pool_name="job")
 
     def client_for(self, search_url: str):
         client = self.clients.get(search_url)
@@ -65,27 +79,25 @@ class Hub:
         return client
 
     def _recover_stuck_catalog_meta(self) -> None:
-        """Clear leftover 'running' meta from a crashed process so sync/live can resume."""
+        """Resume leftover running jobs after a worker crash. Web reloads must not do this."""
+        interrupted: set[str] = set()
         try:
             status = str(self.store.get_meta("catalog_sync_status") or "")
-            if status == "running":
-                self.store.set_meta("catalog_sync_status", "partial")
-                self.store.set_meta(
-                    "catalog_sync_error",
-                    "Obnoveno po restartu — předchozí sync zůstal viset ve stavu running.",
-                )
+            err = str(self.store.get_meta("catalog_sync_error") or "")
+            if status == "running" or _is_restart_noise(err):
+                self.store.set_meta("catalog_sync_status", "idle")
+                if _is_restart_noise(err):
+                    self.store.set_meta("catalog_sync_error", None)
         except Exception:
             pass
         try:
             settings = self.store.dedupe_settings()
             status = str(settings.get("status") or "")
             error = str(settings.get("error") or "")
-            interrupted = error.startswith("Přerušeno restartem procesu")
-            if status in {"running", "scanning"} or interrupted:
+            interrupted_dedupe = error.startswith("Přerušeno restartem procesu")
+            if status in {"running", "scanning"} or interrupted_dedupe:
                 self.store.patch_dedupe_meta(
                     {
-                        # A reload interruption is operational cleanup, not a
-                        # persistent dedupe failure shown as a red admin error.
                         "status": "idle",
                         "error": "",
                         "last_attempt": utc_now(),
@@ -94,23 +106,24 @@ class Hub:
         except Exception:
             pass
         try:
-            # Stuck catalog_daily jobs (e.g. Bazos „Běží“ for days) block admin status.
-            now = utc_now()
             for job in self.store.list_scrape_jobs():
-                if str(job.get("status") or "") != "running":
+                status = str(job.get("status") or "")
+                err = str(job.get("last_error") or "")
+                if status != "running" and not (status == "partial" and _is_restart_noise(err)):
                     continue
                 portal = str(job.get("portal") or "")
                 self.store.update_scrape_job(
                     job["id"],
-                    status="partial",
-                    last_error="Obnoveno po restartu — job zůstal ve stavu running.",
-                    finished_at=now,
+                    status="pending",
+                    last_error=None,
+                    finished_at=None,
                 )
                 if portal:
-                    # Mark portal attempted today so minute ticks are not starved by catch-up.
-                    self.store.set_meta(f"catalog_sync_{portal}_status", "partial")
-                    if not str(self.store.get_meta(f"catalog_sync_{portal}_last") or "").startswith(now[:10]):
-                        self.store.set_meta(f"catalog_sync_{portal}_last", now)
+                    interrupted.add(portal)
+            if interrupted:
+                queued = sorted(set(self.store.catalog_queued_portals()) | interrupted)
+                self.store.set_meta("catalog_sync_request", json.dumps(queued))
+                print(f"catalog_sync resume after restart portals={queued}", flush=True)
         except Exception:
             pass
 
@@ -130,8 +143,18 @@ class Hub:
 
         return await asyncio.get_running_loop().run_in_executor(self.job_pool, _call)
 
+    async def _flush_scrape_metrics(self) -> None:
+        from app.scrape_timing import drain, enabled
+
+        if not enabled():
+            return
+        rows = drain()
+        if rows:
+            await self._job_db(self.store.insert_scrape_metrics, rows)
+
     async def _record_tick(self, tick: dict[str, Any]) -> None:
         """Serialize tick metadata off the event loop and retry transient writers."""
+        await self._flush_scrape_metrics()
         def _call() -> None:
             for attempt in range(5):
                 try:
@@ -168,9 +191,11 @@ class Hub:
             )
             self._coords_task = asyncio.create_task(self.backfill_missing_coords(), name="sreality-coords")
             self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
+            self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
         elif role == "web":
             # Digests only — listing polls / catalog / sold run in scrape_worker.
             self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
+            self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
         if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
             from app.discord_bot import run_discord_bot
@@ -205,6 +230,7 @@ class Hub:
                 self._discord_task,
                 self._coords_task,
                 self._dedupe_task,
+                self._prune_task,
             )
             if task is not None
         ]
@@ -221,6 +247,7 @@ class Hub:
         self._discord_task = None
         self._coords_task = None
         self._dedupe_task = None
+        self._prune_task = None
 
     async def close(self) -> None:
         await self.stop()
@@ -234,9 +261,44 @@ class Hub:
                 pass
         self.clients.clear()
 
+    async def _prune_loop(self) -> None:
+        await asyncio.sleep(20)
+        while self.running:
+            try:
+                await self._prune_tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            try:
+                await asyncio.sleep(86400)
+            except asyncio.CancelledError:
+                raise
+
+    async def _prune_tick(self) -> None:
+        dry = await asyncio.to_thread(self.store.prune_perf_data, dry_run=True)
+        self.store.set_meta("prune_perf_dry", json.dumps(dry))
+        if config.PRUNE_APPLY:
+            applied = await asyncio.to_thread(self.store.prune_perf_data, dry_run=False)
+            self.store.set_meta("prune_perf_last", utc_now())
+            self.store.set_meta("prune_perf_applied", json.dumps(applied))
+
     async def _loop(self) -> None:
         await asyncio.sleep(1)
+        paused = False
         while self.running:
+            if self.catalog_running:
+                if not paused:
+                    print("monitor_priority paused (catalog_sync running)", flush=True)
+                    paused = True
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    raise
+                continue
+            if paused:
+                print("monitor_priority resumed", flush=True)
+                paused = False
             started = time.monotonic()
             try:
                 monitor_run = await self.check_due()
@@ -316,12 +378,12 @@ class Hub:
                         )
                     except asyncio.TimeoutError:
                         message = "Monitor search timeout; další cyklus ho zkusí znovu."
+                        print(message, flush=True)
                         for item in current["monitors"]:
                             await self._job_db(
                                 self.store.update_monitor_stats,
                                 item["id"],
                                 last_check=utc_now(),
-                                last_error=message,
                             )
                         return {
                             "job_id": current["job"]["id"],
@@ -442,9 +504,7 @@ class Hub:
                         template_config = (template or {}).get("config")
                         queued = False
                         if prefs.get("discord") is not False:
-                            if not webhook:
-                                errors.append(f"{listing.id}: chybí Discord webhook")
-                            else:
+                            if webhook:
                                 queued = self.store.enqueue_listing_ping(
                                     alert,
                                     webhook,
@@ -515,6 +575,31 @@ class Hub:
                 )
             raise
 
+    async def _timed_detail(self, client, listing: Listing, reason: str) -> Listing:
+        from app.scrape_timing import log_row
+        from app.sources import portal_of
+
+        started = time.monotonic()
+        result = await client.fetch_detail(listing)
+        log_row(
+            {
+                "kind": "detail",
+                "portal": portal_of(getattr(listing, "url", "") or ""),
+                "pipeline": "monitor",
+                "shard_key": reason,
+                "page": 0,
+                "fetch_ms": round((time.monotonic() - started) * 1000.0, 2),
+                "parse_ms": None,
+                "upsert_ms": None,
+                "listings_count": 1,
+                "status_code": 200,
+                "limiter_at_call": None,
+                "error": None,
+                "deferred": 0,
+            }
+        )
+        return result
+
     async def _classify(
         self,
         client,
@@ -522,7 +607,7 @@ class Hub:
         prev: dict[str, Any] | None,
     ) -> Listing | None:
         if prev is None:
-            listing = await client.fetch_detail(listing)
+            listing = await self._timed_detail(client, listing, "new")
             if is_recently_created(listing.created_on, config.NEW_MAX_AGE_DAYS):
                 listing.kind = "new"
                 listing.changes = detail_price_change(listing)
@@ -536,7 +621,7 @@ class Hub:
 
         price_changes = snapshot_price_change(prev, listing)
         if price_changes:
-            listing = await client.fetch_detail(listing)
+            listing = await self._timed_detail(client, listing, "changed")
             listing.kind = "changed"
             listing.changes = merge_price_changes(price_changes, detail_price_change(listing))
             return listing
@@ -678,7 +763,20 @@ class Hub:
     async def _recent_catalog_loop(self) -> None:
         """Continuously discover new listings, independent of monitors and deep crawl."""
         await asyncio.sleep(2)
+        paused = False
         while self.running:
+            if self.catalog_running:
+                if not paused:
+                    print("new_discovery paused (catalog_sync running)", flush=True)
+                    paused = True
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    raise
+                continue
+            if paused:
+                print("new_discovery resumed", flush=True)
+                paused = False
             tick_started = time.monotonic()
             try:
                 await self.run_due_scrape_schedules()
@@ -710,7 +808,20 @@ class Hub:
     async def _deep_catalog_loop(self) -> None:
         """Continuously consume low-priority full-market shards."""
         await asyncio.sleep(4)
+        paused = False
         while self.running:
+            if self.catalog_running:
+                if not paused:
+                    print("rolling_deep paused (catalog_sync running)", flush=True)
+                    paused = True
+                try:
+                    await asyncio.sleep(0.5)
+                except asyncio.CancelledError:
+                    raise
+                continue
+            if paused:
+                print("rolling_deep resumed", flush=True)
+                paused = False
             try:
                 await self._deep_catalog_tick()
             except asyncio.CancelledError:
@@ -777,12 +888,7 @@ class Hub:
             if portal not in config.CATALOG_SYNC_HOURS:
                 return {"ok": False, "error": "Neznámý portál"}
             payload["portal"] = portal
-            payload["label"] = {
-                "sreality": "Sreality",
-                "bezrealitky": "Bezrealitky",
-                "idnes": "Reality.iDNES",
-                "bazos": "Bazoš",
-            }.get(portal, portal)
+            payload["label"] = PORTAL_LABELS.get(portal, portal)
         else:
             cleaned = normalize_search_url(str(job.get("url") or ""))
             if not cleaned:
@@ -853,6 +959,7 @@ class Hub:
                 totals["deferred_write"] = len(listings) - offset
                 break
             chunk = listings[offset : offset + chunk_size]
+            t_up = time.monotonic()
             async with self._catalog_write:
                 part = await self._job_db(
                     self.store.upsert_catalog_listings_batch,
@@ -861,6 +968,25 @@ class Hub:
                     commit_every=chunk_size,
                     fast=True,
                 )
+            from app.scrape_timing import log_row
+
+            log_row(
+                {
+                    "kind": "upsert",
+                    "portal": "",
+                    "pipeline": kind,
+                    "shard_key": "",
+                    "page": 0,
+                    "fetch_ms": None,
+                    "parse_ms": None,
+                    "upsert_ms": round((time.monotonic() - t_up) * 1000.0, 2),
+                    "listings_count": len(chunk),
+                    "status_code": None,
+                    "limiter_at_call": None,
+                    "error": None,
+                    "deferred": 0,
+                }
+            )
             for key in ("n", "new", "updated", "same"):
                 totals[key] += int(part.get(key) or 0)
             # Let pending minute ticks acquire the write lock.
@@ -889,8 +1015,8 @@ class Hub:
         ), None
 
     def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
-        """Rotate through full Sreality shards without synchronous DB writes."""
-        deep = [item for item in daily_shards() if item.get("portal") == "sreality"]
+        """Rotate through full-market shards (all portals) without synchronous DB writes."""
+        deep = daily_shards()
         if not deep:
             return []
         n = max(1, min(len(deep), int(take or config.SCRAPE_DEEP_SHARDS_PER_TICK)))
@@ -904,12 +1030,12 @@ class Hub:
         """High-priority NewDiscovery; never waits for rolling deep."""
         from app.scrape_engine import ScrapeEngine
 
-        recent = sreality_recent_shards()
+        recent = recent_shards()
         if not recent:
             return
 
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=1)
+        engine = ScrapeEngine(registry=self._scrape_registry, priority=1, pipeline="discovery")
         disc_stats = {"n": 0, "new": 0, "updated": 0, "same": 0, "deferred_write": 0}
         disc_listings: list[Listing] = []
         disc_pages = 0
@@ -966,7 +1092,7 @@ class Hub:
                 "write_skipped": bool(write_note) and not disc_listings,
             },
             "refresh": {},
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         try:
             await self._record_tick(tick)
@@ -988,7 +1114,7 @@ class Hub:
         if not deep:
             return
         started = time.monotonic()
-        engine = ScrapeEngine(self._scrape_limiter, priority=2)
+        engine = ScrapeEngine(registry=self._scrape_registry, priority=2, pipeline="deep")
         listings: list[Listing] = []
         pages_ok = 0
         deferred = 0
@@ -1050,7 +1176,7 @@ class Hub:
                 "coverage_pct": coverage_pct,
                 "notified": 0,
             },
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         await self._record_tick(tick)
         print(
@@ -1070,13 +1196,15 @@ class Hub:
             return {"ok": False, "error": "Chybí URL hledání"}
         pages = max(1, min(200, int(max_pages or 40)))
         client = self.client_for(cleaned)
-        engine = ScrapeEngine()
+        engine = ScrapeEngine(registry=self._scrape_registry, pipeline="manual")
         started = time.monotonic()
         result = await engine.fetch_pages_parallel(
             shard_key=f"manual:{portal_of(cleaned)}:{cleaned[:80]}",
             fetch_page=lambda p: client.fetch_page(p, newest=True),
             max_pages=pages,
             deadline_monotonic=time.monotonic() + max(30.0, float(config.SCRAPE_FULL_MARKET_DEADLINE_SEC)),
+            portal=portal_of(cleaned),
+            search_url=cleaned,
         )
         listings = list(result.listings)
         stats = {"n": 0, "new": 0, "updated": 0, "same": 0}
@@ -1098,7 +1226,7 @@ class Hub:
                 "total": result.total,
             },
             "refresh": {"listings": 0, "shards": 0, "notified": 0},
-            "metrics": {**engine.metrics.snapshot(), "limit": engine.limiter.limit},
+            "metrics": engine.metrics_snapshot(),
         }
         await self._job_db(self.store.record_scrape_tick, tick)
         return {
@@ -1188,6 +1316,37 @@ class Hub:
         asyncio.create_task(self.run_dedupe_scan(), name="dedupe-scan")
         return {"ok": True, "started": True}
 
+    async def catalog_quality_dry_run(self, max_age_hours: int = 72) -> dict[str, Any]:
+        """Counts via job_pool Store connection — never a side-process sqlite connect."""
+        return await self._job_db(self.store.catalog_quality_dry_run, max_age_hours)
+
+    async def run_catalog_quality_cleanup(
+        self,
+        *,
+        max_age_hours: int = 72,
+        dry_run: bool = False,
+        chunk_size: int = 80,
+    ) -> dict[str, Any]:
+        """Ordered catalog cleanup via job_pool (chunked commits; do not side-process sqlite)."""
+        if self.catalog_quality_running:
+            return {"ok": False, "reason": "already-running"}
+        self.catalog_quality_running = True
+        try:
+            # No long _catalog_write hold: mark_non_apartment commits every chunk_size
+            # rows so the scrape worker can interleave (Wave 2 pattern).
+            result = await self._job_db(
+                self.store.run_catalog_quality_cleanup,
+                max_age_hours=max_age_hours,
+                dry_run=dry_run,
+                chunk_size=chunk_size,
+            )
+            return {"ok": True, **result}
+        except Exception as exc:
+            print(f"catalog quality cleanup failed: {exc}", flush=True)
+            return {"ok": False, "error": str(exc)[:300]}
+        finally:
+            self.catalog_quality_running = False
+
     async def run_dedupe(self) -> dict[str, Any]:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
@@ -1220,6 +1379,17 @@ class Hub:
         finally:
             self.dedupe_scanning = False
 
+    @staticmethod
+    def _meta_local_day(value: str) -> str:
+        text = str(value or "").replace("Z", "+00:00")
+        try:
+            stamp = datetime.fromisoformat(text)
+        except ValueError:
+            return text[:10]
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return stamp.astimezone().date().isoformat()
+
     def _due_catalog_portals(self, force: bool = False) -> list[str]:
         now = datetime.now().astimezone()
         today = now.date().isoformat()
@@ -1229,14 +1399,10 @@ class Hub:
                 if now.hour < hour:
                     continue
                 # No all-day catch-up: missed window must wait until tomorrow (or manual run).
-                # Catch-up of Bazos/iDNES was holding SQLite locks for hours and killing minute ticks.
                 if now.hour > hour + 2:
                     continue
             last = self.store.get_meta(f"catalog_sync_{portal}_last") or ""
-            status = str(self.store.get_meta(f"catalog_sync_{portal}_status") or "")
-            if not force and str(last).startswith(today):
-                continue
-            if not force and status in {"done", "partial", "error", "running"} and str(last).startswith(today):
+            if not force and last and self._meta_local_day(str(last)) == today:
                 continue
             due.append(portal)
         return due
@@ -1257,16 +1423,24 @@ class Hub:
         if not force:
             pick = "bazos" if "bazos" in to_start else sorted(to_start)[0]
             to_start = {pick}
-        return await self.run_catalog_sync(portals=sorted(to_start))
+        self.catalog_running_portals |= to_start
+        self.catalog_running = True
+        asyncio.create_task(
+            self.run_catalog_sync(portals=sorted(to_start), rerun=force, claimed=True),
+            name="sreality-catalog-run",
+        )
+        return {"ok": True, "started": True, "portals": sorted(to_start)}
 
     def start_catalog_sync(self, portals: list[str] | None = None) -> dict[str, Any]:
         wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
         if config.SCRAPE_ROLE == "web":
-            self.store.set_meta("catalog_sync_request", json.dumps(sorted(wanted)))
+            merged = sorted(wanted | set(self.store.catalog_queued_portals()))
+            self.store.set_meta("catalog_sync_request", json.dumps(merged))
             return {
                 "ok": True,
                 "queued": True,
-                "portals": sorted(wanted),
+                "portals": merged,
+                "added": sorted(wanted),
                 "status": self.store.catalog_sync_status(),
             }
         to_start = wanted - self.catalog_running_portals
@@ -1294,6 +1468,7 @@ class Hub:
         started = utc_now()
         today = started[:10]
         shards = [item for item in daily_shards() if item["portal"] in wanted]
+        print(f"catalog_sync start portals={sorted(wanted)} shards={len(shards)} rerun={rerun}", flush=True)
         await self._job_db(self.store.set_meta, "catalog_sync_status", "running")
         await self._job_db(self.store.set_meta, "catalog_sync_error", None)
         shard_ok: dict[str, bool] = {}
@@ -1323,11 +1498,19 @@ class Hub:
                             job["id"],
                             page=1,
                             upserts=0,
+                            last_total=0,
                             status="pending",
                             finished_at=None,
                             last_error=None,
                         )
-                        job = {**job, "page": 1, "upserts": 0, "started_at": None, "status": "pending"}
+                        job = {
+                            **job,
+                            "page": 1,
+                            "upserts": 0,
+                            "last_total": 0,
+                            "started_at": None,
+                            "status": "pending",
+                        }
                     shard_ok[shard["shard_key"]] = await self._run_catalog_job(job)
 
                 if portal == "bazos":
@@ -1339,6 +1522,14 @@ class Hub:
                             await run_shard(shard)
 
                     await asyncio.gather(*(run_bazos_shard(shard) for shard in portal_shards))
+                elif portal == "idnes":
+                    shard_gate = asyncio.Semaphore(3)
+
+                    async def run_idnes_shard(shard: dict[str, str]) -> None:
+                        async with shard_gate:
+                            await run_shard(shard)
+
+                    await asyncio.gather(*(run_idnes_shard(shard) for shard in portal_shards))
                 else:
                     for shard in portal_shards:
                         await run_shard(shard)
@@ -1381,34 +1572,71 @@ class Hub:
             return await self._run_bazos_catalog_job(job, client)
         page = max(int(job.get("page") or 1), 1)
         upserts = int(job.get("upserts") or 0)
-        self.store.update_scrape_job(
+        portal = str(job.get("portal") or "")
+        shard_key = str(job.get("shard_key") or "")
+        await self._job_db(
+            self.store.update_scrape_job,
             job["id"],
             status="running",
             started_at=utc_now(),
             last_error=None,
+            page=page,
+            upserts=upserts,
         )
         total = int(job.get("last_total") or 0)
         seen_ids: set[int] = set()
         try:
             from app.scrape_engine import ScrapeEngine
 
-            engine = ScrapeEngine()
+            engine = ScrapeEngine(
+                registry=self._scrape_registry,
+                priority=0,
+                pipeline="catalog_sync",
+            )
             needed: int | None = None
+            pending_write: asyncio.Task[None] | None = None
+            rate_retries = 0
             while page <= 400:
-                window = max(1, engine.limiter.limit)
+                window = max(1, min(8, engine.limiter_for(portal).limit))
                 pages = list(range(page, min(page + window, (needed or 400) + 1)))
                 if not pages:
                     break
                 results = await asyncio.gather(
-                    *(engine.fetch_one_page(lambda p=p: client.fetch_page(p, newest=True), p) for p in pages)
+                    *(
+                        engine.fetch_one_page(
+                            lambda p=p: client.fetch_page(p, newest=True),
+                            p,
+                            portal=portal,
+                            shard_key=shard_key,
+                        )
+                        for p in pages
+                    )
                 )
+                failed = next((item for item in results if item.error), None)
+                if failed:
+                    err = failed.error or ""
+                    if "429" in err or "403" in err:
+                        rate_retries += 1
+                        await asyncio.sleep(min(60, 10 * rate_retries))
+                        if rate_retries <= 3:
+                            continue
+                        if pending_write is not None:
+                            await pending_write
+                        await self._job_db(
+                            self.store.update_scrape_job,
+                            job["id"],
+                            status="partial",
+                            last_error=f"{portal} rate-limited (HTTP 429/403), zkusím v dalším běhu",
+                            upserts=upserts,
+                            page=page,
+                            last_total=total,
+                        )
+                        return False
+                    raise RuntimeError(err)
+                rate_retries = 0
                 empty_streak = 0
                 chunk: list[Listing] = []
                 for result in results:
-                    if result.error:
-                        if any(code in (result.error or "") for code in ("403", "429")):
-                            await asyncio.sleep(20)
-                        raise RuntimeError(result.error)
                     total = result.total or total
                     if not result.listings:
                         empty_streak += 1
@@ -1423,20 +1651,42 @@ class Hub:
                     page_size = max(len(result.listings), 1)
                     if total:
                         needed = (int(total) + page_size - 1) // page_size
-                if chunk:
-                    await self._catalog_upsert(chunk, kind="seeded")
-                    upserts += len(chunk)
                 page = pages[-1] + 1
-                # Persist progress once per window (not per page).
-                self.store.update_scrape_job(job["id"], page=page, upserts=upserts, last_total=total)
+                await self._job_db(
+                    self.store.update_scrape_job,
+                    job["id"],
+                    page=page,
+                    upserts=upserts,
+                    last_total=total,
+                )
+                if chunk:
+                    upserts += len(chunk)
+                    items = chunk
+
+                    async def _write(batch: list[Listing] = items) -> None:
+                        await self._catalog_upsert(batch, kind="seeded")
+
+                    if pending_write is not None:
+                        await pending_write
+                    pending_write = asyncio.create_task(_write())
+                    await self._job_db(
+                        self.store.update_scrape_job,
+                        job["id"],
+                        page=page,
+                        upserts=upserts,
+                        last_total=total,
+                    )
                 if needed and pages[-1] >= needed:
                     break
                 if empty_streak >= len(pages):
                     break
+            if pending_write is not None:
+                await pending_write
             complete = True
             if total and upserts < max(1, int(total * 0.92)):
                 complete = False
-            self.store.update_scrape_job(
+            await self._job_db(
+                self.store.update_scrape_job,
                 job["id"],
                 status="done" if complete else "partial",
                 finished_at=utc_now(),
@@ -1449,7 +1699,8 @@ class Hub:
             )
             return complete
         except Exception as exc:
-            self.store.update_scrape_job(
+            await self._job_db(
+                self.store.update_scrape_job,
                 job["id"],
                 status="error",
                 last_error=str(exc),
@@ -1667,7 +1918,11 @@ class Hub:
         if not fresh and self._status_cache is not None and now - self._status_cache_at < 1.5:
             return self._status_cache
         monitors = self.store.list_monitors()
-        errors = [item.get("last_error") for item in monitors if item.get("last_error")]
+        errors = [
+            item.get("last_error")
+            for item in monitors
+            if item.get("last_error") and not _is_notify_config_noise(item.get("last_error"))
+        ]
         last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
         catalog = self.store.catalog_sync_status()
         tracked = self.store.count()

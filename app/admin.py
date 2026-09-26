@@ -17,10 +17,15 @@ from app import billing as stripe_billing
 from app import config
 from app import whatsapp as wa_notify
 from app.store import Store, local_day_start
+from app.sources import PORTAL_LABELS, PORTAL_ORDER
 
 ADMIN_COOKIE = "realitify_admin"
 DEMO = "demo"
 LIVE = "live"
+
+
+def _is_restart_noise(message: object) -> bool:
+    return "Obnoveno po restartu" in str(message or "")
 
 
 def _now() -> str:
@@ -1306,6 +1311,96 @@ def dedupe_payload(store: Store, hub: Any) -> dict[str, Any]:
     }
 
 
+_CATALOG_STATE_LABELS = {
+    "queued": "Ve frontě",
+    "pending": "Čeká",
+    "running": "Běží",
+    "done": "Hotovo",
+    "partial": "Částečně",
+    "error": "Chyba",
+    "idle": "Klid",
+}
+
+
+def catalog_progress_payload(store: Store, hub: Any | None = None) -> dict[str, Any]:
+    data = store.catalog_progress()
+    running_mem = sorted(getattr(hub, "catalog_running_portals", set()) or [])
+    running_set = set(running_mem)
+    queued = [str(item) for item in (data.get("queued_portals") or [])]
+    titles = dict(PORTAL_LABELS)
+    for item in data.get("portals") or []:
+        portal = str(item.get("id") or "")
+        if portal in running_set and item.get("state") in {"idle", "queued", "pending"}:
+            item["state"] = "running"
+        item["state_label"] = _CATALOG_STATE_LABELS.get(str(item.get("state") or ""), str(item.get("state") or ""))
+        item["started_rel"] = relative_cs(str(item.get("started_at") or "") or None)
+        if item["started_rel"] == "—":
+            item["started_rel"] = ""
+    for item in data.get("running_jobs") or []:
+        item["portal_name"] = titles.get(str(item.get("portal") or ""), str(item.get("portal") or "").title())
+        item["started_rel"] = relative_cs(str(item.get("started_at") or "") or None)
+        item["started_fmt"] = fmt_dt(str(item.get("started_at") or ""))
+    for item in data.get("recent_errors") or []:
+        item["portal_name"] = titles.get(str(item.get("portal") or ""), str(item.get("portal") or "").title())
+        item["when_rel"] = relative_cs(str(item.get("finished_at") or item.get("started_at") or "") or None)
+    data["recent_errors"] = [
+        item for item in (data.get("recent_errors") or []) if not _is_restart_noise(item.get("last_error"))
+    ]
+    names = [titles.get(key, key.title()) for key in queued]
+    mem_names = [titles.get(key, key.title()) for key in running_mem]
+    status = str(data.get("status") or "idle")
+    if running_mem and status in {"idle", "queued"}:
+        status = "running"
+        data["active"] = True
+    current = next((item for item in (data.get("running_jobs") or []) if item.get("shard_key")), None)
+    if queued and not running_mem and not data.get("running"):
+        if config.SCRAPE_ROLE == "web":
+            headline = "Čeká na worker: " + ", ".join(names) + ". Převzetí obvykle do 10 s."
+        else:
+            headline = "Ve frontě: " + ", ".join(names) + "."
+    elif current:
+        portal_name = current.get("portal_name") or current.get("portal") or "katalog"
+        portal_row = next(
+            (item for item in (data.get("portals") or []) if item.get("id") == current.get("portal")),
+            None,
+        )
+        pos = ""
+        if portal_row and portal_row.get("shards"):
+            pos = f"{int(portal_row.get('done') or 0) + 1}/{portal_row.get('shards')} · "
+        headline = (
+            f"Běží {portal_name} — {pos}{current.get('shard_key')} · strana {current.get('page') or 1}."
+        )
+    elif mem_names:
+        headline = "Běží katalog: " + ", ".join(mem_names) + "."
+    elif status == "pending":
+        leftover = int(data.get("pending") or 0)
+        headline = (
+            f"Ve frontě zbývá {leftover} shardů, ale teď žádný neběží. "
+            "Spusť znovu „Všechny portály“ — worker je znovu sebere."
+        )
+    elif status == "done":
+        headline = "Poslední full scrape doběhl."
+    elif status == "partial":
+        headline = "Poslední full scrape skončil částečně."
+    else:
+        headline = "Žádný full scrape teď neběží."
+    data.update(
+        {
+            "status": status,
+            "status_label": _CATALOG_STATE_LABELS.get(status, status),
+            "headline": headline,
+            "queued_names": names,
+            "running_portals": running_mem,
+            "role": config.SCRAPE_ROLE,
+            "last_run_rel": relative_cs(str(data.get("last_run") or "") or None),
+            "last_run_fmt": fmt_dt(str(data.get("last_run") or "")),
+        }
+    )
+    if data.get("last_run_rel") == "—":
+        data["last_run_rel"] = ""
+    return data
+
+
 def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     # Full hub.status() performs catalog/user aggregates needed by the public app.
     # Provoz only needs runtime flags; repeating those aggregates made this page
@@ -1372,13 +1467,11 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             "SELECT IFNULL(portal,'neznámý') AS portal, COUNT(*) n, MAX(last_seen) seen FROM catalog_listings WHERE IFNULL(gone,0)=0 GROUP BY portal"
         ):
             name = str(row["portal"] or "neznámý")
-            portals[name] = {"name": name.title() if name != "sreality" else "Sreality", "n": int(row["n"]), "seen": row["seen"]}
-    if "bezrealitky" in portals:
-        portals["bezrealitky"]["name"] = "Bezrealitky"
-    if "idnes" in portals:
-        portals["idnes"]["name"] = "Reality.iDNES"
-    if "bazos" in portals:
-        portals["bazos"]["name"] = "Bazoš"
+            portals[name] = {
+                "name": PORTAL_LABELS.get(name, name.title() if name != "sreality" else "Sreality"),
+                "n": int(row["n"]),
+                "seen": row["seen"],
+            }
     for item in live_jobs:
         portal = str(item.get("portal") or "")
         if portal not in portals:
@@ -1403,12 +1496,12 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     logs: list[dict[str, Any]] = []
     if hub.last_error:
         logs.append({"at": fmt_dt(_now()), "at_iso": _now(), "level": "Error", "service": "API", "message": str(hub.last_error)[:180]})
-    if catalog.get("last_error"):
+    if catalog.get("last_error") and not _is_restart_noise(catalog.get("last_error")):
         logs.append({"at": fmt_dt(catalog.get("last_run")), "at_iso": catalog.get("last_run") or "", "level": "Error", "service": "Scraper", "message": str(catalog.get("last_error"))[:180]})
     for item in jobs:
         stamp = item.get("finished_at") or item.get("started_at") or ""
         portal = (item.get("portal") or "Scraper").title()
-        if item.get("last_error"):
+        if item.get("last_error") and not _is_restart_noise(item.get("last_error")):
             logs.append({"at": fmt_dt(stamp), "at_iso": stamp, "level": "Error", "service": "Scraper", "message": f"{portal}: {item.get('last_error')}"[:180]})
         elif item.get("status") == "done" or item.get("finished_at"):
             logs.append(
@@ -1465,7 +1558,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         prev = by_portal.get(portal)
         if not prev or stamp > (prev.get("finished_at") or prev.get("started_at") or ""):
             by_portal[portal] = item
-    titles = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
+    titles = dict(PORTAL_LABELS)
     all_scrape_ticks = store.list_scrape_ticks(limit=120)
     # Deep runs much more often than discovery/monitor checks. Keep the admin
     # history representative instead of letting deep rows hide both priorities.
@@ -1482,8 +1575,8 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     latest_tick = all_scrape_ticks[0] if all_scrape_ticks else None
     tick_at = str((latest_tick or {}).get("at") or "")
     tick_ok = bool(latest_tick) and not bool((latest_tick or {}).get("error"))
-    seen_portals = set(by_portal) | {key for key in portals if key in titles}
-    for portal in sorted(seen_portals, key=lambda key: titles.get(key, key)):
+    seen_portals = set(by_portal) | {key for key in portals if key in titles} | set(PORTAL_ORDER)
+    for portal in sorted(seen_portals, key=lambda key: (PORTAL_ORDER.index(key) if key in PORTAL_ORDER else 99, titles.get(key, key))):
         title = titles.get(portal, portal.title())
         item = by_portal.get(portal)
         # Minute Sreality discovery ticks are the source of truth; monitor_live jobs go stale.
@@ -1521,7 +1614,14 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
         secs = [_job_secs(item) for item in jobs]
         secs_n = [s for s in secs if s is not None]
         last_job = max(jobs, key=lambda item: item.get("finished_at") or item.get("started_at") or "", default=None)
-        err = next((item.get("last_error") for item in jobs if item.get("last_error")), None)
+        err = next(
+            (
+                item.get("last_error")
+                for item in jobs
+                if item.get("last_error") and not _is_restart_noise(item.get("last_error"))
+            ),
+            None,
+        )
         running = any(item.get("status") == "running" for item in jobs)
         cron.append(
             {
@@ -1631,6 +1731,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             {"id": key, "name": titles.get(key, key.title())}
             for key in config.CATALOG_SYNC_HOURS
         ],
+        "catalog_progress": catalog_progress_payload(store, hub),
         "scrape_schedules": [
             {
                 "id": item.get("id"),

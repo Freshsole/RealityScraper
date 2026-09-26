@@ -6,6 +6,8 @@ import unicodedata
 from typing import Any
 from urllib.parse import urlparse
 
+from app.sources import PORTAL_LABELS, portal_of as portal_from_sources
+
 MAX_MATCH_M = 45.0
 MAX_AREA_DELTA = 1
 MAX_AREA_RATIO = 0.03
@@ -25,22 +27,25 @@ def listing_key(url: str) -> str:
 
 
 def portal_from_url(url: str) -> str:
-    raw = (url or "").lower()
-    if "bezrealitky" in raw:
-        return "bezrealitky"
-    if "reality.idnes" in raw or "idnes.cz" in raw:
-        return "idnes"
-    if "bazos" in raw:
-        return "bazos"
-    if "sreality" in raw:
-        return "sreality"
-    host = (urlparse(url).hostname or "web").lower().removeprefix("www.")
-    return host.split(".")[0] if host else "web"
+    raw = (url or "").strip()
+    if not raw:
+        return "web"
+    portal = portal_from_sources(raw)
+    if portal != "sreality" or "sreality" in raw.lower():
+        return portal
+    host = (urlparse(raw).hostname or "").lower().removeprefix("www.")
+    if host in {"reality.cz"} or host.endswith(".reality.cz"):
+        return "realitycz"
+    if host:
+        return host.split(".")[0]
+    return "web"
 
 
 def portal_label(portal: str) -> str:
-    names = {"sreality": "Sreality", "bezrealitky": "Bezrealitky", "idnes": "Reality.iDNES", "bazos": "Bazoš"}
-    return names.get((portal or "").lower(), (portal or "Web").title())
+    key = (portal or "").lower()
+    if key in PORTAL_LABELS:
+        return PORTAL_LABELS[key]
+    return (portal or "Web").title()
 
 
 def _fold(value: str) -> str:
@@ -174,6 +179,9 @@ def same_listing(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if listing_key(url_a) and listing_key(url_a) == listing_key(url_b):
         return True
     same_portal = portal_from_url(url_a) == portal_from_url(url_b)
+    id_a, id_b = left.get("id"), right.get("id")
+    if same_portal and id_a not in (None, "", 0, "0") and str(id_a) == str(id_b):
+        return True
     offer_a = offer_kind(url_a, extras_a, str(left.get("price_label") or ""))
     offer_b = offer_kind(url_b, extras_b, str(right.get("price_label") or ""))
     if offer_a != offer_b or offer_a == "unknown":

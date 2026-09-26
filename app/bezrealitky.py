@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -222,8 +223,12 @@ def gql_list(values: list[str]) -> str:
 
 class BezrealitkyClient:
     def __init__(self, search_url: str) -> None:
+        from app.scrape_http import scrape_timeout
+
         self.search_url = search_url
-        self._client = httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=25.0)
+        self._client = httpx.AsyncClient(
+            headers=HEADERS, follow_redirects=True, max_redirects=3, timeout=scrape_timeout()
+        )
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -304,19 +309,26 @@ class BezrealitkyClient:
         return ", ".join(parts)
 
     async def _graphql(self, query: str) -> dict[str, Any]:
-        last_error: Exception | None = None
-        for attempt in range(3):
-            response = await self._client.post(GRAPHQL_URL, json={"query": query})
-            if response.status_code == 403:
-                last_error = RuntimeError("Bezrealitky GraphQL 403")
-                await asyncio.sleep(0.8 * (attempt + 1))
-                continue
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("errors") and not payload.get("data"):
-                raise RuntimeError(payload["errors"][0].get("message") or "Bezrealitky GraphQL error")
-            return payload.get("data") or {}
-        raise last_error or RuntimeError("Bezrealitky GraphQL error")
+        from app.scrape_http import request_with_log
+        from app.scrape_timing import note, note_httpx
+
+        response = await request_with_log(
+            self._client,
+            "POST",
+            GRAPHQL_URL,
+            portal="bezrealitky",
+            json={"query": query},
+        )
+        note_httpx(response)
+        if response.status_code == 403:
+            raise RuntimeError("Bezrealitky GraphQL 403")
+        response.raise_for_status()
+        parse_started = time.monotonic()
+        payload = response.json()
+        note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
+        if payload.get("errors") and not payload.get("data"):
+            raise RuntimeError(payload["errors"][0].get("message") or "Bezrealitky GraphQL error")
+        return payload.get("data") or {}
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
         data = await self._graphql(
@@ -369,9 +381,9 @@ class BezrealitkyClient:
         parsed = self._parse(raw)
         if not parsed:
             return listing
-        from app.places import refine_listing_location
+        from app.places import refine_listing_location_async
 
-        refine_listing_location(parsed)
+        await refine_listing_location_async(parsed)
         if parsed.views is None:
             parsed.views = listing.views
         if not parsed.description:

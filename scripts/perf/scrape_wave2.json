@@ -1,0 +1,814 @@
+{
+  "at": "2026-09-17T16:37:48+00:00",
+  "mode": "live",
+  "minutes": 5.0,
+  "seconds": 315.5,
+  "db": "/Users/jirka/Desktop/Folders/Realitify2grok/data/monitor.sqlite",
+  "concurrency": 16,
+  "concurrency_overrides": {},
+  "limiter_limits": {
+    "annonce": 16,
+    "bazos": 16,
+    "bezrealitky": 16,
+    "ceskereality": 16,
+    "idnes": 16,
+    "mmreality": 16,
+    "realitycz": 16,
+    "remax": 16,
+    "sreality": 16,
+    "ulovdomov": 16
+  },
+  "deep_shards_total": 797,
+  "deep_shards_per_tick": 10,
+  "deep_loop_sec": 2,
+  "coverage_cycle_s_theoretical": 159.4,
+  "coverage_cycle_h_theoretical": 0.04,
+  "deep_unique_shards_in_window": 150,
+  "coverage_cycle_s_measured": 1676.5,
+  "coverage_cycle_h_measured": 0.47,
+  "watchdog": {
+    "n": 525,
+    "max_ms": 64025.6,
+    "p50_ms": 1.1,
+    "p95_ms": 3.0,
+    "last_ms": 1.1,
+    "over_50ms": 8,
+    "over_500ms": 6,
+    "over_2000ms": 5
+  },
+  "scrape_jobs": {},
+  "throughput": {
+    "seconds": 315.5,
+    "pages": 1139,
+    "listings": 10668,
+    "pages_per_s": 3.61,
+    "listings_per_s": 33.809,
+    "unique_shards": 204,
+    "deferred_rows": 230,
+    "deferred_wait_ms_p50": 164748.6,
+    "deferred_wait_ms_p95": 166103.6,
+    "portals": {
+      "annonce": {
+        "pages": 9,
+        "listings": 30,
+        "pages_per_s": 0.029,
+        "listings_per_s": 0.095,
+        "ok": 9,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 340.62,
+        "fetch_ms_p95": 51060.47,
+        "parse_ms_p50": 0.42,
+        "parse_ms_p95": 10.29,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 42.9,
+        "header_samples": 7,
+        "pipelines": {
+          "discovery": {
+            "pages": 6,
+            "listings": 20,
+            "pages_per_s": 0.019,
+            "listings_per_s": 0.063
+          },
+          "monitor": {
+            "pages": 3,
+            "listings": 10,
+            "pages_per_s": 0.01,
+            "listings_per_s": 0.032
+          }
+        }
+      },
+      "bazos": {
+        "pages": 12,
+        "listings": 240,
+        "pages_per_s": 0.038,
+        "listings_per_s": 0.761,
+        "ok": 12,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 1,
+        "list_to_detail": 12.0,
+        "fetch_ms_p50": 104.63,
+        "fetch_ms_p95": 285.7,
+        "parse_ms_p50": 3.31,
+        "parse_ms_p95": 10.85,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 100.0,
+        "header_samples": 12,
+        "pipelines": {
+          "monitor": {
+            "pages": 4,
+            "listings": 80,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.254
+          },
+          "discovery": {
+            "pages": 8,
+            "listings": 160,
+            "pages_per_s": 0.025,
+            "listings_per_s": 0.507
+          }
+        }
+      },
+      "bezrealitky": {
+        "pages": 20,
+        "listings": 0,
+        "pages_per_s": 0.063,
+        "listings_per_s": 0.0,
+        "ok": 10,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 3,
+        "deferred": 7,
+        "error_rate": 0.15,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 51061.73,
+        "fetch_ms_p95": 81284.19,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 0.0,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 164748.6,
+        "deferred_wait_ms_p95": 164748.6,
+        "etag_pct": null,
+        "last_modified_pct": null,
+        "header_samples": 0,
+        "pipelines": {
+          "discovery": {
+            "pages": 16,
+            "listings": 0,
+            "pages_per_s": 0.051,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 0,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "ceskereality": {
+        "pages": 14,
+        "listings": 3,
+        "pages_per_s": 0.044,
+        "listings_per_s": 0.01,
+        "ok": 13,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 1,
+        "error_rate": 0.0,
+        "detail_fetches": 1,
+        "list_to_detail": 14.0,
+        "fetch_ms_p50": 51062.14,
+        "fetch_ms_p95": 64646.9,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 888.94,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 164749.4,
+        "deferred_wait_ms_p95": 164749.4,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 3,
+        "pipelines": {
+          "discovery": {
+            "pages": 10,
+            "listings": 2,
+            "pages_per_s": 0.032,
+            "listings_per_s": 0.006
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 1,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.003
+          }
+        }
+      },
+      "idnes": {
+        "pages": 19,
+        "listings": 52,
+        "pages_per_s": 0.06,
+        "listings_per_s": 0.165,
+        "ok": 12,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 7,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 49582.01,
+        "fetch_ms_p95": 64643.79,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 889.72,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 2,
+        "pipelines": {
+          "discovery": {
+            "pages": 16,
+            "listings": 52,
+            "pages_per_s": 0.051,
+            "listings_per_s": 0.165
+          },
+          "monitor": {
+            "pages": 3,
+            "listings": 0,
+            "pages_per_s": 0.01,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "mmreality": {
+        "pages": 20,
+        "listings": 0,
+        "pages_per_s": 0.063,
+        "listings_per_s": 0.0,
+        "ok": 13,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 7,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 49552.26,
+        "fetch_ms_p95": 64642.64,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 2042.54,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 164748.7,
+        "deferred_wait_ms_p95": 164748.7,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 3,
+        "pipelines": {
+          "discovery": {
+            "pages": 16,
+            "listings": 0,
+            "pages_per_s": 0.051,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 0,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "realitycz": {
+        "pages": 19,
+        "listings": 0,
+        "pages_per_s": 0.06,
+        "listings_per_s": 0.0,
+        "ok": 18,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 1,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 49521.24,
+        "fetch_ms_p95": 80849.2,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 896.51,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 164742.4,
+        "deferred_wait_ms_p95": 164742.4,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 6,
+        "pipelines": {
+          "discovery": {
+            "pages": 15,
+            "listings": 0,
+            "pages_per_s": 0.048,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 0,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "remax": {
+        "pages": 10,
+        "listings": 37,
+        "pages_per_s": 0.032,
+        "listings_per_s": 0.117,
+        "ok": 9,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 1,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 472.86,
+        "fetch_ms_p95": 64645.8,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 64064.25,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 5,
+        "pipelines": {
+          "discovery": {
+            "pages": 7,
+            "listings": 30,
+            "pages_per_s": 0.022,
+            "listings_per_s": 0.095
+          },
+          "monitor": {
+            "pages": 3,
+            "listings": 7,
+            "pages_per_s": 0.01,
+            "listings_per_s": 0.022
+          }
+        }
+      },
+      "sreality": {
+        "pages": 996,
+        "listings": 10306,
+        "pages_per_s": 3.157,
+        "listings_per_s": 32.662,
+        "ok": 803,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 193,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 213.96,
+        "fetch_ms_p95": 784.58,
+        "parse_ms_p50": 1.66,
+        "parse_ms_p95": 6.84,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 113164.6,
+        "deferred_wait_ms_p95": 113164.6,
+        "etag_pct": 100.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 788,
+        "pipelines": {
+          "discovery": {
+            "pages": 203,
+            "listings": 1391,
+            "pages_per_s": 0.643,
+            "listings_per_s": 4.408
+          },
+          "deep": {
+            "pages": 789,
+            "listings": 8852,
+            "pages_per_s": 2.501,
+            "listings_per_s": 28.054
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 63,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.2
+          }
+        }
+      },
+      "ulovdomov": {
+        "pages": 20,
+        "listings": 0,
+        "pages_per_s": 0.063,
+        "listings_per_s": 0.0,
+        "ok": 7,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 13,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": 0.0,
+        "fetch_ms_p95": 114195.17,
+        "parse_ms_p50": 0.0,
+        "parse_ms_p95": 6.03,
+        "upsert_ms_p50": null,
+        "upsert_ms_p95": null,
+        "deferred_wait_ms_p50": 166103.6,
+        "deferred_wait_ms_p95": 166103.6,
+        "etag_pct": 0.0,
+        "last_modified_pct": 0.0,
+        "header_samples": 5,
+        "pipelines": {
+          "discovery": {
+            "pages": 16,
+            "listings": 0,
+            "pages_per_s": 0.051,
+            "listings_per_s": 0.0
+          },
+          "monitor": {
+            "pages": 4,
+            "listings": 0,
+            "pages_per_s": 0.013,
+            "listings_per_s": 0.0
+          }
+        }
+      },
+      "unknown": {
+        "pages": 0,
+        "listings": 0,
+        "pages_per_s": 0.0,
+        "listings_per_s": 0.0,
+        "ok": 0,
+        "http_403": 0,
+        "http_429": 0,
+        "fail": 0,
+        "deferred": 0,
+        "error_rate": 0.0,
+        "detail_fetches": 0,
+        "list_to_detail": null,
+        "fetch_ms_p50": null,
+        "fetch_ms_p95": null,
+        "parse_ms_p50": null,
+        "parse_ms_p95": null,
+        "upsert_ms_p50": 25.61,
+        "upsert_ms_p95": 68.2,
+        "deferred_wait_ms_p50": null,
+        "deferred_wait_ms_p95": null,
+        "etag_pct": null,
+        "last_modified_pct": null,
+        "header_samples": 0,
+        "pipelines": {}
+      }
+    }
+  },
+  "last_error": null,
+  "conditional_headers": {
+    "sreality": {
+      "url": "https://www.sreality.cz/hledani/pronajem/byty/jihocesky-kraj,jihomoravsky-kraj,karlovarsky-kraj,kralovehradecky-kraj,lib",
+      "status": 200,
+      "etag": true,
+      "last_modified": false,
+      "cache_control": "private, no-cache, no-store, max-age=0, must-revalidate"
+    },
+    "bezrealitky": {
+      "url": "https://www.bezrealitky.cz/vyhledat?offerType=PRONAJEM&estateType=BYT&regionOsmIds=R51684&osm_value=%C4%8Cesko&location=",
+      "status": 200,
+      "etag": true,
+      "last_modified": false,
+      "cache_control": "public, max-age=600"
+    },
+    "idnes": {
+      "url": "https://reality.idnes.cz/s/pronajem/byty/",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": "no-store, no-cache, must-revalidate"
+    },
+    "bazos": {
+      "url": "https://reality.bazos.cz/pronajmu/byt/?kitx=ano",
+      "status": 200,
+      "etag": false,
+      "last_modified": true,
+      "cache_control": "max-age=10"
+    },
+    "ceskereality": {
+      "url": "https://www.ceskereality.cz/pronajem/byty/",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": "max-age=0, must-revalidate, private"
+    },
+    "annonce": {
+      "url": "https://www.annonce.cz/byty-k-pronajmu.html",
+      "status": 200,
+      "etag": false,
+      "last_modified": true,
+      "cache_control": "no-cache"
+    },
+    "mmreality": {
+      "url": "https://www.mmreality.cz/nemovitosti/?typ-nabidky=pronajem&typ-nemovitosti=byt&razeni=nejnovejsi",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": "max-age=0, must-revalidate, private"
+    },
+    "ulovdomov": {
+      "url": "https://www.ulovdomov.cz/pronajem/byty",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": "no-cache, no-store, must-revalidate"
+    },
+    "remax": {
+      "url": "https://www.remax-czech.cz/reality/byty/?sale=2&order_by_price=0",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": "no-cache"
+    },
+    "realitycz": {
+      "url": "https://www.reality.cz/pronajem/byty/",
+      "status": 200,
+      "etag": false,
+      "last_modified": false,
+      "cache_control": null
+    }
+  },
+  "vs_baseline": {
+    "pages_per_s": {
+      "now": 3.61,
+      "base": 4.702,
+      "delta_pct": -23.2
+    },
+    "listings_per_s": {
+      "now": 33.809,
+      "base": 56.239,
+      "delta_pct": -39.9
+    },
+    "coverage_cycle_h_measured": {
+      "now": 0.47,
+      "base": 0.4,
+      "delta_pct": 17.5
+    },
+    "watchdog_p95_ms": {
+      "now": 3.0,
+      "base": 2.2,
+      "delta_pct": 36.4
+    },
+    "portals": {
+      "annonce": {
+        "pages_per_s": {
+          "now": 0.029,
+          "base": 0.034,
+          "delta_pct": -14.7
+        },
+        "listings_per_s": {
+          "now": 0.095,
+          "base": 0.144,
+          "delta_pct": -34.0
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 10.29,
+          "base": 12.17,
+          "delta_pct": -15.4
+        }
+      },
+      "bazos": {
+        "pages_per_s": {
+          "now": 0.038,
+          "base": 0.067,
+          "delta_pct": -43.3
+        },
+        "listings_per_s": {
+          "now": 0.761,
+          "base": 0.962,
+          "delta_pct": -20.9
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 10.85,
+          "base": 5.28,
+          "delta_pct": 105.5
+        }
+      },
+      "bezrealitky": {
+        "pages_per_s": {
+          "now": 0.063,
+          "base": 0.067,
+          "delta_pct": -6.0
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.15,
+          "base": 0.6429,
+          "delta_pct": -76.7
+        },
+        "parse_ms_p95": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        }
+      },
+      "ceskereality": {
+        "pages_per_s": {
+          "now": 0.044,
+          "base": 0.036,
+          "delta_pct": 22.2
+        },
+        "listings_per_s": {
+          "now": 0.01,
+          "base": 0.01,
+          "delta_pct": 0.0
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 888.94,
+          "base": 837.75,
+          "delta_pct": 6.1
+        }
+      },
+      "idnes": {
+        "pages_per_s": {
+          "now": 0.06,
+          "base": 0.065,
+          "delta_pct": -7.7
+        },
+        "listings_per_s": {
+          "now": 0.165,
+          "base": 0.31,
+          "delta_pct": -46.8
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 889.72,
+          "base": 4.81,
+          "delta_pct": 18397.3
+        }
+      },
+      "mmreality": {
+        "pages_per_s": {
+          "now": 0.063,
+          "base": 0.067,
+          "delta_pct": -6.0
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 2042.54,
+          "base": 2871.41,
+          "delta_pct": -28.9
+        }
+      },
+      "realitycz": {
+        "pages_per_s": {
+          "now": 0.06,
+          "base": 0.067,
+          "delta_pct": -10.4
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 896.51,
+          "base": 836.77,
+          "delta_pct": 7.1
+        }
+      },
+      "remax": {
+        "pages_per_s": {
+          "now": 0.032,
+          "base": 0.034,
+          "delta_pct": -5.9
+        },
+        "listings_per_s": {
+          "now": 0.117,
+          "base": 0.106,
+          "delta_pct": 10.4
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 64064.25,
+          "base": 48966.89,
+          "delta_pct": 30.8
+        }
+      },
+      "sreality": {
+        "pages_per_s": {
+          "now": 3.157,
+          "base": 4.197,
+          "delta_pct": -24.8
+        },
+        "listings_per_s": {
+          "now": 32.662,
+          "base": 54.707,
+          "delta_pct": -40.3
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 6.84,
+          "base": 6.88,
+          "delta_pct": -0.6
+        }
+      },
+      "ulovdomov": {
+        "pages_per_s": {
+          "now": 0.063,
+          "base": 0.067,
+          "delta_pct": -6.0
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": 6.03,
+          "base": 2.49,
+          "delta_pct": 142.2
+        }
+      },
+      "unknown": {
+        "pages_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "listings_per_s": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "error_rate": {
+          "now": 0.0,
+          "base": 0.0,
+          "delta_pct": null
+        },
+        "parse_ms_p95": {
+          "now": null,
+          "base": null,
+          "delta_pct": null
+        }
+      }
+    }
+  }
+}
