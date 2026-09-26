@@ -2711,6 +2711,73 @@ img {
   margin: 0;
 }
 
+.ad-console-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ad-console-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ad-console {
+  margin: 0;
+  padding: 14px 16px;
+  min-height: 420px;
+  max-height: min(75vh, 780px);
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #0b0d0c;
+  color: #3ecf8e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.38;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.ad-console code {
+  display: block;
+  font: inherit;
+  color: inherit;
+  white-space: pre;
+}
+
+.ad-console-line {
+  display: inline;
+  color: #3ecf8e;
+}
+
+.ad-console-line.is-start {
+  color: #2bb673;
+}
+
+.ad-console-line.is-ok {
+  color: #3ecf8e;
+}
+
+.ad-console-line.is-warn {
+  color: #e6c07b;
+}
+
+.ad-console-line.is-err {
+  color: #f07178;
+}
+
+.ad-console-line.is-info {
+  color: #56b6c2;
+}
+
+.ad-console-line.is-meta {
+  color: #6a737d;
+}
+
 .ad-choice {
   display: inline-flex;
   gap: 6px;

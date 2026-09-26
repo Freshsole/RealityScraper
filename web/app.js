@@ -81,9 +81,26 @@ function fillCarousel(id, emptyId, items) {
     viewport.replaceChildren(track);
     bindCarousel(viewport);
   }
-  track.innerHTML = list.map((item) => listingCardHtml(item)).join("");
+  const keys = list
+    .map((item) => item.listing_key || item.url || `${item.monitor_id}:${item.id}`)
+    .join("\n");
   const state = carousels.get(id) || {};
-  state.page = 0;
+  const prevPage = Number(state.page) || 0;
+  // Polling /api/status every few seconds must not yank the carousel back to page 0.
+  if (state.keys === keys && track.children.length === list.length) {
+    carousels.set(id, state);
+    viewport.hidden = list.length === 0;
+    if (empty) empty.hidden = list.length > 0;
+    if (list.length && !viewport.classList.contains("is-dragging")) layoutCarousel(viewport);
+    else if (!list.length) {
+      const pager = viewport.parentElement?.querySelector(".carousel-pager");
+      if (pager) pager.hidden = true;
+    }
+    return;
+  }
+  track.innerHTML = list.map((item) => listingCardHtml(item)).join("");
+  state.keys = keys;
+  state.page = prevPage;
   state.dragX = 0;
   carousels.set(id, state);
   viewport.hidden = list.length === 0;

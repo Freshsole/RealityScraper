@@ -163,6 +163,9 @@ CITY_CENTERS = [
     ("Slaný", 50.2305, 14.0869),
     ("Dobříš", 49.7811, 14.1672),
     ("Poděbrady", 50.1425, 15.1188),
+    # Okresy kolem Prahy — nesmí padat na centrum hl. m. Prahy
+    ("Praha-západ", 49.9603, 14.3208),
+    ("Praha-východ", 50.0880, 14.6570),
 ]
 _ANCHORS: list[tuple[str, float, float]] | None = None
 
@@ -171,6 +174,11 @@ def _fold_label(value: str) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return text.casefold()
+
+
+def _fold_anchor(value: str) -> str:
+    """Fold + collapse dashes/spaces so 'Praha - západ' matches 'Praha-západ'."""
+    return re.sub(r"[\s\-–—]+", " ", _fold_label(value)).strip()
 
 
 def locality_anchors() -> list[tuple[str, float, float]]:
@@ -301,22 +309,29 @@ _MATCH_CACHE: dict[tuple[str, bool], tuple[str, float, float] | None] = {}
 def _anchor_from_folded(folded: str, collapse_prague: bool = False) -> tuple[str, float, float] | None:
     if not folded:
         return None
+    haystack = _fold_anchor(folded)
     best: tuple[str, float, float] | None = None
     best_len = 0
     praha: tuple[str, float, float] | None = None
     for label, lat, lon in locality_anchors():
-        needle = _fold_label(label)
+        needle = _fold_anchor(label)
         if needle == "praha":
             praha = (label, lat, lon)
-        if len(needle) < 4 or len(needle) <= best_len or needle not in folded:
+        if len(needle) < 4 or len(needle) <= best_len or needle not in haystack:
             continue
-        if len(needle) <= 4:
-            padded = f" {folded} "
+        if len(needle) <= 5:
+            # Avoid bare "praha" matching inside "praha zapad" / "praha vychod".
+            padded = f" {haystack} "
             if f" {needle} " not in padded and f"{needle}," not in padded and padded.strip() != needle:
+                continue
+            if needle == "praha" and re.search(r"\bpraha\s+(zapad|vychod)\b", haystack):
                 continue
         best = (label, lat, lon)
         best_len = len(needle)
-    if collapse_prague and best and _fold_label(best[0]).startswith("praha") and praha:
+    if collapse_prague and best and _fold_anchor(best[0]).startswith("praha") and praha:
+        # Keep okres Praha-západ / Praha-východ distinct from hl. m. Praha.
+        if _fold_anchor(best[0]) in {"praha zapad", "praha vychod"}:
+            return best
         return praha
     return best
 
@@ -338,6 +353,9 @@ def locality_anchor_match(text: str, collapse_prague: bool = False) -> tuple[str
             part = part.strip()
             if len(part) < 4:
                 continue
+            # Don't split "Praha-západ" into "Praha" + "západ".
+            if re.fullmatch(r"praha\s*[-–]?\s*(západ|východ|zapad|vychod)", part, re.I):
+                continue
             found = _anchor_from_folded(_fold_label(part), collapse_prague)
             if found:
                 break
@@ -350,6 +368,147 @@ def approx_point_from_locality(text: str) -> tuple[float, float] | None:
     if not match:
         return None
     return match[1], match[2]
+
+
+_CITY_ONLY_STREET = re.compile(
+    r"^(praha(\s*\d+)?|praha\s*[-–]?\s*(zapad|vychod|západ|východ)|brno|ostrava|plzen|plzeň|liberec|olomouc|pardubice|"
+    r"hradec kralove|hradec králové|usti nad labem|ústí nad labem|"
+    r"ceske budejovice|české budějovice|zlin|zlín|kladno|most|opava|"
+    r"karlovy vary|jihlava|teplice)(\s+\d{3}\s*\d{2})?$",
+    re.I,
+)
+
+
+def locality_has_street(text: str) -> bool:
+    """True when locality looks like a street/address, not just a city or district."""
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    q = locality_query(raw)
+    street = street_from_locality(q)
+    if len(street) < 3:
+        return False
+    folded = _fold_label(street)
+    if _CITY_ONLY_STREET.match(folded):
+        return False
+    if re.fullmatch(r".+\s+\d{3}\s*\d{2}", folded):
+        city_part = re.sub(r"\s+\d{3}\s*\d{2}$", "", folded).strip()
+        if _CITY_ONLY_STREET.match(city_part):
+            return False
+        anchor = locality_anchor_match(city_part)
+        if anchor and _fold_label(anchor[0]) == city_part:
+            return False
+    anchor = locality_anchor_match(street)
+    if anchor and _fold_label(anchor[0]) == folded:
+        return False
+    if has_house_number(q):
+        return True
+    if "," in q or "–" in raw or " - " in raw:
+        whole = locality_anchor_match(q)
+        if whole and folded == _fold_label(whole[0]):
+            return False
+        return True
+    return False
+
+
+def coords_are_approx_dump(locality: str, lat: float | None, lon: float | None, *, max_deg: float = 0.0035) -> bool:
+    """True when coords sit on the city/district dump point for this locality."""
+    if lat is None or lon is None:
+        return False
+    approx = approx_point_from_locality(locality)
+    if not approx:
+        return False
+    try:
+        return abs(float(lat) - approx[0]) <= max_deg and abs(float(lon) - approx[1]) <= max_deg
+    except (TypeError, ValueError):
+        return False
+
+
+def wrong_city_anchor_point(
+    locality: str, lat: float | None, lon: float | None, *, max_deg: float = 0.004
+) -> tuple[float, float] | None:
+    """If listing sits on hl. m. Praha but locality is an outer district/town, return the right point."""
+    if lat is None or lon is None:
+        return None
+    match = locality_anchor_match(locality)
+    if not match:
+        return None
+    try:
+        lat_f, lon_f = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    if abs(lat_f - match[1]) <= max_deg and abs(lon_f - match[2]) <= max_deg:
+        return None
+    praha = next((item for item in locality_anchors() if _fold_anchor(item[0]) == "praha"), None)
+    if not praha:
+        return None
+    if abs(lat_f - praha[1]) > max_deg or abs(lon_f - praha[2]) > max_deg:
+        return None
+    if _fold_anchor(match[0]) == "praha":
+        return None
+    return match[1], match[2]
+
+
+def _street_lookup_keys(street_raw: str) -> list[str]:
+    """Normalized street name variants for street-index lookup (with/without house no.)."""
+    keys: list[str] = []
+    full = _norm_street(street_raw)
+    if full:
+        keys.append(full)
+    # "Korunní 1279 / 1279" → "korunní"
+    bare = _norm_street(re.sub(r"[\s/]+\d.*$", "", street_raw or "").strip())
+    if bare and bare not in keys:
+        keys.append(bare)
+    # "Korunní 121" → "korunní"
+    bare2 = _norm_street(re.sub(r"\s+\d+\w*(?:[\/\-\s]+\d+\w*)*$", "", street_raw or "").strip())
+    if bare2 and bare2 not in keys:
+        keys.append(bare2)
+    return keys
+
+
+def street_peer_prefix(text: str) -> str:
+    """Bare street name used to find sibling listings with real GPS."""
+    keys = _street_lookup_keys(street_from_locality(text))
+    if not keys:
+        return ""
+    return min(keys, key=len)
+
+
+def resolve_locality_coords(
+    text: str,
+    streets: dict[str, tuple[float, float]] | None = None,
+    *,
+    allow_network: bool = True,
+) -> tuple[tuple[float, float] | None, bool]:
+    """Return ((lat, lon), is_approx) for a locality string.
+
+    ``is_approx`` means the portal did not give a usable place (city-only dump).
+    When the street is known but we only have a district centroid, ``is_approx``
+    is False — the tip must not claim the address was missing.
+    """
+    loc = str(text or "").strip()
+    if not loc:
+        return None, True
+    street_raw = street_from_locality(loc)
+    if streets:
+        for key in _street_lookup_keys(street_raw):
+            point = streets.get(key)
+            if point:
+                return point, False
+    has_street = locality_has_street(loc)
+    if has_street:
+        point = None
+        if allow_network:
+            point = geocode_locality_sync(loc)
+        else:
+            point = geocode_locality_cached(loc)
+        if point and not coords_are_approx_dump(loc, point[0], point[1]):
+            return point, False
+    approx = approx_point_from_locality(loc)
+    if not approx:
+        return None, True
+    # Street known → district pin is a fallback, not "unknown location".
+    return approx, not has_street
 
 
 def cached_item(ident: str) -> dict[str, Any] | None:
@@ -780,6 +939,9 @@ async def _to_geocode_thread(fn, /, *args):
 
 def locality_query(text: str) -> str:
     needle = re.sub(r"\s+", " ", (text or "").strip())
+    # Keep okres names intact — "Praha - západ" must not become "Praha, západ".
+    if re.search(r"praha\s*[-–]\s*(západ|východ|zapad|vychod)", needle, re.I):
+        return needle
     return needle.replace(" – ", ", ").replace(" - ", ", ")
 
 
@@ -860,6 +1022,17 @@ def geocode_locality_sync(text: str) -> tuple[float, float] | None:
     if point is not None or status == "empty":
         _cache_put(key, point)
     return point
+
+
+def geocode_locality_cached(text: str) -> tuple[float, float] | None:
+    """Return a previously cached geocode hit without touching the network."""
+    needle = locality_query(text)
+    if len(needle) < 4:
+        return None
+    cached = _cache_get(needle.casefold())
+    if cached is _CACHE_MISS:
+        return None
+    return cached
 
 
 async def geocode_locality(text: str) -> tuple[float, float] | None:
@@ -1001,6 +1174,83 @@ def _norm_street(name: str) -> str:
 
 
 _STREET_INDEX: dict[str, dict[str, tuple[float, float]]] = {}
+
+
+def osm_ids_for_locality(text: str) -> list[str]:
+    """Best-matching district/city OSM ids for a locality string (most specific first)."""
+    folded = _fold_label(text)
+    if not folded:
+        return []
+    ranked: list[tuple[int, str]] = []
+    for ident, label in bezrealitky_url.DISTRICTS:
+        if label == "Česko":
+            continue
+        needle = _fold_label(label)
+        if len(needle) < 4 or needle not in folded:
+            continue
+        ranked.append((len(needle), normalize_osm_id(ident)))
+    ranked.sort(reverse=True)
+    out: list[str] = []
+    seen: set[str] = set()
+    for _score, ident in ranked:
+        if not ident or ident in seen:
+            continue
+        seen.add(ident)
+        out.append(ident)
+        if len(out) >= 3:
+            break
+    return out
+
+
+def street_index_cached(ident: str) -> dict[str, tuple[float, float]]:
+    """Load a street index from memory/disk only — never hit Overpass."""
+    ident = normalize_osm_id(ident)
+    if not ident:
+        return {}
+    if ident in _STREET_INDEX:
+        return _STREET_INDEX[ident]
+    cache_path = config.DATA_DIR / f"street_index_{ident}.json"
+    if cache_path.exists():
+        try:
+            raw = json.loads(cache_path.read_text(encoding="utf-8"))
+            parsed = {
+                str(key): (float(val[0]), float(val[1]))
+                for key, val in raw.items()
+                if isinstance(val, (list, tuple)) and len(val) >= 2
+            }
+            _STREET_INDEX[ident] = parsed
+            return parsed
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return {}
+
+
+def street_index_for_locality(
+    text: str,
+    geoms: list[dict[str, Any]] | None = None,
+    *,
+    allow_fetch: bool = False,
+) -> dict[str, tuple[float, float]]:
+    """Street centroids for a locality / place filter without blocking the request path."""
+    merged: dict[str, tuple[float, float]] = {}
+    for geom in geoms or []:
+        ident = normalize_osm_id(str(geom.get("id") or ""))
+        if not ident:
+            continue
+        if allow_fetch:
+            if ident not in _STREET_INDEX:
+                _STREET_INDEX[ident] = _load_street_index(ident)
+            merged.update(_STREET_INDEX[ident])
+        else:
+            merged.update(street_index_cached(ident))
+    for ident in osm_ids_for_locality(text):
+        if allow_fetch:
+            if ident not in _STREET_INDEX:
+                _STREET_INDEX[ident] = _load_street_index(ident)
+            merged.update(_STREET_INDEX.get(ident) or {})
+        else:
+            merged.update(street_index_cached(ident))
+    return merged
 
 
 def street_index_sync(geoms: list[dict[str, Any]] | None) -> dict[str, tuple[float, float]]:

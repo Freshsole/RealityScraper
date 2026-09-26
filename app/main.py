@@ -21,6 +21,7 @@ from starlette.requests import Request
 from app import config
 from app.backup import export_config, export_pack, export_sqlite, import_config, replace_sqlite
 from app.monitor import Hub
+from app.scrape_console import install_stdout_tee
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
 from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
@@ -38,6 +39,8 @@ from app import email_notify as mail_notify
 from app import whatsapp as wa_notify
 from app import agents as agent_hub
 from app import mcp_oauth
+
+install_stdout_tee()
 from app import extension_score as ext_score
 from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict
@@ -60,6 +63,9 @@ async def maybe_auto_update() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from app.scrape_console import install_stdout_tee
+
+    install_stdout_tee()
     print(
         f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE} scrape_role={config.SCRAPE_ROLE}",
         flush=True,
@@ -762,6 +768,28 @@ async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="re
 async def admin_scrape_progress(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     await asyncio.to_thread(_admin_user, realitify_admin)
     return await asyncio.to_thread(admin_panel.catalog_progress_payload, hub.store, hub)
+
+
+@app.get("/api/admin/scrape-console")
+async def admin_scrape_console(
+    after: int = 0,
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    from app import scrape_console
+
+    await asyncio.to_thread(_admin_user, realitify_admin)
+    return await asyncio.to_thread(scrape_console.read_since, max(0, int(after or 0)))
+
+
+@app.post("/api/admin/scrape-console/clear")
+async def admin_scrape_console_clear(
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    from app import scrape_console
+
+    await asyncio.to_thread(_admin_user, realitify_admin)
+    await asyncio.to_thread(scrape_console.clear)
+    return {"ok": True, "offset": 0}
 
 
 @app.get("/api/admin/games")

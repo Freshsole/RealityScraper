@@ -1216,7 +1216,8 @@
     }
     const groups = new Map();
     for (const item of items) {
-      const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}`;
+      // Approx dump nesmí pohltit přesné piny ve stejné mapové buňce.
+      const key = `${Math.round(item.lat / cell)}:${Math.round(item.lon / cell)}:${item.approx ? "a" : "e"}`;
       const group = groups.get(key) || { items: [], lat: 0, lon: 0, count: 0 };
       const weight = pinWeight(item);
       group.items.push(item);
@@ -1237,12 +1238,24 @@
     return mergeNearbyPinGroups(raw);
   }
 
+  function pinApproxFlag(item) {
+    return Boolean(item?.approx);
+  }
+
+  function groupApproxOnly(items) {
+    return items.length > 0 && items.every((item) => pinApproxFlag(item));
+  }
+
   function collapseCoincidentPins(groups) {
     if (!catalogMap || groups.length < 2) return groups;
     const buckets = [];
     for (const group of groups) {
       const point = catalogMap.latLngToLayerPoint([group.lat, group.lon]);
-      const hit = buckets.find((bucket) => point.distanceTo(bucket.point) < STACK_PX);
+      const approx = groupApproxOnly(group.items);
+      const hit = buckets.find(
+        (bucket) =>
+          bucket.approx === approx && point.distanceTo(bucket.point) < STACK_PX,
+      );
       if (hit) {
         hit.items.push(...group.items);
         hit.count += group.count || group.items.length;
@@ -1250,6 +1263,7 @@
       }
       buckets.push({
         point,
+        approx,
         items: group.items.slice(),
         lat: group.lat,
         lon: group.lon,
@@ -1268,14 +1282,8 @@
   function groupNeedsApproxTip(group) {
     const items = group?.items || [];
     if (!items.length) return false;
-    if (group.coincident) return true;
-    if (items.some((item) => item.approx)) return true;
-    if (items.length < 2) return Boolean(items[0]?.approx);
-    const lat0 = Number(items[0].lat);
-    const lon0 = Number(items[0].lon);
-    return items.every(
-      (item) => Math.abs(Number(item.lat) - lat0) < 0.0003 && Math.abs(Number(item.lon) - lon0) < 0.0003,
-    );
+    // Jen když jsou všechny piny approx — smíchaný cluster nesmí tvrdit, že neznáme ulici.
+    return groupApproxOnly(items);
   }
 
   function offsetAround(lat, lon, index, count, px = 36) {
@@ -1290,7 +1298,11 @@
 
   function mergeNearbyPinGroups(groups) {
     if (!catalogMap || groups.length < 2) return groups;
-    const remaining = groups.map((group) => ({ ...group, items: group.items.slice() }));
+    const remaining = groups.map((group) => ({
+      ...group,
+      items: group.items.slice(),
+      approx: groupApproxOnly(group.items),
+    }));
     let merged = true;
     while (merged) {
       merged = false;
@@ -1300,6 +1312,7 @@
         const pa = catalogMap.latLngToLayerPoint([a.lat, a.lon]);
         for (let j = i + 1; j < remaining.length; j += 1) {
           const b = remaining[j];
+          if (a.approx !== b.approx) continue;
           const pb = catalogMap.latLngToLayerPoint([b.lat, b.lon]);
           if (pa.distanceTo(pb) >= 56) continue;
           const count = a.count + b.count;
@@ -1364,6 +1377,8 @@
     catalogMap.getPane("placePane").style.pointerEvents = "none";
     catalogMap.createPane("pinPane");
     catalogMap.getPane("pinPane").style.zIndex = 650;
+    const popupPane = catalogMap.getPane("popupPane");
+    if (popupPane) popupPane.style.zIndex = 1400;
     addBaseTiles(catalogMap);
     placeLayer = L.featureGroup({ pane: "placePane" }).addTo(catalogMap);
     catalogLayer = L.layerGroup({ pane: "pinPane" }).addTo(catalogMap);
@@ -1410,17 +1425,58 @@
     listEl.querySelectorAll(".offer-card.is-hot").forEach((el) => el.classList.remove("is-hot"));
   }
 
+  function stackPlaceLabel(items) {
+    const counts = new Map();
+    for (const item of items || []) {
+      const loc = String(item.locality || "").trim();
+      if (!loc) continue;
+      const praha = loc.match(/Praha\s*\d+/i);
+      let label = "";
+      if (praha) {
+        label = praha[0].replace(/\s+/g, " ");
+        label = label.replace(/^(praha)(\s*)(\d+)/i, (_, p, _s, n) => `Praha ${n}`);
+      } else {
+        // "Brno 602 00", "Brandýs nad Labem …" — first segment before comma / en-dash
+        const head = loc.split(/[,–-]/)[0].trim().replace(/\s+\d{3}\s*\d{2}\s*$/, "").trim();
+        if (head && head.length >= 3 && !/^\d+$/.test(head)) label = head;
+      }
+      if (!label) continue;
+      const key = label.toLowerCase();
+      const prev = counts.get(key);
+      if (prev) prev.n += 1;
+      else counts.set(key, { label, n: 1 });
+    }
+    if (!counts.size) return "";
+    let best = null;
+    for (const row of counts.values()) {
+      if (!best || row.n > best.n) best = row;
+    }
+    // Require a clear majority so mixed cities don't get a wrong title.
+    if (!best || best.n < Math.ceil((items?.length || 0) * 0.5)) return "";
+    return best.label;
+  }
+
   function stackPopupHtml(group) {
     const all = group.items || [];
-    const tip = approxLocalityTip(all.length);
+    const approx = groupNeedsApproxTip(group);
+    const tip = approx ? approxLocalityTip(all.length) : "";
+    const place = stackPlaceLabel(all);
+    const title = approx
+      ? place
+        ? `${all.length} nabídek v ${place}`
+        : `${all.length} nabídek na přibližném místě`
+      : place
+        ? `${all.length} nabídek v ${place}`
+        : `${all.length} nabídek na stejném místě`;
     const rows = all.slice(0, 8).map((item) => {
       const key = listingKey(item);
       const label = escapeHtml(pinPrice(item));
-      const place = escapeHtml(item.locality || item.name || "");
-      return `<button type="button" class="map-stack-item" data-stack-key="${escapeHtml(key)}" data-mid="${escapeHtml(item.monitor_id)}" data-id="${escapeHtml(String(item.id))}"><strong>${label}</strong><span>${place}</span></button>`;
+      const placeText = escapeHtml(item.locality || item.name || "");
+      return `<button type="button" class="map-stack-item" data-stack-key="${escapeHtml(key)}" data-mid="${escapeHtml(item.monitor_id)}" data-id="${escapeHtml(String(item.id))}"><strong>${label}</strong><span>${placeText}</span></button>`;
     });
     const more = all.length > 8 ? `<p class="map-stack-more">+${all.length - 8} dalších v seznamu vpravo</p>` : "";
-    return `<div class="map-stack-pop"><strong>${all.length} nabídek na přibližném místě</strong><p>${escapeHtml(tip)}</p><div class="map-stack-list">${rows.join("")}</div>${more}</div>`;
+    const tipHtml = tip ? `<p>${escapeHtml(tip)}</p>` : "";
+    return `<div class="map-stack-pop"><strong>${escapeHtml(title)}</strong>${tipHtml}<div class="map-stack-list">${rows.join("")}</div>${more}</div>`;
   }
 
   function openStackPopup(marker, group) {
@@ -2001,8 +2057,13 @@
 
   async function refreshCatalogPins(seq, signal) {
     try {
+      const pinTimeout = AbortSignal.timeout(12000);
+      const combined =
+        signal && typeof AbortSignal.any === "function"
+          ? AbortSignal.any([signal, pinTimeout])
+          : pinTimeout;
       const response = await fetch(`/api/catalog/pins?${queryString({ limit: LIMIT, offset: 0 })}`, {
-        signal: signal || AbortSignal.timeout(25000),
+        signal: combined,
       });
       if (seq !== catalogSeq || !response.ok) return;
       const pinData = await response.json();
@@ -2091,8 +2152,8 @@
       finishCatalogLoad(seq, { keepCount: true });
       return;
     }
-    window.clearTimeout(timeout);
     if (seq !== catalogSeq) {
+      window.clearTimeout(timeout);
       return;
     }
     try {
@@ -2131,6 +2192,7 @@
     } catch (err) {
       console.warn("catalog render failed", err);
     } finally {
+      window.clearTimeout(timeout);
       finishCatalogLoad(seq, { keepCount: true });
     }
   }

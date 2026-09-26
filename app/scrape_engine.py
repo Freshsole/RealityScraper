@@ -654,17 +654,19 @@ class ScrapeEngine:
         self.metrics.tick_duration_ms = (time.monotonic() - started) * 1000.0
         snap = self.metrics_snapshot()
         if self.metrics.error_rate_5m() >= config.SCRAPE_ERROR_RATE_ALERT:
-            print(
+            from app.scrape_console import emit
+
+            emit(
                 f"scrape throttle alert: error_rate_5m={snap['error_rate_5m']} "
-                f"403={snap['http_403']} 429={snap['http_429']} limit={snap.get('limit')} limits={snap.get('limits')}",
-                flush=True,
+                f"403={snap['http_403']} 429={snap['http_429']} limit={snap.get('limit')} limits={snap.get('limits')}"
             )
         for portal, rate in self.metrics.portal_error_rates().items():
             if rate >= config.SCRAPE_ERROR_RATE_ALERT:
+                from app.scrape_console import emit
+
                 portal_snap = snap.get("portals", {}).get(portal) or {}
-                print(
+                emit(
                     f"scrape throttle alert portal={portal} error_rate_5m={rate:.4f} "
-                    f"403={portal_snap.get('http_403')} 429={portal_snap.get('http_429')}",
-                    flush=True,
+                    f"403={portal_snap.get('http_403')} 429={portal_snap.get('http_429')}"
                 )
         return results

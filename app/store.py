@@ -431,7 +431,7 @@ def _place_text_sql(geoms: list[dict[str, Any]]) -> tuple[str, list[Any]]:
         number = _prague_number_from_place(geom)
         if number:
             parts.append("(listings.locality GLOB ? OR listings.locality GLOB ? OR listings.url LIKE ?)")
-            params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*", f"%praha-{number}%"])
+            params.extend([f"*Praha {number}", f"*Praha {number}[^0-9]*", f"%praha-{number}%"])
             continue
         label = str(geom.get("label") or "").strip()
         if label:
@@ -475,6 +475,8 @@ class Store:
         self._facets_cache: dict[str, Any] | None = None
         self._facets_at = 0.0
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
+        # street-prefix → GPS | None (None = looked up, no usable peer)
+        self._peer_street_cache: dict[str, tuple[float, float] | None] = {}
         self._monitor_index = None
         self._monitor_index_at = 0.0
         self._has_hidden_users = False
@@ -4872,17 +4874,220 @@ class Store:
             self._record_price(conn, monitor_id, listing, now)
             self._save_photos(conn, monitor_id, listing, replace=True)
 
-    def _persist_locality_coords(self, locality: str, point: tuple[float, float]) -> None:
+    def _persist_locality_coords(self, locality: str, point: tuple[float, float], *, overwrite: bool = False) -> None:
         with self.connect() as conn:
-            conn.execute(
-                """
-                UPDATE listings SET lat = ?, lon = ?
-                WHERE locality = ? AND (lat IS NULL OR lon IS NULL)
-                """,
-                (point[0], point[1], locality),
-            )
+            if overwrite:
+                conn.execute(
+                    """
+                    UPDATE listings SET lat = ?, lon = ?
+                    WHERE locality = ?
+                    """,
+                    (point[0], point[1], locality),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE listings SET lat = ?, lon = ?
+                    WHERE locality = ? AND (lat IS NULL OR lon IS NULL)
+                    """,
+                    (point[0], point[1], locality),
+                )
 
-    def _fill_missing_coords(self, rows: list[dict[str, Any]], geoms: list[dict[str, Any]] | None = None) -> None:
+    def _peer_street_point(self, locality: str) -> tuple[float, float] | None:
+        """Average GPS of other listings on the same street (skips city/district dumps).
+
+        Uses a process cache and a short DB busy timeout so catalog/pin requests
+        never stall on scrape write locks or hundreds of unindexed LIKE scans.
+        """
+        bare = places.street_peer_prefix(locality)
+        if len(bare) < 4:
+            return None
+        cache_key = bare.casefold()
+        if cache_key in self._peer_street_cache:
+            return self._peer_street_cache[cache_key]
+        needle_keys = set(places._street_lookup_keys(places.street_from_locality(locality)))
+        # LIKE is ASCII-case-insensitive; accents still need a usable prefix.
+        raw_street = places.street_from_locality(locality)
+        raw_bare = re.sub(r"[\s/]+\d.*$", "", raw_street).strip() or raw_street
+        patterns = list(dict.fromkeys([f"{raw_bare}%", f"{raw_bare},%", f"{bare}%"]))
+        rows: list[Any] = []
+        try:
+            # quick=True: fail fast under scrape lock instead of blocking pins for seconds.
+            with self.connect(quick=True) as conn:
+                for pattern in patterns:
+                    found = conn.execute(
+                        """
+                        SELECT lat, lon, locality FROM listings
+                        WHERE lat IS NOT NULL AND lon IS NOT NULL
+                          AND locality LIKE ?
+                        LIMIT 40
+                        """,
+                        (pattern,),
+                    ).fetchall()
+                    rows.extend(found)
+                    if len(rows) >= 40:
+                        break
+        except sqlite3.OperationalError:
+            # Don't cache lock failures — retry next request when DB is quiet.
+            return None
+        points: list[tuple[float, float]] = []
+        for row in rows:
+            peer_loc = str(row["locality"] or "")
+            peer_keys = set(places._street_lookup_keys(places.street_from_locality(peer_loc)))
+            if not (needle_keys & peer_keys):
+                continue
+            try:
+                lat_f, lon_f = float(row["lat"]), float(row["lon"])
+            except (TypeError, ValueError):
+                continue
+            if places.coords_are_approx_dump(peer_loc, lat_f, lon_f):
+                continue
+            # Do not filter by the query locality dump radius — streets near a
+            # district centroid (Žižkov ↔ Praha 3) are still valid peers.
+            points.append((lat_f, lon_f))
+        result = (
+            (
+                sum(p[0] for p in points) / len(points),
+                sum(p[1] for p in points) / len(points),
+            )
+            if points
+            else None
+        )
+        self._peer_street_cache[cache_key] = result
+        if len(self._peer_street_cache) > 4000:
+            for drop_key in list(self._peer_street_cache)[:2000]:
+                self._peer_street_cache.pop(drop_key, None)
+        return result
+
+    def _apply_resolved_coords(
+        self,
+        loc: str,
+        group: list[dict[str, Any]],
+        streets: dict[str, tuple[float, float]],
+        *,
+        overwrite: bool = False,
+        allow_network: bool = True,
+        allow_peer: bool = True,
+        persist: bool = True,
+    ) -> None:
+        point, approx = places.resolve_locality_coords(loc, streets, allow_network=allow_network)
+        if allow_peer and places.locality_has_street(loc):
+            needs_peer = (
+                point is None
+                or approx
+                or places.coords_are_approx_dump(loc, point[0], point[1])
+            )
+            if needs_peer:
+                peer = self._peer_street_point(loc)
+                if peer:
+                    point, approx = peer, False
+        if not point:
+            return
+        if persist and not approx:
+            try:
+                self._persist_locality_coords(loc, point, overwrite=overwrite or places.locality_has_street(loc))
+            except sqlite3.OperationalError:
+                pass
+        for row in group:
+            row["lat"], row["lon"] = point
+            if approx:
+                row["_geo_approx"] = True
+            else:
+                row.pop("_geo_approx", None)
+
+    def _upgrade_coarse_coords(
+        self,
+        rows: list[dict[str, Any]],
+        geoms: list[dict[str, Any]] | None = None,
+        *,
+        limit: int = 48,
+        allow_network: bool = False,
+        peer_limit: int = 24,
+        persist: bool = True,
+    ) -> None:
+        """Fix street localities dumped onto a city/district centroid.
+
+        Catalog/pin requests must stay fast: default is local street-index only
+        (no Photon/Nominatim). Peer-street DB lookups are capped per request.
+        Network geocode is opt-in for workers/backfill.
+        Also relocates listings wrongly pinned on hl. m. Praha (e.g. Praha-západ).
+        """
+        pending: dict[str, list[dict[str, Any]]] = {}
+        wrong_city: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            loc = str(row.get("locality") or "").strip()
+            lat, lon = row.get("lat"), row.get("lon")
+            if not loc or lat is None or lon is None:
+                continue
+            fixed = places.wrong_city_anchor_point(loc, lat, lon)
+            if fixed:
+                wrong_city.setdefault(loc, []).append(row)
+                continue
+            if not places.locality_has_street(loc):
+                continue
+            if not places.coords_are_approx_dump(loc, lat, lon):
+                continue
+            pending.setdefault(loc, []).append(row)
+        for loc, group in wrong_city.items():
+            point = places.wrong_city_anchor_point(loc, group[0].get("lat"), group[0].get("lon"))
+            if not point:
+                continue
+            if persist:
+                try:
+                    self._persist_locality_coords(loc, point, overwrite=True)
+                except sqlite3.OperationalError:
+                    pass
+            for row in group:
+                row["lat"], row["lon"] = point
+                row["_geo_approx"] = True
+        if not pending:
+            return
+        # Cap unique street upgrades per request so pin loads stay interactive.
+        max_resolve = max(peer_limit, 48) if not allow_network else max(limit, peer_limit, 48)
+        if len(pending) > max_resolve:
+            keep = dict(list(pending.items())[:max_resolve])
+            for loc, group in pending.items():
+                if loc in keep:
+                    continue
+                for row in group:
+                    row["_geo_approx"] = True
+            pending = keep
+        streets: dict[str, tuple[float, float]] = {}
+        for geom in geoms or []:
+            streets.update(places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or ""))))
+        for loc in pending:
+            streets.update(places.street_index_for_locality(loc, allow_fetch=False))
+        attempts = 0
+        peer_attempts = 0
+        for loc, group in pending.items():
+            use_network = allow_network and attempts < limit
+            if use_network:
+                attempts += 1
+            use_peer = peer_attempts < peer_limit
+            if use_peer:
+                peer_attempts += 1
+            self._apply_resolved_coords(
+                loc,
+                group,
+                streets,
+                overwrite=True,
+                allow_network=use_network,
+                allow_peer=use_peer,
+                persist=persist,
+            )
+            if places.locality_has_street(loc) and any(row.get("_geo_approx") for row in group):
+                for row in group:
+                    row["_geo_approx"] = True
+
+    def _fill_missing_coords(
+        self,
+        rows: list[dict[str, Any]],
+        geoms: list[dict[str, Any]] | None = None,
+        *,
+        allow_network: bool = False,
+        peer_limit: int = 24,
+        persist: bool = True,
+    ) -> None:
         pending: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             if row.get("lat") is not None and row.get("lon") is not None:
@@ -4893,22 +5098,28 @@ class Store:
             pending.setdefault(loc, []).append(row)
         if not pending:
             return
-        streets = places.street_index_sync(geoms)
+        streets: dict[str, tuple[float, float]] = {}
+        for geom in geoms or []:
+            streets.update(places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or ""))))
+        for loc in pending:
+            streets.update(places.street_index_for_locality(loc, allow_fetch=False))
+        attempts = 0
+        peer_attempts = 0
         for loc, group in pending.items():
-            point = streets.get(places._norm_street(places.street_from_locality(loc)))
-            persist = bool(point)
-            if not point:
-                point = places.approx_point_from_locality(loc)
-            if not point:
-                continue
-            if persist:
-                try:
-                    self._persist_locality_coords(loc, point)
-                except sqlite3.OperationalError:
-                    pass
-            for row in group:
-                row["lat"], row["lon"] = point
-                row["_geo_approx"] = True
+            use_network = allow_network and places.locality_has_street(loc) and attempts < 64
+            if use_network:
+                attempts += 1
+            use_peer = peer_attempts < peer_limit
+            if use_peer and places.locality_has_street(loc):
+                peer_attempts += 1
+            self._apply_resolved_coords(
+                loc,
+                group,
+                streets,
+                allow_network=use_network,
+                allow_peer=use_peer,
+                persist=persist,
+            )
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
         from app.sources import PORTAL_IDS, url_likes
@@ -5268,7 +5479,8 @@ class Store:
                     continue
                 matched.append(row)
             total = len(matched)
-            self._fill_missing_coords(matched, place_geoms)
+            self._fill_missing_coords(matched, place_geoms, peer_limit=24, persist=False)
+            self._upgrade_coarse_coords(matched, place_geoms, peer_limit=24, persist=False)
             page = matched[offset : offset + limit]
             rows = []
             if page:
@@ -5342,7 +5554,21 @@ class Store:
                 [
                     pin
                     for row in matched
-                    if (pin := _pin_with_place(row, place_geoms, approx=bool(row.get("_geo_approx"))))
+                    if (
+                        pin := _pin_with_place(
+                            row,
+                            place_geoms,
+                            approx=bool(row.get("_geo_approx"))
+                            or (
+                                places.coords_are_approx_dump(
+                                    str(row.get("locality") or ""),
+                                    row.get("lat"),
+                                    row.get("lon"),
+                                )
+                                and not places.locality_has_street(str(row.get("locality") or ""))
+                            ),
+                        )
+                    )
                 ]
                 if include_pins
                 else []
@@ -5485,6 +5711,7 @@ class Store:
                         LIMIT {pin_cap}
                         """
                         gps_rows = [dict(row) for row in conn.execute(gps_sql, params).fetchall()]
+                    self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
                     fetched.extend(gps_rows)
                     null_sql = f"""
                     {select}
@@ -5493,25 +5720,51 @@ class Store:
                     ORDER BY listings.first_seen DESC
                     LIMIT 2000
                     """
-                    buckets: dict[str, list[dict[str, Any]]] = {}
+                    null_pending: dict[str, list[dict[str, Any]]] = {}
                     for row in conn.execute(null_sql, params).fetchall():
                         item = dict(row)
-                        loc = str(item.get("locality") or "")
-                        point = places.approx_point_from_locality(loc)
+                        loc = str(item.get("locality") or "").strip()
+                        if not loc:
+                            continue
+                        null_pending.setdefault(loc, []).append(item)
+                    streets: dict[str, tuple[float, float]] = {}
+                    for geom in place_geoms or []:
+                        streets.update(
+                            places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or "")))
+                        )
+                    for loc in null_pending:
+                        streets.update(places.street_index_for_locality(loc, allow_fetch=False))
+                    buckets: dict[str, list[dict[str, Any]]] = {}
+                    for loc, group in null_pending.items():
+                        # No network on pin requests — street index / cache or city dump only.
+                        point, approx = places.resolve_locality_coords(
+                            loc, streets, allow_network=False
+                        )
                         if not point:
                             continue
                         if isinstance(bbox, tuple) and len(bbox) == 4:
                             b_south, b_north, b_west, b_east = bbox
                             if not (b_south <= point[0] <= b_north and b_west <= point[1] <= b_east):
                                 continue
-                        seed = abs(int(item.get("id") or 0))
-                        item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
-                        item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
-                        item["_geo_approx"] = True
-                        key = f"{round(point[0], 2)}:{round(point[1], 2)}"
-                        bucket = buckets.setdefault(key, [])
-                        if len(bucket) < 50:
-                            bucket.append(item)
+                        if not approx:
+                            try:
+                                self._persist_locality_coords(loc, point)
+                            except sqlite3.OperationalError:
+                                pass
+                            for item in group:
+                                item["lat"], item["lon"] = point
+                                item.pop("_geo_approx", None)
+                                fetched.append(item)
+                            continue
+                        for item in group:
+                            seed = abs(int(item.get("id") or 0))
+                            item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
+                            item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
+                            item["_geo_approx"] = True
+                            key = f"{round(point[0], 2)}:{round(point[1], 2)}"
+                            bucket = buckets.setdefault(key, [])
+                            if len(bucket) < 50:
+                                bucket.append(item)
                     for bucket in buckets.values():
                         fetched.extend(bucket)
                 else:
@@ -5522,7 +5775,9 @@ class Store:
                     ORDER BY listings.notified DESC, listings.rowid ASC
                     LIMIT {int(pin_limit)}
                     """
-                    fetched.extend(dict(row) for row in conn.execute(sql, params).fetchall())
+                    gps_rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+                    self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
+                    fetched.extend(gps_rows)
         items = []
         seen: set[str] = set()
         for row in fetched:
@@ -5533,7 +5788,10 @@ class Store:
                 continue
             seen.add(key)
             pin = _pin_item(row)
+            loc = str(row.get("locality") or "")
             if row.get("_geo_approx"):
+                pin["approx"] = True
+            elif places.coords_are_approx_dump(loc, pin.get("lat"), pin.get("lon")) and not places.locality_has_street(loc):
                 pin["approx"] = True
             items.append(pin)
             if not wide and len(items) >= pin_limit:

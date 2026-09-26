@@ -55,10 +55,11 @@ class CatalogPlaceTests(unittest.TestCase):
         self.store = Store(Path(self.tmp.name))
 
     @patch(
-        "app.places.street_index_sync",
+        "app.places.street_index_for_locality",
         return_value={"dělnická": (50.1027, 14.4502)},
     )
-    def test_idnes_praha7_without_coords_matches_place_filter(self, _streets):
+    @patch("app.places.street_index_cached", return_value={})
+    def test_idnes_praha7_without_coords_matches_place_filter(self, _cached, _streets):
         self.store.upsert_catalog_listing(listing(), kind="seeded")
         self.store.upsert_catalog_listing(
             listing(
@@ -82,15 +83,16 @@ class CatalogPlaceTests(unittest.TestCase):
         self.assertEqual(data["total"], 1)
         self.assertIn("Praha 7", data["items"][0]["locality"])
         self.assertEqual(len(data["pins"]), 1)
-        self.assertTrue(data["pins"][0].get("approx"))
+        self.assertFalse(data["pins"][0].get("approx"))
         self.assertAlmostEqual(data["pins"][0]["lat"], 50.1027, places=3)
         self.assertAlmostEqual(data["pins"][0]["lon"], 14.4502, places=3)
 
     @patch(
-        "app.places.street_index_sync",
+        "app.places.street_index_for_locality",
         return_value={"dělnická": (50.1027, 14.4502), "komunardů": (50.1062, 14.4499)},
     )
-    def test_street_localities_get_distinct_pins(self, _streets):
+    @patch("app.places.street_index_cached", return_value={})
+    def test_street_localities_get_distinct_pins(self, _cached, _streets):
         self.store.upsert_catalog_listing(listing(), kind="seeded")
         self.store.upsert_catalog_listing(
             listing(

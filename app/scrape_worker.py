@@ -101,7 +101,9 @@ class ScrapeWorker:
             try:
                 lag = await watchdog_sample()
                 if lag >= 0.5:
-                    print(f"scrape watchdog lag_ms={lag * 1000:.0f}", flush=True)
+                    from app.scrape_console import emit
+
+                    emit(f"scrape watchdog lag_ms={lag * 1000:.0f}")
                 snap = watchdog_snapshot()
                 if snap.get("n") and snap["n"] % 100 == 0:
                     await self.hub._job_db(
@@ -132,12 +134,13 @@ class ScrapeWorker:
                 f"scrape throttle: error_rate_5m={snap['error_rate_5m']} "
                 f"403={snap['http_403']} 429={snap['http_429']}"
             )
-        print(
+        from app.scrape_console import emit
+
+        emit(
             f"scrape_worker tick discovery={discovery.get('listings')} "
             f"new={discovery.get('new')} upd={discovery.get('updated')} "
             f"refresh={refresh.get('listings')} deferred={snap.get('tick_deferred_pages')} "
-            f"ms={self.last_tick.get('ms')} limit={snap.get('limit')}",
-            flush=True,
+            f"ms={self.last_tick.get('ms')} limit={snap.get('limit')}"
         )
         return self.last_tick
 
@@ -377,6 +380,9 @@ async def _amain() -> None:
 
 
 def main() -> None:
+    from app.scrape_console import install_stdout_tee
+
+    install_stdout_tee()
     asyncio.run(_amain())
 
 

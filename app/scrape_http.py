@@ -39,17 +39,17 @@ def log_attempt(
     status: int | None = None,
     error: str | None = None,
 ) -> None:
+    from app.scrape_console import emit
     from app.scrape_timing import enabled, log_row
 
     portal = (portal or "").strip().lower()
     noisy = portal in SUSPECT_PORTALS or enabled()
     if not noisy:
         return
-    print(
+    emit(
         f"scrape attempt portal={portal or '?'} {phase} n={attempt}/{attempts} "
         f"at={_iso()} ms={None if ms is None else round(ms)} status={status} "
-        f"err={(error or '')[:120]} url={(url or '')[:90]}",
-        flush=True,
+        f"err={(error or '')[:120]} url={(url or '')[:90]}"
     )
     if enabled():
         log_row(

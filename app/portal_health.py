@@ -144,10 +144,11 @@ def record_fail(portal: str, reason: str) -> bool:
         item.consecutive = 0
         retry_at = datetime.fromtimestamp(item.disabled_until, timezone.utc).isoformat(timespec="seconds")
         if item.logged_until < item.disabled_until:
-            print(
+            from app.scrape_console import emit
+
+            emit(
                 f"portal {_key(portal)} disabled: {item.reason}; retry at {retry_at} "
-                f"(cooldown={item.cooldown_sec}s)",
-                flush=True,
+                f"(cooldown={item.cooldown_sec}s)"
             )
             item.logged_until = item.disabled_until
         item.cooldown_sec = min(

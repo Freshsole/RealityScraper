@@ -1838,6 +1838,17 @@
               </div>
             </div>
           </div>
+          <div class="ad-ops-block">
+            <div class="ad-console-head">
+              <h3 class="ad-sec sm">Scrape konzole</h3>
+              <div class="ad-console-actions">
+                <label class="ad-dedupe-check"><input type="checkbox" id="o-console-follow" checked /> Sledovat konec</label>
+                <button class="ad-btn soft" type="button" id="o-console-clear">Vymazat</button>
+              </div>
+            </div>
+            <p class="ad-dedupe-lead">1:1 výpis jako v terminálu (web + worker stdout), živě s barvami.</p>
+            <pre class="ad-console" id="o-console" aria-live="polite"><code id="o-console-code"></code></pre>
+          </div>
         </article>
       </section>`;
     const charts = main.querySelectorAll(".ad-ops-chart");
@@ -2127,6 +2138,120 @@
       }
     };
     setTimeout(pollCatalogProgress, 2500);
+    let consoleOffset = 0;
+    let consoleBuf = [];
+    const consoleMaxLines = 4000;
+    const stripAnsi = (value) => String(value ?? "").replace(/\u001b\[[0-9;]*m/g, "");
+    const ansiToHtml = (raw) => {
+      const colorMap = {
+        30: "#4b5563",
+        31: "#f07178",
+        32: "#3ecf8e",
+        33: "#e6c07b",
+        34: "#61afef",
+        35: "#c678dd",
+        36: "#56b6c2",
+        37: "#d0d0d0",
+        90: "#6a737d",
+        91: "#f07178",
+        92: "#3ecf8e",
+        93: "#e6c07b",
+        94: "#61afef",
+        95: "#c678dd",
+        96: "#56b6c2",
+        97: "#f5f5f5",
+      };
+      let html = "";
+      let open = false;
+      let last = 0;
+      const re = /\u001b\[([0-9;]*)m/g;
+      let match;
+      while ((match = re.exec(raw))) {
+        html += esc(raw.slice(last, match.index));
+        last = match.index + match[0].length;
+        const codes = String(match[1] || "0").split(";").filter(Boolean);
+        if (!codes.length || codes.includes("0")) {
+          if (open) {
+            html += "</span>";
+            open = false;
+          }
+          continue;
+        }
+        const styles = [];
+        for (const code of codes) {
+          if (code === "1") styles.push("font-weight:700");
+          else if (colorMap[code]) styles.push(`color:${colorMap[code]}`);
+        }
+        if (styles.length) {
+          if (open) html += "</span>";
+          html += `<span style="${styles.join(";")}">`;
+          open = true;
+        }
+      }
+      html += esc(raw.slice(last));
+      if (open) html += "</span>";
+      return html;
+    };
+    const consoleLineClass = (line) => {
+      const plain = stripAnsi(line);
+      if (/Traceback|Error|Exception|status=5\d\d|status=429|disabled:|falling back/i.test(plain)) return "is-err";
+      if (/throttle alert|WARNING:|WARN\b/i.test(plain)) return "is-warn";
+      if (/status=200\b/.test(plain)) return "is-ok";
+      if (/^INFO:|^Discord |Application startup|Started server|Shutting down/i.test(plain)) return "is-meta";
+      if (/rolling_deep|new_discovery|scrape_worker|watchdog|catalog_sync|monitor_priority/i.test(plain)) return "is-info";
+      if (/\bstart n=/.test(plain)) return "is-start";
+      return "";
+    };
+    const paintConsole = () => {
+      const code = $("o-console-code");
+      const box = $("o-console");
+      if (!code || !box) return;
+      code.innerHTML = consoleBuf
+        .map((line) => {
+          if (/\u001b\[/.test(line)) {
+            return `<span class="ad-console-line">${ansiToHtml(line)}\n</span>`;
+          }
+          const cls = consoleLineClass(line);
+          return `<span class="ad-console-line${cls ? ` ${cls}` : ""}">${esc(line)}\n</span>`;
+        })
+        .join("");
+      if ($("o-console-follow")?.checked) box.scrollTop = box.scrollHeight;
+    };
+    const appendConsole = (lines, reset) => {
+      if (reset) consoleBuf = [];
+      if (!lines?.length) {
+        if (reset) paintConsole();
+        return;
+      }
+      consoleBuf.push(...lines);
+      if (consoleBuf.length > consoleMaxLines) {
+        consoleBuf = consoleBuf.slice(-consoleMaxLines);
+      }
+      paintConsole();
+    };
+    const pollConsole = async () => {
+      if (currentRoute() !== "provoz") return;
+      try {
+        const fresh = await api(`/api/admin/scrape-console?after=${consoleOffset}`);
+        if (fresh.reset) consoleOffset = 0;
+        consoleOffset = Number(fresh.offset) || consoleOffset;
+        appendConsole(fresh.lines || [], Boolean(fresh.reset));
+        setTimeout(pollConsole, fresh.more ? 80 : 250);
+      } catch {
+        setTimeout(pollConsole, 1200);
+      }
+    };
+    $("o-console-clear")?.addEventListener("click", async () => {
+      try {
+        await api("/api/admin/scrape-console/clear", { method: "POST" });
+        consoleOffset = 0;
+        consoleBuf = [];
+        paintConsole();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    setTimeout(pollConsole, 100);
     if (d.busy) pollDedupe();
   }
 

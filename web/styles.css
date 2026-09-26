@@ -384,7 +384,8 @@ a { color: var(--forest); }
   background: var(--canvas);
   border-radius: var(--card-radius);
   overflow: hidden;
-  box-shadow: var(--shadow);
+  border: 1.5px solid #d8dbd5;
+  box-shadow: none;
   text-decoration: none;
   color: inherit;
   display: flex;
@@ -448,12 +449,14 @@ a { color: var(--forest); }
   height: 100%;
 }
 #hits-map .leaflet-marker-pane,
-#hits-map .leaflet-popup-pane,
 #catalog-map .leaflet-marker-pane,
-#catalog-map .leaflet-popup-pane,
 #catalog-map .leaflet-overlay-pane,
 #catalog-map .leaflet-place-pane {
   z-index: 650;
+}
+#hits-map .leaflet-popup-pane,
+#catalog-map .leaflet-popup-pane {
+  z-index: 1400;
 }
 
 .leaflet-control-zoom a {
@@ -565,7 +568,11 @@ a { color: var(--forest); }
 }
 .leaflet-marker-icon:hover,
 .leaflet-marker-icon.is-open {
-  z-index: 1200 !important;
+  z-index: 700 !important;
+}
+#catalog-map .leaflet-popup-pane .leaflet-popup,
+#hits-map .leaflet-popup-pane .leaflet-popup {
+  z-index: 1410;
 }
 .leaflet-marker-icon:hover .price-pin,
 .leaflet-marker-icon.is-open .price-pin {

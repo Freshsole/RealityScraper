@@ -188,17 +188,26 @@ class BazosClient:
         missing = [item for item in listings if item.lat is None or item.lon is None]
         if not missing:
             return
-        from app.places import approx_point_from_locality, geocode_locality
+        from app.places import approx_point_from_locality, coords_are_approx_dump, geocode_locality, locality_has_street
 
         keys = list(dict.fromkeys((item.locality or "").strip() for item in missing if (item.locality or "").strip()))
         found: dict[str, tuple[float, float] | None] = {}
         for key in keys:
-            found[key] = approx_point_from_locality(key)
+            # Street localities must not be dumped onto a city centroid — leave empty
+            # unless we can geocode (or network fallback below).
+            if locality_has_street(key):
+                found[key] = None
+            else:
+                found[key] = approx_point_from_locality(key)
         if network:
             for key in keys:
                 if found.get(key):
                     continue
-                found[key] = await geocode_locality(key)
+                point = await geocode_locality(key)
+                if point and not (locality_has_street(key) and coords_are_approx_dump(key, point[0], point[1])):
+                    found[key] = point
+                elif not locality_has_street(key):
+                    found[key] = found.get(key) or approx_point_from_locality(key)
         for item in missing:
             point = found.get((item.locality or "").strip())
             if point:

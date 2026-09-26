@@ -103,7 +103,9 @@ async def watchdog_sample(sleep_s: float = 0.1) -> float:
             "lag_ms": round(worst * 1000, 1),
         }
         _watchdog_events.append(ev)
-        print(f"scrape watchdog lag_ms={ev['lag_ms']} at={ev['at']}", flush=True)
+        from app.scrape_console import emit
+
+        emit(f"scrape watchdog lag_ms={ev['lag_ms']} at={ev['at']}")
     return worst
 
 

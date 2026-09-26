@@ -812,7 +812,9 @@ class Hub:
         while self.running:
             if self.catalog_running:
                 if not paused:
-                    print("rolling_deep paused (catalog_sync running)", flush=True)
+                    from app.scrape_console import emit
+
+                    emit("rolling_deep paused (catalog_sync running)")
                     paused = True
                 try:
                     await asyncio.sleep(0.5)
@@ -820,7 +822,9 @@ class Hub:
                     raise
                 continue
             if paused:
-                print("rolling_deep resumed", flush=True)
+                from app.scrape_console import emit
+
+                emit("rolling_deep resumed")
                 paused = False
             try:
                 await self._deep_catalog_tick()
@@ -1096,11 +1100,12 @@ class Hub:
         }
         try:
             await self._record_tick(tick)
-            print(
+            from app.scrape_console import emit
+
+            emit(
                 f"new_discovery listings={len(disc_listings)} new={disc_stats.get('new')} "
                 f"ms={tick['ms']}"
-                + (f" note={write_note}" if write_note else ""),
-                flush=True,
+                + (f" note={write_note}" if write_note else "")
             )
         except Exception as exc:
             self.last_error = f"scrape-tick: {exc}"
@@ -1179,10 +1184,11 @@ class Hub:
             "metrics": engine.metrics_snapshot(),
         }
         await self._record_tick(tick)
-        print(
+        from app.scrape_console import emit
+
+        emit(
             f"rolling_deep listings={len(listings)} shards={len(deep)} "
-            f"cover={coverage_pct}% ms={tick['ms']}",
-            flush=True,
+            f"cover={coverage_pct}% ms={tick['ms']}"
         )
 
     async def scrape_search_url(self, url: str, *, max_pages: int = 40) -> dict[str, Any]:
