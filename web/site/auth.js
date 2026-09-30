@@ -555,8 +555,6 @@ if (register) {
     }
   }
 
-  let pendingAccount = null;
-
   register.querySelector("#reg-step1").addEventListener("submit", async (e) => {
     e.preventDefault();
     const pw = register.querySelector("#reg-password");
@@ -566,12 +564,23 @@ if (register) {
       return;
     }
     if (!register.querySelector("#reg-agree").checked) return;
-    pendingAccount = {
-      name: register.querySelector("#name")?.value.trim() || "",
-      email: register.querySelector("#email")?.value.trim() || "",
-      password: pw.value,
-    };
-    show(1);
+    const btn = register.querySelector('#reg-step1 button[type="submit"]');
+    if (btn) btn.disabled = true;
+    try {
+      // Create the account right away so steps 2 and 3 run under the new session.
+      const promo = promoFromUrl() || readStoredPromo();
+      await postJson("/api/auth/register", {
+        name: register.querySelector("#name")?.value.trim() || "",
+        email: register.querySelector("#email")?.value.trim() || "",
+        password: pw.value,
+        promo,
+      });
+      show(1);
+    } catch (err) {
+      toast(err.message || "Registrace se nepovedla");
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   });
   register.querySelector("#to-step3").addEventListener("click", async () => {
     try {
@@ -583,35 +592,17 @@ if (register) {
   register.querySelector("#skip-prefs").addEventListener("click", () => show(2));
   register.querySelector("#finish-reg").addEventListener("click", async () => {
     const promo = register.querySelector("#reg-promo")?.value.trim() || "";
-    if (!pendingAccount?.email || !pendingAccount?.password) {
-      toast("Nejdřív vyplňte jméno, e-mail a heslo v prvním kroku.");
-      show(0);
-      return;
-    }
+    const btn = register.querySelector("#finish-reg");
+    if (btn) btn.disabled = true;
     try {
-      const me = await fetch("/api/auth/me");
-      if (me.ok) {
-        if (promo) await postJson("/api/billing/promo", { code: promo });
-      } else {
-        try {
-          await postJson("/api/auth/register", { ...pendingAccount, promo });
-        } catch (err) {
-          try {
-            await postJson("/api/auth/login", {
-              email: pendingAccount.email,
-              password: pendingAccount.password,
-            });
-            if (promo) await postJson("/api/billing/promo", { code: promo });
-          } catch {
-            throw err;
-          }
-        }
-      }
+      // The account already exists (created in step 1); just store the promo code.
+      if (promo) await postJson("/api/billing/promo", { code: promo });
       writeStoredPromo(promo);
       const next = new URLSearchParams(location.search).get("next") || "/nabidka";
       location.href = next.startsWith("/") ? next : "/nabidka";
     } catch (err) {
-      toast(err.message || "Registrace se nepovedla");
+      toast(err.message || "Dokončení se nepovedlo");
+      if (btn) btn.disabled = false;
     }
   });
   bindChoices(register, "#offer-seg button", false);

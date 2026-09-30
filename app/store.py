@@ -635,6 +635,7 @@ class Store:
                     self._ensure_push(conn)
                     self._ensure_analytics(conn)
                     self._ensure_guest_searches(conn)
+                    self._ensure_user_identity(conn)
                 return
             except sqlite3.OperationalError as exc:
                 last_error = exc
@@ -661,6 +662,11 @@ class Store:
                     pass
         if last_error:
             raise last_error
+
+    def _ensure_user_identity(self, conn: sqlite3.Connection) -> None:
+        from app.users import ensure_users_schema
+
+        ensure_users_schema(conn)
 
     def _ensure_guest_searches(self, conn: sqlite3.Connection) -> None:
         conn.execute(

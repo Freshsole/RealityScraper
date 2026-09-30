@@ -52,12 +52,24 @@ def _slug(text: str) -> str:
 
 
 class DiscordBot:
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, *, user_stores=None) -> None:
         self.store = store
+        # Optional callable () -> list[(user_id, Store)] for multi-user link-code matching.
+        self._user_stores = user_stores
         self.http = httpx.AsyncClient(timeout=20.0, headers=_headers())
         self.bot_user_id = ""
         self._seq: int | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+
+    def _iter_link_stores(self) -> list[tuple[str | None, Store]]:
+        if self._user_stores is not None:
+            try:
+                pairs = list(self._user_stores())
+                if pairs:
+                    return pairs
+            except Exception:
+                pass
+        return [(None, self.store)]
         self._ack = True
 
     async def aclose(self) -> None:
@@ -165,9 +177,17 @@ class DiscordBot:
         user = member.get("user") or interaction.get("user") or {}
         discord_user_id = str(user.get("id") or "")
         username = str(user.get("global_name") or user.get("username") or "uživatel")
-        if not user_account.match_discord_link_code(self.store, code):
+        link_store: Store | None = None
+        for _uid, candidate in self._iter_link_stores():
+            try:
+                if user_account.match_discord_link_code(candidate, code):
+                    link_store = candidate
+                    break
+            except Exception:
+                continue
+        if link_store is None:
             return "Kód neplatí nebo vypršel. V Realitify vygeneruj nový a zkus `/link` znovu."
-        account = user_account.account_record(self.store)
+        account = user_account.account_record(link_store)
         channel_name = f"byty-{_slug(account.get('first') or username)}"
         channel = await self.create_private_channel_for_user(
             discord_user_id,
@@ -185,7 +205,7 @@ class DiscordBot:
         if not webhook_url:
             return "Kanál vznikl, ale Discord nevrátil webhook URL. Zkus `/link` znovu."
         user_account.save_discord_connection(
-            self.store,
+            link_store,
             {
                 "discord_user_id": discord_user_id,
                 "discord_username": username,
@@ -196,7 +216,7 @@ class DiscordBot:
                 "discord_linked_at": datetime.now(timezone.utc).isoformat(),
             },
         )
-        user_account.clear_discord_link_code(self.store)
+        user_account.clear_discord_link_code(link_store)
         await self.send_welcome(str(channel["id"]), username)
         return (
             f"Hotovo. Kanál **#{channel.get('name')}** vidíš jen ty. "
@@ -299,10 +319,10 @@ class DiscordBot:
             await asyncio.sleep(5)
 
 
-async def run_discord_bot(store: Store) -> None:
+async def run_discord_bot(store: Store, *, user_stores=None) -> None:
     if not config.DISCORD_BOT_TOKEN or not config.DISCORD_GUILD_ID:
         return
-    bot = DiscordBot(store)
+    bot = DiscordBot(store, user_stores=user_stores)
     try:
         await bot.run_forever()
     finally:

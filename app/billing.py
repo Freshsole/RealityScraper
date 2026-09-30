@@ -610,7 +610,7 @@ def _customer(store: Store, email: str) -> str:
     return customer.id
 
 
-def create_checkout(store: Store, plan_id: str, email: str = "", promo_code: str = "") -> dict[str, Any]:
+def create_checkout(store: Store, plan_id: str, email: str = "", promo_code: str = "", user_id: str = "") -> dict[str, Any]:
     if plan_id not in PAID_PLANS:
         raise ValueError("Objednat lze jen tarify Start a PRO")
     _configure()
@@ -632,6 +632,8 @@ def create_checkout(store: Store, plan_id: str, email: str = "", promo_code: str
         current["pending_promo_code"] = promo["code"]
         store.save_billing_record(current)
     subscription_data: dict[str, Any] = {"metadata": {"plan": plan_id}}
+    if user_id:
+        subscription_data["metadata"]["user_id"] = user_id
     if promo:
         subscription_data["metadata"]["promo"] = promo["code"]
     elif not had_subscription:
@@ -648,6 +650,8 @@ def create_checkout(store: Store, plan_id: str, email: str = "", promo_code: str
         "subscription_data": subscription_data,
         "metadata": {"plan": plan_id, "promo": promo["code"] if promo else ""},
     }
+    if user_id:
+        session_kwargs["metadata"]["user_id"] = user_id
     if promo:
         session_kwargs["discounts"] = [{"promotion_code": promo["id"]}]
     else:
@@ -1391,6 +1395,50 @@ def admin_set_plan(store: Store, plan_id: str, charge: bool, email: str = "") ->
         },
     )
     return {"ok": True, "mode": "grant", "billing": billing_state(store), "message": f"Tarif {label} je aktivní bez platby."}
+
+
+def extract_webhook_user_id(payload: bytes, signature: str | None) -> str | None:
+    """Parse a Stripe webhook event and return the user_id from its metadata (if present).
+
+    Used to route the event to the right user's store. Returns None when the
+    event carries no user_id (legacy events) or cannot be parsed.
+    """
+    _configure()
+    try:
+        if config.STRIPE_WEBHOOK_SECRET:
+            if not signature:
+                return None
+            event = stripe.Webhook.construct_event(payload, signature, config.STRIPE_WEBHOOK_SECRET)
+            etype = event["type"]
+            obj = event["data"]["object"]
+            get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
+        else:
+            import json
+
+            event = json.loads(payload.decode("utf-8"))
+            etype = event.get("type") or ""
+            obj = (event.get("data") or {}).get("object") or {}
+            get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
+    except Exception:
+        return None
+    meta = get(obj, "metadata") or {}
+    user_id = meta.get("user_id") if isinstance(meta, dict) else get(meta, "user_id")
+    if user_id:
+        return str(user_id)
+    # checkout.session.completed: fall back to the subscription's metadata
+    if etype == "checkout.session.completed":
+        try:
+            session_id = get(obj, "id")
+            if session_id:
+                session = stripe.checkout.Session.retrieve(session_id, expand=["subscription"])
+                sub = get(session, "subscription")
+                sub_meta = get(sub, "metadata") or {} if sub else {}
+                uid = sub_meta.get("user_id") if isinstance(sub_meta, dict) else get(sub_meta, "user_id")
+                if uid:
+                    return str(uid)
+        except Exception:
+            pass
+    return None
 
 
 def handle_webhook(store: Store, payload: bytes, signature: str | None) -> dict[str, Any]:

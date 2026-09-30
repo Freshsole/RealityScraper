@@ -1,26 +1,25 @@
+"""Account handling.
+
+Identity (users, sessions, password resets) lives in the GLOBAL store via
+:mod:`app.users`.  Per-user profile data (the ``account`` meta, Discord
+linking, ...) lives in each user's private store.
+"""
+
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import secrets
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from app import config
+from app import users as user_registry
 from app.store import Store
 
 LINK_TTL_SEC = 20 * 60
-RESET_TTL_SEC = 24 * 60 * 60
 
 SESSION_COOKIE = "realitify_session"
-_ITERATIONS = 200_000
-_RESET_META = "password_reset"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def split_name(full: str) -> tuple[str, str]:
@@ -32,17 +31,7 @@ def split_name(full: str) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
-def _hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
-    salt_hex = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), _ITERATIONS)
-    return digest.hex(), salt_hex
-
-
-def _verify_password(password: str, hashed: str, salt: str) -> bool:
-    if not hashed or not salt:
-        return False
-    candidate, _ = _hash_password(password, salt)
-    return hmac.compare_digest(candidate, hashed)
+# ------------------------------------------------- per-user store profile --
 
 
 def account_record(store: Store) -> dict[str, Any]:
@@ -99,109 +88,31 @@ def save_account(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
     return public_account(store)
 
 
-def _new_session(store: Store) -> str:
-    token = secrets.token_urlsafe(32)
-    store.set_meta("auth_session", token)
-    return token
-
-
-def clear_session(store: Store) -> None:
-    store.set_meta("auth_session", None)
-
-
-def user_from_session(store: Store, token: str | None) -> dict[str, Any] | None:
-    stored = store.get_meta("auth_session") or ""
-    given = token or ""
-    if not stored or not given or len(stored) != len(given):
-        return None
-    if not secrets.compare_digest(given, stored):
-        return None
-    public = public_account(store)
-    if not public.get("email"):
-        return None
-    return public
-
-
-def register(store: Store, name: str, email: str, password: str, promo_code: str = "") -> tuple[dict[str, Any], str]:
-    from app.billing import pending_promo_for_signup
-
-    email_norm = (email or "").strip().lower()
-    if not email_norm or "@" not in email_norm:
-        raise ValueError("Zadej platný e-mail")
-    if len(password or "") < 8:
-        raise ValueError("Heslo musí mít alespoň 8 znaků")
-    existing = account_record(store)
-    existing_email = (existing.get("email") or "").strip().lower()
-    if existing_email:
-        if _verify_password(password, existing.get("password_hash") or "", existing.get("password_salt") or ""):
-            first, last = split_name(name)
-            if first:
-                existing["first"] = first
-                existing["last"] = last
-            if existing_email != email_norm:
-                existing["email"] = email_norm
-            promo = pending_promo_for_signup(promo_code)
-            if promo:
-                existing["pending_promo_code"] = promo
-            save_account(store, existing)
-            billing = store.billing_record() or {}
-            billing["email"] = existing["email"]
-            if promo:
-                billing["pending_promo_code"] = promo
-            store.save_billing_record(billing)
-            return public_account(store), _new_session(store)
-        if existing_email == email_norm:
-            raise ValueError("Tento účet už existuje, přihlaste se")
-        raise ValueError("Účet už je založený. Přihlaste se e-mailem z registrace.")
-    first, last = split_name(name)
-    if not first:
-        raise ValueError("Zadej jméno a příjmení")
-    promo = pending_promo_for_signup(promo_code)
-    hashed, salt = _hash_password(password)
-    payload = {
-        "first": first,
-        "last": last,
-        "email": email_norm,
-        "phone": "",
-        "password_hash": hashed,
-        "password_salt": salt,
-        "email_verified": True,
-        "created_at": _now(),
-    }
-    if promo:
-        payload["pending_promo_code"] = promo
-    save_account(store, payload)
-    billing = store.billing_record() or {}
-    billing["email"] = email_norm
-    if promo:
-        billing["pending_promo_code"] = promo
-    store.save_billing_record(billing)
-    return public_account(store), _new_session(store)
-
-
-def login(store: Store, email: str, password: str) -> tuple[dict[str, Any], str]:
-    email_norm = (email or "").strip().lower()
-    data = account_record(store)
-    if not data.get("email"):
-        raise ValueError("Účet ještě není založený. Nejdřív se zaregistrujte.")
-    stored_email = (data.get("email") or "").strip().lower()
-    if stored_email != email_norm or not _verify_password(password, data.get("password_hash") or "", data.get("password_salt") or ""):
-        raise ValueError("E-mail nebo heslo nesedí")
-    return public_account(store), _new_session(store)
-
-
-def update_profile(store: Store, first: str, last: str, phone: str) -> dict[str, Any]:
-    data = account_record(store)
-    if not data.get("email"):
-        raise ValueError("Účet není založený")
+def update_profile(
+    global_store: Store,
+    user_store: Store,
+    user_id: str,
+    first: str,
+    last: str,
+    phone: str,
+) -> dict[str, Any]:
     first = (first or "").strip()
     last = (last or "").strip()
     if not first:
         raise ValueError("Jméno je povinné")
+    updated = user_registry.update_user_profile(global_store, user_id, first, last)
+    if not updated:
+        raise ValueError("Účet neexistuje")
+    data = account_record(user_store)
     data["first"] = first
     data["last"] = last
     data["phone"] = (phone or "").strip()
-    return save_account(store, data)
+    if not data.get("email"):
+        data["email"] = (updated.get("email") or "").strip()
+    save_account(user_store, data)
+    public = user_registry.public_user(updated) or {}
+    public["phone"] = data["phone"]
+    return public
 
 
 def save_whatsapp_phone(store: Store, digits: str) -> dict[str, Any]:
@@ -214,97 +125,134 @@ def save_whatsapp_phone(store: Store, digits: str) -> dict[str, Any]:
     return save_account(store, data)
 
 
-def change_password(store: Store, current: str, new: str) -> str:
-    data = account_record(store)
-    if not data.get("email"):
-        raise ValueError("Účet není založený")
-    if not _verify_password(current or "", data.get("password_hash") or "", data.get("password_salt") or ""):
+# ------------------------------------------------------- global identity --
+
+
+def _init_user_store(
+    user_store: Store,
+    *,
+    first: str,
+    last: str,
+    email: str,
+    promo: str = "",
+) -> None:
+    payload = {
+        "first": first,
+        "last": last,
+        "email": email,
+        "phone": "",
+        "email_verified": True,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if promo:
+        payload["pending_promo_code"] = promo
+    save_account(user_store, payload)
+    billing = user_store.billing_record() or {}
+    billing["email"] = email
+    if promo:
+        billing["pending_promo_code"] = promo
+    user_store.save_billing_record(billing)
+
+
+def register(
+    global_store: Store,
+    name: str,
+    email: str,
+    password: str,
+    promo_code: str = "",
+    make_user_store: Callable[[str], Store] | None = None,
+) -> tuple[dict[str, Any], str]:
+    from app.billing import pending_promo_for_signup
+
+    email_norm = (email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("Zadej platný e-mail")
+    if len(password or "") < 8:
+        raise ValueError("Heslo musí mít alespoň 8 znaků")
+    first, last = split_name(name)
+    if not first:
+        raise ValueError("Zadej jméno a příjmení")
+    promo = pending_promo_for_signup(promo_code)
+    user = user_registry.create_user(
+        global_store,
+        email=email_norm,
+        password=password,
+        first=first,
+        last=last,
+    )
+    if make_user_store is not None:
+        user_store = make_user_store(user["id"])
+        _init_user_store(user_store, first=first, last=last, email=email_norm, promo=promo)
+    token = user_registry.create_session(global_store, user["id"])
+    public = user_registry.public_user(user)
+    assert public is not None
+    return public, token
+
+
+def login(global_store: Store, email: str, password: str) -> tuple[dict[str, Any], str]:
+    email_norm = (email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("Zadej platný e-mail")
+    user = user_registry.verify_user_password(global_store, email_norm, password or "")
+    if user is None:
+        if user_registry.get_user_by_email(global_store, email_norm) is None:
+            raise ValueError("Účet s tímto e-mailem neexistuje. Nejdřív se zaregistrujte.")
+        raise ValueError("E-mail nebo heslo nesedí")
+    token = user_registry.create_session(global_store, user["id"])
+    public = user_registry.public_user(user)
+    assert public is not None
+    return public, token
+
+
+def user_from_session(global_store: Store, token: str | None) -> dict[str, Any] | None:
+    user = user_registry.get_user_by_session(global_store, token)
+    return user_registry.public_user(user)
+
+
+def clear_session(global_store: Store, token: str | None) -> None:
+    user_registry.delete_session(global_store, token)
+
+
+def change_password(global_store: Store, user_id: str, current: str, new: str) -> str:
+    user = user_registry.get_user_by_id(global_store, user_id)
+    if not user:
+        raise ValueError("Účet neexistuje")
+    if not user_registry.verify_user_password(global_store, user["email"], current or ""):
         raise ValueError("Současné heslo nesedí")
     if len(new or "") < 8:
         raise ValueError("Nové heslo musí mít alespoň 8 znaků")
-    hashed, salt = _hash_password(new)
-    data["password_hash"] = hashed
-    data["password_salt"] = salt
-    save_account(store, data)
-    clear_password_reset(store)
-    return _new_session(store)
+    user_registry.set_user_password(global_store, user_id, new)
+    user_registry.clear_password_resets(global_store, user_id)
+    user_registry.delete_user_sessions(global_store, user_id)
+    return user_registry.create_session(global_store, user_id)
 
 
-def _hash_reset_token(token: str) -> str:
-    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
-
-
-def clear_password_reset(store: Store) -> None:
-    store.set_meta(_RESET_META, None)
-
-
-def _password_reset_payload(store: Store) -> dict[str, Any] | None:
-    raw = store.get_meta(_RESET_META) or ""
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict) or not data.get("token_hash"):
-        return None
-    try:
-        expires_at = float(data.get("expires_at") or 0)
-    except (TypeError, ValueError):
-        clear_password_reset(store)
-        return None
-    if expires_at <= time.time():
-        clear_password_reset(store)
-        return None
-    data["expires_at"] = expires_at
-    return data
-
-
-def create_password_reset(store: Store, email: str) -> str | None:
+def create_password_reset(global_store: Store, email: str) -> str | None:
     """Vytvoří jednorázový token. Vrátí raw token jen když e-mail sedí na účet."""
-    email_norm = (email or "").strip().lower()
-    data = account_record(store)
-    stored = (data.get("email") or "").strip().lower()
-    if not email_norm or email_norm != stored or not data.get("password_hash"):
-        return None
-    token = secrets.token_urlsafe(32)
-    store.set_meta(
-        _RESET_META,
-        json.dumps(
-            {
-                "token_hash": _hash_reset_token(token),
-                "email": email_norm,
-                "expires_at": time.time() + RESET_TTL_SEC,
-            },
-            ensure_ascii=False,
-        ),
-    )
-    return token
+    return user_registry.create_password_reset(global_store, email)
 
 
-def password_reset_ok(store: Store, token: str) -> bool:
-    payload = _password_reset_payload(store)
-    given = (token or "").strip()
-    if not payload or not given:
-        return False
-    return hmac.compare_digest(str(payload.get("token_hash") or ""), _hash_reset_token(given))
+def password_reset_ok(global_store: Store, token: str) -> bool:
+    return user_registry.password_reset_ok(global_store, token)
 
 
-def reset_password_with_token(store: Store, token: str, new_password: str) -> tuple[dict[str, Any], str]:
-    if not password_reset_ok(store, token):
-        raise ValueError("Odkaz pro obnovení hesla je neplatný nebo vypršel")
+def reset_password_with_token(
+    global_store: Store, token: str, new_password: str
+) -> tuple[dict[str, Any], str]:
     if len(new_password or "") < 8:
         raise ValueError("Nové heslo musí mít alespoň 8 znaků")
-    data = account_record(store)
-    if not data.get("email"):
-        clear_password_reset(store)
-        raise ValueError("Účet není založený")
-    hashed, salt = _hash_password(new_password)
-    data["password_hash"] = hashed
-    data["password_salt"] = salt
-    save_account(store, data)
-    clear_password_reset(store)
-    return public_account(store), _new_session(store)
+    user = user_registry.consume_password_reset(global_store, token)
+    if not user:
+        raise ValueError("Odkaz pro obnovení hesla je neplatný nebo vypršel")
+    user_registry.set_user_password(global_store, user["id"], new_password)
+    user_registry.delete_user_sessions(global_store, user["id"])
+    session = user_registry.create_session(global_store, user["id"])
+    public = user_registry.public_user(user)
+    assert public is not None
+    return public, session
+
+
+# -------------------------------------------------------------- discord --
 
 
 def discord_webhook_url(store: Store) -> str:

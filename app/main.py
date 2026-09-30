@@ -31,6 +31,7 @@ from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
+from app import users as user_registry
 from app import admin as admin_panel
 from app import cms as stories_cms
 from app import analytics as site_stats
@@ -43,7 +44,7 @@ from app import mcp_oauth
 install_stdout_tee()
 from app import extension_score as ext_score
 from app.sreality import ListingGone
-from app.store import _listing_from_catalog_dict
+from app.store import _listing_from_catalog_dict, Store
 
 hub = Hub()
 monitor = hub
@@ -397,6 +398,53 @@ def _current_user(session: str | None) -> dict[str, Any]:
     return user
 
 
+_admin_id_cache: dict[str, Any] = {"id": None, "at": 0.0}
+
+
+def _admin_user_id() -> str | None:
+    """ID of the admin user (cached 60 s). Used for public data + admin panel."""
+    now = time.monotonic()
+    cached = _admin_id_cache.get("id")
+    if cached and now - float(_admin_id_cache.get("at") or 0) < 60:
+        return str(cached)
+    user_id: str | None = None
+    try:
+        for candidate in user_registry.list_users(hub.store):
+            email = (candidate.get("email") or "").strip().lower()
+            if candidate.get("role") == "admin" or (email and email == config.ADMIN_EMAIL):
+                user_id = str(candidate.get("id"))
+                break
+        if user_id is None:
+            all_users = user_registry.list_users(hub.store)
+            if all_users:
+                user_id = str(all_users[0].get("id"))
+    except Exception:
+        user_id = None
+    _admin_id_cache["id"] = user_id
+    _admin_id_cache["at"] = now
+    return user_id
+
+
+def _public_store() -> Store | None:
+    """Store backing public pages: the admin's data (listing previews, games)."""
+    admin_id = _admin_user_id()
+    return hub.store_for(admin_id) if admin_id else None
+
+
+def _user_store(session: str | None) -> tuple[dict[str, Any], Store]:
+    """Resolve (user, private store) for a session cookie; 401 when not logged in."""
+    user = _current_user(session)
+    return user, hub.store_for(str(user.get("id")))
+
+
+def _store_for_session(session: str | None) -> tuple[dict[str, Any] | None, Store | None]:
+    """(user|None, store): logged-in user's store, else the public (admin) store."""
+    user = user_account.user_from_session(hub.store, session)
+    if user:
+        return user, hub.store_for(str(user.get("id")))
+    return None, _public_store()
+
+
 @app.post("/api/t")
 async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     if not site_stats.analytics_allowed(request):
@@ -420,6 +468,7 @@ async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict
             str(body.get("email") or ""),
             str(body.get("password") or ""),
             str(body.get("promo") or body.get("promo_code") or ""),
+            hub.store_for,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -493,8 +542,8 @@ async def auth_reset_api(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 
 @app.post("/api/auth/logout")
-async def auth_logout_api() -> dict:
-    await _auth_db(user_account.clear_session, hub.store)
+async def auth_logout_api(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    await _auth_db(user_account.clear_session, hub.store, realitify_session)
     response = JSONResponse({"ok": True})
     response.delete_cookie(user_account.SESSION_COOKIE, path="/")
     return response
@@ -517,7 +566,8 @@ async def extension_me(
 ) -> dict:
     session = _extension_session(request, realitify_session)
     user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
+    ustore = hub.store_for(str(user.get("id"))) if user else None
+    account = ext_score.extension_account(ustore or hub.store)
     if not user:
         account["authenticated"] = False
         account["active"] = False
@@ -535,15 +585,16 @@ async def extension_scores(
 ) -> dict:
     session = _extension_session(request, realitify_session)
     user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
     if not user:
         raise HTTPException(401, "Nejste přihlášeni")
+    ustore = hub.store_for(str(user.get("id")))
+    account = ext_score.extension_account(ustore)
     if not account.get("active"):
         raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
     body = payload or {}
     ids = body.get("ids") if isinstance(body.get("ids"), list) else []
     urls = body.get("urls") if isinstance(body.get("urls"), list) else []
-    result = ext_score.score_batch(hub.store, ids=[str(x) for x in ids], urls=[str(x) for x in urls])
+    result = ext_score.score_batch(ustore, ids=[str(x) for x in ids], urls=[str(x) for x in urls])
     result["account"] = {
         "plan": account["plan"],
         "label": account["label"],
@@ -562,9 +613,10 @@ async def extension_ingest(
     """Scrape unknown Sreality listings into catalog and return fresh scores."""
     session = _extension_session(request, realitify_session)
     user = user_account.user_from_session(hub.store, session)
-    account = ext_score.extension_account(hub.store)
     if not user:
         raise HTTPException(401, "Nejste přihlášeni")
+    ustore = hub.store_for(str(user.get("id")))
+    account = ext_score.extension_account(ustore)
     if not account.get("active"):
         raise HTTPException(403, "Aktivní předplatné Start nebo PRO je povinné")
 
@@ -615,7 +667,7 @@ async def extension_ingest(
             from app.places import refine_listing_location_async
 
             await refine_listing_location_async(listing)
-            await asyncio.to_thread(hub.store.upsert_catalog_listing, listing, kind="extension")
+            await asyncio.to_thread(ustore.upsert_catalog_listing, listing, kind="extension")
             if listing.id:
                 ext_score.invalidate_scores(str(listing.id))
                 ingested.append(str(listing.id))
@@ -630,7 +682,7 @@ async def extension_ingest(
     await asyncio.gather(*[_one(url) for url in cleaned])
 
     score_ids = list(dict.fromkeys(ingested + [ext_score.extract_sreality_id(u) for u in cleaned if ext_score.extract_sreality_id(u)]))
-    result = ext_score.score_batch(hub.store, ids=score_ids, urls=cleaned)
+    result = ext_score.score_batch(ustore, ids=score_ids, urls=cleaned)
     result["ingested"] = ingested
     result["errors"] = errors
     result["account"] = {
@@ -644,11 +696,13 @@ async def extension_ingest(
 
 @app.post("/api/auth/profile")
 async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
+    user, ustore = _user_store(realitify_session)
     body = payload or {}
     try:
         return user_account.update_profile(
             hub.store,
+            ustore,
+            str(user.get("id")),
             str(body.get("first") or ""),
             str(body.get("last") or ""),
             str(body.get("phone") or ""),
@@ -659,10 +713,10 @@ async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_se
 
 @app.post("/api/auth/password")
 async def auth_password(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
+    user = _current_user(realitify_session)
     body = payload or {}
     try:
-        token = user_account.change_password(hub.store, str(body.get("current") or ""), str(body.get("new") or ""))
+        token = user_account.change_password(hub.store, str(user.get("id")), str(body.get("current") or ""), str(body.get("new") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     response = JSONResponse({"ok": True})
@@ -675,6 +729,12 @@ def _admin_user(token: str | None) -> dict[str, Any]:
     if not user:
         raise HTTPException(401, "Nejste přihlášeni do administrace")
     return user
+
+
+def _admin_store(token: str | None) -> tuple[dict[str, Any], Store]:
+    """Admin user + their private store (the store the admin panel operates on)."""
+    user = _admin_user(token)
+    return user, hub.store_for(str(user.get("id")))
 
 
 @app.post("/api/admin/login")
@@ -698,8 +758,8 @@ async def admin_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 
 @app.post("/api/admin/logout")
-async def admin_logout_api() -> dict:
-    admin_panel.clear_admin_session(hub.store)
+async def admin_logout_api(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    user_registry.delete_session(hub.store, realitify_admin)
     response = JSONResponse({"ok": True})
     response.delete_cookie(admin_panel.ADMIN_COOKIE, path="/")
     return response
@@ -712,14 +772,14 @@ async def admin_me(realitify_admin: str | None = Cookie(default=None, alias="rea
 
 @app.get("/api/admin/overview")
 async def admin_overview(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.overview_payload, hub.store, hub)
+    _, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(admin_panel.overview_payload, astore, hub)
 
 
 @app.get("/api/admin/users")
 async def admin_users(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.users_payload, hub.store)
+    return await asyncio.to_thread(admin_panel.users_payload, hub.store, hub.store_for)
 
 
 @app.get("/api/admin/users/{user_id}")
@@ -728,10 +788,13 @@ async def admin_user_detail(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
     _admin_user(realitify_admin)
-    if user_id not in {"local", "USR-LOCAL"}:
+    target = user_registry.get_user_by_id(hub.store, user_id)
+    if not target:
         raise HTTPException(404, "Uživatel neexistuje")
     try:
-        return await asyncio.to_thread(admin_panel.user_detail_payload, hub.store)
+        return await asyncio.to_thread(
+            admin_panel.user_detail_payload, hub.store_for(str(target.get("id"))), target
+        )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -739,14 +802,14 @@ async def admin_user_detail(
 @app.get("/api/admin/monitors")
 async def admin_monitors(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(hub.auth_pool, _admin_user, realitify_admin)
-    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, hub.store)
+    _, astore = await loop.run_in_executor(hub.auth_pool, _admin_store, realitify_admin)
+    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, astore)
 
 
 @app.get("/api/admin/notifications")
 async def admin_notifications(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.notifications_payload, hub.store)
+    _, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(admin_panel.notifications_payload, astore)
 
 
 @app.post("/api/admin/broadcast")
@@ -754,20 +817,21 @@ async def admin_broadcast(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
-    return await admin_panel.send_broadcast(hub.store, payload or {}, user.get("name") or "Admin")
+    user, astore = _admin_store(realitify_admin)
+    targets = [(str(u.get("id")), hub.store_for(str(u.get("id")))) for u in user_registry.list_users(hub.store) if u.get("id")]
+    return await admin_panel.send_broadcast(astore, payload or {}, user.get("name") or "Admin", user_stores=targets)
 
 
 @app.get("/api/admin/ops")
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    await asyncio.to_thread(_admin_user, realitify_admin)
-    return await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)
+    _, astore = await asyncio.to_thread(_admin_store, realitify_admin)
+    return await asyncio.to_thread(admin_panel.ops_payload, astore, hub)
 
 
 @app.get("/api/admin/scrape-progress")
 async def admin_scrape_progress(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    await asyncio.to_thread(_admin_user, realitify_admin)
-    return await asyncio.to_thread(admin_panel.catalog_progress_payload, hub.store, hub)
+    _, astore = await asyncio.to_thread(_admin_store, realitify_admin)
+    return await asyncio.to_thread(admin_panel.catalog_progress_payload, astore, hub)
 
 
 @app.get("/api/admin/scrape-console")
@@ -805,7 +869,7 @@ async def admin_scrape_url(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     body = payload or {}
     scope = str(body.get("scope") or "url").strip().lower()
     when = str(body.get("when") or "now").strip().lower()
@@ -826,7 +890,7 @@ async def admin_scrape_url(
         )
         if not result.get("ok"):
             raise HTTPException(400, str(result.get("error") or "Naplánování selhalo"))
-        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, astore, hub)}
 
     if scope == "portal":
         portal = str(body.get("portal") or "").strip().lower()
@@ -838,7 +902,7 @@ async def admin_scrape_url(
             result = hub.start_catalog_sync(portals=[portal])
         if not result.get("ok") and result.get("reason") != "already-running":
             raise HTTPException(409, str(result.get("reason") or "Katalog sync selhal"))
-        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+        return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, astore, hub)}
 
     url = str(body.get("url") or "").strip()
     if not url:
@@ -846,7 +910,7 @@ async def admin_scrape_url(
     result = hub.start_scrape_search_url(url, max_pages=max_pages)
     if not result.get("ok"):
         raise HTTPException(409 if "locked" in str(result.get("error") or "").lower() else 400, str(result.get("error") or "Scrape selhal"))
-    return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+    return {"result": result, "ops": await asyncio.to_thread(admin_panel.ops_payload, astore, hub)}
 
 
 @app.delete("/api/admin/scrape-schedule/{job_id}")
@@ -854,17 +918,17 @@ async def admin_scrape_schedule_delete(
     job_id: str,
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     ok = await asyncio.to_thread(hub.store.remove_scrape_schedule, job_id)
     if not ok:
         raise HTTPException(404, "Naplánovaný scrape nenalezen")
-    return {"ok": True, "ops": await asyncio.to_thread(admin_panel.ops_payload, hub.store, hub)}
+    return {"ok": True, "ops": await asyncio.to_thread(admin_panel.ops_payload, astore, hub)}
 
 
 @app.get("/api/admin/dedupe")
 async def admin_dedupe(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+    _, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
 @app.post("/api/admin/dedupe/schedule")
@@ -872,32 +936,32 @@ async def admin_dedupe_schedule(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     body = payload or {}
     try:
         hour = int(body.get("hour", 3))
     except (TypeError, ValueError):
         hour = 3
     hub.store.save_dedupe_schedule(enabled=bool(body.get("enabled")), hour=hour)
-    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
 @app.post("/api/admin/dedupe/run")
 async def admin_dedupe_run(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     result = hub.start_dedupe()
     if not result.get("ok"):
         raise HTTPException(409, "Deduplikace už běží")
-    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
 @app.post("/api/admin/dedupe/scan")
 async def admin_dedupe_scan(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     result = hub.start_dedupe_scan()
     if not result.get("ok"):
         raise HTTPException(409, "Deduplikace už běží")
-    return await asyncio.to_thread(admin_panel.dedupe_payload, hub.store, hub)
+    return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
 @app.get("/api/admin/catalog-quality")
@@ -939,8 +1003,8 @@ async def admin_catalog_quality_run(
 
 @app.get("/api/admin/billing")
 async def admin_billing(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.billing_payload, hub.store)
+    _, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(admin_panel.billing_payload, astore)
 
 
 @app.get("/api/admin/promo")
@@ -1003,13 +1067,23 @@ async def admin_action(
 ) -> dict:
     user = _admin_user(realitify_admin)
     body = payload or {}
+    target_id = str(body.get("user_id") or "").strip()
+    target = user_registry.get_user_by_id(hub.store, target_id) if target_id else None
+    if target is not None:
+        tstore = hub.store_for(str(target.get("id")))
+        tuid: str | None = str(target.get("id"))
+    else:
+        _, tstore = _admin_store(realitify_admin)
+        tuid = None
     try:
         return await asyncio.to_thread(
             admin_panel.apply_action,
-            hub.store,
+            tstore,
             str(body.get("action") or ""),
             body,
             user.get("name") or "Admin",
+            hub.store,
+            tuid,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -1017,29 +1091,32 @@ async def admin_action(
 
 @app.get("/api/stories")
 async def stories_index() -> dict:
-    return await asyncio.to_thread(stories_cms.public_listing, hub.store)
+    store = _public_store() or hub.store
+    return await asyncio.to_thread(stories_cms.public_listing, store)
 
 
 @app.get("/api/stories/{slug}")
 async def stories_detail(slug: str, view: int = 0) -> dict:
+    store = _public_store() or hub.store
     try:
-        return await asyncio.to_thread(stories_cms.public_by_slug, hub.store, slug, bool(view))
+        return await asyncio.to_thread(stories_cms.public_by_slug, store, slug, bool(view))
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/inquiries")
 async def public_inquiry(payload: dict[str, Any] | None = Body(None)) -> dict:
+    store = _public_store() or hub.store
     try:
-        return await asyncio.to_thread(stories_cms.create_inquiry, hub.store, payload or {})
+        return await asyncio.to_thread(stories_cms.create_inquiry, store, payload or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/admin/cms")
 async def admin_cms_list(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(stories_cms.list_articles, hub.store)
+    _, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(stories_cms.list_articles, astore)
 
 
 @app.post("/api/admin/cms-inquiry/{inquiry_id}")
@@ -1048,9 +1125,9 @@ async def admin_cms_inquiry_save(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     try:
-        return await asyncio.to_thread(stories_cms.update_inquiry, hub.store, inquiry_id, payload or {})
+        return await asyncio.to_thread(stories_cms.update_inquiry, astore, inquiry_id, payload or {})
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
@@ -1061,18 +1138,18 @@ async def admin_cms_inquiry_save(
 async def admin_cms_inquiry_delete(
     inquiry_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")
 ) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     try:
-        return await asyncio.to_thread(stories_cms.delete_inquiry, hub.store, inquiry_id)
+        return await asyncio.to_thread(stories_cms.delete_inquiry, astore, inquiry_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
 @app.get("/api/admin/cms/{article_id}")
 async def admin_cms_one(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     try:
-        return await asyncio.to_thread(stories_cms.get_article, hub.store, article_id)
+        return await asyncio.to_thread(stories_cms.get_article, astore, article_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -1082,8 +1159,8 @@ async def admin_cms_create(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
-    return await asyncio.to_thread(stories_cms.save_article, hub.store, None, payload or {}, user.get("name") or "Admin")
+    user, astore = _admin_store(realitify_admin)
+    return await asyncio.to_thread(stories_cms.save_article, astore, None, payload or {}, user.get("name") or "Admin")
 
 
 @app.post("/api/admin/cms/{article_id}")
@@ -1092,18 +1169,18 @@ async def admin_cms_save(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
+    user, astore = _admin_store(realitify_admin)
     try:
-        return await asyncio.to_thread(stories_cms.save_article, hub.store, article_id, payload or {}, user.get("name") or "Admin")
+        return await asyncio.to_thread(stories_cms.save_article, astore, article_id, payload or {}, user.get("name") or "Admin")
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/admin/cms/{article_id}/delete")
 async def admin_cms_delete(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    _, astore = _admin_store(realitify_admin)
     try:
-        return await asyncio.to_thread(stories_cms.delete_article, hub.store, article_id)
+        return await asyncio.to_thread(stories_cms.delete_article, astore, article_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -1200,40 +1277,44 @@ async def catalog_sync_now(payload: dict[str, Any] | None = None) -> dict:
 
 
 @app.post("/api/discord/test")
-async def discord_test(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def discord_test(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    user = _current_user(realitify_session)
     try:
-        return await hub.send_test((payload or {}).get("monitor_id"))
+        return await hub.hub_for(str(user.get("id"))).send_test((payload or {}).get("monitor_id"))
     except Exception as exc:
         raise HTTPException(502, f"Discord test selhal: {exc}") from exc
 
 
 @app.get("/api/discord/status")
 async def discord_link_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return user_account.discord_status(hub.store)
+    _, ustore = _user_store(realitify_session)
+    return user_account.discord_status(ustore)
 
 
 @app.post("/api/discord/link-code")
 async def discord_link_code(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
+    _, ustore = _user_store(realitify_session)
     try:
-        return user_account.create_discord_link_code(hub.store)
+        return user_account.create_discord_link_code(ustore)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/discord/unlink")
 async def discord_unlink(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return user_account.unlink_discord(hub.store)
+    _, ustore = _user_store(realitify_session)
+    return user_account.unlink_discord(ustore)
 
 
 @app.post("/api/email/test")
 async def email_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
+    _, ustore = _user_store(realitify_session)
     try:
         sent = await mail_notify.notify_listing(
-            hub.store,
+            ustore,
             {"name": "Testovací zpráva z Realitify"},
             "test",
             ignore_quiet=True,
@@ -1242,13 +1323,13 @@ async def email_test(realitify_session: str | None = Cookie(default=None, alias=
         raise HTTPException(502, str(exc)) from exc
     if not sent:
         raise HTTPException(400, "Zapněte e-mail a na serveru nastavte SMTP_HOST a SMTP_FROM")
-    return {"ok": True, "email": mail_notify.account_email(hub.store)}
+    return {"ok": True, "email": mail_notify.account_email(ustore)}
 
 
 @app.get("/api/whatsapp/status")
 async def whatsapp_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    return wa_notify.status(hub.store)
+    _, ustore = _user_store(realitify_session)
+    return wa_notify.status(ustore)
 
 
 @app.post("/api/whatsapp/phone")
@@ -1256,24 +1337,24 @@ async def whatsapp_phone(
     payload: dict[str, Any] | None = Body(None),
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
-    _current_user(realitify_session)
-    if not wa_notify.plan_allows(hub.store):
+    _, ustore = _user_store(realitify_session)
+    if not wa_notify.plan_allows(ustore):
         raise HTTPException(403, "WhatsApp notifikace jsou jen v tarifu PRO")
     try:
-        wa_notify.save_phone(hub.store, str((payload or {}).get("phone") or ""))
+        wa_notify.save_phone(ustore, str((payload or {}).get("phone") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return wa_notify.status(hub.store)
+    return wa_notify.status(ustore)
 
 
 @app.post("/api/whatsapp/test")
 async def whatsapp_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _current_user(realitify_session)
-    if not wa_notify.plan_allows(hub.store):
+    _, ustore = _user_store(realitify_session)
+    if not wa_notify.plan_allows(ustore):
         raise HTTPException(403, "WhatsApp notifikace jsou jen v tarifu PRO")
     try:
         sent = await wa_notify.notify_listing(
-            hub.store,
+            ustore,
             {"name": "Testovací zpráva z Realitify"},
             "test",
             ignore_quiet=True,
@@ -1282,7 +1363,7 @@ async def whatsapp_test(realitify_session: str | None = Cookie(default=None, ali
         raise HTTPException(502, str(exc)) from exc
     if not sent:
         raise HTTPException(400, "Zapněte WhatsApp, vyplňte číslo a na serveru nastavte WHATSAPP_TOKEN")
-    return {"ok": True, **wa_notify.status(hub.store)}
+    return {"ok": True, **wa_notify.status(ustore)}
 
 
 @app.get("/api/whatsapp/webhook")
@@ -1301,9 +1382,13 @@ async def whatsapp_webhook_event(payload: dict[str, Any] | None = Body(None)) ->
 
 
 @app.post("/api/digest/test")
-async def digest_test(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def digest_test(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    user = _current_user(realitify_session)
     try:
-        return await hub.send_digest_test((payload or {}).get("webhook_url"))
+        return await hub.hub_for(str(user.get("id"))).send_digest_test((payload or {}).get("webhook_url"))
     except Exception as exc:
         raise HTTPException(502, f"Test digestu selhal: {exc}") from exc
 
@@ -1327,12 +1412,14 @@ def web_manifest() -> FileResponse:
 
 
 @app.get("/api/push/vapid")
-def push_vapid() -> dict:
+def push_vapid(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, store = _store_for_session(realitify_session)
+    store = store or hub.store
     return {
         "publicKey": web_push.public_key(),
         "supported": True,
-        "devices": hub.store.push_subscription_count(),
-        "enabled": bool(hub.store.notify_prefs().get("push")),
+        "devices": store.push_subscription_count(),
+        "enabled": bool(store.notify_prefs().get("push")),
     }
 
 
@@ -1340,13 +1427,15 @@ def push_vapid() -> dict:
 async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
     ua = request.headers.get("user-agent") or ""
+    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
+    store = store or hub.store
 
     def _save() -> dict[str, Any]:
-        hub.store.save_push_subscription(body, ua)
-        prefs = hub.store.notify_prefs()
+        store.save_push_subscription(body, ua)
+        prefs = store.notify_prefs()
         prefs["push"] = True
-        hub.store.save_notify_prefs(prefs)
-        return {"ok": True, "devices": hub.store.push_subscription_count(), "notify": hub.store.notify_prefs()}
+        store.save_notify_prefs(prefs)
+        return {"ok": True, "devices": store.push_subscription_count(), "notify": store.notify_prefs()}
 
     try:
         return await asyncio.to_thread(_save)
@@ -1360,14 +1449,18 @@ async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body
 
 
 @app.post("/api/push/unsubscribe")
-async def push_unsubscribe(payload: dict[str, Any] | None = Body(None)) -> dict:
-    hub.store.delete_push_subscription(str((payload or {}).get("endpoint") or ""))
-    return {"ok": True, "devices": hub.store.push_subscription_count()}
+async def push_unsubscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
+    store = store or hub.store
+    store.delete_push_subscription(str((payload or {}).get("endpoint") or ""))
+    return {"ok": True, "devices": store.push_subscription_count()}
 
 
 @app.post("/api/push/test")
-async def push_test() -> dict:
-    sent = await asyncio.to_thread(web_push.notify_test, hub.store)
+async def push_test(request: Request) -> dict:
+    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
+    store = store or hub.store
+    sent = await asyncio.to_thread(web_push.notify_test, store)
     if not sent:
         raise HTTPException(400, "Na tomto zařízení ještě není aktivní odběr push notifikací")
     return {"ok": True, "sent": sent}
@@ -1375,12 +1468,14 @@ async def push_test() -> dict:
 
 @app.get("/api/public/stats")
 async def public_stats() -> dict:
-    return {"new_today": await asyncio.to_thread(hub.store.catalog_new_today_count)}
+    store = _public_store() or hub.store
+    return {"new_today": await asyncio.to_thread(store.catalog_new_today_count)}
 
 
 @app.get("/api/public/landing-listings")
 async def public_landing_listings() -> dict:
-    items = await asyncio.to_thread(hub.store.landing_preview_listings)
+    store = _public_store() or hub.store
+    items = await asyncio.to_thread(store.landing_preview_listings)
     return {"items": items}
 
 
@@ -1425,7 +1520,8 @@ async def public_guest_search_start(request: Request) -> JSONResponse:
 
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
-    items = await asyncio.to_thread(hub.store.public_gone_fast_rentals, days=3, limit=4)
+    store = _public_store() or hub.store
+    items = await asyncio.to_thread(store.public_gone_fast_rentals, days=3, limit=4)
     return {"items": items}
 
 
@@ -1434,16 +1530,18 @@ async def public_game_higher_lower() -> dict:
     from app import games as marketing_games
 
     # Memory/seed only — catalog refresh is background and must not delay the response.
-    marketing_games.schedule_pool_refresh(hub.store)
-    return await asyncio.to_thread(marketing_games.higher_lower_pair, hub.store)
+    store = _public_store() or hub.store
+    marketing_games.schedule_pool_refresh(store)
+    return await asyncio.to_thread(marketing_games.higher_lower_pair, store)
 
 
 @app.get("/api/public/games/rent-round")
 async def public_game_rent_round() -> dict:
     from app import games as marketing_games
 
-    marketing_games.schedule_pool_refresh(hub.store)
-    payload = await asyncio.to_thread(marketing_games.rent_round, hub.store)
+    store = _public_store() or hub.store
+    marketing_games.schedule_pool_refresh(store)
+    payload = await asyncio.to_thread(marketing_games.rent_round, store)
     return {"round_id": payload["round_id"], "items": payload["items"]}
 
 
@@ -1456,14 +1554,15 @@ async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) ->
     if not isinstance(guesses, list) or len(guesses) < 1:
         raise HTTPException(400, "Chybí tipy")
     ids = [str(item.get("id") or "") for item in guesses if isinstance(item, dict)]
-    found = await asyncio.to_thread(marketing_games.lookup_prices, hub.store, ids)
+    store = _public_store() or hub.store
+    found = await asyncio.to_thread(marketing_games.lookup_prices, store, ids)
     items = [found[key] for key in ids if key in found]
     if len(items) < 1:
         raise HTTPException(400, "Neznámé byty")
     scored = marketing_games.score_round(items, [item for item in guesses if isinstance(item, dict)])
     saved = await asyncio.to_thread(
         marketing_games.save_rent_round,
-        hub.store,
+        store,
         player_name=str(body.get("name") or ""),
         scored=scored,
     )
@@ -1479,8 +1578,9 @@ async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) ->
 
 
 @app.get("/api/listings")
-async def listings() -> dict:
-    items = await asyncio.to_thread(hub.store.recent_notified, 24)
+async def listings(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
+    items = await asyncio.to_thread(ustore.recent_notified, 24)
     return {"items": items}
 
 
@@ -1564,9 +1664,9 @@ def _catalog_filters(
     return payload
 
 
-async def _run_catalog_query(payload: dict[str, Any]) -> dict[str, Any]:
+async def _run_catalog_query(payload: dict[str, Any], store: Store) -> dict[str, Any]:
     try:
-        result = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, hub.store.catalog, payload)
+        result = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, store.catalog, payload)
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=503, detail="catalog-busy") from exc
     return result
@@ -1609,7 +1709,9 @@ async def catalog(
     offset: int = 0,
     include_pins: str = "0",
     facets: str = "1",
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
+    _, ustore = _user_store(realitify_session)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -1649,7 +1751,7 @@ async def catalog(
             facets=facets,
         )
     )
-    return await _run_catalog_query(payload)
+    return await _run_catalog_query(payload, ustore)
 
 
 @app.get("/api/catalog/pins")
@@ -1684,7 +1786,9 @@ async def catalog_pins(
     north: str = "",
     west: str = "",
     east: str = "",
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
+    _, ustore = _user_store(realitify_session)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -1720,7 +1824,7 @@ async def catalog_pins(
             pins_only=True,
         )
     )
-    return await _run_catalog_query(payload)
+    return await _run_catalog_query(payload, ustore)
 
 
 @app.get("/api/catalog/item")
@@ -1729,9 +1833,11 @@ async def catalog_item(
     id: str = "",
     listing_key: str = "",
     url: str = "",
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
+    user, ustore = _user_store(realitify_session)
     item = await asyncio.to_thread(
-        hub.store.catalog_item, monitor_id, id, listing_key, url
+        ustore.catalog_item, monitor_id, id, listing_key, url
     )
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
@@ -1746,9 +1852,9 @@ async def catalog_item(
             await refine_listing_location_async(listing)
 
             def _enrich() -> dict:
-                hub.store.save_listing_enrichment(item["monitor_id"], listing)
+                ustore.save_listing_enrichment(item["monitor_id"], listing)
                 return (
-                    hub.store.catalog_item(
+                    ustore.catalog_item(
                         item["monitor_id"],
                         item["id"],
                         listing_key=item.get("listing_key") or "",
@@ -1759,9 +1865,9 @@ async def catalog_item(
 
             item = await asyncio.to_thread(_enrich)
         except ListingGone:
-            await hub.notify_sold(hub.store.get_monitor(item["monitor_id"]), item["id"])
+            await hub.hub_for(str(user.get("id"))).notify_sold(ustore.get_monitor(item["monitor_id"]), item["id"])
             item = await asyncio.to_thread(
-                hub.store.catalog_item, item["monitor_id"], item["id"], url=source_url
+                ustore.catalog_item, item["monitor_id"], item["id"], url=source_url
             ) or item
         except Exception:
             pass
@@ -1769,41 +1875,55 @@ async def catalog_item(
 
 
 @app.post("/api/catalog/user")
-async def save_listing_user(payload: dict[str, Any]) -> dict:
+async def save_listing_user(
+    payload: dict[str, Any],
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
         return await asyncio.to_thread(
-            hub.store.set_listing_user, payload.get("url") or "", payload.get("status"), payload.get("note")
+            ustore.set_listing_user, payload.get("url") or "", payload.get("status"), payload.get("note")
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/settings")
-async def get_settings() -> dict:
-    return await asyncio.to_thread(hub.store.app_settings)
+async def get_settings(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
+    return await asyncio.to_thread(ustore.app_settings)
 
 
 @app.post("/api/settings")
-async def save_settings(payload: dict[str, Any]) -> dict:
+async def save_settings(
+    payload: dict[str, Any],
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        return await asyncio.to_thread(hub.store.save_app_settings, payload)
+        return await asyncio.to_thread(ustore.save_app_settings, payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/monitors")
-async def list_monitors() -> dict:
-    items = await asyncio.to_thread(hub.store.list_monitors)
+async def list_monitors(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
+    items = await asyncio.to_thread(ustore.list_monitors)
     return {"items": items}
 
 
 @app.post("/api/monitors")
-async def save_monitor(payload: dict[str, Any]) -> dict:
+async def save_monitor(
+    payload: dict[str, Any],
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     if not (payload.get("search_url") or "").strip():
         raise HTTPException(400, "Chybí search_url")
-    existing = hub.store.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
+    existing = ustore.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
     try:
-        saved = hub.store.save_monitor(payload)
+        saved = ustore.save_monitor(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if existing is None:
@@ -1815,16 +1935,24 @@ async def save_monitor(payload: dict[str, Any]) -> dict:
 
 
 @app.get("/api/monitors/{monitor_id}/preview")
-async def preview_monitor(monitor_id: str) -> dict:
-    monitor = hub.store.get_monitor(monitor_id)
+async def preview_monitor(
+    monitor_id: str,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
+    monitor = ustore.get_monitor(monitor_id)
     if not monitor:
         raise HTTPException(404, "Monitor neexistuje")
-    return {"items": hub.store.monitor_preview(monitor_id)}
+    return {"items": ustore.monitor_preview(monitor_id)}
 
 
 @app.get("/api/monitors/{monitor_id}/convert")
-async def convert_monitor(monitor_id: str) -> dict:
-    monitor = hub.store.get_monitor(monitor_id)
+async def convert_monitor(
+    monitor_id: str,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
+    monitor = ustore.get_monitor(monitor_id)
     if not monitor:
         raise HTTPException(404, "Monitor neexistuje")
     converted = convert_search_url(monitor["search_url"])
@@ -1836,30 +1964,43 @@ async def convert_monitor(monitor_id: str) -> dict:
 
 
 @app.delete("/api/monitors/{monitor_id}")
-async def delete_monitor(monitor_id: str) -> dict:
+async def delete_monitor(
+    monitor_id: str,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    user, ustore = _user_store(realitify_session)
     try:
-        hub.store.delete_monitor(monitor_id)
+        ustore.delete_monitor(monitor_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"ok": True, "status": hub.status(fresh=True)}
+    return {"ok": True, "status": hub.hub_for(str(user.get("id"))).status(fresh=True)}
 
 
 @app.get("/api/templates")
-async def list_templates() -> dict:
-    return {"items": hub.store.list_templates(), "variables": VARIABLES, "sample": sample_vars()}
+async def list_templates(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
+    return {"items": ustore.list_templates(), "variables": VARIABLES, "sample": sample_vars()}
 
 
 @app.post("/api/templates")
-async def save_template(payload: dict[str, Any]) -> dict:
+async def save_template(
+    payload: dict[str, Any],
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     if not payload.get("config"):
         payload["config"] = default_template_config()
-    return hub.store.save_template(payload)
+    return ustore.save_template(payload)
 
 
 @app.delete("/api/templates/{template_id}")
-async def delete_template(template_id: str) -> dict:
+async def delete_template(
+    template_id: str,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        hub.store.delete_template(template_id)
+        ustore.delete_template(template_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"ok": True}
@@ -2103,8 +2244,9 @@ async def commute_times(
 
 
 @app.get("/api/backup/json")
-async def backup_json() -> Response:
-    payload = json.dumps(export_config(hub.store), ensure_ascii=False, indent=2)
+async def backup_json(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
+    _, ustore = _user_store(realitify_session)
+    payload = json.dumps(export_config(ustore), ensure_ascii=False, indent=2)
     return Response(
         payload,
         media_type="application/json",
@@ -2113,93 +2255,106 @@ async def backup_json() -> Response:
 
 
 @app.get("/api/backup/sqlite")
-async def backup_sqlite() -> Response:
+async def backup_sqlite(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
+    _, ustore = _user_store(realitify_session)
     return Response(
-        export_sqlite(hub.store),
+        export_sqlite(ustore),
         media_type="application/vnd.sqlite3",
         headers={"Content-Disposition": 'attachment; filename="monitor.sqlite"'},
     )
 
 
 @app.get("/api/backup/pack")
-async def backup_pack() -> Response:
+async def backup_pack(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
+    _, ustore = _user_store(realitify_session)
     return Response(
-        export_pack(hub.store),
+        export_pack(ustore),
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="sreality-backup.zip"'},
     )
 
 
 @app.post("/api/backup/import")
-async def backup_import(file: UploadFile = File(...)) -> dict:
+async def backup_import(
+    file: UploadFile = File(...),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    user, ustore = _user_store(realitify_session)
+    user_id = str(user.get("id"))
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Prázdný soubor")
     name = (file.filename or "").lower()
-    was_running = hub.running
-    await hub.stop()
-    while hub.checking:
-        await asyncio.sleep(0.05)
-    try:
+
+    def _do_import() -> None:
+        nonlocal ustore
         if name.endswith(".zip") or raw[:2] == b"PK":
             with zipfile.ZipFile(io.BytesIO(raw)) as archive:
                 names = archive.namelist()
                 sqlite_name = next((item for item in names if item.endswith((".sqlite", ".db"))), None)
-                json_name = next((item for item in names if item.endswith(".json")), None)
+                json_name = next((item for item in names if item.endswith((".json"))), None)
                 if sqlite_name:
-                    hub.store = replace_sqlite(hub.store, archive.read(sqlite_name))
+                    replace_sqlite(ustore, archive.read(sqlite_name))
+                    hub.drop_store_cache(user_id)
+                    ustore = hub.store_for(user_id)
                 if json_name:
                     payload = json.loads(archive.read(json_name))
-                    import_config(hub.store, payload, reset_seeded=sqlite_name is None)
+                    import_config(ustore, payload, reset_seeded=sqlite_name is None)
                 if not sqlite_name and not json_name:
                     raise HTTPException(400, "V zipu chybí config.json nebo monitor.sqlite")
         elif name.endswith(".json") or raw[:1] in {b"{", b"["}:
-            import_config(hub.store, json.loads(raw.decode("utf-8")), reset_seeded=True)
+            import_config(ustore, json.loads(raw.decode("utf-8")), reset_seeded=True)
         elif name.endswith((".sqlite", ".db")) or raw[:16] == b"SQLite format 3\x00":
-            hub.store = replace_sqlite(hub.store, raw)
+            replace_sqlite(ustore, raw)
+            hub.drop_store_cache(user_id)
+            ustore = hub.store_for(user_id)
         else:
             raise HTTPException(400, "Nahraj .zip, .json nebo .sqlite")
+
+    try:
+        await asyncio.to_thread(_do_import)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
-    finally:
-        if was_running:
-            await hub.start()
-    return {"ok": True, "status": hub.status(fresh=True)}
-
-
+    return {"ok": True, "status": hub.hub_for(user_id).status(fresh=True)}
 @app.get("/api/billing")
-async def billing_status() -> dict:
+async def billing_status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        stripe_billing.settle_pending_if_due(hub.store)
-        state = stripe_billing.billing_state(hub.store)
-        record = hub.store.billing_record() or {}
+        stripe_billing.settle_pending_if_due(ustore)
+        state = stripe_billing.billing_state(ustore)
+        record = ustore.billing_record() or {}
         if record.get("customer_id") and config.STRIPE_SECRET_KEY and (
             state.get("plan") == "free" or record.get("pending_plan") or record.get("cancel_at_period_end")
         ):
-            state = stripe_billing.recover_from_stripe(hub.store)
-            stripe_billing.apply_watch_limit(hub.store)
+            state = stripe_billing.recover_from_stripe(ustore)
+            stripe_billing.apply_watch_limit(ustore)
             hub._status_cache = None
-            state = stripe_billing.billing_state(hub.store)
-        return {**state, "invoices": stripe_billing.list_invoices(hub.store)}
+            state = stripe_billing.billing_state(ustore)
+        return {**state, "invoices": stripe_billing.list_invoices(ustore)}
     except Exception as extra:
         if not config.STRIPE_SECRET_KEY or "Invalid API Key" in str(extra):
-            state = stripe_billing.billing_state(hub.store)
+            state = stripe_billing.billing_state(ustore)
             state["configured"] = False
             return {**state, "invoices": []}
         raise HTTPException(502, f"Stripe: {extra}") from extra
 
 
 @app.post("/api/billing/checkout")
-async def billing_checkout(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def billing_checkout(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    user, ustore = _user_store(realitify_session)
     body = payload or {}
     try:
         result = stripe_billing.create_checkout(
-            hub.store,
+            ustore,
             str(body.get("plan") or ""),
-            user_account.public_account(hub.store).get("email") or str(body.get("email") or ""),
+            user.get("email") or str(body.get("email") or ""),
             str(body.get("promo") or body.get("promo_code") or ""),
+            str(user.get("id") or ""),
         )
         hub._status_cache = None
         return result
@@ -2210,11 +2365,15 @@ async def billing_checkout(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 
 @app.get("/api/billing/promo")
-async def billing_promo_lookup(code: str = Query("")) -> dict:
+async def billing_promo_lookup(
+    code: str = Query(""),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
         raw = (code or "").strip()
         if not raw:
-            pending = (hub.store.billing_record() or {}).get("pending_promo_code") or ""
+            pending = (ustore.billing_record() or {}).get("pending_promo_code") or ""
             if not pending:
                 return {"ok": True, "code": "", "percent": 0, "amount_czk": 0, "first_order": True}
             raw = str(pending)
@@ -2226,10 +2385,14 @@ async def billing_promo_lookup(code: str = Query("")) -> dict:
 
 
 @app.post("/api/billing/promo")
-async def billing_promo_save(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def billing_promo_save(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     body = payload or {}
     try:
-        return stripe_billing.save_pending_promo(hub.store, str(body.get("code") or body.get("promo") or ""))
+        return stripe_billing.save_pending_promo(ustore, str(body.get("code") or body.get("promo") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
@@ -2237,9 +2400,10 @@ async def billing_promo_save(payload: dict[str, Any] | None = Body(None)) -> dic
 
 
 @app.post("/api/billing/portal")
-async def billing_portal() -> dict:
+async def billing_portal(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        return {"url": stripe_billing.create_portal(hub.store)}
+        return {"url": stripe_billing.create_portal(ustore)}
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
@@ -2247,9 +2411,10 @@ async def billing_portal() -> dict:
 
 
 @app.post("/api/billing/cancel")
-async def billing_cancel() -> dict:
+async def billing_cancel(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        result = stripe_billing.cancel_subscription(hub.store)
+        result = stripe_billing.cancel_subscription(ustore)
         hub._status_cache = None
         return result
     except Exception as exc:
@@ -2257,12 +2422,16 @@ async def billing_cancel() -> dict:
 
 
 @app.post("/api/billing/sync")
-async def billing_sync(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def billing_sync(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     session_id = str((payload or {}).get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(400, "Chybí session_id")
     try:
-        result = stripe_billing.sync_checkout_session(hub.store, session_id)
+        result = stripe_billing.sync_checkout_session(ustore, session_id)
         hub._status_cache = None
         return result
     except Exception as exc:
@@ -2272,8 +2441,19 @@ async def billing_sync(payload: dict[str, Any] | None = Body(None)) -> dict:
 @app.post("/api/billing/webhook")
 async def billing_webhook(request: Request) -> dict:
     payload = await request.body()
+    signature = request.headers.get("stripe-signature")
+    # Route the event to the owning user's store via Stripe metadata.
+    target_store = hub.store
     try:
-        result = stripe_billing.handle_webhook(hub.store, payload, request.headers.get("stripe-signature"))
+        webhook_user_id = await asyncio.to_thread(
+            stripe_billing.extract_webhook_user_id, payload, signature
+        )
+    except Exception:
+        webhook_user_id = None
+    if webhook_user_id and user_registry.get_user_by_id(hub.store, webhook_user_id):
+        target_store = hub.store_for(webhook_user_id)
+    try:
+        result = stripe_billing.handle_webhook(target_store, payload, signature)
         hub._status_cache = None
         return result
     except ValueError as exc:
@@ -2282,18 +2462,29 @@ async def billing_webhook(request: Request) -> dict:
         raise HTTPException(400, str(exc)) from exc
 
 
-def _agent_key(request: Request) -> dict[str, Any]:
-    try:
-        key = agent_hub.require_mcp(hub.store, request.headers.get("authorization"))
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=401,
-            detail=str(exc),
-            headers={"WWW-Authenticate": mcp_oauth.www_authenticate()},
-        ) from exc
-    if not agent_hub.rate_ok(str(key.get("id") or "")):
-        raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
-    return key
+def _agent_key(request: Request) -> tuple[dict[str, Any], Store]:
+    """Authenticate an MCP/API key against all user stores. Returns (key, owner_store)."""
+    authorization = request.headers.get("authorization")
+    last_error: PermissionError | None = None
+    for candidate in user_registry.list_users(hub.store):
+        uid = str(candidate.get("id") or "")
+        if not uid:
+            continue
+        ustore = hub.store_for(uid)
+        try:
+            key = agent_hub.require_mcp(ustore, authorization)
+        except PermissionError as exc:
+            last_error = exc
+            continue
+        if not agent_hub.rate_ok(str(key.get("id") or "")):
+            raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
+        return key, ustore
+    detail = str(last_error) if last_error else "Neplatný nebo chybějící API klíč"
+    raise HTTPException(
+        status_code=401,
+        detail=detail,
+        headers={"WWW-Authenticate": mcp_oauth.www_authenticate()},
+    )
 
 
 def _mcp_http(request: Request, payload: Any):
@@ -2352,7 +2543,8 @@ async def oauth_authorize_post(request: Request):
         nxt = "/oauth/authorize?" + urlencode(form)
         return RedirectResponse("/prihlaseni?next=" + quote(nxt, safe=""), status_code=303)
     try:
-        target = mcp_oauth.complete_authorize(hub.store, form)
+        # client lives in the global store; the auth code belongs to the consenting user
+        target = mcp_oauth.complete_authorize(hub.store_for(str(user.get("id"))), form, client_store=hub.store)
     except PermissionError as exc:
         return HTMLResponse(mcp_oauth.consent_html(form, error=str(exc)), status_code=403)
     except ValueError as exc:
@@ -2360,21 +2552,38 @@ async def oauth_authorize_post(request: Request):
     return RedirectResponse(target, status_code=303)
 
 
+def _oauth_store_for_token(token_value: str) -> Store:
+    """Find the user store holding an OAuth code/refresh token."""
+    for candidate in user_registry.list_users(hub.store):
+        uid = str(candidate.get("id") or "")
+        if not uid:
+            continue
+        ustore = hub.store_for(uid)
+        try:
+            if mcp_oauth.find_token_store_hint(ustore, token_value):
+                return ustore
+        except Exception:
+            continue
+    return hub.store
+
+
 @app.post("/oauth/token")
 async def oauth_token(request: Request):
     form = {str(key): str(value) for key, value in (await request.form()).items()}
     grant = str(form.get("grant_type") or "")
+    token_value = str(form.get("code") or form.get("refresh_token") or "")
+    ustore = _oauth_store_for_token(token_value)
     try:
         if grant == "authorization_code":
             data = mcp_oauth.exchange_code(
-                hub.store,
+                ustore,
                 code=str(form.get("code") or ""),
                 redirect_uri=str(form.get("redirect_uri") or ""),
                 client_id=str(form.get("client_id") or ""),
                 code_verifier=str(form.get("code_verifier") or ""),
             )
         elif grant == "refresh_token":
-            data = mcp_oauth.refresh_tokens(hub.store, str(form.get("refresh_token") or ""))
+            data = mcp_oauth.refresh_tokens(ustore, str(form.get("refresh_token") or ""))
         else:
             return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
     except ValueError:
@@ -2385,19 +2594,26 @@ async def oauth_token(request: Request):
 @app.post("/oauth/revoke")
 async def oauth_revoke(request: Request) -> dict:
     form = {str(key): str(value) for key, value in (await request.form()).items()}
-    mcp_oauth.revoke(hub.store, str(form.get("token") or ""))
+    token_value = str(form.get("token") or "")
+    ustore = _oauth_store_for_token(token_value)
+    mcp_oauth.revoke(ustore, token_value)
     return {"ok": True}
 
 
 @app.get("/api/agents")
-async def agents_dashboard() -> dict:
-    return agent_hub.dashboard_payload(hub.store)
+async def agents_dashboard(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    _, ustore = _user_store(realitify_session)
+    return agent_hub.dashboard_payload(ustore)
 
 
 @app.post("/api/agents/keys")
-async def agents_create_key(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def agents_create_key(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        created = agent_hub.create_key(hub.store, str((payload or {}).get("name") or ""))
+        created = agent_hub.create_key(ustore, str((payload or {}).get("name") or ""))
     except PermissionError as exc:
         raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
@@ -2406,9 +2622,13 @@ async def agents_create_key(payload: dict[str, Any] | None = Body(None)) -> dict
 
 
 @app.delete("/api/agents/keys/{key_id}")
-async def agents_delete_key(key_id: str) -> dict:
+async def agents_delete_key(
+    key_id: str,
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
     try:
-        return agent_hub.delete_key(hub.store, key_id)
+        return agent_hub.delete_key(ustore, key_id)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
 
@@ -2420,7 +2640,7 @@ async def agents_openapi() -> dict:
 
 @app.api_route("/mcp", methods=["GET", "POST", "HEAD"])
 async def mcp_endpoint(request: Request):
-    _agent_key(request)
+    _, mcp_store = _agent_key(request)
     if request.method == "GET":
         return {
             "name": "realitify",
@@ -2434,61 +2654,61 @@ async def mcp_endpoint(request: Request):
     if isinstance(payload, list):
         out = []
         for msg in payload:
-            item = agent_hub.handle_mcp(hub.store, msg if isinstance(msg, dict) else {})
+            item = agent_hub.handle_mcp(mcp_store, msg if isinstance(msg, dict) else {})
             if item is not None:
                 out.append(item)
         return _mcp_http(request, out)
-    result = agent_hub.handle_mcp(hub.store, payload if isinstance(payload, dict) else {})
+    result = agent_hub.handle_mcp(mcp_store, payload if isinstance(payload, dict) else {})
     return _mcp_http(request, result)
 
 
 @app.get("/api/v1/listings")
 async def agent_search_listings(request: Request) -> dict:
-    _agent_key(request)
+    _, mcp_store = _agent_key(request)
     args = dict(request.query_params)
-    return agent_hub.run_tool(hub.store, "search_listings", args)
+    return agent_hub.run_tool(mcp_store, "search_listings", args)
 
 
 @app.get("/api/v1/listings/{monitor_id}/{listing_id}")
 async def agent_get_listing(request: Request, monitor_id: str, listing_id: int) -> dict:
-    _agent_key(request)
+    _, mcp_store = _agent_key(request)
     try:
-        return agent_hub.run_tool(hub.store, "get_listing", {"monitor_id": monitor_id, "listing_id": listing_id})
+        return agent_hub.run_tool(mcp_store, "get_listing", {"monitor_id": monitor_id, "listing_id": listing_id})
     except (KeyError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
 
 
 @app.get("/api/v1/monitors")
 async def agent_list_monitors(request: Request) -> dict:
-    _agent_key(request)
-    return agent_hub.run_tool(hub.store, "list_monitors", {})
+    _, mcp_store = _agent_key(request)
+    return agent_hub.run_tool(mcp_store, "list_monitors", {})
 
 
 @app.post("/api/v1/monitors")
 async def agent_create_monitor(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
-    _agent_key(request)
+    _, mcp_store = _agent_key(request)
     try:
-        return agent_hub.run_tool(hub.store, "create_monitor", payload or {})
+        return agent_hub.run_tool(mcp_store, "create_monitor", payload or {})
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.delete("/api/v1/monitors/{monitor_id}")
 async def agent_delete_monitor(request: Request, monitor_id: str) -> dict:
-    _agent_key(request)
+    _, mcp_store = _agent_key(request)
     try:
-        return agent_hub.run_tool(hub.store, "delete_monitor", {"id": monitor_id})
+        return agent_hub.run_tool(mcp_store, "delete_monitor", {"id": monitor_id})
     except (KeyError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/v1/alerts")
 async def agent_list_alerts(request: Request) -> dict:
-    _agent_key(request)
-    return agent_hub.run_tool(hub.store, "list_alerts", dict(request.query_params))
+    _, mcp_store = _agent_key(request)
+    return agent_hub.run_tool(mcp_store, "list_alerts", dict(request.query_params))
 
 
 @app.get("/api/v1/account")
 async def agent_get_account(request: Request) -> dict:
-    _agent_key(request)
-    return agent_hub.run_tool(hub.store, "get_account", {})
+    _, mcp_store = _agent_key(request)
+    return agent_hub.run_tool(mcp_store, "get_account", {})

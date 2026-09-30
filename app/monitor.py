@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from app import config
 from app import push as web_push
 from app import email_notify as mail_notify
+from app import users as user_registry
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
 from app.sources import PORTAL_LABELS, client_for, source_name
@@ -29,11 +32,17 @@ def _is_restart_noise(message: object) -> bool:
 
 
 class Hub:
-    def __init__(self) -> None:
-        self.store = Store(config.DB_PATH)
+    def __init__(self, store_path: str | Path | None = None, *, shared: Hub | None = None) -> None:
+        self.store = Store(Path(store_path) if store_path else config.DB_PATH)
         self.clients: dict[str, object] = {}
         self.running = False
         self.checking = False
+        # Web-process cache of per-user private stores (user_id -> Store).
+        self._user_stores: dict[str, Store] = {}
+        self._user_stores_lock = threading.Lock()
+        # Web-process cache of per-user child Hubs (user_id -> Hub).
+        self._child_hubs: dict[str, Hub] = {}
+        self._user_manager_task: asyncio.Task[None] | None = None
         self._task: asyncio.Task[None] | None = None
         self._sold_task: asyncio.Task[None] | None = None
         self._ping_task: asyncio.Task[None] | None = None
@@ -60,16 +69,28 @@ class Hub:
         from app.scrape_engine import LimiterRegistry, ScrapeEngine
         from app.perf_diag import CountedPool
 
-        self._scrape_registry = LimiterRegistry()
+        if shared is not None:
+            # Worker child hub: share rate limiters, semaphores and thread
+            # pools with the primary hub so N users don't multiply scraping
+            # pressure or thread counts.
+            self._scrape_registry = shared._scrape_registry
+            self._portal_gate = shared._portal_gate
+            self._bazos_gate = shared._bazos_gate
+            self._catalog_write = shared._catalog_write
+            self.ui_pool = shared.ui_pool
+            self.auth_pool = shared.auth_pool
+            self.job_pool = shared.job_pool
+        else:
+            self._scrape_registry = LimiterRegistry()
+            self.ui_pool = CountedPool(max_workers=4, thread_name_prefix="rf-ui", pool_name="ui")
+            self.auth_pool = CountedPool(max_workers=2, thread_name_prefix="rf-auth", pool_name="auth")
+            self.job_pool = CountedPool(max_workers=4, thread_name_prefix="rf-job", pool_name="job")
         self._monitor_engine = ScrapeEngine(
             registry=self._scrape_registry, priority=0, pipeline="monitor"
         )
         self._status_cache: dict[str, Any] | None = None
         self._status_cache_at = 0.0
         self.catalog_gen = 0
-        self.ui_pool = CountedPool(max_workers=4, thread_name_prefix="rf-ui", pool_name="ui")
-        self.auth_pool = CountedPool(max_workers=2, thread_name_prefix="rf-auth", pool_name="auth")
-        self.job_pool = CountedPool(max_workers=4, thread_name_prefix="rf-job", pool_name="job")
 
     def client_for(self, search_url: str):
         client = self.clients.get(search_url)
@@ -77,6 +98,95 @@ class Hub:
             client = client_for(search_url)
             self.clients[search_url] = client
         return client
+
+    def store_for(self, user_id: str) -> Store:
+        """Return the private Store for a user (web process), creating it on demand."""
+        key = "".join(ch for ch in (user_id or "") if ch.isalnum() or ch in "-_") or "unknown"
+        with self._user_stores_lock:
+            store = self._user_stores.get(key)
+            if store is None:
+                store = Store(user_registry.user_store_path(key))
+                self._user_stores[key] = store
+            return store
+
+    def drop_store_cache(self, user_id: str) -> None:
+        key = "".join(ch for ch in (user_id or "") if ch.isalnum() or ch in "-_") or "unknown"
+        with self._user_stores_lock:
+            self._user_stores.pop(key, None)
+            self._child_hubs.pop(key, None)
+
+    def hub_for(self, user_id: str) -> "Hub":
+        """Return the child Hub bound to a user's DB, sharing pools/limiters."""
+        key = "".join(ch for ch in (user_id or "") if ch.isalnum() or ch in "-_") or "unknown"
+        with self._user_stores_lock:
+            child = self._child_hubs.get(key)
+            if child is None:
+                child = Hub(store_path=user_registry.user_store_path(key), shared=self)
+                self._child_hubs[key] = child
+            return child
+
+    def _web_user_ids(self) -> list[str]:
+        try:
+            return [str(u.get("id")) for u in user_registry.list_users(self.store) if u.get("id")]
+        except Exception:
+            return []
+
+    def _web_user_stores(self) -> list[tuple[str, Store]]:
+        return [(uid, self.store_for(uid)) for uid in self._web_user_ids()]
+
+    async def start_user_web_loops(self) -> None:
+        """Digest + ping + prune loops for one user's Hub (no scraping, no discord bot)."""
+        if self.running:
+            return
+        self.running = True
+        self.last_error = None
+        self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
+        self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
+        self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
+
+    async def stop_user_web_loops(self) -> None:
+        self.running = False
+        tasks = [t for t in (self._task, self._ping_task, self._prune_task) if t]
+        self._task = self._ping_task = self._prune_task = None
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    async def _user_web_manager(self) -> None:
+        """Ensure every user has a running web Hub (digest + ping on their own store)."""
+        while self.running:
+            try:
+                wanted = set(self._web_user_ids())
+                with self._user_stores_lock:
+                    known = set(self._child_hubs)
+                for uid in sorted(wanted):
+                    try:
+                        child = self.hub_for(uid)
+                        if not child.running:
+                            await child.start_user_web_loops()
+                    except Exception as exc:
+                        self.last_error = f"user hub {uid}: {exc}"
+                for uid in sorted(known - wanted):
+                    try:
+                        child = self._child_hubs.get(uid)
+                        if child is not None:
+                            await child.stop_user_web_loops()
+                    except Exception:
+                        pass
+                    finally:
+                        self.drop_store_cache(uid)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"{exc}"
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
 
     def _recover_stuck_catalog_meta(self) -> None:
         """Resume leftover running jobs after a worker crash. Web reloads must not do this."""
@@ -193,9 +303,18 @@ class Hub:
             self._dedupe_task = asyncio.create_task(self._dedupe_loop(), name="sreality-dedupe")
             self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
         elif role == "web":
-            # Digests only — listing polls / catalog / sold run in scrape_worker.
-            self._task = asyncio.create_task(self._web_loop(), name="sreality-hub-web")
-            self._prune_task = asyncio.create_task(self._prune_loop(), name="sreality-prune")
+            # Multi-user: per-user digest + ping loops via the user manager.
+            # Listing polls / catalog / sold run in scrape_worker.
+            self._user_manager_task = asyncio.create_task(self._user_web_manager(), name="sreality-user-web")
+            # Keep _task set so web mode still reports a running main loop.
+            self._task = self._user_manager_task
+            if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
+                from app.discord_bot import run_discord_bot
+
+                self._discord_task = asyncio.create_task(
+                    run_discord_bot(self.store, user_stores=self._web_user_stores), name="discord-bot"
+                )
+            return
         self._ping_task = asyncio.create_task(self._ping_loop(), name="sreality-pings")
         if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
             from app.discord_bot import run_discord_bot
@@ -231,6 +350,7 @@ class Hub:
                 self._coords_task,
                 self._dedupe_task,
                 self._prune_task,
+                self._user_manager_task,
             )
             if task is not None
         ]
@@ -248,6 +368,12 @@ class Hub:
         self._coords_task = None
         self._dedupe_task = None
         self._prune_task = None
+        self._user_manager_task = None
+        for child in list(self._child_hubs.values()):
+            try:
+                await child.stop_user_web_loops()
+            except Exception:
+                pass
 
     async def close(self) -> None:
         await self.stop()

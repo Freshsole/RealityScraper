@@ -163,6 +163,24 @@ def save_code(store: Store, payload: dict[str, Any]) -> str:
     return code
 
 
+def find_token_store_hint(store: Store, token_value: str) -> bool:
+    """Return True if an OAuth code or refresh token (hash) exists in this store.
+
+    Used to route /oauth/token and /oauth/revoke to the owning user's store.
+    """
+    if not token_value:
+        return False
+    digest = _hash(token_value)
+    now = time.time()
+    for row in _read(store, CODES_META):
+        if row.get("code") == digest and int(row.get("exp") or 0) > now:
+            return True
+    for row in _read(store, TOKENS_META):
+        if row.get("refresh_hash") == digest and int(row.get("refresh_exp") or 0) > now:
+            return True
+    return False
+
+
 def consume_code(store: Store, code: str) -> dict[str, Any] | None:
     digest = _hash(code)
     now = time.time()
@@ -299,12 +317,12 @@ def validate_authorize(store: Store, params: dict[str, str]) -> dict[str, str]:
     }
 
 
-def complete_authorize(store: Store, params: dict[str, str]) -> str:
+def complete_authorize(store: Store, params: dict[str, str], client_store: Store | None = None) -> str:
     from app.agents import mcp_enabled
 
     if not mcp_enabled(store):
         raise PermissionError("MCP je v tarifu PRO")
-    fields = validate_authorize(store, params)
+    fields = validate_authorize(client_store if client_store is not None else store, params)
     code = save_code(
         store,
         {

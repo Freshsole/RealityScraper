@@ -3,66 +3,59 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import time
 import traceback
-from typing import Any
 
 from app import config
-from app.catalog_sync import (
-    daily_shards,
-    listing_is_new_for_monitor,
-    monitor_search_targets,
-    recent_shards,
-)
+from app import users as user_registry
 from app.monitor import Hub
-from app.monitor_index import MonitorIndex
-from app.scrape_engine import ScrapeEngine
-from app.sreality import Listing, ListingGone
-from app.store import utc_now
 
 
 class ScrapeWorker:
-    """Minute NewDiscovery + MonitorRefresh + rolling deep catalog (SCRAPE_ROLE=worker)."""
+    """One worker process, one Hub per user (SCRAPE_ROLE=worker).
+
+    The primary hub owns the global store (users table) plus the shared
+    rate-limiter registry and thread pools.  Every user gets a child hub
+    (shared=primary) running the full scrape pipeline on their private
+    store: monitor priority loop, new-discovery, rolling deep catalog,
+    sold, coords, dedupe, stale sweep and the per-user tick.
+    """
+
+    RESCAN_INTERVAL_S = 300
 
     def __init__(self) -> None:
         self.hub = Hub()
-        self.engine = ScrapeEngine(registry=self.hub._scrape_registry, pipeline="worker")
-        self.monitor_index = MonitorIndex()
         self.running = False
-        self.last_tick: dict[str, Any] = {}
+        self.user_hubs: dict[str, Hub] = {}
+        self._user_tasks: dict[str, list[asyncio.Task[None]]] = {}
+        self._rescan_task: asyncio.Task[None] | None = None
+        self._watch_task: asyncio.Task[None] | None = None
 
     async def run(self) -> None:
         self.running = True
-        self.hub.running = True
         print(
             f"scrape_worker start concurrency={config.SCRAPE_CONCURRENCY} "
             f"overrides={config.SCRAPE_CONCURRENCY_OVERRIDES or '{}'} "
             f"recent_pages={config.SCRAPE_RECENT_PAGES}",
             flush=True,
         )
-        # Three independent continuous pipelines. Monitor traffic has priority 0,
-        # NewDiscovery priority 1 and rolling deep priority 2 on the shared limiter.
-        self.hub._task = asyncio.create_task(self.hub._loop(), name="worker-monitor-priority")
-        self.hub._recent_catalog_task = asyncio.create_task(
-            self.hub._recent_catalog_loop(), name="worker-new-discovery"
-        )
-        self.hub._deep_catalog_task = asyncio.create_task(
-            self.hub._deep_catalog_loop(), name="worker-rolling-deep"
-        )
-        # Own sold/coords/dedupe — web process does not.
-        self.hub._sold_task = asyncio.create_task(self.hub._sold_loop(), name="worker-sold")
-        self.hub._coords_task = asyncio.create_task(self.hub.backfill_missing_coords(), name="worker-coords")
-        self.hub._dedupe_task = asyncio.create_task(self.hub._dedupe_loop(), name="worker-dedupe")
-        self._stale_sweep_task = asyncio.create_task(self._stale_sweep_loop(), name="worker-stale-sweep")
-        watch = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
+        await self._rescan_users()
+        self._rescan_task = asyncio.create_task(self._rescan_loop(), name="worker-rescan-users")
+        self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
                 try:
-                    await self._maybe_scrape_url_request()
-                    await self._maybe_forced_catalog()
-                    await self.hub.maybe_run_catalog_sync(force=False)
-                    await self.hub._flush_scrape_metrics()
+                    for user_id, user_hub in list(self.user_hubs.items()):
+                        try:
+                            await self._user_tick(user_hub)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            user_hub.last_error = f"scrape_worker: {exc}"
+                            print(
+                                f"scrape_worker tick error user={user_id}: {exc}\n{traceback.format_exc()}",
+                                flush=True,
+                            )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -71,21 +64,87 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
-            watch.cancel()
-            self._stale_sweep_task.cancel()
+            for task in (self._rescan_task, self._watch_task):
+                if task is not None:
+                    task.cancel()
+            for tasks in self._user_tasks.values():
+                for task in tasks:
+                    task.cancel()
             try:
-                await self.hub._flush_scrape_metrics()
-            except Exception:
-                pass
-            await self.hub.close()
+                for user_hub in list(self.user_hubs.values()):
+                    try:
+                        await user_hub._flush_scrape_metrics()
+                    except Exception:
+                        pass
+            finally:
+                for user_hub in list(self.user_hubs.values()):
+                    try:
+                        await user_hub.close()
+                    except Exception:
+                        pass
+                try:
+                    await self.hub.close()
+                except Exception:
+                    pass
 
-    async def _stale_sweep_loop(self) -> None:
+    def _spawn_user(self, user_id: str) -> None:
+        if user_id in self.user_hubs:
+            return
+        user_hub = Hub(store_path=user_registry.user_store_path(user_id), shared=self.hub)
+        user_hub.running = True
+        tasks = [
+            asyncio.create_task(user_hub._loop(), name=f"worker-monitor-priority:{user_id}"),
+            asyncio.create_task(user_hub._recent_catalog_loop(), name=f"worker-new-discovery:{user_id}"),
+            asyncio.create_task(user_hub._deep_catalog_loop(), name=f"worker-rolling-deep:{user_id}"),
+            # Own sold/coords/dedupe — web process does not.
+            asyncio.create_task(user_hub._sold_loop(), name=f"worker-sold:{user_id}"),
+            asyncio.create_task(user_hub.backfill_missing_coords(), name=f"worker-coords:{user_id}"),
+            asyncio.create_task(user_hub._dedupe_loop(), name=f"worker-dedupe:{user_id}"),
+            asyncio.create_task(self._stale_sweep_loop(user_hub), name=f"worker-stale-sweep:{user_id}"),
+        ]
+        self.user_hubs[user_id] = user_hub
+        self._user_tasks[user_id] = tasks
+        print(f"scrape_worker: spawned pipelines for user {user_id}", flush=True)
+
+    async def _rescan_users(self) -> None:
+        try:
+            users = await asyncio.to_thread(user_registry.list_users, self.hub.store)
+        except Exception as exc:
+            print(f"scrape_worker: user rescan failed: {exc}", flush=True)
+            return
+        for user in users:
+            user_id = str(user.get("id") or "")
+            if user_id:
+                try:
+                    self._spawn_user(user_id)
+                except Exception as exc:
+                    print(f"scrape_worker: spawn failed for user {user_id}: {exc}", flush=True)
+
+    async def _rescan_loop(self) -> None:
+        while self.running:
+            try:
+                await asyncio.sleep(self.RESCAN_INTERVAL_S)
+                if not self.running:
+                    break
+                await self._rescan_users()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"scrape_worker: rescan loop error: {exc}", flush=True)
+
+    async def _user_tick(self, user_hub: Hub) -> None:
+        await self._maybe_scrape_url_request(user_hub)
+        await self._maybe_forced_catalog(user_hub)
+        await user_hub.maybe_run_catalog_sync(force=False)
+        await user_hub._flush_scrape_metrics()
+
+    async def _stale_sweep_loop(self, user_hub: Hub) -> None:
         """Hourly independent staleness sweep — does not wait for portal sync completion."""
         await asyncio.sleep(45)
         while self.running:
             try:
                 hours = int(os.getenv("CATALOG_STALE_HOURS", "72") or 72)
-                n = await self.hub._job_db(self.hub.store.sweep_catalog_stale_gone, hours)
+                n = await user_hub._job_db(user_hub.store.sweep_catalog_stale_gone, hours)
                 if n:
                     print(f"catalog stale sweep gone={n} hours={hours}", flush=True)
             except asyncio.CancelledError:
@@ -114,219 +173,10 @@ class ScrapeWorker:
             except Exception:
                 await asyncio.sleep(1)
 
-    async def minute_tick(self) -> dict[str, Any]:
-        started = time.monotonic()
-        discovery = await self.run_new_discovery()
-        refresh = await self.run_monitor_refresh()
-        snap = self.engine.metrics_snapshot()
-        self.last_tick = {
-            "at": utc_now(),
-            "kind": "minute",
-            "role": "worker",
-            "ms": int((time.monotonic() - started) * 1000),
-            "discovery": discovery,
-            "refresh": refresh,
-            "metrics": snap,
-        }
-        await self.hub._job_db(self.hub.store.record_scrape_tick, self.last_tick)
-        if snap.get("error_rate_5m", 0) >= config.SCRAPE_ERROR_RATE_ALERT:
-            self.hub.last_error = (
-                f"scrape throttle: error_rate_5m={snap['error_rate_5m']} "
-                f"403={snap['http_403']} 429={snap['http_429']}"
-            )
-        from app.scrape_console import emit
 
-        emit(
-            f"scrape_worker tick discovery={discovery.get('listings')} "
-            f"new={discovery.get('new')} upd={discovery.get('updated')} "
-            f"refresh={refresh.get('listings')} deferred={snap.get('tick_deferred_pages')} "
-            f"ms={self.last_tick.get('ms')} limit={snap.get('limit')}"
-        )
-        return self.last_tick
-
-    async def run_new_discovery(self) -> dict[str, Any]:
-        shards = recent_shards()
-        results = await self.engine.fetch_shards(
-            shards,
-            client_factory=self.hub.client_for,
-            max_pages=config.SCRAPE_RECENT_PAGES,
-            deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
-        )
-        listings: list[Listing] = []
-        seen: set[int] = set()
-        pages_ok = 0
-        deferred = 0
-        for item in results:
-            pages_ok += item.pages_ok
-            deferred += len(item.deferred_pages)
-            for listing in item.listings:
-                if listing.id in seen:
-                    continue
-                seen.add(listing.id)
-                listings.append(listing)
-        stats = {"n": 0, "new": 0, "updated": 0, "same": 0}
-        write_skipped = False
-        if listings:
-            written, note = await self.hub._try_catalog_upsert(
-                listings,
-                kind="refresh",
-                timeout_sec=3.0,
-                write_deadline_sec=18.0,
-            )
-            if written is not None:
-                stats = written
-                deferred += int(written.get("deferred_write") or 0)
-            else:
-                write_skipped = True
-                deferred += len(listings)
-        return {
-            "shards": len(shards),
-            "listings": len(listings),
-            "pages_ok": pages_ok,
-            "deferred": deferred,
-            "new": int(stats.get("new") or 0),
-            "updated": int(stats.get("updated") or 0),
-            "same": int(stats.get("same") or 0),
-            "write_skipped": write_skipped,
-            "note": "write-deferred:catalog-busy" if write_skipped else None,
-        }
-
-    def _unique_monitor_shards(self) -> list[dict[str, str]]:
-        shards: list[dict[str, str]] = []
-        seen_urls: set[str] = set()
-        for monitor in self.hub.store.list_monitors():
-            if not monitor.get("enabled"):
-                continue
-            if not monitor.get("seeded"):
-                self.hub.store.seed_monitor_from_catalog(monitor)
-                self.hub.store.set_monitor_seeded(monitor["id"], True)
-            for target in monitor_search_targets(monitor):
-                url = target.get("search_url") or ""
-                if not url or url in seen_urls:
-                    continue
-                seen_urls.add(url)
-                shards.append(
-                    {
-                        "kind": "monitor_live",
-                        "portal": target.get("portal") or "sreality",
-                        "shard_key": f"monitor:{target.get('portal')}:{len(seen_urls)}",
-                        "search_url": url,
-                    }
-                )
-        return shards
-
-    def _full_market_shards(self) -> list[dict[str, str]]:
-        """Deep rolling coverage for full catalog — not gated on monitor URL count."""
-        return self.hub.next_deep_shards()
-
-    async def run_monitor_refresh(self) -> dict[str, Any]:
-        monitors = [item for item in self.hub.store.list_monitors() if item.get("enabled")]
-        self.monitor_index.rebuild(monitors)
-        monitor_shards = self._unique_monitor_shards()
-        # Always rotate deep shards so ~50k catalog coverage advances every minute.
-        # Few monitor URLs still get polled for alerts; deep path keeps the long tail fresh.
-        deep = self._full_market_shards()
-        full_market = len(monitor_shards) >= config.SCRAPE_FULL_MARKET_URLS
-        if full_market:
-            shards = deep
-            deadline = float(config.SCRAPE_FULL_MARKET_DEADLINE_SEC)
-            max_pages = config.SCRAPE_DEEP_PAGES
-        else:
-            # Poll concrete monitor searches + a deep slice each tick.
-            shards = monitor_shards + deep
-            deadline = float(config.SCRAPE_MONITOR_DEADLINE_SEC) + float(config.SCRAPE_DEEP_DEADLINE_SEC)
-            max_pages = max(config.POLL_PAGES, config.SCRAPE_DEEP_PAGES)
-        if not shards:
-            return {"listings": 0, "shards": 0, "full_market": full_market, "notified": 0}
-
-        results = await self.engine.fetch_shards(
-            shards,
-            client_factory=self.hub.client_for,
-            max_pages=max_pages,
-            deadline_sec=min(deadline, float(config.SCRAPE_FULL_MARKET_DEADLINE_SEC) + 20),
-        )
-        listings: list[Listing] = []
-        seen: set[int] = set()
-        for item in results:
-            for listing in item.listings:
-                if listing.id in seen:
-                    continue
-                seen.add(listing.id)
-                listings.append(listing)
-
-        notified = 0
-        if listings:
-            notified = await self._notify_matches(listings)
-
-        deep_total = len(daily_shards()) or 1
-        return {
-            "listings": len(listings),
-            "shards": len(shards),
-            "deep_shards": len(deep),
-            "deep_idx": self.hub._deep_shard_idx,
-            "deep_total": deep_total,
-            "coverage_pct": round(100.0 * (self.hub._deep_shard_idx % deep_total) / deep_total, 1),
-            "full_market": full_market,
-            "notified": notified,
-            "monitors": len(monitors),
-            "index_buckets": self.monitor_index.bucket_count,
-        }
-
-    async def _notify_matches(self, listings: list[Listing]) -> int:
-        notified = 0
-        prefs = self.hub.store.notify_prefs()
-        self.monitor_index.rebuild([item for item in self.hub.store.list_monitors() if item.get("enabled")])
-        for listing in listings:
-            try:
-                result = await self.hub._job_db(
-                    self.hub.store.upsert_catalog_listing, listing, kind="refresh", fast=True
-                )
-                targets = self.monitor_index.matching_monitors(listing)
-                if not targets:
-                    continue
-                for monitor in targets:
-                    await self.hub._job_db(self.hub.store.add_monitor_hit, monitor["id"], result["listing_key"])
-                alert = await self.hub._classify(self.hub.client_for(listing.url), listing, result.get("prev"))
-                if alert is None:
-                    continue
-                if alert.kind == "refresh" and not config.NOTIFY_REFRESHES:
-                    continue
-                for monitor in targets:
-                    if alert.kind == "new" and not listing_is_new_for_monitor(listing, monitor, None):
-                        self.hub.store.upsert_seen(monitor["id"], listing, notified=False, kind="seeded")
-                        continue
-                    kind = alert.kind or "new"
-                    if kind == "new" and not prefs.get("ntNew", True):
-                        self.hub.store.upsert_seen(monitor["id"], alert, notified=False)
-                        continue
-                    if kind == "changed" and not prefs.get("ntPrice", True):
-                        self.hub.store.upsert_seen(monitor["id"], alert, notified=False)
-                        continue
-                    webhook = self.hub.store.notify_webhook(monitor.get("search_url") or "", monitor.get("webhook_url"))
-                    template = self.hub.store.get_template(monitor.get("template_id") or "default")
-                    template_config = (template or {}).get("config")
-                    queued = False
-                    if prefs.get("discord") is not False and webhook:
-                        queued = self.hub.store.enqueue_listing_ping(
-                            alert,
-                            webhook,
-                            monitor_id=monitor["id"],
-                            template_config=template_config,
-                            monitor_name=monitor.get("name") or "",
-                        )
-                    pushed = await self.hub._notify_push(alert, kind, monitor.get("name") or "")
-                    mailed = await self.hub._notify_email(alert, kind, monitor.get("name") or "")
-                    self.hub.store.upsert_seen(monitor["id"], alert, notified=bool(queued or pushed or mailed))
-                    if queued or pushed or mailed:
-                        notified += 1
-            except ListingGone:
-                continue
-            except Exception as exc:
-                self.hub.last_error = f"notify {getattr(listing, 'id', '?')}: {exc}"
-        return notified
-
-    async def _maybe_forced_catalog(self) -> None:
-        raw = await self.hub._job_db(self.hub.store.get_meta, "catalog_sync_request")
+    async def _maybe_forced_catalog(self, user_hub: Hub | None = None) -> None:
+        user_hub = user_hub if user_hub is not None else self.hub
+        raw = await user_hub._job_db(user_hub.store.get_meta, "catalog_sync_request")
         if not raw:
             return
         portals = None
@@ -337,27 +187,28 @@ class ScrapeWorker:
         except json.JSONDecodeError:
             portals = None
         wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
-        to_start = wanted - self.hub.catalog_running_portals
+        to_start = wanted - user_hub.catalog_running_portals
         if not to_start:
             return
         leftover = sorted(wanted - to_start)
-        await self.hub._job_db(
-            self.hub.store.set_meta,
+        await user_hub._job_db(
+            user_hub.store.set_meta,
             "catalog_sync_request",
             json.dumps(leftover) if leftover else None,
         )
-        self.hub.catalog_running_portals |= to_start
-        self.hub.catalog_running = True
+        user_hub.catalog_running_portals |= to_start
+        user_hub.catalog_running = True
         asyncio.create_task(
-            self.hub.run_catalog_sync(portals=sorted(to_start), rerun=True, claimed=True),
+            user_hub.run_catalog_sync(portals=sorted(to_start), rerun=True, claimed=True),
             name="forced-catalog",
         )
 
-    async def _maybe_scrape_url_request(self) -> None:
-        raw = await self.hub._job_db(self.hub.store.get_meta, "scrape_url_request")
+    async def _maybe_scrape_url_request(self, user_hub: Hub | None = None) -> None:
+        user_hub = user_hub if user_hub is not None else self.hub
+        raw = await user_hub._job_db(user_hub.store.get_meta, "scrape_url_request")
         if not raw:
             return
-        await self.hub._job_db(self.hub.store.set_meta, "scrape_url_request", None)
+        await user_hub._job_db(user_hub.store.set_meta, "scrape_url_request", None)
         try:
             payload = json.loads(str(raw))
         except json.JSONDecodeError:
@@ -371,7 +222,7 @@ class ScrapeWorker:
             pages = int(payload.get("max_pages") or 40)
         except (TypeError, ValueError):
             pages = 40
-        await self.hub._run_scrape_search_url(url, pages)
+        await user_hub._run_scrape_search_url(url, pages)
 
 
 async def _amain() -> None:

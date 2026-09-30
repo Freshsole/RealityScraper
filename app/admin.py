@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app import account as user_account
+from app import users as user_registry
 from app import billing as stripe_billing
 from app import config
 from app import whatsapp as wa_notify
@@ -171,62 +172,70 @@ def live(value: Any) -> dict[str, Any]:
     return {"value": value, "source": LIVE, "note": ""}
 
 
-def _admin_session_ok(store: Store, token: str | None) -> bool:
-    stored = store.get_meta("admin_session") or ""
-    given = token or ""
-    if not stored or not given or len(stored) != len(given):
-        return False
-    return secrets.compare_digest(stored, given)
-
-
 def admin_from_cookie(store: Store, token: str | None) -> dict[str, Any] | None:
-    if not _admin_session_ok(store, token):
+    row = user_registry.get_user_by_session(store, token)
+    if not row or (row.get("role") or "") != "admin":
         return None
-    account = user_account.public_account(store)
-    name = account.get("name") or "Admin"
-    email = config.ADMIN_EMAIL
+    user = user_registry.public_user(row) or {}
+    name = user.get("name") or "Administrátor"
     return {
-        "email": email,
-        "name": name if (account.get("email") or "").lower() == email else "Administrátor",
-        "initials": initials(name if (account.get("email") or "").lower() == email else "Admin Realitify", email),
+        "id": user.get("id"),
+        "email": user.get("email"),
+        "name": name,
+        "initials": initials(name, user.get("email") or ""),
         "role": "Admin účet",
     }
 
 
 def new_admin_session(store: Store) -> str:
-    token = secrets.token_urlsafe(32)
-    store.set_meta("admin_session", token)
-    return token
+    """Legacy helper: create a session token for the admin user."""
+    admin_id = None
+    for candidate in user_registry.list_users(store):
+        if (candidate.get("role") or "") == "admin":
+            admin_id = str(candidate.get("id"))
+            break
+    if not admin_id:
+        raise ValueError("Admin účet neexistuje")
+    return user_registry.create_session(store, admin_id)
 
 
 def clear_admin_session(store: Store) -> None:
-    store.set_meta("admin_session", None)
+    with store.connect() as conn:
+        try:
+            conn.execute(
+                "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE role = 'admin')"
+            )
+            conn.commit()
+        except Exception:
+            pass
 
 
 def login_admin(store: Store, email: str, password: str) -> str:
     email_norm = (email or "").strip().lower()
-    data = user_account.account_record(store)
-    account_email = (data.get("email") or "").strip().lower()
-    role = user_account.account_role_from_data(data)
-    allowed = email_norm == config.ADMIN_EMAIL or (bool(email_norm) and email_norm == account_email and role == "admin")
-    if not allowed:
-        raise ValueError("Do administrace se lze přihlásit jen jako admin")
     password = password or ""
-    ok = False
+    admin_email = (config.ADMIN_EMAIL or "").strip().lower()
     env_pw = config.ADMIN_PASSWORD
-    if env_pw and email_norm == config.ADMIN_EMAIL:
+    if env_pw and email_norm and email_norm == admin_email:
         left = hashlib.sha256(f"admin|{env_pw}".encode()).digest()
         right = hashlib.sha256(f"admin|{password}".encode()).digest()
         if hmac.compare_digest(left, right):
-            ok = True
-    if not ok and data.get("password_hash") and email_norm in {config.ADMIN_EMAIL, account_email}:
-        if user_account._verify_password(password, data.get("password_hash") or "", data.get("password_salt") or ""):
-            ok = True
-    if not ok:
-        if not env_pw and account_email != config.ADMIN_EMAIL and role != "admin":
-            raise ValueError("Nastav ADMIN_PASSWORD v .env, nebo založ účet admin@realitify.cz")
+            user = user_registry.get_user_by_email(store, email_norm)
+            if not user:
+                user = user_registry.create_user(
+                    store, email_norm, secrets.token_hex(16), name="Administrátor", role="admin"
+                )
+            elif (user.get("role") or "") != "admin":
+                user_registry.set_role(store, str(user.get("id")), "admin")
+            return user_registry.create_session(store, str(user.get("id")))
         raise ValueError("E-mail nebo heslo nesedí")
-    return new_admin_session(store)
+    user = user_registry.get_user_by_email(store, email_norm)
+    if not user or (user.get("role") or "") != "admin":
+        if not env_pw:
+            raise ValueError("Do administrace se lze přihlásit jen jako admin (nastav ADMIN_PASSWORD v .env)")
+        raise ValueError("Do administrace se lze přihlásit jen jako admin")
+    if not user_registry.verify_password(password, user.get("password_hash") or "", user.get("password_salt") or ""):
+        raise ValueError("E-mail nebo heslo nesedí")
+    return user_registry.create_session(store, str(user.get("id")))
 
 
 def _audit(store: Store, text: str, actor: str = "Admin") -> None:
@@ -530,56 +539,109 @@ def overview_payload(store: Store, hub: Any) -> dict[str, Any]:
     }
 
 
-def users_payload(store: Store) -> dict[str, Any]:
-    account = user_account.public_account(store)
-    data = user_account.account_record(store)
-    monitors = store.list_monitors()
-    disc = user_account.discord_status(store)
-    wa = wa_notify.status(store)
-    blocked = _blocked(store)
-    user = None
-    if account.get("email"):
-        hits = _count_events(store)
+def users_payload(store: Store, store_for=None) -> dict[str, Any]:
+    """All registered users with per-user stats (each from their own store)."""
+    def _spc(n: int) -> str:
+        return f"{int(n):,}".replace(",", " ")
+
+    def _ustore(uid: str) -> Store | None:
+        if store_for is None:
+            return None
+        try:
+            return store_for(uid)
+        except Exception:
+            return None
+
+    rows: list[dict[str, Any]] = []
+    for row in user_registry.list_users(store):
+        uid = str(row.get("id") or "")
+        if not uid:
+            continue
+        ustore = _ustore(uid)
+        email = (row.get("email") or "").strip()
+        name = f"{(row.get('first') or '').strip()} {(row.get('last') or '').strip()}".strip() or "—"
+        monitors: list = []
+        disc = {"linked": False}
+        wa: dict = {}
+        billing = {"plan": "free", "label": "Zdarma"}
+        hits = 0
         uniq = 0
-        with store.connect() as conn:
-            uniq = int(conn.execute("SELECT COUNT(DISTINCT listing_id) FROM events WHERE kind IN ('new','changed')").fetchone()[0] or 0)
-        last_at = _last_activity(store, data.get("created_at"))
-        billing = stripe_billing.billing_state(store)
-        def _spc(n: int) -> str:
-            return f"{int(n):,}".replace(",", " ")
-        user = {
-            "id": "local",
-            "email": account.get("email"),
-            "name": account.get("name") or "—",
-            "registered": fmt_date(data.get("created_at")),
-            "registered_at": data.get("created_at") or "",
+        last_at = row.get("created_at")
+        blocked = False
+        if ustore is not None:
+            try:
+                monitors = ustore.list_monitors()
+            except Exception:
+                monitors = []
+            try:
+                disc = user_account.discord_status(ustore)
+            except Exception:
+                pass
+            try:
+                wa = wa_notify.status(ustore)
+            except Exception:
+                pass
+            try:
+                billing = stripe_billing.billing_state(ustore)
+            except Exception:
+                pass
+            try:
+                hits = _count_events(ustore)
+                with ustore.connect() as conn:
+                    uniq = int(conn.execute(
+                        "SELECT COUNT(DISTINCT listing_id) FROM events WHERE kind IN ('new','changed')"
+                    ).fetchone()[0] or 0)
+            except Exception:
+                pass
+            try:
+                last_at = _last_activity(ustore, row.get("created_at"))
+            except Exception:
+                pass
+            try:
+                blocked = _blocked(ustore)
+            except Exception:
+                pass
+        rows.append({
+            "id": uid,
+            "email": email,
+            "name": name,
+            "registered": fmt_date(row.get("created_at")),
+            "registered_at": row.get("created_at") or "",
             "status": "Zablokovaný" if blocked else "Aktivní",
             "blocked": blocked,
             "plan": billing.get("plan") or "free",
             "plan_label": billing.get("label") or "Zdarma",
-            "role": user_account.account_role(store),
+            "role": (row.get("role") or "user"),
             "monitors": len(monitors),
             "discord": bool(disc.get("linked")),
-            "whatsapp": bool(wa.get("enabled") or wa.get("phone")),
+            "whatsapp": bool((wa or {}).get("enabled") or (wa or {}).get("phone")),
             "activity": relative_short(last_at),
             "activity_at": last_at or "",
             "hits": hits,
             "notif": f"{_spc(hits)} / {_spc(uniq)}",
-        }
+        })
+    rows.sort(key=lambda r: (r.get("role") != "admin", r.get("registered_at") or ""))
     audit = _json_meta(store, "admin_audit", [])
     return {
-        "total": 1 if user else 0,
-        "users": [user] if user else [],
+        "total": len(rows),
+        "users": rows,
         "audit": audit[:8],
-        "note": "Platforma má teď jeden lokální účet — tabulka ukazuje reálná data z této instance.",
+        "note": "",
     }
 
 
-def user_detail_payload(store: Store) -> dict[str, Any]:
+def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dict[str, Any]:
     account = user_account.public_account(store)
     data = user_account.account_record(store)
-    if not account.get("email"):
+    email = ((user or {}).get("email") or account.get("email") or "").strip()
+    if not email:
         raise ValueError("Žádný uživatel")
+    name = ((user or {}).get("name") or account.get("name") or "—").strip() or "—"
+    if user and not (user.get("name") or "").strip():
+        first = ((user.get("first") or "").strip())
+        last = ((user.get("last") or "").strip())
+        name = f"{first} {last}".strip() or "—"
+    registered_at = (user or {}).get("created_at") or data.get("created_at")
     monitors = store.list_monitors()
     disc = user_account.discord_status(store)
     wa = wa_notify.status(store)
@@ -588,8 +650,8 @@ def user_detail_payload(store: Store) -> dict[str, Any]:
     limit = override if override is not None else billing.get("watch_limit")
     events = store.recent_notified(limit=12, twins=False)
     timeline = []
-    if data.get("created_at"):
-        timeline.append({"title": "Registrace", "at": fmt_dt(data.get("created_at"))})
+    if registered_at:
+        timeline.append({"title": "Registrace", "at": fmt_dt(registered_at)})
     for item in monitors:
         name = item.get("name") or "monitor"
         timeline.append({"title": f"Vytvořil monitor {name}", "at": fmt_dt(item.get("created_at"))})
@@ -600,21 +662,21 @@ def user_detail_payload(store: Store) -> dict[str, Any]:
     timeline.sort(key=lambda row: row.get("at") or "", reverse=True)
     return {
         "user": {
-            "id": "USR-LOCAL",
-            "name": account.get("name") or "—",
-            "email": account.get("email"),
-            "registered": fmt_date(data.get("created_at")),
+            "id": (user or {}).get("id") or "USR-LOCAL",
+            "name": name,
+            "email": email,
+            "registered": fmt_date(registered_at),
             "status": "Zablokovaný" if _blocked(store) else "Aktivní",
             "blocked": _blocked(store),
-            "activity": relative_long(_last_activity(store, data.get("created_at"))),
+            "activity": relative_long(_last_activity(store, registered_at)),
             "watch_limit": limit if limit is not None else "neomezeně",
             "phone": account.get("phone") or "—",
-            "role": user_account.account_role(store),
+            "role": (user or {}).get("role") or user_account.account_role(store),
             "plan": billing.get("plan") or "free",
             "plan_label": billing.get("label") or "Zdarma",
             "comp": bool(billing.get("comp")),
         },
-        "monitors": [_monitor_view(item, account.get("email") or "") for item in monitors],
+        "monitors": [_monitor_view(item, email) for item in monitors],
         "discord": {
             "linked": bool(disc.get("linked")),
             "channel": "Ano" if disc.get("linked") else "Ne",
@@ -1046,13 +1108,12 @@ def save_broadcast(store: Store, payload: dict[str, Any], actor: str) -> dict[st
     return item
 
 
-async def send_broadcast(store: Store, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+async def send_broadcast(store: Store, payload: dict[str, Any], actor: str, user_stores=None) -> dict[str, Any]:
     from app import email_notify as mail
     from app.discord_notify import send_text as discord_send
 
-    account = user_account.public_account(store)
-    email = (account.get("email") or "").strip()
-    n_users = 1 if email else 0
+    targets = list(user_stores) if user_stores else [(None, store)]
+    n_users = len(targets)
     subject = (payload.get("subject") or "").strip() or "Hromadná zpráva"
     body = (payload.get("body") or "").strip()
     raw_ch = (payload.get("channel") or "all").strip()
@@ -1093,41 +1154,44 @@ async def send_broadcast(store: Store, payload: dict[str, Any], actor: str) -> d
             actor,
         )
         return item
-    if "E-mail" in channels:
-        if email and mail.configured():
-            try:
-                await asyncio.to_thread(mail.send_message, email, subject, body)
-                delivered += 1
-            except Exception as exc:
+    for _uid, ustore in targets:
+        account = user_account.public_account(ustore)
+        email = (account.get("email") or "").strip()
+        if "E-mail" in channels:
+            if email and mail.configured():
+                try:
+                    await asyncio.to_thread(mail.send_message, email, subject, body)
+                    delivered += 1
+                except Exception as exc:
+                    failed += 1
+                    errors.append(str(exc)[:120])
+            else:
                 failed += 1
-                errors.append(str(exc)[:120])
-        else:
-            failed += 1
-            errors.append("E-mail není nastavený")
-    if "Discord" in channels:
-        webhook = store.notify_webhook() or store.discord_webhook_url()
-        if webhook:
-            try:
-                await discord_send(webhook, f"{subject}\n\n{body}"[:1900])
-                delivered += 1
-            except Exception as exc:
+                errors.append("E-mail není nastavený")
+        if "Discord" in channels:
+            webhook = ustore.notify_webhook() or ustore.discord_webhook_url()
+            if webhook:
+                try:
+                    await discord_send(webhook, f"{subject}\n\n{body}"[:1900])
+                    delivered += 1
+                except Exception as exc:
+                    failed += 1
+                    errors.append(str(exc)[:120])
+            else:
                 failed += 1
-                errors.append(str(exc)[:120])
-        else:
-            failed += 1
-            errors.append("Discord webhook chybí")
-    if "WhatsApp" in channels:
-        phone = wa_notify.account_phone(store)
-        if phone and wa_notify.server_configured():
-            try:
-                await wa_notify.send_text(phone, f"{subject}\n{body}"[:1000])
-                delivered += 1
-            except Exception as exc:
+                errors.append("Discord webhook chybí")
+        if "WhatsApp" in channels:
+            phone = wa_notify.account_phone(ustore)
+            if phone and wa_notify.server_configured():
+                try:
+                    await wa_notify.send_text(phone, f"{subject}\n{body}"[:1000])
+                    delivered += 1
+                except Exception as exc:
+                    failed += 1
+                    errors.append(str(exc)[:120])
+            else:
                 failed += 1
-                errors.append(str(exc)[:120])
-        else:
-            failed += 1
-            errors.append("WhatsApp není nastavený")
+                errors.append("WhatsApp není nastavený")
     item = save_broadcast(
         store,
         {
@@ -2071,8 +2135,9 @@ def mark_promo_payout(store: Store, code: str, month: str, paid: bool) -> dict[s
     return promo_payload(store, month)
 
 
-def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str, global_store: Store | None = None, user_id: str | None = None) -> dict[str, Any]:
     action = (action or "").strip()
+    gstore = global_store if global_store is not None else store
     if action == "block":
         _set_json_meta(store, "admin_user_blocked", True)
         _audit(store, f"zablokoval účet {user_account.public_account(store).get('email')}", actor)
@@ -2090,7 +2155,14 @@ def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str)
         _audit(store, "odpojil WhatsApp", actor)
         return {"ok": True}
     if action == "set_role":
-        role = user_account.set_account_role(store, str(payload.get("role") or ""))
+        role = (str(payload.get("role") or "").strip().lower() or "user")
+        if role not in {"admin", "user"}:
+            raise ValueError("Neplatná role")
+        if user_id:
+            updated = user_registry.set_role(gstore, user_id, role)
+            role = (updated or {}).get("role") or role
+        else:
+            role = user_account.set_account_role(store, role)
         label = "admin" if role == "admin" else "běžný uživatel"
         _audit(store, f"nastavil roli na {label}", actor)
         return {"ok": True, "role": role}
@@ -2121,12 +2193,17 @@ def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str)
     if action == "reset_password":
         from app import email_notify as mail
 
-        email = (user_account.account_record(store).get("email") or "").strip().lower()
+        email = ""
+        if user_id:
+            row = user_registry.get_user_by_id(gstore, user_id)
+            email = ((row or {}).get("email") or "").strip().lower()
+        if not email:
+            email = (user_account.account_record(store).get("email") or "").strip().lower()
         if not email:
             raise ValueError("Účet nemá e-mail")
         if not mail.configured():
             raise ValueError("Nastav SMTP_HOST a SMTP_FROM pro odeslání resetu hesla")
-        token = user_account.create_password_reset(store, email)
+        token = user_account.create_password_reset(gstore, email)
         if not token:
             raise ValueError("Reset hesla se nepodařilo vytvořit")
         base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"

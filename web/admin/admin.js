@@ -834,7 +834,7 @@
     main.querySelectorAll("[data-act]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const action = btn.dataset.act;
-        const body = { action };
+        const body = { action, user_id: id };
         if (action === "watch_limit") {
           const limit = prompt("Limit monitorů", String(u.watch_limit));
           if (limit == null) return;
@@ -855,7 +855,7 @@
       try {
         const result = await api("/api/admin/action", {
           method: "POST",
-          body: JSON.stringify({ action: "set_plan", plan, charge: pay === "charge" }),
+          body: JSON.stringify({ action: "set_plan", plan, charge: pay === "charge", user_id: id }),
         });
         if (result.message) alert(result.message);
         pageUser();
@@ -866,7 +866,7 @@
     $("u-role-save")?.addEventListener("click", async () => {
       const role = $("u-role-set")?.value || "user";
       try {
-        await api("/api/admin/action", { method: "POST", body: JSON.stringify({ action: "set_role", role }) });
+        await api("/api/admin/action", { method: "POST", body: JSON.stringify({ action: "set_role", role, user_id: id }) });
         pageUser();
       } catch (err) {
         alert(err.message);
