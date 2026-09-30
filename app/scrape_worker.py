@@ -20,7 +20,7 @@ class ScrapeWorker:
     sold, coords, dedupe, stale sweep and the per-user tick.
     """
 
-    RESCAN_INTERVAL_S = 300
+    RESCAN_INTERVAL_S = 60
 
     def __init__(self) -> None:
         self.hub = Hub()

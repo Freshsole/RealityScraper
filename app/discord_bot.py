@@ -70,7 +70,6 @@ class DiscordBot:
             except Exception:
                 pass
         return [(None, self.store)]
-        self._ack = True
 
     async def aclose(self) -> None:
         await self.http.aclose()
