@@ -389,7 +389,7 @@ function applySettingsPanel() {
     el.hidden = el.id !== `panel-${panel}`;
   });
   const meta = SETTINGS_PANELS[panel];
-  document.title = `${meta?.title || "Nastavení"} · Sreality monitor`;
+  document.title = `${meta?.title || "Nastavení"} · Realitify`;
   if (panel === "billing") loadBillingInvoices();
   if (panel === "agents") loadAgents();
   if (panel === "notify") {
@@ -504,7 +504,7 @@ function applyRoute() {
     if (view) view.hidden = name !== page;
   });
   if (page === "settings") applySettingsPanel();
-  else document.title = `${PAGE_TITLES[page]} · Sreality monitor`;
+  else document.title = `${PAGE_TITLES[page]} · Realitify`;
   if (page === "overview") {
     setTimeout(() => {
       hitsMap?.invalidateSize();
@@ -1580,7 +1580,7 @@ function blankTemplate() {
   const config = structuredClone(
     (statusCache.templates || []).find((item) => item.id === "default")?.config ||
       (statusCache.templates || [])[0]?.config || {
-        username: "Sreality Monitor",
+        username: "Realitify",
         content_lines: [
           { text: "**{{headline}}**" },
           { text: "{{name}}" },
@@ -1598,7 +1598,7 @@ function blankTemplate() {
           url: "{{url}}",
           color: "#9fe870",
           show_image: true,
-          footer: "Sreality monitor",
+          footer: "Realitify",
           fields: [
             { name: "Cena", value: "{{price_label}}", inline: true },
             { name: "Dispozice", value: "{{disposition}}", inline: true },
@@ -1645,28 +1645,42 @@ function fillMonitorForm(item) {
 
 $("monitor-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  try {
-    await rebuildUrl();
-  } catch {
-    /* URL se nepodařilo přegenerovat, použijeme poslední známou */
+  // Okamžitá odezva: uživatel musí vidět, že se něco děje, hned po kliknutí.
+  const saveBtn = event.target.querySelector('button[type="submit"]');
+  const origLabel = saveBtn ? saveBtn.textContent : "";
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Ukládám…";
   }
-  const monitorId = $("monitor-id").value || undefined;
-  const saved = await post(
-    "/api/monitors",
-    {
-      id: monitorId,
-      name: $("monitor-name").value,
-      search_url: $("generated-url")?.value || $("monitor-url").value,
-      template_id: $("monitor-template").value,
-      enabled: $("monitor-enabled").checked,
-      interval_sec: $("monitor-interval")?.value || "",
-      portals: selectedMonitorPortals(),
-    },
-    monitorId ? "Profil upraven" : "Hlídací profil vytvořen",
-  );
-  if (saved) {
-    fillMonitorForm(null);
-    showWatchHome();
+  try {
+    try {
+      await rebuildUrl();
+    } catch {
+      /* URL se nepodařilo přegenerovat, použijeme poslední známou */
+    }
+    const monitorId = $("monitor-id").value || undefined;
+    const saved = await post(
+      "/api/monitors",
+      {
+        id: monitorId,
+        name: $("monitor-name").value,
+        search_url: $("generated-url")?.value || $("monitor-url").value,
+        template_id: $("monitor-template").value,
+        enabled: $("monitor-enabled").checked,
+        interval_sec: $("monitor-interval")?.value || "",
+        portals: selectedMonitorPortals(),
+      },
+      monitorId ? "Profil upraven" : "Hlídací profil vytvořen",
+    );
+    if (saved) {
+      fillMonitorForm(null);
+      showWatchHome();
+    }
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = origLabel;
+    }
   }
 });
 
@@ -2266,10 +2280,10 @@ function renderTemplateEditor() {
   if (!templateState) return;
   const cfg = templateState.config;
   $("template-name").value = templateState.name || "";
-  $("tpl-username").value = cfg.username || "Sreality Monitor";
+  $("tpl-username").value = cfg.username || "Realitify";
   setEmbedColor(cfg.embed?.color || "#9fe870", false);
   $("tpl-title").value = cfg.embed?.title || "{{name}}";
-  $("tpl-footer").value = cfg.embed?.footer || "Sreality monitor";
+  $("tpl-footer").value = cfg.embed?.footer || "Realitify";
   $("tpl-image").checked = cfg.embed?.show_image !== false;
   $("tpl-lines").innerHTML = (cfg.content_lines || [])
     .map((line, index) => `<div class="line-row"><input value="${escapeHtml(line.text || "")}" /><button class="btn btn-ghost" type="button" data-del-line="${index}">×</button></div>`)

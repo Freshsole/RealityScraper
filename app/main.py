@@ -122,6 +122,51 @@ app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 
 
+def public_error(exc: BaseException, fallback: str = "Něco se nepovedlo. Zkuste to prosím znovu.") -> str:
+    """Převede technickou výjimku na lidskou českou hlášku pro uživatele.
+
+    Kurátorské ValueError hlášky z doménové vrstvy (česky, psané pro uživatele)
+    se přes tento helper neposílají — ten je jen pro neočekávané technické chyby,
+    které by jinak unikly klientovi i s detaily (tracebacky, názvy služeb, …).
+    Skutečnou chybu musí volající vždy zalogovat přes logger.exception.
+    """
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    blob = f"{name} {msg}"
+    if isinstance(exc, (TimeoutError, ConnectionError)) or "timeout" in blob or "timed out" in blob:
+        return "Spojení vypršelo. Zkontrolujte připojení k internetu a zkuste to znovu."
+    if "connection" in blob or "network" in blob or "dns" in blob or "name resolution" in blob:
+        return "Nepodařilo se spojit se službou. Zkuste to prosím za chvíli znovu."
+    if "locked" in blob:
+        return "Systém je právě zaneprázdněný. Zkuste to prosím za chvíli znovu."
+    if "stripe" in blob or "payment" in blob or "invoice" in blob or "checkout" in blob:
+        return "Platbu se nepodařilo zpracovat. Zkuste to prosím znovu, případně nám napište na podpora@realitify.cz."
+    if "discord" in blob or "webhook" in blob:
+        return "Zprávu se nepodařilo odeslat. Zkontrolujte nastavení Discordu a zkuste to znovu."
+    if "smtp" in blob or "email" in name or "mail" in name:
+        return "E-mail se nepodařilo odeslat. Zkuste to prosím znovu."
+    if "http" in name or "status code" in blob or " 429" in blob or " 502" in blob or " 503" in blob:
+        return "Externí služba je momentálně nedostupná. Zkuste to prosím později."
+    if "unauthorized" in blob or " 401" in blob or " 403" in blob:
+        return "Přístup byl zamítnut. Zkuste se prosím znovu přihlásit."
+    if "not found" in blob or " 404" in blob:
+        return "Požadovaná věc nebyla nalezena. Možná už neexistuje."
+    return fallback
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Záchranná síť: neošetřená výjimka nikdy nesmí ukázat technický detail."""
+    if isinstance(exc, HTTPException):
+        # HTTPException mají vlastní kurátorské hlášky — ty necháváme projít.
+        raise exc
+    logger.exception("Neošetřená výjimka %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Na naší straně se něco pokazilo. Zkuste to prosím za chvíli znovu."},
+    )
+
+
 @app.middleware("http")
 async def static_asset_cache(request: Request, call_next):
     response = await call_next(request)
@@ -766,7 +811,8 @@ async def extension_ingest(
         except ListingGone:
             errors[native or url] = "gone"
         except Exception as exc:
-            errors[native or url] = str(exc)[:200]
+            logger.warning("Extension ingest selhal pro %s: %s", native or url, exc)
+            errors[native or url] = public_error(exc, "Nepodařilo se načíst nabídku.")[:200]
 
     await asyncio.gather(*[_one(url) for url in cleaned])
 
@@ -1337,7 +1383,8 @@ async def install_update(realitify_admin: str | None = Cookie(default=None, alia
     try:
         await apply_update(info["url"])
     except Exception as exc:
-        raise HTTPException(502, f"Aktualizace selhala: {exc}") from exc
+        logger.exception("Aktualizace selhala")
+        raise HTTPException(502, public_error(exc, "Aktualizaci se nepodařilo spustit. Zkuste to prosím později.")) from exc
     return {"ok": True, "restarting": True, "version": info.get("latest")}
 
 
@@ -1389,7 +1436,8 @@ async def discord_test(
     try:
         return await hub.hub_for(str(user.get("id"))).send_test((payload or {}).get("monitor_id"))
     except Exception as exc:
-        raise HTTPException(502, f"Discord test selhal: {exc}") from exc
+        logger.exception("Discord test selhal")
+        raise HTTPException(502, public_error(exc, "Testovací zprávu se nepodařilo odeslat. Zkontrolujte webhook v nastavení.")) from exc
 
 
 @app.get("/api/discord/status")
@@ -1496,7 +1544,8 @@ async def digest_test(
     try:
         return await hub.hub_for(str(user.get("id"))).send_digest_test((payload or {}).get("webhook_url"))
     except Exception as exc:
-        raise HTTPException(502, f"Test digestu selhal: {exc}") from exc
+        logger.exception("Test digestu selhal")
+        raise HTTPException(502, public_error(exc, "Testovací zprávu se nepodařilo odeslat. Zkontrolujte webhook v nastavení.")) from exc
 
 
 @app.get("/sw.js")
@@ -2471,7 +2520,8 @@ async def billing_checkout(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.get("/api/billing/promo")
@@ -2491,7 +2541,8 @@ async def billing_promo_lookup(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.post("/api/billing/promo")
@@ -2506,7 +2557,8 @@ async def billing_promo_save(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.post("/api/billing/portal")
@@ -2517,7 +2569,8 @@ async def billing_portal(realitify_session: str | None = Cookie(default=None, al
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.post("/api/billing/cancel")
@@ -2528,7 +2581,8 @@ async def billing_cancel(realitify_session: str | None = Cookie(default=None, al
         hub._status_cache = None
         return result
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.post("/api/billing/sync")
@@ -2545,7 +2599,8 @@ async def billing_sync(
         hub._status_cache = None
         return result
     except Exception as exc:
-        raise HTTPException(502, f"Stripe: {exc}") from exc
+        logger.exception("Stripe operace selhala")
+        raise HTTPException(502, public_error(exc)) from exc
 
 
 @app.post("/api/billing/webhook")
@@ -2584,7 +2639,8 @@ async def billing_webhook(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(400, str(exc)) from exc
+        logger.exception("Neočekávaná chyba")
+        raise HTTPException(400, public_error(exc)) from exc
 
 
 def _store_for_stripe_customer(customer_id: str) -> Store | None:

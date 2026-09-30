@@ -2269,23 +2269,27 @@ class Store:
         url_changed = (existing is None) or existing.get("search_url") != search_url or existing.get("portals") != portals
         saved = self.get_monitor(monitor_id)
         assert saved
-        # Post-insert side efekty nesmí shodit celý save: profil je už uložený,
-        # worker rescan případné nedodělky (job, seed) dožene.
-        try:
-            self.attach_monitor_live_jobs(saved)
-        except Exception:
-            logger.exception("attach_monitor_live_jobs selhalo pro monitor %s", monitor_id)
-        if url_changed:
+        # Post-insert side efekty běží na pozadí, aby API vrátilo odpověď okamžitě.
+        # Seedování z katalogu trvalo i 5+ sekund a UI mezitím neukazovalo žádnou
+        # odezvu (uživatel kliknul na "Uložit profil" a nic se nedělo). Profil je už
+        # v DB, takže případný pád vlákna nic nerozbije; chyby se jen zalogují
+        # a nedodělky dožene worker rescan.
+        def _post_insert() -> None:
             try:
-                self.seed_monitor_from_catalog(saved)
+                self.attach_monitor_live_jobs(saved)
             except Exception:
-                logger.exception("seed_monitor_from_catalog selhalo pro monitor %s", monitor_id)
-        try:
-            self.set_monitor_seeded(monitor_id, True)
-        except Exception:
-            logger.exception("set_monitor_seeded selhalo pro monitor %s", monitor_id)
-        saved = self.get_monitor(monitor_id)
-        assert saved
+                logger.exception("attach_monitor_live_jobs selhalo pro monitor %s", monitor_id)
+            if url_changed:
+                try:
+                    self.seed_monitor_from_catalog(saved)
+                except Exception:
+                    logger.exception("seed_monitor_from_catalog selhalo pro monitor %s", monitor_id)
+            try:
+                self.set_monitor_seeded(monitor_id, True)
+            except Exception:
+                logger.exception("set_monitor_seeded selhalo pro monitor %s", monitor_id)
+
+        threading.Thread(target=_post_insert, name=f"monitor-post-insert-{monitor_id}", daemon=True).start()
         return saved
 
     def delete_monitor(self, monitor_id: str) -> None:

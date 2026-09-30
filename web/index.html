@@ -252,7 +252,7 @@
               <p class="set-copy">Jednou denně se doplní sdílený katalog inzerátů. Zip obsahuje JSON (monitory, šablony, webhook) i SQLite databázi.</p>
               <p id="catalog-sync-status" class="set-copy">Zatím bez běhu.</p>
               <div class="set-actions">
-                <button class="btn" id="catalog-sync-now" type="button" data-icon="refresh">Spustit sync</button>
+                <button class="btn" id="catalog-sync-now" type="button" data-icon="refresh">Spustit synchronizaci</button>
                 <button class="btn btn-ghost" id="export-pack" type="button" data-icon="download">Stáhnout balíček</button>
                 <button class="btn btn-ghost" id="export-json" type="button" data-icon="file">Jen JSON</button>
                 <button class="btn btn-ghost" id="export-db" type="button" data-icon="database">Jen databáze</button>
@@ -429,7 +429,7 @@
                       <select id="template-select"></select>
                     </label>
                     <label>Název šablony<input id="template-name" /></label>
-                    <label>Username<input id="tpl-username" /></label>
+                    <label>Uživatelské jméno<input id="tpl-username" /></label>
                     <label>Barva embedu
                       <span class="color-row">
                         <input id="tpl-color-picker" type="color" value="#9fe870" />
@@ -437,7 +437,7 @@
                       </span>
                     </label>
                     <label>Titulek embedu<input id="tpl-title" /></label>
-                    <label>Footer<input id="tpl-footer" /></label>
+                    <label>Zápatí<input id="tpl-footer" /></label>
                     <label class="check"><input type="checkbox" id="tpl-image" checked /> Zobrazit fotku</label>
                     <p class="card-label">Text zprávy</p>
                     <div id="tpl-lines"></div>
