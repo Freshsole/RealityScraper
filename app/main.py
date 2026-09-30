@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -48,6 +49,8 @@ from app.sreality import ListingGone
 from app.store import _listing_from_catalog_dict, Store
 
 hub = Hub()
+
+logger = logging.getLogger("realitify")
 monitor = hub
 
 
@@ -1404,7 +1407,8 @@ async def email_test(realitify_session: str | None = Cookie(default=None, alias=
             ignore_quiet=True,
         )
     except Exception as exc:
-        raise HTTPException(502, str(exc)) from exc
+        logger.warning("test email failed: %s", exc)
+        raise HTTPException(502, "Testovací e-mail se nepodařilo odeslat. Zkuste to později.") from exc
     if not sent:
         raise HTTPException(400, "Zapněte e-mail a na serveru nastavte SMTP_HOST a SMTP_FROM")
     return {"ok": True, "email": mail_notify.account_email(ustore)}
@@ -1444,9 +1448,10 @@ async def whatsapp_test(realitify_session: str | None = Cookie(default=None, ali
             ignore_quiet=True,
         )
     except Exception as exc:
-        raise HTTPException(502, str(exc)) from exc
+        logger.warning("whatsapp test failed: %s", exc)
+        raise HTTPException(502, "Testovací zprávu se nepodařilo odeslat. Zkuste to později.") from exc
     if not sent:
-        raise HTTPException(400, "Zapněte WhatsApp, vyplňte číslo a na serveru nastavte WHATSAPP_TOKEN")
+        raise HTTPException(400, "Zapněte WhatsApp a vyplňte telefonní číslo")
     return {"ok": True, **wa_notify.status(ustore)}
 
 
