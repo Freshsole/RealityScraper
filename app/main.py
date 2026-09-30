@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import sqlite3
-import subprocess
 import sys
 import threading
 import zipfile
@@ -291,17 +290,8 @@ async def agent_cors(request: Request, call_next):
 
 
 def _asset_version() -> str:
-    """Krátká verze pro cache-busting statických assetů — mění se s každým deployem."""
-    try:
-        out = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
-            cwd=str(config.resource_root()),
-        )
-        if out.returncode == 0 and out.stdout.strip():
-            return out.stdout.strip()
-    except Exception:
-        pass
+    """Content hash statických assetů pro cache-busting — mění se vždy,
+    když se změní obsah JS/CSS, nezávisle na git metadatech v buildu."""
     try:
         digest = hashlib.sha256()
         for name in ("app.js", "catalog.js", "styles.css", "icons.js"):
