@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -36,6 +37,8 @@ from app.sreality import (
 )
 from app.sources import is_discord_webhook, usable_discord_webhook, webhook_for
 from app.templates import default_template_config
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -2266,10 +2269,21 @@ class Store:
         url_changed = (existing is None) or existing.get("search_url") != search_url or existing.get("portals") != portals
         saved = self.get_monitor(monitor_id)
         assert saved
-        self.attach_monitor_live_jobs(saved)
+        # Post-insert side efekty nesmí shodit celý save: profil je už uložený,
+        # worker rescan případné nedodělky (job, seed) dožene.
+        try:
+            self.attach_monitor_live_jobs(saved)
+        except Exception:
+            logger.exception("attach_monitor_live_jobs selhalo pro monitor %s", monitor_id)
         if url_changed:
-            self.seed_monitor_from_catalog(saved)
-        self.set_monitor_seeded(monitor_id, True)
+            try:
+                self.seed_monitor_from_catalog(saved)
+            except Exception:
+                logger.exception("seed_monitor_from_catalog selhalo pro monitor %s", monitor_id)
+        try:
+            self.set_monitor_seeded(monitor_id, True)
+        except Exception:
+            logger.exception("set_monitor_seeded selhalo pro monitor %s", monitor_id)
         saved = self.get_monitor(monitor_id)
         assert saved
         return saved
