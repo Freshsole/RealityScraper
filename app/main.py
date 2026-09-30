@@ -1247,26 +1247,35 @@ async def install_update() -> dict:
 
 
 @app.post("/api/monitor/start")
-async def start_monitor() -> dict:
+async def start_monitor(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
     await hub.start()
     return hub.status(fresh=True)
 
 
 @app.post("/api/monitor/stop")
-async def stop_monitor() -> dict:
+async def stop_monitor(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
     await hub.stop()
     return hub.status(fresh=True)
 
 
 @app.post("/api/monitor/check")
-async def check_now(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def check_now(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    user, store = _user_store(realitify_session)
     monitor_id = (payload or {}).get("monitor_id")
-    result = await hub.check_once(monitor_id)
+    # User-scoped check: run against the user's own store, not the global hub.
+    child = hub.hub_for(str(user.get("id"))) if hasattr(hub, "hub_for") else None
+    if child is not None:
+        result = await child.check_once(monitor_id)
+    else:
+        result = await hub.check_once(monitor_id)
     return {"result": result, "status": hub.status(fresh=True)}
 
 
 @app.post("/api/catalog/sync")
-async def catalog_sync_now(payload: dict[str, Any] | None = None) -> dict:
+async def catalog_sync_now(payload: dict[str, Any] | None = None, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
     raw = (payload or {}).get("portals") if isinstance(payload, dict) else None
     portals = None
     if isinstance(raw, str) and raw and raw != "all":
@@ -1413,8 +1422,7 @@ def web_manifest() -> FileResponse:
 
 @app.get("/api/push/vapid")
 def push_vapid(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    _, store = _store_for_session(realitify_session)
-    store = store or hub.store
+    _, store = _user_store(realitify_session)
     return {
         "publicKey": web_push.public_key(),
         "supported": True,
@@ -1427,8 +1435,7 @@ def push_vapid(realitify_session: str | None = Cookie(default=None, alias="reali
 async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
     ua = request.headers.get("user-agent") or ""
-    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
-    store = store or hub.store
+    _, store = _user_store(request.cookies.get(user_account.SESSION_COOKIE))
 
     def _save() -> dict[str, Any]:
         store.save_push_subscription(body, ua)
@@ -1450,16 +1457,14 @@ async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body
 
 @app.post("/api/push/unsubscribe")
 async def push_unsubscribe(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
-    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
-    store = store or hub.store
+    _, store = _user_store(request.cookies.get(user_account.SESSION_COOKIE))
     store.delete_push_subscription(str((payload or {}).get("endpoint") or ""))
     return {"ok": True, "devices": store.push_subscription_count()}
 
 
 @app.post("/api/push/test")
 async def push_test(request: Request) -> dict:
-    _, store = _store_for_session(request.cookies.get(user_account.SESSION_COOKIE))
-    store = store or hub.store
+    _, store = _user_store(request.cookies.get(user_account.SESSION_COOKIE))
     sent = await asyncio.to_thread(web_push.notify_test, store)
     if not sent:
         raise HTTPException(400, "Na tomto zařízení ještě není aktivní odběr push notifikací")
