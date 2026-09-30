@@ -1397,28 +1397,28 @@ def admin_set_plan(store: Store, plan_id: str, charge: bool, email: str = "") ->
     return {"ok": True, "mode": "grant", "billing": billing_state(store), "message": f"Tarif {label} je aktivní bez platby."}
 
 
+def _parse_webhook_event(payload: bytes, signature: str | None) -> tuple[str, Any]:
+    """Parse and verify a Stripe webhook event. Fail closed when the secret is unset."""
+    _configure()
+    if not config.STRIPE_WEBHOOK_SECRET:
+        raise ValueError("Stripe webhook není nakonfigurovaný (chybí STRIPE_WEBHOOK_SECRET)")
+    if not signature:
+        raise ValueError("Chybí Stripe-Signature")
+    event = stripe.Webhook.construct_event(payload, signature, config.STRIPE_WEBHOOK_SECRET)
+    return event["type"], event["data"]["object"]
+
+
 def extract_webhook_user_id(payload: bytes, signature: str | None) -> str | None:
     """Parse a Stripe webhook event and return the user_id from its metadata (if present).
 
     Used to route the event to the right user's store. Returns None when the
     event carries no user_id (legacy events) or cannot be parsed.
+    Raises ValueError when the webhook secret is not configured (fail closed).
     """
     _configure()
     try:
-        if config.STRIPE_WEBHOOK_SECRET:
-            if not signature:
-                return None
-            event = stripe.Webhook.construct_event(payload, signature, config.STRIPE_WEBHOOK_SECRET)
-            etype = event["type"]
-            obj = event["data"]["object"]
-            get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
-        else:
-            import json
-
-            event = json.loads(payload.decode("utf-8"))
-            etype = event.get("type") or ""
-            obj = (event.get("data") or {}).get("object") or {}
-            get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
+        etype, obj = _parse_webhook_event(payload, signature)
+        get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
     except Exception:
         return None
     meta = get(obj, "metadata") or {}
@@ -1441,20 +1441,21 @@ def extract_webhook_user_id(payload: bytes, signature: str | None) -> str | None
     return None
 
 
+def extract_webhook_customer_id(payload: bytes, signature: str | None) -> str | None:
+    """Return the Stripe customer_id from a webhook event (legacy routing fallback)."""
+    _configure()
+    try:
+        _, obj = _parse_webhook_event(payload, signature)
+        get = lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None)
+        customer = get(obj, "customer")
+        return str(customer) if customer else None
+    except Exception:
+        return None
+
+
 def handle_webhook(store: Store, payload: bytes, signature: str | None) -> dict[str, Any]:
     _configure()
-    if config.STRIPE_WEBHOOK_SECRET:
-        if not signature:
-            raise ValueError("Chybí Stripe-Signature")
-        event = stripe.Webhook.construct_event(payload, signature, config.STRIPE_WEBHOOK_SECRET)
-        etype = event["type"]
-        obj = event["data"]["object"]
-    else:
-        import json
-
-        event = json.loads(payload.decode("utf-8"))
-        etype = event.get("type") or ""
-        obj = (event.get("data") or {}).get("object") or {}
+    etype, obj = _parse_webhook_event(payload, signature)
     if etype == "checkout.session.completed":
         session_id = obj.get("id") if isinstance(obj, dict) else obj.id
         return sync_checkout_session(store, session_id)

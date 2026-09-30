@@ -2447,8 +2447,9 @@ async def billing_sync(
 async def billing_webhook(request: Request) -> dict:
     payload = await request.body()
     signature = request.headers.get("stripe-signature")
-    # Route the event to the owning user's store via Stripe metadata.
-    target_store = hub.store
+    # Route the event to the owning user's store: first via Stripe metadata
+    # user_id, then via customer_id lookup across user stores (legacy events).
+    target_store = None
     try:
         webhook_user_id = await asyncio.to_thread(
             stripe_billing.extract_webhook_user_id, payload, signature
@@ -2457,6 +2458,20 @@ async def billing_webhook(request: Request) -> dict:
         webhook_user_id = None
     if webhook_user_id and user_registry.get_user_by_id(hub.store, webhook_user_id):
         target_store = hub.store_for(webhook_user_id)
+    if target_store is None:
+        try:
+            webhook_customer_id = await asyncio.to_thread(
+                stripe_billing.extract_webhook_customer_id, payload, signature
+            )
+        except Exception:
+            webhook_customer_id = None
+        if webhook_customer_id:
+            target_store = await asyncio.to_thread(
+                _store_for_stripe_customer, webhook_customer_id
+            )
+    if target_store is None:
+        # Fail loudly instead of writing billing state into the central DB black hole.
+        raise HTTPException(400, "Webhook event nelze přiřadit žádnému uživateli")
     try:
         result = stripe_billing.handle_webhook(target_store, payload, signature)
         hub._status_cache = None
@@ -2465,6 +2480,22 @@ async def billing_webhook(request: Request) -> dict:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+def _store_for_stripe_customer(customer_id: str) -> Store | None:
+    """Find the user store whose billing record matches the Stripe customer_id."""
+    for user in user_registry.list_users(hub.store):
+        uid = str(user.get("id") or "")
+        if not uid:
+            continue
+        try:
+            ustore = hub.store_for(uid)
+            record = ustore.billing_record() or {}
+        except Exception:
+            continue
+        if str(record.get("customer_id") or "") == customer_id:
+            return ustore
+    return None
 
 
 def _agent_key(request: Request) -> tuple[dict[str, Any], Store]:
