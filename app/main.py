@@ -381,11 +381,17 @@ app.add_api_route("/admin", admin_page, methods=["GET"], include_in_schema=False
 app.add_api_route("/admin/{rest:path}", admin_page, methods=["GET"], include_in_schema=False)
 
 
+def _cookie_secure() -> bool:
+    # Secure flag jen přes HTTPS (produkce); lokální HTTP dev bez něj.
+    return (config.PUBLIC_BASE_URL or "").startswith("https://")
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         user_account.SESSION_COOKIE,
         token,
         httponly=True,
+        secure=_cookie_secure(),
         samesite="lax",
         max_age=60 * 60 * 24 * 30,
         path="/",
@@ -772,6 +778,7 @@ async def admin_login_api(request: Request, payload: dict[str, Any] | None = Bod
         admin_panel.ADMIN_COOKIE,
         token,
         httponly=True,
+        secure=_cookie_secure(),
         samesite="lax",
         max_age=60 * 60 * 24 * 7,
         path="/",
@@ -1230,12 +1237,15 @@ async def cms_media(name: str) -> FileResponse:
 
 
 @app.get("/api/status")
-async def status() -> dict:
-    return await asyncio.to_thread(hub.status)
+async def status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    user, store = _user_store(realitify_session)
+    child = hub.hub_for(str(user.get("id")))
+    return await asyncio.to_thread(child.status)
 
 
 @app.get("/api/perf/diag")
-async def perf_diag_snapshot() -> dict:
+async def perf_diag_snapshot(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
     from app import perf_diag
 
     payload = perf_diag.snapshot()
@@ -1253,7 +1263,8 @@ async def version() -> dict:
 
 
 @app.post("/api/update")
-async def install_update() -> dict:
+async def install_update(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
     info = await version_info()
     if not info.get("update_available"):
         raise HTTPException(400, "Už máš nejnovější verzi")
