@@ -498,6 +498,17 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
         raise HTTPException(400, str(exc)) from exc
     response = JSONResponse(user)
     _set_session_cookie(response, token)
+    # Odeslat verifikační e-mail (bez něj se registrace nezastaví, jen zalogujeme).
+    try:
+        from app import email_notify
+
+        verify_token = await _auth_db(user_registry.create_email_verification, hub.store, user["id"])
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+        if base:
+            verify_url = f"{base}/overeni?token={verify_token}"
+            await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
+    except Exception as exc:
+        print(f"[register] verifikační e-mail se nepodařilo odeslat: {exc}")
     try:
         site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
     except Exception:
@@ -550,6 +561,34 @@ async def auth_reset_check(token: str = "") -> dict:
     ok = await _auth_db(user_account.password_reset_ok, hub.store, token)
     if not ok:
         raise HTTPException(400, "Odkaz pro obnovení hesla je neplatný nebo vypršel")
+    return {"ok": True}
+
+
+@app.get("/api/auth/verify")
+async def auth_verify_email(token: str = "") -> dict:
+    user = await _auth_db(user_registry.verify_email_with_token, hub.store, token)
+    if not user:
+        raise HTTPException(400, "Ověřovací odkaz je neplatný nebo vypršel")
+    return {"ok": True}
+
+
+@app.post("/api/auth/verify/resend")
+async def auth_verify_resend(request: Request, realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    """Znovu odeslat verifikační e-mail přihlášenému (neověřenému) uživateli."""
+    _rate_limit_or_429(request, "verify_resend", "ip", 3, 3600)
+    user = _current_user(realitify_session)
+    if user.get("email_verified"):
+        return {"ok": True, "already": True}
+    try:
+        from app import email_notify
+
+        verify_token = await _auth_db(user_registry.create_email_verification, hub.store, user["id"])
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+        if base:
+            verify_url = f"{base}/overeni?token={verify_token}"
+            await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
+    except Exception as exc:
+        raise HTTPException(502, f"E-mail se nepodařilo odeslat: {exc}") from exc
     return {"ok": True}
 
 

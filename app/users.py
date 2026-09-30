@@ -55,10 +55,17 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
             first TEXT NOT NULL DEFAULT '',
             last TEXT NOT NULL DEFAULT '',
             role TEXT NOT NULL DEFAULT 'user',
+            email_verified INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
         """
     )
+    # Migrace pro existující DB: přidat email_verified pokud chybí.
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+    if "email_verified" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+        # Účty vzniklé před zavedením verifikace považujeme za ověřené.
+        conn.execute("UPDATE users SET email_verified = 1")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -80,6 +87,16 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_resets(user_id)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_verifications (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            expires_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)")
 
 
 # ---------------------------------------------------------------- password --
@@ -128,7 +145,7 @@ def public_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
         "name": f"{first} {last}".strip(),
         "email": email,
         "phone": (user.get("phone") or "").strip(),
-        "email_verified": True,
+        "email_verified": bool(user.get("email_verified")),
         "authenticated": bool(email),
         "role": role,
     }
@@ -373,3 +390,39 @@ def consume_password_reset(store: Store, token: str) -> dict[str, Any] | None:
 def clear_password_resets(store: Store, user_id: str) -> None:
     with store.connect() as conn:
         conn.execute("DELETE FROM password_resets WHERE user_id = ?", (user_id,))
+
+
+# ------------------------------------------------- email verification --
+
+VERIFY_TTL_SEC = 48 * 3600
+
+
+def create_email_verification(store: Store, user_id: str) -> str:
+    """Create a one-time email verification token (48h expiry). Returns the raw token."""
+    token = secrets.token_urlsafe(32)
+    with store.connect() as conn:
+        conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))
+        conn.execute(
+            "INSERT INTO email_verifications (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+            (_hash_reset_token(token), user_id, time.time() + VERIFY_TTL_SEC),
+        )
+    return token
+
+
+def verify_email_with_token(store: Store, token: str) -> dict[str, Any] | None:
+    """Consume a verification token; mark the user verified. Returns user or None."""
+    given = (token or "").strip()
+    if not given:
+        return None
+    now = time.time()
+    with store.connect() as conn:
+        row = conn.execute(
+            "SELECT user_id, expires_at FROM email_verifications WHERE token_hash = ?",
+            (_hash_reset_token(given),),
+        ).fetchone()
+        if not row or row[1] < now:
+            return None
+        user_id = row[0]
+        conn.execute("DELETE FROM email_verifications WHERE token_hash = ?", (_hash_reset_token(given),))
+        conn.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,))
+    return get_user_by_id(store, user_id)
