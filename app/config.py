@@ -73,6 +73,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
 DISCORD_GUILD_ID = os.getenv("DISCORD_GUILD_ID", "").strip()
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
 DISCORD_SERVER_INVITE = os.getenv("DISCORD_SERVER_INVITE", "").strip()
+EXTENSION_IDS = os.getenv("EXTENSION_IDS", "").strip()  # CSV povolených chrome-extension ID pro CORS
 SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
 POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
 POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))

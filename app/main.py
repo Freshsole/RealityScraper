@@ -231,7 +231,10 @@ def _extension_cors_origin(request: Request) -> str | None:
     if not origin:
         return None
     if origin.startswith("chrome-extension://"):
-        return origin
+        # Povol jen oficiální extension ID (CSV v EXTENSION_IDS), ne každou extenzi.
+        ext_id = origin[len("chrome-extension://"):].split("/")[0]
+        allowed_ids = {e.strip() for e in (config.EXTENSION_IDS or "").split(",") if e.strip()}
+        return origin if ext_id and ext_id in allowed_ids else None
     allowed = {
         "https://www.sreality.cz",
         "https://sreality.cz",
