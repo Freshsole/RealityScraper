@@ -309,6 +309,13 @@ class Hub:
             self._user_manager_task = asyncio.create_task(self._user_web_manager(), name="sreality-user-web")
             # Keep _task set so web mode still reports a running main loop.
             self._task = self._user_manager_task
+            # Denní automatický backup centrální DB + per-user DB.
+            try:
+                from app import auto_backup
+
+                self._backup_task = asyncio.create_task(auto_backup.backup_loop(), name="sreality-backup")
+            except Exception:
+                self._backup_task = None
             if config.DISCORD_BOT_TOKEN and config.DISCORD_GUILD_ID:
                 from app.discord_bot import run_discord_bot
 
