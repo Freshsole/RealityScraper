@@ -34,6 +34,7 @@ from app import account as user_account
 from app import users as user_registry
 from app import admin as admin_panel
 from app import cms as stories_cms
+from app import rate_limit
 from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
@@ -391,6 +392,19 @@ def _set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+def _client_ip(request: Request) -> str:
+    # Za reverzní proxy (Coolify/Traefik) bereme X-Forwarded-For.
+    xff = request.headers.get("x-forwarded-for") or ""
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limit_or_429(request: Request, scope: str, key: str, limit: int, window_s: float) -> None:
+    if not rate_limit.check(scope, f"{_client_ip(request)}:{key}", limit, window_s):
+        raise HTTPException(429, "Příliš mnoho pokusů, zkuste to prosím později")
+
+
 def _current_user(session: str | None) -> dict[str, Any]:
     user = user_account.user_from_session(hub.store, session)
     if not user:
@@ -458,7 +472,8 @@ async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None
 
 
 @app.post("/api/auth/register")
-async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def auth_register_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _rate_limit_or_429(request, "auth_register", "ip", 5, 3600)
     body = payload or {}
     try:
         user, token = await _auth_db(
@@ -482,8 +497,12 @@ async def auth_register_api(payload: dict[str, Any] | None = Body(None)) -> dict
 
 
 @app.post("/api/auth/login")
-async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def auth_login_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     body = payload or {}
+    email_key = str(body.get("email") or "").strip().lower()
+    _rate_limit_or_429(request, "auth_login_ip", "ip", 30, 60)
+    if email_key:
+        _rate_limit_or_429(request, "auth_login_email", email_key, 10, 60)
     try:
         user, token = await _auth_db(
             user_account.login,
@@ -499,7 +518,8 @@ async def auth_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 
 @app.post("/api/auth/forgot")
-async def auth_forgot_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def auth_forgot_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _rate_limit_or_429(request, "auth_forgot", "ip", 5, 3600)
     body = payload or {}
     email = str(body.get("email") or "").strip().lower()
     token = await _auth_db(user_account.create_password_reset, hub.store, email)
@@ -525,7 +545,8 @@ async def auth_reset_check(token: str = "") -> dict:
 
 
 @app.post("/api/auth/reset")
-async def auth_reset_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def auth_reset_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _rate_limit_or_429(request, "auth_reset", "ip", 20, 60)
     body = payload or {}
     try:
         user, session = await _auth_db(
@@ -738,7 +759,8 @@ def _admin_store(token: str | None) -> tuple[dict[str, Any], Store]:
 
 
 @app.post("/api/admin/login")
-async def admin_login_api(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def admin_login_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _rate_limit_or_429(request, "admin_login", "ip", 10, 60)
     body = payload or {}
     try:
         token = admin_panel.login_admin(hub.store, str(body.get("email") or ""), str(body.get("password") or ""))

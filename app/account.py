@@ -195,8 +195,7 @@ def login(global_store: Store, email: str, password: str) -> tuple[dict[str, Any
         raise ValueError("Zadej platný e-mail")
     user = user_registry.verify_user_password(global_store, email_norm, password or "")
     if user is None:
-        if user_registry.get_user_by_email(global_store, email_norm) is None:
-            raise ValueError("Účet s tímto e-mailem neexistuje. Nejdřív se zaregistrujte.")
+        # Stejná hláška pro neexistující účet i špatné heslo (anti-enumeration).
         raise ValueError("E-mail nebo heslo nesedí")
     token = user_registry.create_session(global_store, user["id"])
     public = user_registry.public_user(user)
