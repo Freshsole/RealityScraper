@@ -2215,13 +2215,14 @@ class Store:
             limit = watch_limit_for(self)
             enabled = self.enabled_monitor_count()
             if limit is not None and enabled >= limit:
-                raise ValueError(f"Limit tarifu je {limit} aktivních hlídacích psů. Upgradujte plán.")
+                word = "aktivní hlídací profil" if limit == 1 else "aktivní hlídací profily" if limit < 5 else "aktivních hlídacích profilů"
+                raise ValueError(f"Limit tarifu je {limit} {word}. Upgradujte plán.")
         elif payload.get("enabled", True) and not existing.get("enabled"):
             from app.billing import watch_limit_for
 
             limit = watch_limit_for(self)
             if limit is not None and self.enabled_monitor_count() >= limit:
-                raise ValueError("Limit tarifu je naplněný. Upgradujte plán, abyste tohoto hlídacího psa znovu aktivovali.")
+                raise ValueError("Limit tarifu je naplněný. Upgradujte plán, abyste tento hlídací profil znovu aktivovali.")
         now = utc_now()
         search_url = (payload.get("search_url") or "").strip()
         from app.catalog_sync import normalize_portals

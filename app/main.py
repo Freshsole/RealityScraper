@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
 import os
 import sqlite3
+import subprocess
 import sys
 import threading
 import zipfile
@@ -288,8 +290,33 @@ async def agent_cors(request: Request, call_next):
     return await call_next(request)
 
 
-def page() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+def _asset_version() -> str:
+    """Krátká verze pro cache-busting statických assetů — mění se s každým deployem."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+            cwd=str(config.resource_root()),
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    try:
+        digest = hashlib.sha256()
+        for name in ("app.js", "catalog.js", "styles.css", "icons.js"):
+            path = config.WEB_DIR / name
+            if path.exists():
+                digest.update(path.read_bytes())
+        return digest.hexdigest()[:8]
+    except Exception:
+        return "dev"
+
+
+def page() -> HTMLResponse:
+    html = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
+    html = html.replace("__ASSET_VERSION__", _asset_version())
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 def landing() -> FileResponse:
@@ -2005,7 +2032,7 @@ async def save_monitor(
 ) -> dict:
     _, ustore = _user_store(realitify_session)
     if not (payload.get("search_url") or "").strip():
-        raise HTTPException(400, "Chybí search_url")
+        raise HTTPException(400, "Chybí URL hledání. Vyplňte ho tlačítkem „Použít URL v profilu“.")
     existing = ustore.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
     try:
         saved = ustore.save_monitor(payload)

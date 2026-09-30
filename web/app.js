@@ -1334,7 +1334,7 @@ async function startCheckout(plan) {
     } else if (data.switched && !data.upgraded && !data.scheduled) {
       toast(`Naplánované snížení je zrušené. Zůstáváte na tarifu ${label}.`);
     } else if (data.switched && (data.paused_monitors || []).length) {
-      toast(`Tarif ${label} je aktivní. Pozastaveno ${data.paused_monitors.length} hlídacích psů nad limitem.`);
+      toast(`Tarif ${label} je aktivní. Pozastaveno ${data.paused_monitors.length} hlídacích profilů nad limitem.`);
     } else {
       toast(`Tarif ${label} je aktivní`);
     }
@@ -1363,7 +1363,7 @@ async function cancelBilling() {
   const paused = data.paused_monitors || [];
   toast(data.scheduled || data.pending_plan || data.cancel_at_period_end
     ? `Tarif ${currentBilling().label} doběhne do ${formatBillingDate(data.pending_at || data.current_period_end)}. Pak Zdarma.`
-    : (paused.length ? `Tarif Zdarma. Pozastaveno ${paused.length} hlídacích psů.` : "Předplatné je zrušené"));
+    : (paused.length ? `Tarif Zdarma. Pozastaveno ${paused.length} hlídacích profilů.` : "Předplatné je zrušené"));
   await refresh();
 }
 
@@ -1430,9 +1430,9 @@ function confirmPlanChange(plan) {
     if (lead) {
       const when = formatBillingDate(currentBilling().current_period_end);
       lead.textContent = when
-        ? `Do ${when} zůstáváte na tarifu ${currentBilling().label}. Teprve potom se tarif sníží${extras.length ? ` a pozastaví se ${extras.length} hlídacích psů nad limitem` : ""}.`
+        ? `Do ${when} zůstáváte na tarifu ${currentBilling().label}. Teprve potom se tarif sníží${extras.length ? ` a pozastaví se ${extras.length} hlídacích profilů nad limitem` : ""}.`
         : extras.length
-          ? `Ztratíte funkce vyššího tarifu a po konci období se pozastaví ${extras.length} hlídacích psů.`
+          ? `Ztratíte funkce vyššího tarifu a po konci období se pozastaví ${extras.length} hlídacích profilů.`
           : "Ztratíte tyto funkce vyššího tarifu až po konci zaplaceného období:";
     }
     if (list) {
@@ -1534,7 +1534,7 @@ function renderMonitors(items) {
       const left = Math.max(0, limit - enabled);
       $("watch-create-hint").textContent = left
         ? `Zbývá vám ještě ${left} ${pluralProfil(left)} v tarifu ${currentBilling().label}.`
-        : limit === 1
+        : Number(limit) === 1
           ? `Limit tarifu ${currentBilling().label} je 1 aktivní profil. Další zapnete upgradem.`
           : `Limit tarifu ${currentBilling().label} je ${limit} ${pluralProfil(limit)}. Další zapnete upgradem.`;
     }
@@ -1566,7 +1566,7 @@ function renderMonitors(items) {
           <button class="btn btn-ghost" type="button" data-toggle-monitor="${item.id}">${item.enabled ? "Pozastavit hlídání" : "Obnovit hlídání"}</button>
           <button class="set-link" type="button" data-del-monitor="${item.id}">Smazat profil</button>
         </div>
-        ${!item.enabled ? `<p class="watch-upgrade-hint">Pro opětovné zapnutí upgradujte tarif, pokud už máte naplněný limit hlídacích psů.</p>` : ""}
+        ${!item.enabled ? `<p class="watch-upgrade-hint">Pro opětovné zapnutí upgradujte tarif, pokud už máte naplněný limit hlídacích profilů.</p>` : ""}
       </article>
     `;
     })
@@ -1751,7 +1751,7 @@ $("monitor-list").addEventListener("click", async (event) => {
       const limit = currentBilling().watch_limit;
       const enabled = (statusCache.monitors || []).filter((row) => row.enabled).length;
       if (limit != null && enabled >= limit) {
-        toast("Limit aktivních hlídacích psů je naplněný. Upgradujte tarif.", "info");
+        toast("Limit aktivních hlídacích profilů je naplněný. Upgradujte tarif.", "info");
         history.pushState(null, "", "/nastaveni/predplatne");
         applyRoute();
         return;
@@ -3186,7 +3186,8 @@ $("watch-create")?.addEventListener("click", () => {
   const limit = currentBilling().watch_limit;
   const enabled = (statusCache.monitors || []).filter((item) => item.enabled).length;
   if (limit != null && enabled >= limit) {
-    const plural = limit === 1 ? "aktivní profil" : limit < 5 ? "aktivní profily" : "aktivních profilů";
+    const n = Number(limit);
+    const plural = n === 1 ? "aktivní profil" : n < 5 ? "aktivní profily" : "aktivních profilů";
     toast(`Limit tarifu ${currentBilling().label} je ${limit} ${plural}. Upgradujte plán.`, "info");
     history.pushState(null, "", "/nastaveni/predplatne");
     applyRoute();

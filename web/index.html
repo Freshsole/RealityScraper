@@ -14,7 +14,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
-    <link rel="stylesheet" href="/static/styles.css?v=1.2.0-n80" />
+    <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -279,13 +279,13 @@
                 <p>Spravujte své hlídací profily. Každý profil monitoruje nabídky podle vašich kritérií 24/7.</p>
               </header>
               <div class="set-limit">
-                <p><img class="set-ico-inline" src="/static/assets/settings/icon-check.svg" alt="" /><span id="watch-limit-copy">Využíváte 0 ze 3 hlídacích profilů v tarifu Start.</span></p>
+                <p><img class="set-ico-inline" src="/static/assets/settings/icon-check.svg" alt="" /><span id="watch-limit-copy">Načítám…</span></p>
                 <a class="btn" href="/nastaveni/predplatne">Upgradovat na Pro pro neomezené profily</a>
               </div>
               <div id="monitor-list" class="watch-list"></div>
               <button class="watch-create" id="watch-create" type="button">
                 <span><img src="/static/assets/settings/icon-plus.svg" alt="" />VYTVOŘIT NOVÝ HLÍDACÍ PROFIL</span>
-                <small id="watch-create-hint">Zbývá vám ještě volný profil v tarifu Start.</small>
+                <small id="watch-create-hint">Načítám…</small>
               </button>
             </div>
             <div id="watch-editor" hidden>
@@ -1042,9 +1042,9 @@
     <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
     <script src="/static/map-basemap.js?v=2"></script>
     <script src="/static/portals.js?v=1"></script>
-    <script src="/static/icons.js?v=1.2.0-n33"></script>
-    <script src="/static/app.js?v=1.2.0-n81"></script>
-    <script src="/static/catalog.js?v=1.2.0-n114"></script>
+    <script src="/static/icons.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/app.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>

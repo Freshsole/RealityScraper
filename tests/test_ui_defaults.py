@@ -14,6 +14,7 @@ class DefaultFiltersUiTest(unittest.TestCase):
         self.assertIsNone(defaults["area_from"])
         self.assertIsNone(defaults["price_from"])
         self.assertIsNone(defaults["area_to"])
+        self.assertIsNone(defaults["poi_distance"])
 
     def test_empty_area_not_in_url(self):
         defaults = default_filters()

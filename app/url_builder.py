@@ -130,7 +130,7 @@ def default_filters() -> dict:
         "buildings": [],
         "energy": [],
         "pois": [],
-        "poi_distance": 2,
+        "poi_distance": None,
         "price_from": None,
         "price_to": None,
         "area_from": None,
