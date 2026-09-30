@@ -105,7 +105,8 @@ class Hub:
         with self._user_stores_lock:
             store = self._user_stores.get(key)
             if store is None:
-                store = Store(user_registry.user_store_path(key))
+                # New users must not inherit the admin's Discord webhook on the seeded monitor.
+                store = Store(user_registry.user_store_path(key), seed_webhook_url="")
                 self._user_stores[key] = store
             return store
 

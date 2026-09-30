@@ -469,9 +469,12 @@ def listing_matches_places(row: dict[str, Any], geoms: list[dict[str, Any]]) -> 
 
 
 class Store:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, seed_webhook_url: str | None = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        # Webhook URL to seed the default monitor with; None = do not seed a webhook
+        # (used for per-user stores so new users don't inherit the admin's Discord).
+        self._seed_webhook_url = config.DISCORD_WEBHOOK_URL if seed_webhook_url is None else seed_webhook_url
         self._facets_cache: dict[str, Any] | None = None
         self._facets_at = 0.0
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
@@ -1941,7 +1944,7 @@ class Store:
                     "default",
                     "Praha pronájmy",
                     config.SEARCH_URL,
-                    config.DISCORD_WEBHOOK_URL,
+                    self._seed_webhook_url or "",
                     "default",
                     1 if seeded and seeded["value"] == "1" else 0,
                     now,
