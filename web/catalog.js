@@ -2236,7 +2236,7 @@
   let galleryStart = null;
   listEl.addEventListener("pointerdown", (event) => {
     const gallery = event.target.closest(".offer-photo");
-    if (!gallery || event.target.closest(".offer-nav") || event.target.closest(".offer-save")) return;
+    if (!gallery || event.target.closest(".offer-nav")) return;
     galleryStart = { gallery, x: event.clientX, y: event.clientY };
   });
   listEl.addEventListener("pointerup", (event) => {

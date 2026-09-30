@@ -3186,7 +3186,8 @@ $("watch-create")?.addEventListener("click", () => {
   const limit = currentBilling().watch_limit;
   const enabled = (statusCache.monitors || []).filter((item) => item.enabled).length;
   if (limit != null && enabled >= limit) {
-    toast(`Limit tarifu ${currentBilling().label} je ${limit} aktivních psů. Upgradujte plán.`, "info");
+    const plural = limit === 1 ? "aktivní profil" : limit < 5 ? "aktivní profily" : "aktivních profilů";
+    toast(`Limit tarifu ${currentBilling().label} je ${limit} ${plural}. Upgradujte plán.`, "info");
     history.pushState(null, "", "/nastaveni/predplatne");
     applyRoute();
     return;
