@@ -52,11 +52,10 @@
         </a>
       </div>
       <div class="nav-end">
-        <span id="app-version" class="ver nav-sr">v–</span>
         <button id="update-btn" class="btn" type="button" hidden data-icon="download">Aktualizovat</button>
         <div id="live-pill" class="live-pill nav-sr" data-state="off">
           <span class="dot"></span>
-          <span id="live-label">Zastaveno</span>
+          <span id="live-label">Načítám…</span>
         </div>
         <a class="nav-user" href="/nastaveni/profily">
           <span class="nav-user-profile">
@@ -301,9 +300,9 @@
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
                 <div class="url-stack" id="monitor-urls"></div>
-                <label>Primární URL<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea></label>
-                <label>Šablona zprávy<select id="monitor-template"></select></label>
-                <label>Interval (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
+                <label>Hlavní URL hledání<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea></label>
+                <label>Šablona notifikace<select id="monitor-template"></select></label>
+                <label>Interval kontroly (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
                 <label class="switch-field">
                   <span class="switch-copy">
                     <span class="switch-title">Stav</span>
@@ -377,7 +376,7 @@
                     <label>Plocha do<input id="f-area-to" type="number" /></label>
                     <label class="sreality-only">Patro od<input id="f-floor-from" type="number" /></label>
                     <label class="sreality-only">Patro do<input id="f-floor-to" type="number" /></label>
-                    <label class="sreality-only">POI do km<input id="f-poi-km" type="number" /></label>
+                    <label class="sreality-only">Vzdálenost k bodům zájmu (km)<input id="f-poi-km" type="number" /></label>
                     <label class="bazos-only" hidden>Okolí km<input id="f-bazos-radius" type="number" min="0" max="400" /></label>
                     <label class="br-only" hidden>Anuita od<input id="f-annuity-from" type="number" /></label>
                     <label class="br-only" hidden>Anuita do<input id="f-annuity-to" type="number" /></label>
@@ -520,7 +519,7 @@
               <div class="set-row is-muted">
                 <div>
                   <p class="set-row-title">SMS notifikace <span class="set-chip-pro">PRO</span></p>
-                  <p class="set-row-sub">+420 777 123 456 (Vyžaduje PRO verzi)</p>
+                  <p class="set-row-sub">Notifikace o nových nabídkách přes SMS</p>
                 </div>
                 <a class="set-link" href="/nastaveni/predplatne">Aktivovat v Pro</a>
               </div>
@@ -666,7 +665,7 @@
                   <button class="bill-cta bill-cta-outline" type="button" data-billing="start"><span>Objednat Start</span></button>
                 </article>
               </div>
-              <p class="bill-individual">Pro firmy je <a href="mailto:ahoj@realitify.cz?subject=INDIVIDUAL%20B2B">INDIVIDUAL (cena dohodou)</a>.</p>
+              <p class="bill-individual">Pro firmy nabízíme <a href="mailto:ahoj@realitify.cz?subject=INDIVIDUAL%20B2B">individuální tarif (cena dohodou)</a>.</p>
             </article>
             <div id="billing-confirm" class="bill-confirm" hidden>
               <div class="bill-confirm-card">
@@ -713,7 +712,14 @@
               <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů. Vyžaduje tarif PRO.</p>
             </header>
             <div id="agents-locked" class="set-limit" hidden>
-              <p><span class="set-chip-pro">PRO</span> MCP a AI konektory jsou v tarifu PRO a INDIVIDUAL.</p>
+              <div class="set-list-wrap">
+              <p><span class="set-chip-pro">PRO</span> MCP a AI konektory jsou v tarifu PRO a v individuálním tarifu.</p>
+              <ul class="set-list">
+                <li>API klíče pro Cursor, Claude Desktop, ChatGPT a Grok</li>
+                <li>MCP endpoint s vaším katalogem inzerátů</li>
+                <li>Ptejte se AI na nabídky ve vašem hlídaném katalogu</li>
+              </ul>
+              </div>
               <a class="btn" href="/nastaveni/predplatne">Upgradovat na PRO</a>
             </div>
             <div id="agents-live">
@@ -859,7 +865,17 @@
         <div id="compare-grid" class="compare-grid"></div>
       </div>
     </div>
-    <footer class="footer">Osobní hlídání veřejných inzerátů. Webhook drž v .env, ne v gitu. <span id="footer-version"></span></footer>
+    <footer class="footer">Realitify — osobní hlídání veřejných inzerátů. <span id="footer-version"></span></footer>
+    <div id="app-confirm" class="bill-confirm" hidden>
+      <div class="bill-confirm-card">
+        <h2 id="app-confirm-title">Opravdu?</h2>
+        <p class="set-row-sub" id="app-confirm-text"></p>
+        <div class="set-actions-end">
+          <button type="button" class="btn btn-ghost" id="app-confirm-cancel">Zpět</button>
+          <button type="button" class="btn btn-danger-outline" id="app-confirm-ok">Potvrdit</button>
+        </div>
+      </div>
+    </div>
     <div id="toasts" class="toasts" aria-live="polite"></div>
     <div id="filters-modal" class="catalog-modal filters-modal" hidden>
       <div class="catalog-modal-card filters-card">

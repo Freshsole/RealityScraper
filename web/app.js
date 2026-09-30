@@ -285,7 +285,7 @@ function listingCardHtml(item, { compact = false } = {}) {
       ${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : `<div class="listing-photo-empty" aria-hidden="true"></div>`}
       <div class="listing-body">
         <h3>${escapeHtml(item.name || item.locality || "Nabídka")}</h3>
-        <div class="price">${escapeHtml(item.price_label || "")}</div>
+        <div class="price">${escapeHtml(item.price_label || "Cena na dotaz")}</div>
         <div class="meta">${meta}</div>
       </div>
     </a>
@@ -548,15 +548,15 @@ function renderStatus(status) {
   $("last-check").textContent = formatTime(status.last_check);
   $("interval").textContent = `${status.interval_sec} s`;
   if (status.version) {
-    if ($("app-version")) $("app-version").textContent = `v${status.version}`;
     if ($("footer-version")) $("footer-version").textContent = `v${status.version}`;
   }
   $("mint").textContent = status.seeded
     ? "Monitory berou unikátní hledání. Nové byty jdou na Discord, katalog se doplňuje denně."
     : "Nový monitor se nasadí z katalogu, bez stahování celé nabídky.";
   if (status.last_error) {
+    console.error("Status error:", status.last_error);
     errorEl.hidden = false;
-    errorEl.textContent = status.last_error;
+    errorEl.textContent = "Při poslední kontrole nastala chyba. Zkuste to později, nebo nám napište na ahoj@realitify.cz.";
   } else {
     errorEl.hidden = true;
     errorEl.textContent = "";
@@ -817,7 +817,7 @@ function monitorEditorHtml(item, draft) {
       <label>Název<input name="name" value="${escapeHtml(data.name)}" /></label>
       <label>URL hledání</label>
       <div class="url-stack">${(item.search_targets || []).map((row) => `<label>${escapeHtml(portalTitle(row.portal))}<textarea rows="3" readonly name="search_url_${escapeHtml(row.portal)}">${escapeHtml(row.search_url || "")}</textarea></label>`).join("")}</div>
-      <label>Primární URL<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
+      <label>Hlavní URL hledání<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
       <input type="hidden" name="portals" value="${escapeHtml(data.portals)}" />
       <div class="filter-group">
         <h3>Hlídané portály</h3>
@@ -897,7 +897,7 @@ function renderCatalogSync(sync, running) {
   const jobs = Number(data.jobs || 0);
   const done = Number(data.done || 0);
   const listings = Number(data.listings || 0).toLocaleString("cs-CZ");
-  const shard = data.running ? `Běží shard ${data.running}.` : jobs ? `Shardy ${done}/${jobs}.` : "Shardy se spustí v nočním okně.";
+  const shard = data.running ? `Probíhá část ${data.running}.` : jobs ? `Hotovo ${done} z ${jobs} částí.` : "Noční sync zatím neběžel.";
   const last = data.last_run ? `Poslední běh ${formatTime(data.last_run)}.` : "Zatím bez dokončeného běhu.";
   const err = data.last_error ? ` Chyba: ${data.last_error}` : "";
   const state = running || data.status === "running" ? "Probíhá sync." : data.status === "partial" ? "Poslední běh byl neúplný." : data.status === "done" ? "Katalog je aktuální." : "Čeká na denní sync.";
@@ -925,7 +925,11 @@ function localitySummary(filters) {
   const districts = filters.districts || [];
   if (!districts.length) return "Česko";
   return districts
-    .map((id) => String(id).replace(/^praha-/, "Praha ").replace(/-/g, " "))
+    .map((id) => {
+      const slug = String(id);
+      if (slug === "praha") return "Praha";
+      return slug.replace(/^praha-/, "Praha ").replace(/-/g, " ");
+    })
     .join(", ");
 }
 
@@ -1090,6 +1094,13 @@ function currentBilling() {
   return statusCache.billing || { plan: "free", label: "Zdarma", watch_limit: 1, price_czk: 0, features: [] };
 }
 
+function pluralProfil(count) {
+  const n = Math.abs(Number(count) || 0);
+  if (n === 1) return "profil";
+  if (n >= 2 && n <= 4) return "profily";
+  return "profilů";
+}
+
 function watchLimitCopy(count) {
   const billing = currentBilling();
   const enabled = (statusCache.monitors || []).filter((item) => item.enabled).length;
@@ -1098,7 +1109,8 @@ function watchLimitCopy(count) {
     return `Využíváte ${enabled} aktivních hlídacích profilů v tarifu ${billing.label} (neomezeně).`;
   }
   let text = `Využíváte ${enabled} z ${billing.watch_limit} aktivních hlídacích profilů v tarifu ${billing.label}.`;
-  if (paused) text += ` ${paused} je pozastavených — zapnete je upgradem.`;
+  if (paused === 1) text += ` 1 profil je pozastavený — zapnete ho upgradem tarifu.`;
+  else if (paused) text += ` ${paused} ${pluralProfil(paused)} je pozastaveno — zapnete je upgradem tarifu.`;
   return text;
 }
 
@@ -1368,6 +1380,41 @@ function closeBillingConfirm() {
   if ($("billing-confirm")) $("billing-confirm").hidden = true;
 }
 
+function confirmDialog(title, text, okLabel = "Potvrdit") {
+  return new Promise((resolve) => {
+    const box = $("app-confirm");
+    if (!box) {
+      resolve(confirm(text));
+      return;
+    }
+    if ($("app-confirm-title")) $("app-confirm-title").textContent = title;
+    if ($("app-confirm-text")) $("app-confirm-text").textContent = text;
+    const ok = $("app-confirm-ok");
+    if (ok) ok.textContent = okLabel;
+    box.hidden = false;
+    const done = (value) => {
+      box.hidden = true;
+      ok?.removeEventListener("click", onOk);
+      $("app-confirm-cancel")?.removeEventListener("click", onCancel);
+      box.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKey);
+      resolve(value);
+    };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    const onBackdrop = (event) => {
+      if (event.target === box) done(false);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") done(false);
+    };
+    ok?.addEventListener("click", onOk);
+    $("app-confirm-cancel")?.addEventListener("click", onCancel);
+    box.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKey);
+  });
+}
+
 function confirmPlanChange(plan) {
   return new Promise((resolve) => {
     const current = currentBilling().plan || "free";
@@ -1486,8 +1533,10 @@ function renderMonitors(items) {
     } else {
       const left = Math.max(0, limit - enabled);
       $("watch-create-hint").textContent = left
-        ? `Zbývá vám ještě ${left} aktivn${left === 1 ? "í profil" : "í profily"} v tarifu ${currentBilling().label}.`
-        : `Limit tarifu ${currentBilling().label} je ${limit} aktivních profilů. Další zapnete upgradem.`;
+        ? `Zbývá vám ještě ${left} ${pluralProfil(left)} v tarifu ${currentBilling().label}.`
+        : limit === 1
+          ? `Limit tarifu ${currentBilling().label} je 1 aktivní profil. Další zapnete upgradem.`
+          : `Limit tarifu ${currentBilling().label} je ${limit} ${pluralProfil(limit)}. Další zapnete upgradem.`;
     }
   }
   list.innerHTML = items
@@ -1517,7 +1566,7 @@ function renderMonitors(items) {
           <button class="btn btn-ghost" type="button" data-toggle-monitor="${item.id}">${item.enabled ? "Pozastavit hlídání" : "Obnovit hlídání"}</button>
           <button class="set-link" type="button" data-del-monitor="${item.id}">Smazat profil</button>
         </div>
-        ${!item.enabled ? `<p class="watch-upgrade-hint">Pro opětovné zapnutí upgradujte tarif, pokud už máte naplněný limit aktivních psů.</p>` : ""}
+        ${!item.enabled ? `<p class="watch-upgrade-hint">Pro opětovné zapnutí upgradujte tarif, pokud už máte naplněný limit hlídacích psů.</p>` : ""}
       </article>
     `;
     })
@@ -1596,10 +1645,16 @@ function fillMonitorForm(item) {
 
 $("monitor-form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  try {
+    await rebuildUrl();
+  } catch {
+    /* URL se nepodařilo přegenerovat, použijeme poslední známou */
+  }
+  const monitorId = $("monitor-id").value || undefined;
   const saved = await post(
     "/api/monitors",
     {
-      id: $("monitor-id").value || undefined,
+      id: monitorId,
       name: $("monitor-name").value,
       search_url: $("generated-url")?.value || $("monitor-url").value,
       template_id: $("monitor-template").value,
@@ -1607,7 +1662,7 @@ $("monitor-form").addEventListener("submit", async (event) => {
       interval_sec: $("monitor-interval")?.value || "",
       portals: selectedMonitorPortals(),
     },
-    "Monitor uložen",
+    monitorId ? "Profil upraven" : "Hlídací profil vytvořen",
   );
   if (saved) {
     fillMonitorForm(null);
@@ -1717,7 +1772,7 @@ $("monitor-list").addEventListener("click", async (event) => {
       item.enabled ? "Hlídání pozastaveno" : "Hlídání obnoveno",
     );
   }
-  if (del && confirm("Smazat hlídací profil i jeho uložená ID?")) {
+  if (del && (await confirmDialog("Smazat hlídací profil?", "Smazat hlídací profil i jeho uložená ID? Tuto akci nelze vrátit.", "Smazat profil"))) {
     if (String(del.dataset.delMonitor) === String(editingMonitorId)) closeMonitorEditor();
     const response = await fetch(`/api/monitors/${del.dataset.delMonitor}`, { method: "DELETE" });
     const data = await response.json().catch(() => ({}));
@@ -1933,7 +1988,7 @@ function renderFilterGroups() {
   $("f-area-to").value = filterState.area_to ?? "";
   $("f-floor-from").value = filterState.floor_from ?? "";
   $("f-floor-to").value = filterState.floor_to ?? "";
-  $("f-poi-km").value = filterState.poi_distance ?? 2;
+  $("f-poi-km").value = filterState.poi_distance ?? "";
   const setVal = (id, value) => {
     if ($(id)) $(id).value = value ?? "";
   };
@@ -2409,11 +2464,8 @@ async function post(url, body, okMessage) {
     if (okMessage) toast(okMessage);
     return data;
   } catch (err) {
-    toast(err.message, "error");
-    if (errorEl) {
-      errorEl.hidden = false;
-      errorEl.textContent = err.message;
-    }
+    console.error("Request failed:", err);
+    toast("Požadavek se nezdařil. Zkuste to prosím znovu.", "error");
     return null;
   } finally {
     setBusy(false);
@@ -2445,7 +2497,6 @@ testBtn.addEventListener("click", async () => {
 async function checkUpdates() {
   try {
     const info = await fetch("/api/version").then((res) => res.json());
-    if ($("app-version") && info.version) $("app-version").textContent = `v${info.version}`;
     const btn = $("update-btn");
     if (!btn) return info;
     if (info.update_available) {
@@ -2817,7 +2868,7 @@ function renderDiscordLink(data) {
   if (!hint || !setup || !ok) return;
   if (!data?.bot_ready) {
     hint.hidden = false;
-    hint.textContent = "Doplňte DISCORD_BOT_TOKEN a DISCORD_GUILD_ID v .env, pozvěte bota na server a restartujte appku.";
+    hint.textContent = "Discord notifikace nejsou momentálně dostupné. Napište nám na ahoj@realitify.cz.";
     setup.hidden = true;
     ok.hidden = true;
     return;
@@ -2990,7 +3041,7 @@ $("notify-email")?.addEventListener("change", async () => {
     });
     if (on) {
       const sent = await post("/api/email/test", {}, "Test šel na e-mail");
-      if (!sent) toast("E-mail je zapnutý. Test se neodeslal — nastavte SMTP v .env.", "info");
+      if (!sent) toast("E-mail je zapnutý, ale testovací zpráva se neodeslala. Zkuste to později nebo nám napište na ahoj@realitify.cz.", "info");
     } else {
       toast("E-mailové notifikace jsou vypnuté");
     }

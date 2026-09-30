@@ -756,7 +756,8 @@
 
   function priceBlock(item) {
     const extras = item.extras || {};
-    const main = item.price_czk != null ? formatKc(item.price_czk) : (item.price_label || "").replace(/\/měsíc.*/, "").replace(/\s*\(.*/, "").trim();
+    const mainRaw = item.price_czk != null ? formatKc(item.price_czk) : (item.price_label || "").replace(/\/měsíc.*/, "").replace(/\s*\(.*/, "").trim();
+    const main = mainRaw || "Cena na dotaz";
     let chargesN = extras.charges_czk;
     if (!chargesN) {
       const match = String(item.price_label || "").match(/\(\+\s*([\d\s]+)\s*Kč\)/);
@@ -766,7 +767,7 @@
     const per = item.price_czk && item.area_m2 ? `(${formatKc(Math.round(item.price_czk / item.area_m2))} / m²)` : "";
     return `
       <p class="offer-price">
-        <strong>${escapeHtml(main || item.price_label || "")}</strong>
+        <strong>${escapeHtml(main)}</strong>
         ${charges ? `<span class="offer-charges">${escapeHtml(charges)}</span>` : ""}
         ${per ? `<span class="offer-unit">${escapeHtml(per)}</span>` : ""}
       </p>
@@ -805,9 +806,6 @@
                 : ""
           }
           ${portalIcons(item)}
-          <button type="button" class="offer-save${item.status === "saved" ? " on" : ""}" data-save-url="${escapeHtml(item.url || "")}" aria-label="Uložit" title="Uložit">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a1 1 0 0 1 1 1V21l-7-4.2L5 21V4.5a1 1 0 0 1 1-1z"/></svg>
-          </button>
         </div>
         <div class="offer-body">
           <div class="offer-kicker-row">
@@ -1805,7 +1803,7 @@
         <aside class="detail-side">
           <div class="detail-price">
             <p>Cena</p>
-            <strong>${escapeHtml(item.price_label || "")}</strong>
+            <strong>${escapeHtml(item.price_label || "Cena na dotaz")}</strong>
             ${item.discount_czk ? `<p>Sleva ${escapeHtml(formatKc(item.discount_czk))}${item.discount_pct ? ` · ${item.discount_pct} %` : ""}</p>` : ""}
             ${listingLinks(item)
               .map(
