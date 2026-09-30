@@ -2366,13 +2366,21 @@ async def billing_status(realitify_session: str | None = Cookie(default=None, al
         stripe_billing.settle_pending_if_due(ustore)
         state = stripe_billing.billing_state(ustore)
         record = ustore.billing_record() or {}
-        if record.get("customer_id") and config.STRIPE_SECRET_KEY and (
-            state.get("plan") == "free" or record.get("pending_plan") or record.get("cancel_at_period_end")
-        ):
-            state = stripe_billing.recover_from_stripe(ustore)
-            stripe_billing.apply_watch_limit(ustore)
-            hub._status_cache = None
-            state = stripe_billing.billing_state(ustore)
+        if record.get("customer_id") and config.STRIPE_SECRET_KEY:
+            # Re-sync ze Stripe i když lokální záznam tvrdí "pro" — chrání před
+            # ztraceným webhookem (zrušení přes Dashboard by jinak nechalo PRO napořád).
+            period_end = record.get("current_period_end") or 0
+            period_past = isinstance(period_end, (int, float)) and period_end > 0 and period_end < time.time()
+            if (
+                state.get("plan") == "free"
+                or record.get("pending_plan")
+                or record.get("cancel_at_period_end")
+                or period_past
+            ):
+                state = stripe_billing.recover_from_stripe(ustore)
+                stripe_billing.apply_watch_limit(ustore)
+                hub._status_cache = None
+                state = stripe_billing.billing_state(ustore)
         return {**state, "invoices": stripe_billing.list_invoices(ustore)}
     except Exception as extra:
         if not config.STRIPE_SECRET_KEY or "Invalid API Key" in str(extra):
