@@ -119,12 +119,17 @@ def verify_password(password: str, hashed: str, salt: str) -> bool:
 def _row_to_user(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
+    try:
+        verified = row["email_verified"]
+    except (KeyError, IndexError):
+        verified = 0
     return {
         "id": row["id"],
         "email": row["email"],
         "first": row["first"] or "",
         "last": row["last"] or "",
         "role": (row["role"] or "user").strip().lower() or "user",
+        "email_verified": bool(verified),
         "created_at": row["created_at"],
     }
 
