@@ -222,7 +222,11 @@ def login_admin(store: Store, email: str, password: str) -> str:
             user = user_registry.get_user_by_email(store, email_norm)
             if not user:
                 user = user_registry.create_user(
-                    store, email_norm, secrets.token_hex(16), name="Administrátor", role="admin"
+                    store,
+                    email=email_norm,
+                    password=secrets.token_hex(16),
+                    first="Administrátor",
+                    role="admin",
                 )
             elif (user.get("role") or "") != "admin":
                 user_registry.set_role(store, str(user.get("id")), "admin")
