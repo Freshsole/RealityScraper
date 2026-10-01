@@ -416,10 +416,73 @@ def auth_forgot() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+def seo_landing_pronajem_praha() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "pronajem-praha.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def seo_landing_pronajem_brno() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "pronajem-brno.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
 def admin_page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+# --- SEO: sitemap.xml a robots.txt ---
+SEO_PAGES = [
+    ("/", "daily", "1.0"),
+    ("/pronajem-praha", "weekly", "0.9"),
+    ("/pronajem-brno", "weekly", "0.8"),
+    ("/byt", "daily", "0.8"),
+    ("/registrace", "weekly", "0.9"),
+    ("/uspechy", "weekly", "0.7"),
+    ("/hry", "weekly", "0.6"),
+    ("/hry/vyssi-nizsi", "weekly", "0.5"),
+    ("/hry/najem", "weekly", "0.5"),
+    ("/kontakt", "monthly", "0.5"),
+]
+
+
+def sitemap_xml() -> Response:
+    from datetime import date
+    today = date.today().isoformat()
+    urls = "\n".join(
+        f'  <url><loc>https://realitify.cz{path}</loc>'
+        f"<lastmod>{today}</lastmod>"
+        f"<changefreq>{freq}</changefreq>"
+        f"<priority>{prio}</priority></url>"
+        for path, freq, prio in SEO_PAGES
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>"
+    )
+    return Response(content=xml, media_type="application/xml",
+                    headers={"Cache-Control": "public, max-age=3600"})
+
+
+def robots_txt() -> Response:
+    txt = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /admin\n"
+        "Disallow: /api/\n"
+        "Disallow: /prihlaseni\n"
+        "Disallow: /heslo\n"
+        "Disallow: /nastaveni-cookies\n"
+        "\n"
+        "Sitemap: https://realitify.cz/sitemap.xml\n"
+    )
+    return Response(content=txt, media_type="text/plain",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
+app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
+app.add_api_route("/pronajem-praha", seo_landing_pronajem_praha, methods=["GET"], include_in_schema=False)
+app.add_api_route("/pronajem-brno", seo_landing_pronajem_brno, methods=["GET"], include_in_schema=False)
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
 app.add_api_route("/byt", byt_preview, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
