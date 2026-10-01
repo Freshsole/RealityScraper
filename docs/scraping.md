@@ -221,7 +221,7 @@ Sreality `fetch_page`:
 
 Detail (`fetch_detail`) se volá jen v `_classify` (nový / změna ceny) a v sold/coords. List crawl detail **nestačí**.
 
-Známá omezení živého webu (viz README): M&M Reality Cloudflare 403, Reality.cz maintenance, UlovDomov POST 500 → HTML fallback.
+Známá omezení živého webu (viz README): M&M Reality má nový web (2026) - scraper používá /nemovitosti/pronajem/ + data-realty-* atributy; Reality.cz má JS-only list (scraper failne s jasnou chybou místo tichého []); ČeskéReality vrací 403 (blokace IP); UlovDomov POST 500 → HTML fallback.
 
 ---
 
