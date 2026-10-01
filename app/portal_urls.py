@@ -160,25 +160,25 @@ class MmrealityUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        query = {
-            "typ-nabidky": "pronajem" if offer == "pronajem" else "prodej",
-            "typ-nemovitosti": "byt",
-            "razeni": "nejnovejsi",
-        }
-        if filters.get("price_from"):
-            query["cena-od"] = str(int(filters["price_from"]))
-        if filters.get("price_to"):
-            query["cena-do"] = str(int(filters["price_to"]))
-        return _join(self.site + "/nemovitosti/", query)
+        slug = "pronajem" if offer == "pronajem" else "prodej"
+        # Path-based since the 2026 redesign; query params are ignored by the site.
+        return f"{self.site}/nemovitosti/{slug}/"
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
-        query = dict(parse_qsl(urlsplit(url or "").query, keep_blank_values=True))
-        kind = (query.get("typ-nabidky") or "").casefold()
-        if "prodej" in kind:
-            filters["offers"] = ["prodej"]
-        elif "pronaj" in kind:
+        path = (urlsplit(url or "").path or "").casefold()
+        if "/pronajem" in path:
             filters["offers"] = ["pronajem"]
+        elif "/prodej" in path:
+            filters["offers"] = ["prodej"]
+        else:
+            # Legacy query params (pre-2026 site).
+            query = dict(parse_qsl(urlsplit(url or "").query, keep_blank_values=True))
+            kind = (query.get("typ-nabidky") or "").casefold()
+            if "prodej" in kind:
+                filters["offers"] = ["prodej"]
+            elif "pronaj" in kind:
+                filters["offers"] = ["pronajem"]
         return filters
 
 

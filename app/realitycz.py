@@ -32,8 +32,14 @@ class RealityczClient(HtmlPortalClient):
         return "prodej" if "/prodej/" in path else "pronajem"
 
     def _parse_list(self, html: str) -> list[Listing]:
-        if "údržba server" in (html or "").casefold() or "udrzba server" in (html or "").casefold():
+        text = html or ""
+        if "údržba server" in text.casefold() or "udrzba server" in text.casefold():
             return []
+        if "vypnutý javascript" in text.casefold() or "bez zapnutí javascriptu" in text.casefold():
+            # The site moved to a JS-only listing page (2026): the HTML shell
+            # contains no offers, so returning [] would look like "no results".
+            # Fail loudly instead so portal health shows the real state.
+            raise RuntimeError("reality.cz listing page requires JavaScript; no offers in HTML")
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()

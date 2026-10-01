@@ -46,10 +46,11 @@ REMAX = """
 """
 
 MM = """
-<a href="/nemovitosti/pronajem-bytu-2kk-praha-778899">
-  <h3>Pronájem bytu 2+kk, Praha 4</h3>
-  <span>19 800 Kč</span>
-  <img src="https://cdn.mmreality.cz/foto.jpg" />
+<a href="https://www.mmreality.cz/nemovitosti/778899/" data-card-id="778899" class="tw-rounded-responsive">
+<article class="rds-image-card rds-property-preview-card">
+<img src="https://cdn.mmreality.cz/medium/offer/ab/12/foto.jpg" />
+<button type="button" data-favorite-toggle="778899" data-realty-id="778899" data-realty-name="Pronájem, Byt 2+kk, 52 m², Praha, Žižkov" data-realty-price="19 800 Kč">fav</button>
+</article>
 </a>
 """
 
@@ -72,7 +73,7 @@ class ExtraPortalTests(unittest.TestCase):
     def test_url_builders(self):
         self.assertIn("/pronajem/byty/", ceskereality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(annonce_url.build_url({"offers": ["pronajem"]}).endswith("/byty-k-pronajmu.html"))
-        self.assertIn("typ-nabidky=pronajem", mmreality_url.build_url({"offers": ["pronajem"]}))
+        self.assertIn("/nemovitosti/pronajem/", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/"))
@@ -106,11 +107,32 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("Praha 3", items[0].locality)
 
     def test_mmreality_list(self):
-        client = MmrealityClient("https://www.mmreality.cz/nemovitosti/?typ-nabidky=pronajem")
+        client = MmrealityClient("https://www.mmreality.cz/nemovitosti/pronajem/")
         items = client._parse_list(MM)
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0].id, 778899)
         self.assertEqual(items[0].price_czk, 19800)
+        self.assertIn("2+kk", items[0].name)
+        self.assertEqual(items[0].disposition, "2+kk")
+        self.assertEqual(items[0].area_m2, 52)
+        self.assertIn("Praha", items[0].locality)
+        self.assertTrue(items[0].url.endswith("/nemovitosti/778899/"))
+
+    def test_mmreality_url_builder(self):
+        self.assertTrue(
+            mmreality_url.build_url({"offers": ["pronajem"]}).endswith("/nemovitosti/pronajem/")
+        )
+        self.assertTrue(
+            mmreality_url.build_url({"offers": ["prodej"]}).endswith("/nemovitosti/prodej/")
+        )
+        self.assertEqual(
+            mmreality_url.parse_url("https://www.mmreality.cz/nemovitosti/pronajem/")["offers"],
+            ["pronajem"],
+        )
+        self.assertEqual(
+            mmreality_url.parse_url("https://www.mmreality.cz/nemovitosti/prodej/")["offers"],
+            ["prodej"],
+        )
 
     def test_realitycz_list(self):
         client = RealityczClient("https://www.reality.cz/pronajem/byty/")
@@ -122,6 +144,11 @@ class ExtraPortalTests(unittest.TestCase):
     def test_realitycz_maintenance_empty(self):
         client = RealityczClient("https://www.reality.cz/pronajem/byty/")
         self.assertEqual(client._parse_list("Probíhá údržba serveru"), [])
+
+    def test_realitycz_js_only_raises(self):
+        client = RealityczClient("https://www.reality.cz/pronajem/byty/")
+        with self.assertRaises(RuntimeError):
+            client._parse_list("Váš prohlížeč má vypnutý Javascript. Bez zapnutí Javascriptu tato stránka nebude správně fungovat.")
 
     def test_ulovdomov_next_data_and_json(self):
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")

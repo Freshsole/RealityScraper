@@ -394,6 +394,9 @@ class HtmlPortalClient:
     PAGE_PARAM = "strana"
     PAGE_SIZE = 20
     TIMEOUT = 8.0
+    #: Set True when listing cards render late in a large page and the shared
+    #: 180KB list truncation in fetch_page would cut them off.
+    FULL_LIST_HTML = False
 
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
@@ -486,7 +489,7 @@ class HtmlPortalClient:
 
         def _parse(blob: bytes) -> tuple[list[Listing], int]:
             text = blob.decode("utf-8", "replace")
-            html = extract_listing_html(text)
+            html = text if self.FULL_LIST_HTML else extract_listing_html(text)
             listings = self._parse_list(html)
             parsed_total = self._parse_total(html)
             total = parsed_total or (len(listings) if page == 1 else 0)
