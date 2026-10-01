@@ -105,7 +105,11 @@ class CeskerealityUrls:
         region = districts[0] if len(districts) == 1 else ""
         path = f"/{offer}/byty/"
         if region and re_slug(region):
-            path = f"/{offer}/byty/{re_slug(region)}/"
+            slug = re_slug(region)
+            # Site canonical slug for Prague (avoids redirect).
+            if slug == "praha":
+                slug = "praha-hlavni-mesto"
+            path = f"/{offer}/byty/{slug}/"
         query: dict[str, str] = {}
         if filters.get("price_from"):
             query["cena-od"] = str(int(filters["price_from"]))
@@ -246,7 +250,19 @@ class RealityczUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        return f"{self.site}/{offer}/byty/"
+        # Locality listing pages are server-rendered with offers in HTML.
+        # The bare /{offer}/byty/ is only a catalogue homepage (carousel),
+        # not a real result list.
+        districts = [str(item) for item in (filters.get("districts") or []) if item]
+        region = districts[0] if len(districts) == 1 else ""
+        locality = "hlavni-mesto-Praha"
+        if region:
+            slug = re_slug(region)
+            if slug:
+                # reality.cz uses obvod-Praha-N / okres-... slugs; map plain
+                # "praha" to the whole-city listing, keep explicit slugs.
+                locality = slug if slug != "praha" else "hlavni-mesto-Praha"
+        return f"{self.site}/{offer}/byty/{locality}/"
 
     def parse_url(self, url: str) -> dict:
         return _parse_common(url, self.source)

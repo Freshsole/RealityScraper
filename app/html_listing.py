@@ -482,6 +482,34 @@ class HtmlPortalClient:
         note_httpx(response)
         if response.status_code in {404, 410}:
             return [], 0
+        if response.status_code in {403, 429}:
+            # Bot protection / rate limit (e.g. ceskereality.cz): back off and
+            # retry a few times before giving up, instead of failing loudly.
+            # Delays: 5s, 15s, 30s.
+            import asyncio as _asyncio
+
+            delays = (5.0, 15.0, 30.0)
+            last = response
+            for delay in delays:
+                await _asyncio.sleep(delay)
+                retry = await request_with_log(
+                    self._client,
+                    "GET",
+                    url,
+                    portal=portal,
+                    headers={"Accept": "text/html,application/json;q=0.9"},
+                )
+                note_httpx(retry)
+                last = retry
+                if retry.status_code not in {403, 429}:
+                    break
+            response = last
+            if response.status_code in {404, 410}:
+                return [], 0
+            if response.status_code in {403, 429}:
+                # Still blocked: return empty instead of raising, so one
+                # protected portal does not break the whole sync run.
+                return [], 0
         response.raise_for_status()
         raw = response.content
         if page <= 1:

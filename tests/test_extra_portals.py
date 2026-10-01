@@ -55,11 +55,20 @@ MM = """
 """
 
 REALITYCZ = """
-<a href="/detail/556677-pronajem-bytu-praha">
-  <h2>Pronájem bytu 2+kk, Praha 10</h2>
-  17 200 Kč
-  <img src="/foto.jpg" />
-</a>
+<div class="xvypis vypismd ui-corner-all gpsx0 gpsy0" id="iddmq003730">
+  <div class="thumbnail">
+    <a href="DMQ-003730/?c=1_48919499_48919501_48919339"><img src="/thumb/1790780386/dmq003730_0.jpg" alt="" /></a><br />
+  </div>
+  <div class="obaltextu">
+    <p class="vypisnaz">
+      <a href="DMQ-003730/?c=1_48919499_48919501_48919339">Nad Rokoskou, Praha 8 - Libeň</a>
+    </p>
+    <p class="lokalita mb10">
+      byt 2+kk, 69 m², cihla, osobní
+    </p>
+    <p class="vypiscena"><span class=""><strong>25.900 Kč/měs.</strong></span></p>
+  </div>
+</div>
 """
 
 ULOV_HTML = """
@@ -76,7 +85,7 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertIn("/nemovitosti/pronajem/", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
         self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
-        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/"))
+        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/hlavni-mesto-Praha/"))
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
         self.assertEqual(remax_url.parse_url("https://www.remax-czech.cz/reality/byty/?sale=1")["offers"], ["prodej"])
@@ -135,20 +144,28 @@ class ExtraPortalTests(unittest.TestCase):
         )
 
     def test_realitycz_list(self):
-        client = RealityczClient("https://www.reality.cz/pronajem/byty/")
+        client = RealityczClient("https://www.reality.cz/pronajem/byty/hlavni-mesto-Praha/")
         items = client._parse_list(REALITYCZ)
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0].id, 556677)
-        self.assertEqual(items[0].price_czk, 17200)
+        self.assertIn("DMQ-003730", items[0].url)
+        self.assertEqual(items[0].price_czk, 25900)
+        self.assertIn("Libeň", items[0].name)
 
     def test_realitycz_maintenance_empty(self):
-        client = RealityczClient("https://www.reality.cz/pronajem/byty/")
+        client = RealityczClient("https://www.reality.cz/pronajem/byty/hlavni-mesto-Praha/")
         self.assertEqual(client._parse_list("Probíhá údržba serveru"), [])
 
-    def test_realitycz_js_only_raises(self):
-        client = RealityczClient("https://www.reality.cz/pronajem/byty/")
-        with self.assertRaises(RuntimeError):
-            client._parse_list("Váš prohlížeč má vypnutý Javascript. Bez zapnutí Javascriptu tato stránka nebude správně fungovat.")
+    def test_realitycz_js_warning_with_listings_parses(self):
+        # The page contains a noscript JS warning, but listings are
+        # server-rendered in HTML - they must still be parsed.
+        client = RealityczClient("https://www.reality.cz/pronajem/byty/hlavni-mesto-Praha/")
+        html = (
+            "<noscript>Váš prohlížeč má vypnutý Javascript. "
+            "Bez zapnutí Javascriptu tato stránka nebude správně fungovat.</noscript>"
+            + REALITYCZ
+        )
+        items = client._parse_list(html)
+        self.assertEqual(len(items), 1)
 
     def test_ulovdomov_next_data_and_json(self):
         client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")

@@ -17,8 +17,9 @@ CARD2_RE = re.compile(
     r'class="[^"]{0,200}i-estate[^"]{0,200}"(.{0,80000}?)(?:class="[^"]{0,200}i-estate[^"]{0,200}"|$)',
     re.S | re.I,
 )
-HREF_RE = re.compile(r'href="([^"]{1,400}/(?:pronajem|prodej)/[^"]{0,300})"', re.I)
-ID_RE = re.compile(r"/(\d{5,12})(?:[-/]|$)")
+HREF_RE = re.compile(r'href="((?:https://[a-z0-9.-]+\.ceskereality\.cz)?/(?:pronajem|prodej)/[^"?#]{1,300}\.html)"', re.I)
+HREF_FALLBACK_RE = re.compile(r'href="([^"?#]{1,400}/(?:pronajem|prodej)/[^"?#]{0,300})"', re.I)
+ID_RE = re.compile(r"[-/](\d{5,12})(?:[-/.]|$)")
 IMG_ID_RE = re.compile(r"img-cache\.ceskereality\.cz/nemovitosti/[^/]{1,80}/(\d{5,12})/", re.I)
 TITLE_RE = re.compile(r"<h2[^>]{0,120}>(.{0,500}?)</h2>", re.S | re.I)
 ALT_RE = re.compile(r'alt="([^"]{1,400})"')
@@ -29,6 +30,8 @@ class CeskerealityClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "strana"
     PAGE_SIZE = 20
+    # Listing cards are spread across a large page; don't truncate.
+    FULL_LIST_HTML = True
 
     def _context(self) -> str:
         path = (self.search_url or "").lower()
@@ -49,7 +52,7 @@ class CeskerealityClient(HtmlPortalClient):
         return items
 
     def _parse_card(self, html: str, offer: str) -> Listing | None:
-        href_m = HREF_RE.search(html)
+        href_m = HREF_RE.search(html) or HREF_FALLBACK_RE.search(html)
         img_id = IMG_ID_RE.search(html)
         listing_id = ""
         url = ""

@@ -1,4 +1,10 @@
-"""Reality.cz list/detail scraper. The live site is often in maintenance; parsers are fixture-tested."""
+"""Reality.cz list/detail scraper.
+
+Listing pages are server-rendered: real result lists live at locality URLs
+(e.g. /pronajem/byty/hlavni-mesto-Praha/), each offer in a
+``<div class="xvypis ...">`` block with an EVC link like ``DMQ-003730/?c=...``.
+The bare /{offer}/byty/ URL is only a catalogue homepage, not results.
+"""
 
 from __future__ import annotations
 
@@ -9,23 +15,36 @@ from app.portal_urls import realitycz_url
 from app.sreality import Listing
 
 SITE = realitycz_url.site
-HREF_RE = re.compile(
-    r'href="((?:https://www\.reality\.cz)?/(?:detail|nemovitost|inzerat)/[^"]{1,400})"',
-    re.I,
+# Listing card blocks: <div class="xvypis ..."> ... </div>
+CARD_RE = re.compile(
+    r'<div class="xvypis[^"]*"[^>]{0,200}>(.{0,12000}?)</div>\s*(?=<div class="xvypis|<div class="cll|$)',
+    re.S | re.I,
 )
-HREF2_RE = re.compile(
-    r'href="((?:https://www\.reality\.cz)?/(?:pronajem|prodej)/[^"]{0,300}/\d{4,12}[^"]{0,200})"',
-    re.I,
+# EVC code links: DMQ-003730/?c=..., BTU-N05169/?strana=2&c=...
+EVC_RE = re.compile(r'href="([A-Z]{2,4}-[A-Z0-9]{3,8})/\?[^"]{0,300}"', re.I)
+TITLE_RE = re.compile(
+    r'<p class="vypisnaz"[^>]{0,120}>\s*<a[^>]{0,400}>(.{1,400}?)</a>',
+    re.S | re.I,
 )
-ID_RE = re.compile(r"/(\d{4,12})")
-TITLE_RE = re.compile(r"<h[123][^>]{0,120}>(.{0,500}?)</h[123]>", re.S | re.I)
-IMG_RE = re.compile(r'(?:src|data-src)="([^"]{1,400}\.(?:jpg|jpeg|webp)[^"]{0,200})"', re.I)
+DESC_RE = re.compile(
+    r'<p class="lokalita[^"]*"[^>]{0,120}>(.{1,400}?)</p>',
+    re.S | re.I,
+)
+PRICE_RE = re.compile(
+    r'<p class="vypiscena"[^>]{0,120}>(.{1,400}?)</p>',
+    re.S | re.I,
+)
+IMG_RE = re.compile(r'<img[^>]{0,400}src="(/thumb/[^"]{1,200}\.(?:jpg|jpeg|webp))"', re.I)
+IMG_ABS_RE = re.compile(r'(?:src|data-src)="(https://[^"]{1,400}\.(?:jpg|jpeg|webp)[^"]{0,200})"', re.I)
 
 
 class RealityczClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "strana"
-    PAGE_SIZE = 20
+    # Site-side pagination via URL params does not advance the result set
+    # (JS-driven); one page carries ~25 offers.
+    PAGE_SIZE = 25
+    FULL_LIST_HTML = True
 
     def _context(self) -> str:
         path = (self.search_url or "").lower()
@@ -35,47 +54,50 @@ class RealityczClient(HtmlPortalClient):
         text = html or ""
         if "údržba server" in text.casefold() or "udrzba server" in text.casefold():
             return []
-        if "vypnutý javascript" in text.casefold() or "bez zapnutí javascriptu" in text.casefold():
-            # The site moved to a JS-only listing page (2026): the HTML shell
-            # contains no offers, so returning [] would look like "no results".
-            # Fail loudly instead so portal health shows the real state.
-            raise RuntimeError("reality.cz listing page requires JavaScript; no offers in HTML")
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
-        hrefs = HREF_RE.findall(html or "") + HREF2_RE.findall(html or "")
-        for href in hrefs:
-            url = abs_url(href.split("?")[0], SITE)
-            if url in seen or "/moje-reality/" in url:
-                continue
-            id_m = ID_RE.search(url)
-            if not id_m:
-                continue
-            seen.add(url)
-            idx = html.find(href)
-            window = html[max(0, idx - 350) : idx + 800] if idx >= 0 else href
-            title_m = TITLE_RE.search(window)
-            title = clean(title_m.group(1) if title_m else url.rstrip("/").split("/")[-1].replace("-", " "))
-            price_czk, price_label = parse_price(window)
-            img_m = IMG_RE.search(window)
-            img = abs_url(img_m.group(1), SITE) if img_m else ""
-            locality = ""
-            loc_m = re.search(r"(Praha[^<,]*|Brno[^<,]*|Ostrava[^<,]*)", window)
-            if loc_m:
-                locality = clean(loc_m.group(1))
-            elif "," in title:
-                locality = title.split(",")[-1].strip()
-            items.append(
-                listing_from_card(
-                    listing_id=numeric_id(id_m.group(1), url),
-                    name=title,
-                    url=url,
-                    price_czk=price_czk,
-                    price_label=price_label,
-                    locality=locality,
-                    image_url=img,
-                    photos=[img] if img else [],
-                    offer="prodej" if "/prodej/" in url else offer,
-                )
-            )
+        blocks = CARD_RE.findall(text)
+        if not blocks:
+            # Fallback: scan whole page for EVC links (older markup).
+            blocks = [text]
+        for block in blocks:
+            listing = self._parse_card(block, offer)
+            if listing and listing.url not in seen:
+                seen.add(listing.url)
+                items.append(listing)
         return items
+
+    def _parse_card(self, html: str, offer: str) -> Listing | None:
+        evc_m = EVC_RE.search(html or "")
+        if not evc_m:
+            return None
+        evc = evc_m.group(1).upper()
+        url = f"{SITE}/{evc}/"
+        title_m = TITLE_RE.search(html)
+        title = clean(title_m.group(1)) if title_m else evc
+        desc_m = DESC_RE.search(html)
+        desc = clean(desc_m.group(1)) if desc_m else ""
+        price_m = PRICE_RE.search(html)
+        price_czk, price_label = parse_price(price_m.group(1)) if price_m else (None, "")
+        locality = ""
+        if "," in title:
+            locality = title.split(",")[-1].strip()
+        img = ""
+        img_m = IMG_RE.search(html) or IMG_ABS_RE.search(html)
+        if img_m:
+            img = abs_url(img_m.group(1), SITE)
+        name = title
+        if desc and desc not in title:
+            name = f"{title} - {desc}"
+        return listing_from_card(
+            listing_id=numeric_id(evc, url),
+            name=name or evc,
+            url=url,
+            price_czk=price_czk,
+            price_label=price_label,
+            locality=locality,
+            image_url=img,
+            photos=[img] if img else [],
+            offer=offer,
+        )
