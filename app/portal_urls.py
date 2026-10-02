@@ -277,6 +277,103 @@ def re_slug(value: str) -> str:
     return ""
 
 
+class EurobydleniUrls:
+    source = "eurobydleni"
+    site = "https://www.eurobydleni.cz"
+
+    def catalog(self) -> dict:
+        return catalog()
+
+    def default_filters(self) -> dict:
+        return default_filters(self.source)
+
+    def sample_filters(self) -> dict:
+        return sample_filters(self.source)
+
+    def build_url(self, filters: dict) -> str:
+        offer = _offer(filters)
+        path = "pronajem" if offer == "pronajem" else "prodej"
+        return f"{self.site}/byty/praha/{path}/"
+
+    def parse_url(self, url: str) -> dict:
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
+        return filters
+
+
+class RealitymixUrls:
+    source = "realitymix"
+    site = "https://realitymix.cz"
+
+    def catalog(self) -> dict:
+        return catalog()
+
+    def default_filters(self) -> dict:
+        return default_filters(self.source)
+
+    def sample_filters(self) -> dict:
+        return sample_filters(self.source)
+
+    def build_url(self, filters: dict) -> str:
+        offer = _offer(filters)
+        path = "pronajem" if offer == "pronajem" else "prodej"
+        return f"{self.site}/reality/byty/{path}/praha"
+
+    def parse_url(self, url: str) -> dict:
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
+        return filters
+
+
+class RealingoUrls:
+    source = "realingo"
+    site = "https://www.realingo.cz"
+
+    def catalog(self) -> dict:
+        return catalog()
+
+    def default_filters(self) -> dict:
+        return default_filters(self.source)
+
+    def sample_filters(self) -> dict:
+        return sample_filters(self.source)
+
+    def build_url(self, filters: dict) -> str:
+        offer = _offer(filters)
+        path = "pronajem_reality" if offer == "pronajem" else "prodej_reality"
+        return f"{self.site}/{path}/cr/"
+
+    def parse_url(self, url: str) -> dict:
+        filters = _parse_common(url, self.source)
+        raw = (url or "").lower()
+        filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
+        return filters
+
+
+class EspolubydleniUrls:
+    source = "espolubydleni"
+    site = "https://www.espolubydleni.cz"
+
+    def catalog(self) -> dict:
+        return catalog()
+
+    def default_filters(self) -> dict:
+        return default_filters(self.source)
+
+    def sample_filters(self) -> dict:
+        return sample_filters(self.source)
+
+    def build_url(self, filters: dict) -> str:
+        return f"{self.site}/podnajem-spolubydlici/"
+
+    def parse_url(self, url: str) -> dict:
+        filters = _parse_common(url, self.source)
+        filters["offers"] = ["pronajem"]
+        return filters
+
+
 MODULES = {
     "ceskereality": CeskerealityUrls(),
     "annonce": AnnonceUrls(),
@@ -284,6 +381,10 @@ MODULES = {
     "ulovdomov": UlovdomovUrls(),
     "remax": RemaxUrls(),
     "realitycz": RealityczUrls(),
+    "eurobydleni": EurobydleniUrls(),
+    "realitymix": RealitymixUrls(),
+    "realingo": RealingoUrls(),
+    "espolubydleni": EspolubydleniUrls(),
 }
 
 ceskereality_url = MODULES["ceskereality"]
@@ -292,3 +393,7 @@ mmreality_url = MODULES["mmreality"]
 ulovdomov_url = MODULES["ulovdomov"]
 remax_url = MODULES["remax"]
 realitycz_url = MODULES["realitycz"]
+eurobydleni_url = MODULES["eurobydleni"]
+realitymix_url = MODULES["realitymix"]
+realingo_url = MODULES["realingo"]
+espolubydleni_url = MODULES["espolubydleni"]

@@ -9,13 +9,21 @@ from app.annonce import AnnonceClient
 from app.bazos import BazosClient
 from app.bezrealitky import BezrealitkyClient
 from app.ceskereality import CeskerealityClient
+from app.espolubydleni import EspolubydleniClient
+from app.eurobydleni import EurobydleniClient
 from app.idnes import IdnesClient
 from app.mmreality import MmrealityClient
+from app.realitymix import RealitymixClient
+from app.realingo import RealingoClient
 from app.portal_urls import (
     annonce_url,
     ceskereality_url,
+    espolubydleni_url,
+    eurobydleni_url,
     mmreality_url,
     realitycz_url,
+    realitymix_url,
+    realingo_url,
     remax_url,
     ulovdomov_url,
 )
@@ -132,6 +140,42 @@ PORTALS: tuple[PortalSpec, ...] = (
         urls=realitycz_url,
         default_search=realitycz_url.build_url({"offers": ["pronajem"]}),
     ),
+    PortalSpec(
+        id="eurobydleni",
+        label="Eurobydlení",
+        hosts=("eurobydleni.cz",),
+        url_likes=("%eurobydleni.cz%",),
+        client=EurobydleniClient,
+        urls=eurobydleni_url,
+        default_search=eurobydleni_url.build_url({"offers": ["pronajem"]}),
+    ),
+    PortalSpec(
+        id="realitymix",
+        label="RealityMIX",
+        hosts=("realitymix.cz",),
+        url_likes=("%realitymix.cz%",),
+        client=RealitymixClient,
+        urls=realitymix_url,
+        default_search=realitymix_url.build_url({"offers": ["pronajem"]}),
+    ),
+    PortalSpec(
+        id="realingo",
+        label="Realingo",
+        hosts=("realingo.cz",),
+        url_likes=("%realingo.cz%",),
+        client=RealingoClient,
+        urls=realingo_url,
+        default_search=realingo_url.build_url({"offers": ["pronajem"]}),
+    ),
+    PortalSpec(
+        id="espolubydleni",
+        label="eSpolubydlení",
+        hosts=("espolubydleni.cz",),
+        url_likes=("%espolubydleni.cz%",),
+        client=EspolubydleniClient,
+        urls=espolubydleni_url,
+        default_search=espolubydleni_url.build_url({"offers": ["pronajem"]}),
+    ),
 )
 
 PORTAL_BY_ID: dict[str, PortalSpec] = {item.id: item for item in PORTALS}
@@ -149,6 +193,10 @@ PORTAL_ORDER: tuple[str, ...] = (
     "ulovdomov",
     "remax",
     "realitycz",
+    "eurobydleni",
+    "realitymix",
+    "realingo",
+    "espolubydleni",
 )
 
 
