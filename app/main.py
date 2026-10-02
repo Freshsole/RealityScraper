@@ -479,8 +479,65 @@ def robots_txt() -> Response:
                     headers={"Cache-Control": "public, max-age=86400"})
 
 
+# --- Watchdog: stav scraperů pro externí monitoring ---
+# Volá se jako /api/watchdog?token=... (token = env WATCHDOG_TOKEN).
+# Vrací stav všech 10 portálů. Cron na pozadí to kontroluje a hlásí pád.
+WATCHDOG_STALE_HOURS = 6
+
+
+def watchdog_status(token: str = Query(default="")) -> JSONResponse:
+    import os
+    expected = os.getenv("WATCHDOG_TOKEN", "").strip()
+    if not expected or token != expected:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    from datetime import datetime, timedelta, timezone
+    from app.sources import PORTAL_LABELS, PORTAL_ORDER
+
+    now = datetime.now(timezone.utc)
+    stale_after = now - timedelta(hours=WATCHDOG_STALE_HOURS)
+    portals = []
+    down = []
+    with hub.store.connect() as conn:
+        for pid in PORTAL_ORDER:
+            row = conn.execute(
+                "SELECT COUNT(*) n, MAX(last_seen) seen FROM catalog_listings "
+                "WHERE portal = ? AND IFNULL(gone, 0) = 0",
+                (pid,),
+            ).fetchone()
+            n = int(row["n"] or 0)
+            seen = row["seen"]
+            err_row = conn.execute(
+                "SELECT last_error, finished_at FROM scrape_jobs "
+                "WHERE portal = ? AND kind = 'monitor_live' "
+                "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1",
+                (pid,),
+            ).fetchone()
+            last_error = (err_row["last_error"] or "").strip() if err_row else ""
+            # DOWN pokud: chyba v posledním jobu, nebo žádná data, nebo data starší než limit
+            reasons = []
+            if last_error:
+                reasons.append(f"chyba: {last_error[:120]}")
+            if n == 0:
+                reasons.append("0 nabídek v katalogu")
+            try:
+                seen_dt = datetime.fromisoformat(str(seen).replace("Z", "+00:00")) if seen else None
+            except ValueError:
+                seen_dt = None
+            if seen_dt is None or seen_dt < stale_after:
+                reasons.append(f"poslední data: {seen or 'nikdy'}")
+            status = "down" if reasons else "ok"
+            label = PORTAL_LABELS.get(pid, pid)
+            portals.append({"id": pid, "name": label, "status": status,
+                            "offers": n, "last_seen": seen, "reasons": reasons})
+            if reasons:
+                down.append(label)
+    return JSONResponse({"ok": not down, "down": down, "portals": portals,
+                         "checked_at": now.isoformat()})
+
+
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
+app.add_api_route("/api/watchdog", watchdog_status, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-praha", seo_landing_pronajem_praha, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-brno", seo_landing_pronajem_brno, methods=["GET"], include_in_schema=False)
 app.add_api_route("/", landing, methods=["GET"], include_in_schema=False)
