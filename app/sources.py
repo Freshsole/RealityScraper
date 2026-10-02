@@ -227,6 +227,14 @@ def portal_of(url: str) -> str:
         return "sreality"
     if host == "reality.cz" or host.endswith(".reality.cz"):
         return "realitycz"
+    if "eurobydleni.cz" in host:
+        return "eurobydleni"
+    if "realitymix.cz" in host:
+        return "realitymix"
+    if "realingo.cz" in host:
+        return "realingo"
+    if "espolubydleni.cz" in host:
+        return "espolubydleni"
     return "sreality"
 
 
