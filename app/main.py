@@ -482,7 +482,13 @@ def robots_txt() -> Response:
 # --- Watchdog: stav scraperů pro externí monitoring ---
 # Volá se jako /api/watchdog?token=... (token = env WATCHDOG_TOKEN).
 # Vrací stav všech 10 portálů. Cron na pozadí to kontroluje a hlásí pád.
-WATCHDOG_STALE_HOURS = 6
+WATCHDOG_STALE_HOURS = 26  # catalog_daily běží 1x denně + rezerva
+
+# "Chyby", které nejsou pádem scraperu (očekávané stavy)
+WATCHDOG_IGNORED_ERRORS = (
+    "portal-disabled",      # circuit breaker - dočasná ochrana, ne pád
+    "Incomplete crawl",     # varování o neúplnosti, ne fatální chyba
+)
 
 
 def watchdog_status(token: str = Query(default="")) -> JSONResponse:
@@ -523,9 +529,11 @@ def watchdog_status(token: str = Query(default="")) -> JSONResponse:
                     fin_dt = fin_dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 fin_dt = None
-            # DOWN pokud: chyba v posledním jobu, nebo job neběžel > 6 hodin
+            # DOWN pokud: skutečná chyba v posledním jobu, nebo job neběžel > limit
+            # Ignorujeme očekávané stavy (circuit breaker, neúplný crawl)
             reasons = []
-            if last_error:
+            is_ignored = any(ign in last_error for ign in WATCHDOG_IGNORED_ERRORS)
+            if last_error and not is_ignored:
                 reasons.append(f"chyba: {last_error[:120]}")
             if fin_dt is None:
                 reasons.append("job nikdy neběžel")
