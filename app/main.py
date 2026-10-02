@@ -510,8 +510,8 @@ def watchdog_status(token: str = Query(default="")) -> JSONResponse:
             ).fetchone()
             n = int(row["n"] or 0)
             err_row = conn.execute(
-                "SELECT last_error, finished_at, started_at FROM scrape_jobs "
-                "WHERE portal = ? AND kind = 'monitor_live' "
+                "SELECT last_error, finished_at, started_at, upserts FROM scrape_jobs "
+                "WHERE portal = ? AND kind = 'catalog_daily' "
                 "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1",
                 (pid,),
             ).fetchone()
