@@ -519,9 +519,25 @@ async def _watchdog_live_test(portal: str) -> dict:
         cls = getattr(m, cm[1])
         c = cls(test_url)
         try:
+            # Nejprv surové HTML pro diagnostiku
+            html_info = {}
+            try:
+                resp = await c._client.get(test_url)
+                html = resp.text
+                html_info = {
+                    "http_status": resp.status_code,
+                    "html_len": len(html),
+                    "box_q_count": html.count("box q"),
+                    "has_captcha": "captcha" in html.lower(),
+                    "title": (html.split("<title>")[1].split("</title>")[0][:80]
+                              if "<title>" in html else "?"),
+                }
+            except Exception as e:
+                html_info = {"html_error": f"{type(e).__name__}: {str(e)[:100]}"}
             listings, total = await c.fetch_page(page=1)
             return {"ok": True, "portal": pid, "url": test_url[:120],
-                    "listings": len(listings), "total": total}
+                    "listings": len(listings), "total": total,
+                    "html": html_info}
         finally:
             await c.aclose()
     except Exception as e:
