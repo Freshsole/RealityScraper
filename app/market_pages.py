@@ -8,6 +8,7 @@ import io
 from datetime import date
 from typing import Any
 
+from app import facts as product_facts
 from app.locality_normalize import _fold, normalize_locality
 from app.store import PRAGUE_DISTRICTS, Store
 
@@ -98,19 +99,12 @@ MARKET_NEIGHBORHOODS: list[str] = [
 MARKET_LOCALITIES: list[str] = MARKET_CITIES + MARKET_NEIGHBORHOODS
 
 # /trh page hysteresis: create at high water, keep until low water.
-MIN_ACTIVE_CREATE = 20
-MIN_ACTIVE_KEEP = 12
+_METHOD = product_facts.get_facts().get("methodology") or {}
+MIN_ACTIVE_CREATE = int(_METHOD.get("trh_create_min") or 20)
+MIN_ACTIVE_KEEP = int(_METHOD.get("trh_keep_min") or 12)
 MIN_ACTIVE = MIN_ACTIVE_CREATE  # backward-compatible alias (= create threshold)
 
-PRICE_METHODOLOGY_CS = (
-    "Hlavní metrika tržních stránek Realitify je medián ceny za m² (průměr uvádíme jako doplněk). "
-    "Počítáme jen byty (kategorie Byt/Podnájem nebo bez uvedené nebytové kategorie) s plochou 10–500 m²; "
-    "u pronájmu s cenou 2 000–300 000 Kč měsíčně; u prodeje s cenou od 300 000 Kč. "
-    "Vyřazujeme nebytové kategorie, domy a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den "
-    "(např. Airbnb, krátkodobý, /den). Stejný filtr platí pro ukázky nabídek a veřejné MCP vyhledávání. "
-    f"Samostatná stránka /trh vznikne při ≥ {MIN_ACTIVE_CREATE} kvalitních nabídkách a zruší se "
-    f"(301 na nadřazenou lokalitu) až když počet klesne pod {MIN_ACTIVE_KEEP}."
-)
+PRICE_METHODOLOGY_CS = product_facts.methodology_cs()
 
 
 def _parents_for_neighborhood(name: str) -> list[str]:
@@ -241,34 +235,16 @@ def _fmt_int(value: Any) -> str:
         return "0"
 
 
-# Portals currently advertised as working on public pages (UlovDomov omitted while unstable).
-PUBLIC_PORTAL_LABELS: tuple[str, ...] = (
-    "Sreality",
-    "Reality.iDNES",
-    "Bazoš",
-    "ČeskéReality",
-    "Bezrealitky",
-    "Annonce",
-    "M&M Reality",
-    "RE/MAX",
-    "Reality.cz",
-)
+# Portals currently advertised as working on public pages (from content/facts.yaml).
+PUBLIC_PORTAL_LABELS: tuple[str, ...] = product_facts.portal_labels()
 
-DISCLAIMER_CS = (
-    "Realitify (realitify.cz) nesouvisí se společností Realtify ani PriceHubble."
-)
-DISCLAIMER_EN = (
-    "Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble."
-)
+DISCLAIMER_CS = product_facts.disclaimer_cs()
+DISCLAIMER_EN = product_facts.disclaimer_en()
 
 
 def public_portals_sentence(*, oxford: bool = True) -> str:
-    labels = list(PUBLIC_PORTAL_LABELS)
-    if len(labels) <= 1:
-        return labels[0] if labels else ""
-    if oxford:
-        return ", ".join(labels[:-1]) + " a " + labels[-1]
-    return ", ".join(labels)
+    del oxford  # kept for call-site compatibility
+    return product_facts.portals_sentence(lang="cs")
 
 
 def _sample_listing_items(store: Store, *, locality: str = "", offer: str = "", q: str = "", limit: int = 12) -> list[dict[str, Any]]:
@@ -370,6 +346,7 @@ def render_index(store: Store) -> str:
     brno = store.catalog_stats("Brno", "pronajem")
     ostrava = store.catalog_stats("Ostrava", "pronajem")
     today = date.today().isoformat()
+    today_cs = product_facts.format_date_cs(date.today())
     current_month = date.today().strftime("%Y-%m")
     import json
 
@@ -390,14 +367,32 @@ def render_index(store: Store) -> str:
         for r in current_rows
     )
     med_m2 = _fmt_m2(praha.get("median_price_per_m2"))
+    updated_label = product_facts.data_updated_label(date.today())
+    cite_praha = (
+        f"K {today_cs} je medián pronájmu bytů v Praze {_fmt_czk(praha.get('median_price'))} "
+        f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} nabídek)."
+    )
+    cite_brno = (
+        f"K {today_cs} je medián pronájmu bytů v Brně {_fmt_czk(brno.get('median_price'))} "
+        f"({_fmt_m2(brno.get('median_price_per_m2'))}; {_fmt_int(brno.get('active_count'))} nabídek)."
+    )
+    cite_ostrava = (
+        f"K {today_cs} je medián pronájmu bytů v Ostravě {_fmt_czk(ostrava.get('median_price'))} "
+        f"({_fmt_m2(ostrava.get('median_price_per_m2'))}; {_fmt_int(ostrava.get('active_count'))} nabídek)."
+    )
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": f"Realitify index nájmů {today}",
         "description": f"Souhrn mediánových nájmů z katalogu Realitify. Praha medián Kč/m² {med_m2}.",
         "url": "https://realitify.cz/index",
-        "creator": {"@type": "Organization", "name": "Realitify", "url": "https://realitify.cz"},
+        "creator": product_facts.dataset_creator(),
         "dateModified": today,
+        "temporalCoverage": today,
+        "license": product_facts.dataset_license(),
+        "distribution": product_facts.dataset_distribution(
+            "https://realitify.cz/index.csv", name="Realitify rent index CSV"
+        ),
     }
     return f"""<!doctype html>
 <html lang="cs">
@@ -407,9 +402,10 @@ def render_index(store: Store) -> str:
   <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>Realitify index nájmů – průběžně k {today}</title>
-  <meta name="description" content="Citovatelný index nájmů Realitify: Praha medián {_fmt_czk(praha.get('median_price'))}, medián {_fmt_m2(praha.get('median_price_per_m2'))}. Průběžně k {today}." />
+  <title>Realitify index nájmů – {today_cs}</title>
+  <meta name="description" content="{html.escape(cite_praha)}" />
   <link rel="canonical" href="https://realitify.cz/index" />
+  <link rel="alternate" type="text/markdown" href="https://realitify.cz/index.md" />
   <link rel="stylesheet" href="/static/site/site.css?v=9" />
   <script type="application/ld+json">{json.dumps(dataset, ensure_ascii=False)}</script>
 </head>
@@ -424,9 +420,12 @@ def render_index(store: Store) -> str:
   </header>
   <header class="legal-header">
     <h1 class="display">REALITIFY INDEX NÁJMŮ</h1>
-    <p>Souhrn aktivních nabídek pronájmu. Průběžně k {today}. Zdroj: katalog Realitify.</p>
+    <p>Souhrn aktivních nabídek pronájmu. {html.escape(updated_label)}. Zdroj: katalog Realitify.</p>
   </header>
   <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
+    <p>{html.escape(cite_praha)}</p>
+    <p>{html.escape(cite_brno)}</p>
+    <p>{html.escape(cite_ostrava)}</p>
     <table border="1" cellpadding="6" cellspacing="0">
       <thead><tr><th>Lokalita</th><th>Aktivní</th><th>Medián</th><th>Průměr</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
       <tbody>
@@ -435,7 +434,7 @@ def render_index(store: Store) -> str:
         <tr><td>Ostrava</td><td>{ostrava.get('active_count')}</td><td>{_fmt_czk(ostrava.get('median_price'))}</td><td>{_fmt_czk(ostrava.get('avg_price'))}</td><td>{_fmt_m2(ostrava.get('median_price_per_m2'))}</td><td>{_fmt_m2(ostrava.get('avg_price_per_m2'))}</td></tr>
       </tbody>
     </table>
-    <h2>Aktuální měsíc ({html.escape(current_month)}) – průběžně k {today}</h2>
+    <h2>Aktuální měsíc ({html.escape(current_month)}) – {html.escape(updated_label)}</h2>
     <p>Neukončený měsíc nemá trvalou archivní URL; čísla se mění. Po skončení měsíce vznikne /index/{html.escape(current_month)}.</p>
     <table border="1" cellpadding="6" cellspacing="0">
       <thead><tr><th>Lokalita</th><th>Nové</th><th>Medián</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
@@ -446,61 +445,131 @@ def render_index(store: Store) -> str:
     <h2>Metodika výpočtu Kč/m²</h2>
     <p>{html.escape(PRICE_METHODOLOGY_CS)}</p>
     <p><a href="/index.csv">Stáhnout CSV</a> · <a href="/trh/praha/pronajem">Detail Praha</a> · <a href="/trh">Trh</a> · <a href="/faq">FAQ</a></p>
+    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
   </div>
 </body>
 </html>"""
 
 
+def render_index_md(store: Store) -> str:
+    praha = store.catalog_stats("Praha", "pronajem")
+    brno = store.catalog_stats("Brno", "pronajem")
+    ostrava = store.catalog_stats("Ostrava", "pronajem")
+    today_cs = product_facts.format_date_cs(date.today())
+    updated = product_facts.data_updated_label(date.today())
+    return "\n".join(
+        [
+            "# Realitify index nájmů",
+            "",
+            updated + ".",
+            "",
+            (
+                f"K {today_cs} je medián pronájmu bytů v Praze {_fmt_czk(praha.get('median_price'))} "
+                f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} nabídek)."
+            ),
+            (
+                f"K {today_cs} je medián pronájmu bytů v Brně {_fmt_czk(brno.get('median_price'))} "
+                f"({_fmt_m2(brno.get('median_price_per_m2'))}; {_fmt_int(brno.get('active_count'))} nabídek)."
+            ),
+            (
+                f"K {today_cs} je medián pronájmu bytů v Ostravě {_fmt_czk(ostrava.get('median_price'))} "
+                f"({_fmt_m2(ostrava.get('median_price_per_m2'))}; {_fmt_int(ostrava.get('active_count'))} nabídek)."
+            ),
+            "",
+            "## Metodika",
+            "",
+            PRICE_METHODOLOGY_CS,
+            "",
+            DISCLAIMER_CS,
+            "",
+            "CSV: https://realitify.cz/index.csv",
+            "HTML: https://realitify.cz/index",
+            "",
+        ]
+    )
+
+
 def index_csv(store: Store) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["locality", "offer", "active_count", "median_price", "avg_price", "median_price_per_m2", "avg_price_per_m2", "as_of"])
+    writer.writerow(
+        [
+            "locality",
+            "offer",
+            "active_count",
+            "median_price",
+            "avg_price",
+            "median_price_per_m2",
+            "avg_price_per_m2",
+            "as_of",
+        ]
+    )
     as_of = date.today().isoformat()
     for loc in ("Praha", "Brno", "Ostrava", "Plzeň", "Olomouc"):
         try:
             s = store.catalog_stats(loc, "pronajem")
         except ValueError:
             continue
-        writer.writerow([
-            loc, "pronajem", s.get("active_count"), s.get("median_price"), s.get("avg_price"),
-            s.get("median_price_per_m2"), s.get("avg_price_per_m2"), as_of,
-        ])
+        writer.writerow(
+            [
+                loc,
+                "pronajem",
+                s.get("active_count"),
+                s.get("median_price"),
+                s.get("avg_price"),
+                s.get("median_price_per_m2"),
+                s.get("avg_price_per_m2"),
+                as_of,
+            ]
+        )
     return buf.getvalue()
 
 
-def render_faq(store: Store) -> str:
+def _faq_items(store: Store) -> list[dict[str, str]]:
     praha = store.catalog_stats("Praha", "pronajem", "2+kk")
     portals = public_portals_sentence()
-    import json
-
-    faqs = [
+    today_cs = product_facts.format_date_cs(date.today())
+    facts = product_facts.get_facts()
+    plans = facts.get("plans") or {}
+    start = plans.get("start") or {}
+    pro = plans.get("pro") or {}
+    return [
         {
             "q": "Co je Realitify?",
-            "a": (
-                "Realitify je agregátor nabídek bytů a domů z českých realitních portálů. "
-                f"Sjednocuje inzeráty ze {portals} a dalších sledovaných zdrojů, "
-                "ukazuje tržní statistiky a umí hlídat nové nabídky podle filtrů."
-            ),
+            "a": product_facts.one_liner_cs()
+            + f" Agreguje inzeráty ze {portals}.",
         },
         {
             "q": "Jak rychle sehnat byt v Praze?",
             "a": (
-                f"Sledujte nové nabídky průběžně — v katalogu Realitify je teď "
-                f"{praha.get('active_count')} aktivních 2+kk v Praze. "
+                f"K {today_cs} je v katalogu Realitify {_fmt_int(praha.get('active_count'))} "
+                f"aktivních nabídek 2+kk v Praze. "
                 "Placené hlídání posílá upozornění během desítek sekund po objevení inzerátu."
             ),
         },
         {
             "q": "Jak být první u nové nabídky?",
-            "a": "Nastavte filtr (lokalita, dispozice, max. cena) a zapněte notifikace. Realitify agreguje portály a hlásí nové first_seen záznamy dřív, než je většina lidí ručně projde.",
+            "a": (
+                "Nastavte filtr (lokalita, dispozice, max. cena) a zapněte notifikace. "
+                "Realitify agreguje portály a hlásí nové first_seen záznamy."
+            ),
         },
         {
             "q": "Kolik stojí pronájem 2+kk v Praze?",
             "a": (
-                f"Podle aktuálních dat Realitify je medián {_fmt_czk(praha.get('median_price'))}, "
-                f"medián {_fmt_m2(praha.get('median_price_per_m2'))} "
-                f"(průměr {_fmt_czk(praha.get('avg_price'))}, {_fmt_m2(praha.get('avg_price_per_m2'))}; "
-                f"vzorek {praha.get('sample_size_price_m2')} nabídek po filtru kvality, datum {date.today().isoformat()})."
+                f"K {today_cs} je medián pronájmu 2+kk v Praze {_fmt_czk(praha.get('median_price'))} "
+                f"({_fmt_m2(praha.get('median_price_per_m2'))}; "
+                f"průměr {_fmt_czk(praha.get('avg_price'))}, {_fmt_m2(praha.get('avg_price_per_m2'))}; "
+                f"vzorek {_fmt_int(praha.get('sample_size_price_m2'))} nabídek po filtru kvality)."
+            ),
+        },
+        {
+            "q": "Jaké jsou tarify?",
+            "a": (
+                f"Prohlížení katalogu a veřejné MCP je zdarma. "
+                f"Start stojí {start.get('price_czk')} Kč/měsíc ({start.get('watch_limit')} hlídacích psů), "
+                f"PRO {pro.get('price_czk')} Kč/měsíc (neomezeně hlídacích psů). "
+                "INDIVIDUAL je cena dohodou."
             ),
         },
         {
@@ -520,8 +589,7 @@ def render_faq(store: Store) -> str:
             "a": (
                 f"Nová lokalitní stránka vznikne při ≥ {MIN_ACTIVE_CREATE} kvalitních nabídkách bytů. "
                 f"Existující stránka se zruší (přesměrování 301 na nadřazenou lokalitu) až když počet "
-                f"klesne pod {MIN_ACTIVE_KEEP}. Stav aktivních stránek ukládáme v databázi, aby bylo "
-                "rozhodnutí deterministické."
+                f"klesne pod {MIN_ACTIVE_KEEP}."
             ),
         },
         {
@@ -529,13 +597,25 @@ def render_faq(store: Store) -> str:
             "a": DISCLAIMER_CS,
         },
     ]
+
+
+def render_faq(store: Store) -> str:
+    import json
+
+    faqs = _faq_items(store)
+    updated = product_facts.data_updated_label(date.today())
     faq_ld = {
         "@context": "https://schema.org",
         "@type": "FAQPage",
         "mainEntity": [
-            {"@type": "Question", "name": f["q"], "acceptedAnswer": {"@type": "Answer", "text": f["a"]}}
+            {
+                "@type": "Question",
+                "name": f["q"],
+                "acceptedAnswer": {"@type": "Answer", "text": f["a"]},
+            }
             for f in faqs
         ],
+        "dateModified": date.today().isoformat(),
     }
     body = "".join(
         f"<section><h2>{html.escape(f['q'])}</h2><p>{html.escape(f['a'])}</p></section>" for f in faqs
@@ -549,22 +629,37 @@ def render_faq(store: Store) -> str:
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <title>FAQ – Realitify</title>
-  <meta name="description" content="Co je Realitify, jak počítáme medián Kč/m², jak sehnat byt v Praze a jak poznat předražený nájem. S živými čísly z katalogu." />
+  <meta name="description" content="Co je Realitify, tarify, medián Kč/m² a metodika. {html.escape(updated)}." />
   <link rel="canonical" href="https://realitify.cz/faq" />
+  <link rel="alternate" type="text/markdown" href="https://realitify.cz/faq.md" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
   <script type="application/ld+json">{json.dumps(faq_ld, ensure_ascii=False)}</script>
 </head>
 <body class="legal-page">
   <header class="navbar"><a class="brand" href="/">REALITIFY</a></header>
-  <header class="legal-header"><h1 class="display">FAQ</h1></header>
+  <header class="legal-header"><h1 class="display">FAQ</h1><p>{html.escape(updated)}</p></header>
   <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">{body}</div>
 </body>
 </html>"""
 
 
+def render_faq_md(store: Store) -> str:
+    faqs = _faq_items(store)
+    lines = ["# FAQ – Realitify", "", product_facts.data_updated_label(date.today()) + ".", ""]
+    for f in faqs:
+        lines.extend([f"## {f['q']}", "", f["a"], ""])
+    lines.append(DISCLAIMER_CS)
+    lines.append("")
+    return "\n".join(lines)
+
+
 def render_search(store: Store, q: str = "") -> str:
     query = (q or "").strip()[:120]
-    items = _sample_listing_items(store, q=query, offer="pronajem", limit=20) if query else _sample_listing_items(store, offer="pronajem", limit=20)
+    items = (
+        _sample_listing_items(store, q=query, offer="pronajem", limit=20)
+        if query
+        else _sample_listing_items(store, offer="pronajem", limit=20)
+    )
     listings = _listings_html(items, empty="Žádné nabídky pro tento dotaz.")
     title_q = html.escape(query) if query else "aktuální nabídky"
     return f"""<!doctype html>
@@ -576,7 +671,7 @@ def render_search(store: Store, q: str = "") -> str:
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <title>Hledat nabídky – Realitify</title>
-  <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify. Výsledky s odkazy na detaily u zdrojových portálů." />
+  <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify." />
   <meta name="robots" content="noindex, follow" />
   <link rel="canonical" href="https://realitify.cz/hledat" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
@@ -611,8 +706,27 @@ def render_search(store: Store, q: str = "") -> str:
 </html>"""
 
 
-def render_about_cs() -> str:
+def render_about_cs(store: Store | None = None) -> str:
     portals = public_portals_sentence()
+    facts = product_facts.get_facts()
+    op = facts.get("operator") or {}
+    contact = facts.get("contact") or {}
+    product = facts.get("product") or {}
+    plans = facts.get("plans") or {}
+    stats_line = ""
+    if store is not None:
+        try:
+            praha = store.catalog_stats("Praha", "pronajem")
+            today_cs = product_facts.format_date_cs(date.today())
+            stats_line = (
+                f"<p>K {html.escape(today_cs)} je medián pronájmu bytů v Praze "
+                f"{html.escape(_fmt_czk(praha.get('median_price')))} "
+                f"({html.escape(_fmt_m2(praha.get('median_price_per_m2')))}; "
+                f"{html.escape(_fmt_int(praha.get('active_count')))} nabídek).</p>"
+            )
+        except Exception:
+            stats_line = ""
+    updated = product_facts.data_updated_label(date.today())
     return f"""<!doctype html>
 <html lang="cs">
 <head>
@@ -622,8 +736,9 @@ def render_about_cs() -> str:
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <title>O nás – Realitify</title>
-  <meta name="description" content="Realitify je agregátor nabídek bytů a domů z českých realitních portálů. Provozuje Jiří Kolb (OSVČ), IČO 21527059." />
+  <meta name="description" content="{html.escape(product_facts.one_liner_cs())} Provozuje {html.escape(str(op.get('name')))} ({html.escape(str(op.get('legal_form')))}), IČO {html.escape(str(op.get('ico')))}." />
   <link rel="canonical" href="https://realitify.cz/o-nas" />
+  <link rel="alternate" type="text/markdown" href="https://realitify.cz/o-nas.md" />
   <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
   <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
   <link rel="alternate" hreflang="x-default" href="https://realitify.cz/o-nas" />
@@ -641,15 +756,19 @@ def render_about_cs() -> str:
   </header>
   <header class="legal-header">
     <h1 class="display">O NÁS</h1>
-    <p>Realitify – všechny nabídky bytů a domů z českých realitních portálů na jednom místě.</p>
+    <p>{html.escape(product_facts.one_liner_cs())}</p>
+    <p>{html.escape(updated)}</p>
   </header>
   <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
     <h2>Co je Realitify</h2>
-    <p>Realitify je český agregátor realitních nabídek. Stahuje a sjednocuje inzeráty bytů a domů z hlavních portálů ({html.escape(portals)}), odstraňuje duplicity a umožňuje prohlížet trh, porovnávat ceny a hlídat nové nabídky podle filtrů.</p>
+    <p>{html.escape(product_facts.one_liner_cs())} Stahuje a sjednocuje inzeráty z {html.escape(portals)}, odstraňuje duplicity a umožňuje prohlížet trh, porovnávat ceny a hlídat nové nabídky.</p>
+    {stats_line}
     <h2>Kdo provozuje službu</h2>
-    <p>Provozovatel: <strong>Jiří Kolb</strong>, podnikající fyzická osoba (OSVČ), IČO <strong>21527059</strong>, sídlo <strong>Umělecká 618/7, 170 00 Praha 7 – Holešovice</strong>. Kontakt: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>.</p>
+    <p>Provozovatel: <strong>{html.escape(str(op.get('name')))}</strong>, podnikající fyzická osoba ({html.escape(str(op.get('legal_form')))}), IČO <strong>{html.escape(str(op.get('ico')))}</strong>, sídlo <strong>{html.escape(str(op.get('address')))}</strong>. Kontakt: <a href="mailto:{html.escape(str(contact.get('support')))}">{html.escape(str(contact.get('support')))}</a>.</p>
     <h2>Od kdy</h2>
-    <p>Služba Realitify je v provozu od roku 2025.</p>
+    <p>Služba Realitify je v provozu od roku {html.escape(str(product.get('since_year')))}.</p>
+    <h2>Tarify</h2>
+    <p>Prohlížení katalogu je zdarma. Start {html.escape(str((plans.get('start') or {}).get('price_czk')))} Kč/měsíc, PRO {html.escape(str((plans.get('pro') or {}).get('price_czk')))} Kč/měsíc. Detail: <a href="/#cenik">ceník</a>.</p>
     <h2>Jak funguje agregace</h2>
     <p>Scrapery průběžně procházejí veřejné výpisy portálů, ukládají aktivní inzeráty do katalogu a aktualizují first_seen / last_seen. Veřejné stránky (/trh/…, /index, /hledat) a MCP server čtou z tohoto katalogu. Placené hlídání posílá notifikace při nových shodách s nastavenými filtry.</p>
     <p>{html.escape(DISCLAIMER_CS)}</p>
@@ -658,8 +777,52 @@ def render_about_cs() -> str:
 </html>"""
 
 
+def render_about_cs_md(store: Store | None = None) -> str:
+    facts = product_facts.get_facts()
+    op = facts.get("operator") or {}
+    contact = facts.get("contact") or {}
+    product = facts.get("product") or {}
+    plans = facts.get("plans") or {}
+    lines = [
+        "# O nás – Realitify",
+        "",
+        product_facts.data_updated_label(date.today()) + ".",
+        "",
+        product_facts.one_liner_cs(),
+        "",
+        f"Provozovatel: {op.get('name')}, {op.get('legal_form')}, IČO {op.get('ico')}, {op.get('address')}. Kontakt: {contact.get('support')}.",
+        "",
+        f"V provozu od roku {product.get('since_year')}.",
+        "",
+        (
+            f"Tarify: Start {(plans.get('start') or {}).get('price_czk')} Kč/měsíc, "
+            f"PRO {(plans.get('pro') or {}).get('price_czk')} Kč/měsíc; prohlížení katalogu zdarma."
+        ),
+        "",
+        f"Portály: {public_portals_sentence()}.",
+        "",
+    ]
+    if store is not None:
+        try:
+            praha = store.catalog_stats("Praha", "pronajem")
+            today_cs = product_facts.format_date_cs(date.today())
+            lines.append(
+                f"K {today_cs} je medián pronájmu bytů v Praze {_fmt_czk(praha.get('median_price'))} "
+                f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} nabídek)."
+            )
+            lines.append("")
+        except Exception:
+            pass
+    lines.extend([DISCLAIMER_CS, ""])
+    return "\n".join(lines)
+
+
 def render_about_en() -> str:
-    portals = ", ".join(PUBLIC_PORTAL_LABELS[:-1]) + ", and " + PUBLIC_PORTAL_LABELS[-1]
+    portals = product_facts.portals_sentence(lang="en")
+    facts = product_facts.get_facts()
+    op = facts.get("operator") or {}
+    contact = facts.get("contact") or {}
+    product = facts.get("product") or {}
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -669,7 +832,7 @@ def render_about_en() -> str:
   <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <title>About – Realitify</title>
-  <meta name="description" content="Realitify is a Czech real-estate listings aggregator. Operated by Jiří Kolb (sole trader), Company ID 21527059." />
+  <meta name="description" content="{html.escape(product_facts.one_liner_en())} Operated by {html.escape(str(op.get('name')))}, Company ID {html.escape(str(op.get('ico')))}." />
   <link rel="canonical" href="https://realitify.cz/about" />
   <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
   <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
@@ -688,54 +851,264 @@ def render_about_en() -> str:
   </header>
   <header class="legal-header">
     <h1 class="display">ABOUT</h1>
-    <p>Realitify — Czech apartment and house listings from major portals, in one place.</p>
+    <p>{html.escape(product_facts.one_liner_en())}</p>
   </header>
   <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
     <h2>What Realitify is</h2>
-    <p>Realitify is a Czech real-estate listings aggregator. It collects and deduplicates ads for flats and houses from major portals ({html.escape(portals)}), exposes market stats, and can watch for new matches against user filters.</p>
+    <p>{html.escape(product_facts.one_liner_en())} It collects and deduplicates ads from {html.escape(portals)}.</p>
     <h2>Operator</h2>
-    <p>Operator: <strong>Jiří Kolb</strong>, sole trader (OSVČ), Company ID (IČO) <strong>21527059</strong>, registered office <strong>Umělecká 618/7, 170 00 Praha 7 – Holešovice</strong>, Czech Republic. Contact: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>.</p>
+    <p>Operator: <strong>{html.escape(str(op.get('name')))}</strong>, sole trader ({html.escape(str(op.get('legal_form')))}), Company ID (IČO) <strong>{html.escape(str(op.get('ico')))}</strong>, registered office <strong>{html.escape(str(op.get('address')))}</strong>, Czech Republic. Contact: <a href="mailto:{html.escape(str(contact.get('support')))}">{html.escape(str(contact.get('support')))}</a>.</p>
     <h2>Since when</h2>
-    <p>Realitify has been operating since 2025.</p>
+    <p>Realitify has been operating since {html.escape(str(product.get('since_year')))}.</p>
     <h2>How aggregation works</h2>
-    <p>Scrapers continuously read public portal listings into a catalog (first_seen / last_seen). Public pages (/trh/…, /index, /hledat) and the MCP server read from that catalog. Paid watches send alerts when new listings match a filter.</p>
+    <p>Scrapers continuously read public portal listings into a catalog (first_seen / last_seen). Public pages and the MCP server read from that catalog. Paid watches send alerts when new listings match a filter.</p>
     <p>{html.escape(DISCLAIMER_EN)}</p>
   </div>
 </body>
 </html>"""
 
 
-def llms_txt() -> str:
+def render_home_md(store: Store | None = None) -> str:
+    facts = product_facts.get_facts()
+    plans = facts.get("plans") or {}
+    lines = [
+        "# Realitify",
+        "",
+        product_facts.one_liner_cs(),
+        "",
+        f"Portály: {public_portals_sentence()}.",
+        "",
+        "## Tarify",
+        "",
+        f"- Zdarma: {(plans.get('free') or {}).get('price_czk')} Kč — 1 hlídací pes, 4 hlavní portály",
+        f"- Start: {(plans.get('start') or {}).get('price_czk')} Kč/měsíc — 10 hlídacích psů, všechny agregované portály ({len(PUBLIC_PORTAL_LABELS)})",
+        f"- PRO: {(plans.get('pro') or {}).get('price_czk')} Kč/měsíc — neomezeně hlídacích psů",
+        "",
+        f"MCP: {(facts.get('mcp') or {}).get('url')}",
+        "",
+        product_facts.data_updated_label(date.today()) + ".",
+        "",
+    ]
+    if store is not None:
+        try:
+            praha = store.catalog_stats("Praha", "pronajem")
+            today_cs = product_facts.format_date_cs(date.today())
+            lines.insert(
+                4,
+                (
+                    f"K {today_cs} je medián pronájmu bytů v Praze {_fmt_czk(praha.get('median_price'))} "
+                    f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} nabídek)."
+                ),
+            )
+            lines.insert(5, "")
+        except Exception:
+            pass
+    lines.extend([DISCLAIMER_CS, ""])
+    return "\n".join(lines)
+
+
+def render_mcp_docs_md() -> str:
+    facts = product_facts.get_facts()
+    mcp = facts.get("mcp") or {}
+    tools = mcp.get("tools") or []
+    lines = [
+        "# Realitify MCP",
+        "",
+        product_facts.one_liner_en(),
+        "",
+        f"Server URL: {mcp.get('url')} (Streamable HTTP, no login)",
+        f"Health: {mcp.get('health')}",
+        f"Units: {mcp.get('units', {}).get('currency')}, {mcp.get('units', {}).get('area')}. Data region: {mcp.get('data_region')}.",
+        "",
+        "## Tools",
+        "",
+    ]
+    for t in tools:
+        lines.append(f"- `{t}`")
+    lines.extend(
+        [
+            "",
+            mcp.get("tip_en") or "",
+            "",
+            DISCLAIMER_EN,
+            "",
+            f"Docs HTML: {mcp.get('docs')}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def llms_txt(store: Store | None = None) -> str:
+    facts = product_facts.get_facts()
+    product = facts.get("product") or {}
+    op = facts.get("operator") or {}
+    mcp = facts.get("mcp") or {}
+    urls = facts.get("urls") or {}
     portals = public_portals_sentence()
+    omitted = ((facts.get("portals") or {}).get("omitted") or [{}])[0]
+    updated = date.today().isoformat()
+    market_line = ""
+    if store is not None:
+        try:
+            praha = store.catalog_stats("Praha", "pronajem")
+            market_line = (
+                f"\nAs of {updated}, Praha rent median is {_fmt_czk(praha.get('median_price'))} "
+                f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} listings).\n"
+            )
+        except Exception:
+            market_line = ""
+    tools = ", ".join(mcp.get("tools") or [])
     return f"""# Realitify
 
-> Czech real-estate listing aggregator for apartments and houses from major Czech portals, with alerts and a public read-only MCP connector.
+> {product_facts.one_liner_en()}
 
-Realitify aggregates active listings from {portals} (UlovDomov currently omitted while unstable). It is operated by Jiří Kolb (sole trader / OSVČ, IČO 21527059) since 2025. {DISCLAIMER_EN}
+Last-Updated: {updated}
 
+Realitify aggregates active listings from {portals} ({omitted.get('id')} currently omitted: {omitted.get('reason')}). Operated by {op.get('name')} (sole trader / {op.get('legal_form')}, IČO {op.get('ico')}) since {product.get('since_year')}. {DISCLAIMER_EN}
+{market_line}
 ## Docs
 
-- [MCP docs](https://realitify.cz/mcp-docs): Public MCP connector documentation
-- [FAQ](https://realitify.cz/faq): Frequently asked questions about Realitify
-- [About](https://realitify.cz/o-nas): What Realitify is and who operates it
-- [About (EN)](https://realitify.cz/about): English about page
+- [MCP docs]({urls.get('mcp_docs')}): Public MCP connector documentation
+- [MCP docs (CS)]({mcp.get('docs_cs')}): Czech MCP documentation
+- [FAQ]({urls.get('faq')}): Frequently asked questions
+- [About]({urls.get('about_cs')}): Operator and product facts
+- [About (EN)]({urls.get('about_en')}): English about page
+- [Full facts (llms-full.txt)]({urls.get('llms_full')}): Complete factual markdown for AI systems
 
 ## Data
 
-- [Home](https://realitify.cz/): Product landing page
-- [Market hub](https://realitify.cz/trh): Locality market pages (SSR)
-- [Rent index](https://realitify.cz/index): Monthly rent index and archive
-- [Search](https://realitify.cz/hledat): Public SSR listing search with links to source details
-- [Rent index](https://realitify.cz/index): Czech rent index overview
-- [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page with sample listings
+- [Home]({urls.get('home')}): Product landing page ([Markdown]({urls.get('home_md')}))
+- [Market hub]({urls.get('trh')}): Locality market pages
+- [Rent index]({urls.get('index')}): Rent index and archive ([CSV]({urls.get('index_csv')}))
+- [Search]({urls.get('search')}): Public SSR listing search
+- [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page
 - [Smíchov market](https://realitify.cz/trh/smichov/pronajem): Smíchov rental market page
 
 ## MCP
 
-- [MCP endpoint](https://mcp.realitify.cz/mcp): Streamable HTTP MCP server (search_listings, new_listings, get_listing, locality_stats, price_check, compare_localities)
+- [MCP endpoint]({mcp.get('url')}): Streamable HTTP ({tools})
 
 ## Legal
 
-- [Privacy](https://realitify.cz/privacy): Privacy policy
-- [Terms](https://realitify.cz/terms): Terms of service
+- [Privacy]({urls.get('privacy')})
+- [Terms]({urls.get('terms')})
 """
+
+
+def llms_full_txt(store: Store) -> str:
+    facts = product_facts.get_facts()
+    product = facts.get("product") or {}
+    op = facts.get("operator") or {}
+    contact = facts.get("contact") or {}
+    plans = facts.get("plans") or {}
+    mcp = facts.get("mcp") or {}
+    free_vs = facts.get("free_vs_paid") or {}
+    updated = date.today().isoformat()
+    today_cs = product_facts.format_date_cs(date.today())
+    lines: list[str] = [
+        "# Realitify — full facts for AI systems",
+        "",
+        f"Last-Updated: {updated}",
+        "",
+        "## What it is",
+        "",
+        product_facts.one_liner_en(),
+        product_facts.one_liner_cs(),
+        "",
+        DISCLAIMER_EN,
+        DISCLAIMER_CS,
+        "",
+        "## Operator",
+        "",
+        f"- Name: {op.get('name')}",
+        f"- Legal form: {op.get('legal_form')}",
+        f"- IČO: {op.get('ico')}",
+        f"- Address: {op.get('address')}",
+        f"- Support: {contact.get('support')}",
+        f"- Since: {product.get('since_year')}",
+        "",
+        "## Portals",
+        "",
+        f"Currently aggregated: {public_portals_sentence()}.",
+    ]
+    for row in (facts.get("portals") or {}).get("omitted") or []:
+        lines.append(f"Omitted: {row.get('id')} ({row.get('reason')}).")
+    lines.extend(["", "## Plans and prices", ""])
+    for key in ("free", "start", "pro", "individual"):
+        p = plans.get(key) or {}
+        price = p.get("price_czk")
+        price_s = "dohodou" if price is None else f"{price} Kč/měsíc"
+        lines.append(f"### {p.get('label')} ({price_s})")
+        for feat in p.get("features_cs") or []:
+            lines.append(f"- {feat}")
+        lines.append("")
+    lines.extend(["## Free vs paid", "", "Free includes:"])
+    for item in free_vs.get("free_includes_cs") or []:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("Paid includes:")
+    for item in free_vs.get("paid_includes_cs") or []:
+        lines.append(f"- {item}")
+    lines.extend(["", "## Methodology", "", PRICE_METHODOLOGY_CS, "", "## Market summary (live)", ""])
+    for loc in ("Praha", "Brno", "Ostrava"):
+        try:
+            s = store.catalog_stats(loc, "pronajem")
+        except Exception:
+            continue
+        lines.append(
+            f"K {today_cs} je medián pronájmu bytů v lokalitě {loc} {_fmt_czk(s.get('median_price'))} "
+            f"({_fmt_m2(s.get('median_price_per_m2'))}; {_fmt_int(s.get('active_count'))} nabídek)."
+        )
+    lines.extend(
+        [
+            "",
+            "## FAQ",
+            "",
+        ]
+    )
+    for f in _faq_items(store):
+        lines.extend([f"### {f['q']}", "", f["a"], ""])
+    lines.extend(
+        [
+            "## MCP tools",
+            "",
+            f"Endpoint: {mcp.get('url')}",
+            f"Transport: {mcp.get('transport')}; auth: {mcp.get('auth')}",
+            f"Units: {mcp.get('units', {}).get('currency')}, area in {mcp.get('units', {}).get('area')}",
+            f"Data region: {mcp.get('data_region')}",
+            "",
+            "### search_listings",
+            "Use when the user wants current rentals/sales matching filters.",
+            "Example CZ: „hledám 2+kk v Praze do 20000“ → locality=Praha, offer_type=pronajem, disposition=2+kk, max_price=20000",
+            "Example EN: \"flat in Prague under 20000 CZK\"",
+            "",
+            "### new_listings",
+            "Use when the user asks what is new in the last N hours (first_seen).",
+            "Example: „co nového na pronájem v Brně“ → locality=Brno, offer_type=pronajem, since_hours=24",
+            "",
+            "### get_listing",
+            "Use when the user wants one listing by id/listing_key from a prior result.",
+            "",
+            "### locality_stats",
+            "Use when the user asks for median/average price or active count in a locality.",
+            "",
+            "### price_check",
+            "Use when the user asks if a price is fair vs comparables (median primary).",
+            "Example: „je 25000 za 2+kk na Vinohradech hodně?“",
+            "",
+            "### compare_localities",
+            "Use when comparing two or more localities side by side.",
+            "",
+            mcp.get("tip_en") or "",
+            "",
+            "## Links",
+            "",
+            f"- Home: {(facts.get('urls') or {}).get('home')}",
+            f"- FAQ: {(facts.get('urls') or {}).get('faq')}",
+            f"- Index: {(facts.get('urls') or {}).get('index')}",
+            f"- MCP docs: {mcp.get('docs')}",
+            "",
+        ]
+    )
+    return "\n".join(lines)

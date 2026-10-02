@@ -12,19 +12,40 @@ import stripe
 from app import config
 from app.store import Store
 
+def _plan_features_from_facts() -> dict[str, list[str]]:
+    """Pull plan feature bullets from content/facts.yaml when available."""
+    try:
+        from app.facts import get_facts
+
+        plans = (get_facts().get("plans") or {})
+        out: dict[str, list[str]] = {}
+        for key in ("free", "start", "pro", "individual"):
+            feats = list((plans.get(key) or {}).get("features_cs") or [])
+            if feats:
+                out[key] = feats
+        return out
+    except Exception:
+        return {}
+
+
+_FACT_FEATURES = _plan_features_from_facts()
+
 PLANS: dict[str, dict[str, Any]] = {
     "free": {
         "id": "free",
         "label": "Zdarma",
         "price_czk": 0,
         "watch_limit": 1,
-        "features": [
-            "1 hlídací pes",
-            "4 hlavní portály (Sreality, Bezrealitky, iDNES, Bazoš)",
-            "Notifikace do 5 minut",
-            "Historie cen 30 dní, základní filtry",
-            "Podpora e-mailem",
-        ],
+        "features": _FACT_FEATURES.get(
+            "free",
+            [
+                "1 hlídací pes",
+                "4 hlavní portály (Sreality, Bezrealitky, Reality.iDNES, Bazoš)",
+                "Notifikace do 5 minut",
+                "Historie cen 30 dní, základní filtry",
+                "Podpora e-mailem",
+            ],
+        ),
     },
     "start": {
         "id": "start",
@@ -34,13 +55,16 @@ PLANS: dict[str, dict[str, Any]] = {
         "lookup_key": "realitify_start_month",
         "product_name": "Realitify Start",
         "trial_days": 3,
-        "features": [
-            "10 hlídacích psů",
-            "12+ portálů, notifikace do 60 s",
-            "E-mail, historie 1 rok, CSV 1× měsíčně",
-            "Pokročilé filtry (RK, klíčová slova)",
-            "3 dny zdarma, prioritní e-mail",
-        ],
+        "features": _FACT_FEATURES.get(
+            "start",
+            [
+                "10 hlídacích psů",
+                "Všechny agregované portály (9), notifikace do 60 s",
+                "E-mail, historie 1 rok, CSV 1× měsíčně",
+                "Pokročilé filtry (RK, klíčová slova)",
+                "3 dny zdarma, prioritní e-mail",
+            ],
+        ),
     },
     "pro": {
         "id": "pro",
@@ -50,26 +74,32 @@ PLANS: dict[str, dict[str, Any]] = {
         "lookup_key": "realitify_pro_month",
         "product_name": "Realitify PRO",
         "trial_days": 3,
-        "features": [
-            "Neomezeně hlídacích psů",
-            "20+ portálů + dražby, notifikace do 30 s",
-            "Email + Push + Discord (10 SMS/měs)",
-            "AI filtry a MCP (ChatGPT, Claude, Grok)",
-            "Telefon + chat, Excel/CSV neomezeně",
-        ],
+        "features": _FACT_FEATURES.get(
+            "pro",
+            [
+                "Neomezeně hlídacích psů",
+                "Všechny agregované portály (9), notifikace do 30 s",
+                "Email + Push + Discord (10 SMS/měs)",
+                "AI filtry a MCP (ChatGPT, Claude, Grok)",
+                "Telefon + chat, Excel/CSV neomezeně",
+            ],
+        ),
     },
     "individual": {
         "id": "individual",
         "label": "INDIVIDUAL",
         "price_czk": None,
         "watch_limit": None,
-        "features": [
-            "Neomezeně + API a MCP",
-            "Všechny portály + vlastní zdroje",
-            "Webhook do 30 s",
-            "Export a filtry na míru",
-            "Osobní manažer",
-        ],
+        "features": _FACT_FEATURES.get(
+            "individual",
+            [
+                "Neomezeně + API a MCP",
+                "Všechny portály + vlastní zdroje",
+                "Webhook do 30 s",
+                "Export a filtry na míru",
+                "Osobní manažer",
+            ],
+        ),
     },
 }
 
@@ -79,8 +109,7 @@ LIVE_SUB_STATUSES = frozenset({"active", "trialing", "past_due", "unpaid", "inco
 DOWNGRADE_LOSSES: dict[tuple[str, str], list[str]] = {
     ("pro", "start"): [
         "Neomezený počet hlídacích psů — Start má nejvýš 10 aktivních",
-        "20+ portálů a dražby",
-        "Notifikace do 30 s",
+        "Notifikace do 30 s (Start má do 60 s)",
         "Push + Discord SMS balíček",
         "AI filtry a MCP (ChatGPT, Claude, Grok)",
         "Telefon + chat a neomezený Excel/CSV",
@@ -88,12 +117,12 @@ DOWNGRADE_LOSSES: dict[tuple[str, str], list[str]] = {
     ("pro", "free"): [
         "Všechny placené funkce tarifu PRO",
         "Neomezené hlídací psy — Zdarma má 1 aktivní",
-        "20+ portálů, dražby, AI a MCP",
+        "Všechny agregované portály (9), AI a MCP",
         "Rychlé notifikace a extra kanály",
     ],
     ("start", "free"): [
         "Až 10 hlídacích psů — Zdarma má 1 aktivní",
-        "12+ portálů a notifikace do 60 s",
+        "Všechny agregované portály (9) a notifikace do 60 s",
         "Historie 1 rok a CSV export",
         "Pokročilé filtry a prioritní e-mail",
     ],

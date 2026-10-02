@@ -524,24 +524,28 @@ class Store:
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         on_loop = threading.current_thread() is threading.main_thread()
         if quick:
-            # WAL-friendly read: do not use mode=ro (it can stall on -shm / checkpoint).
-            conn = sqlite3.connect(self.path, timeout=0.2)
+            # Fast read path: query_only, avoid mode=ro stalls on -shm during checkpoint.
+            conn = sqlite3.connect(self.path, timeout=1.0)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=200")
+            conn.execute("PRAGMA busy_timeout=1000")
             try:
                 conn.execute("PRAGMA query_only=ON")
             except sqlite3.OperationalError:
                 pass
         elif readonly:
-            uri = f"file:{Path(self.path).resolve().as_posix()}?mode=ro"
-            conn = sqlite3.connect(uri, uri=True, timeout=5)
+            # Public/read helpers: query_only on normal connection (WAL-safe).
+            conn = sqlite3.connect(self.path, timeout=5)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=250")
+            conn.execute("PRAGMA busy_timeout=5000")
+            try:
+                conn.execute("PRAGMA query_only=ON")
+            except sqlite3.OperationalError:
+                pass
         elif on_loop:
-            # Short wait for request handlers so UI fails fast under writer load.
-            conn = sqlite3.connect(self.path, timeout=0.08)
+            # Request-path writers should fail fast under scrape load.
+            conn = sqlite3.connect(self.path, timeout=1.0)
             conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA busy_timeout=80")
+            conn.execute("PRAGMA busy_timeout=1000")
         else:
             conn = sqlite3.connect(self.path, timeout=30)
             conn.row_factory = sqlite3.Row
@@ -557,6 +561,8 @@ class Store:
         """Long-timeout writer for schema init (uvicorn --reload races with scrapes)."""
         conn = sqlite3.connect(self.path, timeout=60)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=60000")
         return conn
 
@@ -6305,6 +6311,15 @@ class Store:
                 "SELECT COUNT(*) AS active_count FROM listings WHERE IFNULL(gone, 0) = 0"
             ).fetchone()
         return int(row["active_count"] or 0) if row else 0
+
+    def catalog_data_as_of(self) -> str:
+        """ISO timestamp of the newest last_seen among active listings (catalog freshness)."""
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT MAX(last_seen) AS data_as_of FROM listings WHERE IFNULL(gone, 0) = 0"
+            ).fetchone()
+        value = (row["data_as_of"] if row else None) or ""
+        return str(value).strip()
 
     def catalog_offer_stats(self, offer: str = "", disposition: str = "") -> dict[str, Any]:
         """Nationwide active stats (no locality filter). Price metrics use quality filter."""

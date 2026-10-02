@@ -226,7 +226,16 @@ def _migrate_legacy_data(dest: Path) -> None:
     except OSError:
         return
     dest.mkdir(parents=True, exist_ok=True)
-    for name in ("monitor.sqlite", "monitor.sqlite-wal", "monitor.sqlite-shm", "vapid.json", "vapid-private.pem"):
+    for name in (
+        "monitor.sqlite",
+        "monitor.sqlite-wal",
+        "monitor.sqlite-shm",
+        "ssr_cache.sqlite",
+        "ssr_cache.sqlite-wal",
+        "ssr_cache.sqlite-shm",
+        "vapid.json",
+        "vapid-private.pem",
+    ):
         from_path = src / name
         to_path = dest / name
         if from_path.exists() and not to_path.exists():

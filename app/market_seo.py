@@ -8,6 +8,7 @@ import json
 import re
 from typing import Any
 
+from app import facts as product_facts
 from app.locality_normalize import _fold, normalize_disposition
 from app.market_pages import (
     DISCLAIMER_CS,
@@ -407,7 +408,10 @@ def _narrative(
     med = report.get("median_price")
     avg = report.get("avg_price")
     subject = f"{ol} {disposition}" if disposition else ol
-    head = f"V lokalitě {locality} je teď {_fmt_int(count)} aktivních nabídek typu {subject}."
+    as_of = product_facts.format_date_cs(str(report.get("updated_at") or "")[:10] or None)
+    head = (
+        f"K {as_of} je v lokalitě {locality} {_fmt_int(count)} aktivních nabídek typu {subject}"
+    )
     bits = []
     if med is not None:
         bits.append(f"medián {_fmt_czk(med)}")
@@ -418,7 +422,9 @@ def _narrative(
     elif avg is not None:
         bits.append(f"průměr {_fmt_czk(avg)}")
     if bits:
-        head += " " + ", ".join(bits[:2]) + (f", {bits[2]}" if len(bits) > 2 else "") + "."
+        head += ": " + ", ".join(bits[:2]) + (f", {bits[2]}" if len(bits) > 2 else "") + "."
+    else:
+        head += "."
     paras.append(head)
 
     if parent_stats and parent_stats.get("active_count"):
@@ -516,16 +522,18 @@ def _narrative(
 
 def _faq_items(locality: str, offer: str, report: dict[str, Any], disposition: str = "") -> list[dict[str, str]]:
     ol = offer_label(offer)
+    as_of = product_facts.format_date_cs(str(report.get("updated_at") or "")[:10] or None)
     items: list[dict[str, str]] = []
     if disposition:
         items.append(
             {
                 "q": f"Kolik stojí {ol} {disposition} v lokalitě {locality}?",
                 "a": (
-                    f"Podle aktuálního katalogu Realitify je medián {_fmt_czk(report.get('median_price'))}, "
-                    f"medián {_fmt_m2(report.get('median_price_per_m2'))} "
-                    f"(průměr {_fmt_m2(report.get('avg_price_per_m2'))}; "
-                    f"{_fmt_int(report.get('active_count'))} aktivních nabídek)."
+                    f"K {as_of} je medián {_fmt_czk(report.get('median_price'))} "
+                    f"({_fmt_m2(report.get('median_price_per_m2'))}; "
+                    f"průměr {_fmt_m2(report.get('avg_price_per_m2'))}; "
+                    f"{_fmt_int(report.get('active_count'))} aktivních nabídek) "
+                    f"pro {ol} {disposition} v lokalitě {locality}."
                 ),
             }
         )
@@ -534,9 +542,11 @@ def _faq_items(locality: str, offer: str, report: dict[str, Any], disposition: s
             {
                 "q": f"Kolik stojí {ol} bytů v lokalitě {locality}?",
                 "a": (
-                    f"Medián {_fmt_czk(report.get('median_price'))}, medián {_fmt_m2(report.get('median_price_per_m2'))}, "
-                    f"průměr {_fmt_m2(report.get('avg_price_per_m2'))} "
-                    f"({_fmt_int(report.get('active_count'))} aktivních nabídek)."
+                    f"K {as_of} je medián {_fmt_czk(report.get('median_price'))} "
+                    f"({_fmt_m2(report.get('median_price_per_m2'))}; "
+                    f"průměr {_fmt_m2(report.get('avg_price_per_m2'))}; "
+                    f"{_fmt_int(report.get('active_count'))} aktivních nabídek) "
+                    f"pro {ol} bytů v lokalitě {locality}."
                 ),
             }
         )
@@ -547,7 +557,8 @@ def _faq_items(locality: str, offer: str, report: dict[str, Any], disposition: s
             {
                 "q": f"Kolik nabídek {top.get('disposition')} je teď v lokalitě {locality}?",
                 "a": (
-                    f"Aktuálně {_fmt_int(top.get('count'))} aktivních nabídek dispozice {top.get('disposition')}, "
+                    f"K {as_of} je v lokalitě {locality} {_fmt_int(top.get('count'))} "
+                    f"aktivních nabídek dispozice {top.get('disposition')}, "
                     f"průměrná cena {_fmt_czk(top.get('avg_price'))}."
                 ),
             }
@@ -556,8 +567,8 @@ def _faq_items(locality: str, offer: str, report: dict[str, Any], disposition: s
         {
             "q": f"Kolik nových nabídek {offer_label_genitive(offer)} přibylo za týden?",
             "a": (
-                f"Za posledních 7 dní katalog zaznamenal {_fmt_int(report.get('new_last_7_days'))} "
-                f"nových nabídek v lokalitě {locality}."
+                f"K {as_of} katalog zaznamenal za posledních 7 dní "
+                f"{_fmt_int(report.get('new_last_7_days'))} nových nabídek v lokalitě {locality}."
             ),
         }
     )
@@ -581,7 +592,16 @@ def _faq_items(locality: str, offer: str, report: dict[str, Any], disposition: s
     return items[:4]
 
 
-def _page_shell(*, title: str, description: str, canonical: str, body: str, json_ld: list[dict[str, Any]], og_image: str = "") -> str:
+def _page_shell(
+    *,
+    title: str,
+    description: str,
+    canonical: str,
+    body: str,
+    json_ld: list[dict[str, Any]],
+    og_image: str = "",
+    md_href: str = "",
+) -> str:
     ld = "\n".join(
         f'<script type="application/ld+json">{json.dumps(block, ensure_ascii=False)}</script>' for block in json_ld
     )
@@ -593,6 +613,9 @@ def _page_shell(*, title: str, description: str, canonical: str, body: str, json
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:image" content="{html.escape(og_image)}" />"""
+    md_link = ""
+    if md_href:
+        md_link = f'\n  <link rel="alternate" type="text/markdown" href="{html.escape(md_href)}" />'
     return f"""<!doctype html>
 <html lang="cs">
 <head>
@@ -603,7 +626,7 @@ def _page_shell(*, title: str, description: str, canonical: str, body: str, json
   <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
   <title>{html.escape(title)}</title>
   <meta name="description" content="{html.escape(description)}" />
-  <link rel="canonical" href="{html.escape(canonical)}" />
+  <link rel="canonical" href="{html.escape(canonical)}" />{md_link}
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Realitify" />
   <meta property="og:title" content="{html.escape(title)}" />
@@ -733,6 +756,16 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     faq_html = "".join(f"<section><h3>{html.escape(f['q'])}</h3><p>{html.escape(f['a'])}</p></section>" for f in faqs)
     narrative_html = "".join(f"<p>{html.escape(p)}</p>" for p in narrative)
     updated = str(report.get("updated_at") or "")[:19].replace("T", " ")
+    updated_label = product_facts.data_updated_label(report.get("updated_at"))
+    date_modified = str(report.get("updated_at") or "")[:10] or None
+    if not date_modified:
+        from datetime import date as _date
+
+        date_modified = _date.today().isoformat()
+    md_path = f"/trh/{slugify_locality(locality)}/{offer}"
+    if disposition:
+        md_path += f"/{slugify_disposition(disposition)}"
+    md_path += ".md"
     disp_table = ""
     if not disposition:
         disp_table = (
@@ -744,7 +777,7 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
   {_breadcrumbs_html(crumbs)}
   <header class="legal-header">
     <h1 class="display">{html.escape(h1)}</h1>
-    <p>Data z agregovaného katalogu Realitify. Aktualizováno: {html.escape(updated)} UTC</p>
+    <p>Data z agregovaného katalogu Realitify. {html.escape(updated_label)}</p>
   </header>
   <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
     {narrative_html}
@@ -775,7 +808,13 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
         "name": title,
         "description": description,
         "url": canonical,
-        "creator": {"@type": "Organization", "name": "Realitify", "url": "https://realitify.cz"},
+        "creator": product_facts.dataset_creator(),
+        "dateModified": date_modified,
+        "temporalCoverage": date_modified,
+        "license": product_facts.dataset_license(),
+        "distribution": product_facts.dataset_distribution(
+            "https://realitify.cz/index.csv", name="Realitify rent index CSV"
+        ),
     }
     faq_ld = {
         "@context": "https://schema.org",
@@ -791,7 +830,27 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
         body=body,
         json_ld=[dataset, faq_ld, _breadcrumb_ld(crumbs)],
         og_image=og_image,
+        md_href=f"https://realitify.cz{md_path}",
     )
+
+
+def render_trh_page_md(store: Store, locality: str, offer: str, disposition: str = "") -> str:
+    report = store.catalog_locality_report(locality, offer, disposition)
+    updated_label = product_facts.data_updated_label(report.get("updated_at"))
+    narrative = _narrative(locality, offer, report, disposition=disposition)
+    faqs = _faq_items(locality, offer, report, disposition)
+    lines = [
+        f"# {locality} – {offer_label(offer)}" + (f" {disposition}" if disposition else ""),
+        "",
+        updated_label + ".",
+        "",
+    ]
+    lines.extend(narrative)
+    lines.append("")
+    for f in faqs:
+        lines.extend([f"## {f['q']}", "", f["a"], ""])
+    lines.extend([PRICE_METHODOLOGY_CS, "", DISCLAIMER_CS, ""])
+    return "\n".join(lines)
 
 
 def render_trh_hub(store: Store) -> str:
@@ -839,7 +898,28 @@ def render_trh_hub(store: Store) -> str:
         canonical="https://realitify.cz/trh",
         body=body,
         json_ld=[],
+        md_href="https://realitify.cz/trh.md",
     )
+
+
+def render_trh_hub_md(store: Store) -> str:
+    inv = market_inventory(store)["included"]
+    lines = [
+        "# Realitní trh – lokality",
+        "",
+        product_facts.data_updated_label() + ".",
+        "",
+        f"Nová stránka od {MIN_ACTIVE_CREATE} nabídek, zrušení pod {MIN_ACTIVE_KEEP}.",
+        "",
+    ]
+    for offer in ("pronajem", "prodej"):
+        rows = [r for r in inv if r["offer"] == offer]
+        lines.append(f"## {offer_label(offer).capitalize()}")
+        lines.append("")
+        for r in sorted(rows, key=lambda x: (-int(x["active_count"]), x["locality"]))[:80]:
+            lines.append(f"- [{r['locality']}](https://realitify.cz{r['path']}) ({_fmt_int(r['active_count'])})")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def render_index_month(store: Store, month: str) -> str:
@@ -897,8 +977,13 @@ def render_index_month(store: Store, month: str) -> str:
                 "name": title,
                 "description": description,
                 "url": f"https://realitify.cz/index/{month}",
-                "creator": {"@type": "Organization", "name": "Realitify"},
+                "creator": product_facts.dataset_creator(),
                 "temporalCoverage": month,
+                "dateModified": f"{month}-28",
+                "license": product_facts.dataset_license(),
+                "distribution": product_facts.dataset_distribution(
+                    "https://realitify.cz/index.csv", name="Realitify rent index CSV"
+                ),
             }
         ],
     )

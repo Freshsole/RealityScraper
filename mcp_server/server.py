@@ -30,6 +30,23 @@ from catalog_client import (
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN") or "60")
 PORT = int(os.environ.get("PORT") or "8000")
 
+INSTRUCTIONS = """
+Realitify MCP is a read-only connector for Czech real-estate listings (Czech Republic only).
+Currency is CZK; floor area is m²; price_per_m2 is CZK/m². Responses include data_as_of (ISO time of newest catalog last_seen), units, source, and source_url.
+
+Six tools — pick one:
+1) search_listings — current apartments to rent/buy matching filters (locality, price, disposition). Default use for “hledám byt”, “flat in Prague under 20000”.
+2) new_listings — what first appeared in the last N hours (Realitify first_seen). Use for “co je nového”, “new rentals today”. Do not use for general browsing without a time window.
+3) get_listing — one listing by id/listing_key from a prior search. Do not guess ids.
+4) locality_stats — active count + median/avg price and CZK/m² for a locality. Use for “kolik stojí nájem v Brně”.
+5) price_check — is an asking price fair vs comparables (median primary). Use for “je 25000 za 2+kk hodně?”.
+6) compare_localities — side-by-side stats for 2+ localities. Use for “Praha vs Brno”.
+
+Do not invent listings or prices. If a locality is unknown, errors include suggestions — retry with a suggested name.
+No writes, no monitors, no account actions via this public MCP.
+Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble.
+""".strip()
+
 
 class OfferType(str, Enum):
     pronajem = "pronajem"
@@ -57,16 +74,7 @@ def _annotations(title: str) -> ToolAnnotations:
     )
 
 
-mcp = FastMCP(
-    name="Realitify",
-    instructions=(
-        "Realitify is a read-only Czech real-estate catalog aggregator. "
-        "Use these tools when the user asks about flats/apartments/houses to rent or buy "
-        "in the Czech Republic, current listings, prices, or availability in a city/district. "
-        "Example queries: 'hledám byt', 'pronájem Praha', '2+kk Brno', 'flat in Prague under 20000'. "
-        "Every listing includes source_url (portal) and realitify_url. No broker phones or names."
-    ),
-)
+mcp = FastMCP(name="Realitify", instructions=INSTRUCTIONS)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -84,7 +92,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return "unknown"
 
     async def dispatch(self, request: Request, call_next: Any) -> Response:
-        # Health checks must not burn the rate budget and must stay simple for load balancers.
         if request.url.path in {"/health", "/"}:
             return await call_next(request)
         ip = self._client_ip(request)
@@ -94,7 +101,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             window.popleft()
         if len(window) >= self.limit:
             return JSONResponse(
-                {"error": "Rate limit exceeded. Try again in a minute."},
+                {
+                    "error": "Rate limit exceeded. Wait about 60 seconds, then retry with fewer calls.",
+                },
                 status_code=429,
             )
         window.append(now)
@@ -110,39 +119,36 @@ async def health(_request: Request) -> JSONResponse:
 async def search_listings(
     locality: Annotated[
         str,
-        "City or district in Czechia, e.g. Praha, Prague 5, Smíchov, Brno, Ostrava",
+        "Czech city/district label, e.g. Praha, Prague 5, Smíchov, Brno. Allowed: Czech localities present in catalog.",
     ] = "",
     offer_type: Annotated[
         OfferType | None,
-        "pronajem = rent, prodej = sale. Required for precise results when known.",
+        "Allowed: pronajem (rent) | prodej (sale). Example: pronajem.",
     ] = None,
-    max_price: Annotated[int | None, "Maximum price in CZK"] = None,
-    min_price: Annotated[int | None, "Minimum price in CZK"] = None,
+    max_price: Annotated[int | None, "Maximum price in CZK. Example: 20000 for rent."] = None,
+    min_price: Annotated[int | None, "Minimum price in CZK. Example: 15000."] = None,
     disposition: Annotated[
         str,
-        "Layout: 2+kk, 2kk, dvoupokojový, 3+1, etc. Comma-separated allowed",
+        "Layout filter. Examples: 2+kk, 2kk, 3+1, dvoupokojový. Comma-separated allowed.",
     ] = "",
-    min_area: Annotated[int | None, "Minimum floor area in m²"] = None,
-    limit: Annotated[int, "Max results (1-20)"] = 10,
+    min_area: Annotated[int | None, "Minimum floor area in m². Example: 45."] = None,
+    limit: Annotated[int, "Max results 1–20. Example: 10."] = 10,
     sort: Annotated[
         SortType,
-        "newest | cheapest | best_value (lowest CZK/m² vs locality average)",
+        "Allowed: newest | cheapest | best_value (lowest CZK/m² vs locality). Example: newest.",
     ] = SortType.newest,
     estate_scope: Annotated[
         EstateScope,
-        "apartment = only flats (default). any = also non-residential when user explicitly asks for commercial/land/etc.",
+        "Allowed: apartment (default flats only) | any (include non-residential when explicitly asked).",
     ] = EstateScope.apartment,
 ) -> dict[str, Any]:
-    """Use when the user is looking for a flat/apartment to rent or buy in the Czech Republic,
-    asks about current listings, prices, or what's available in a city/district.
+    """Use when: user looks for current flats/houses to rent or buy in Czechia (“hledám byt”, “flat in Prague under 20000”).
 
-    Defaults to apartments only (quality filter). Set estate_scope=any only when the user
-    explicitly wants non-residential (kancelář, obchod, pozemek, …).
+    Do NOT use when: user asks only for statistics (use locality_stats), fairness of one price (use price_check),
+    what is new in last N hours (use new_listings), or details of one known id (use get_listing).
 
-    Examples: "hledám byt v Praze", "pronájem 2+kk Praha 5 do 20000", "flat in Prague under 20000 CZK",
-    "prodej bytu Brno", "what's for rent in Ostrava".
-
-    Returns compact listing cards with price, price/m², price_vs_locality_pct, source_url, realitify_url.
+    Examples CZ: „hledám 2+kk v Praze do 20000“; „prodej bytu Brno“.
+    Examples EN: \"2-room flat in Prague under 20000 CZK\"; \"apartments for sale in Ostrava\".
     """
     try:
         return await fetch_search(
@@ -162,22 +168,22 @@ async def search_listings(
 
 @mcp.tool(annotations=_annotations("New listings"))
 async def new_listings(
-    locality: Annotated[str, "City or district, e.g. Praha, Brno"] = "",
-    offer_type: Annotated[OfferType, "pronajem or prodej"] = OfferType.pronajem,
-    since_hours: Annotated[int, "How many hours back to look (1-168)"] = 24,
-    disposition: Annotated[str, "Optional layout filter, e.g. 2+kk"] = "",
-    max_price: Annotated[int | None, "Optional max price CZK"] = None,
-    min_area: Annotated[int | None, "Optional min m²"] = None,
-    limit: Annotated[int, "Max results (1-20)"] = 10,
+    locality: Annotated[str, "Czech locality. Example: Praha 5."] = "",
+    offer_type: Annotated[OfferType, "Allowed: pronajem | prodej. Default pronajem."] = OfferType.pronajem,
+    since_hours: Annotated[int, "Hours back (1–168). Example: 24."] = 24,
+    disposition: Annotated[str, "Optional layout, e.g. 2+kk."] = "",
+    max_price: Annotated[int | None, "Optional max price CZK. Example: 25000."] = None,
+    min_area: Annotated[int | None, "Optional min m². Example: 40."] = None,
+    limit: Annotated[int, "Max results 1–20. Example: 10."] = 10,
     estate_scope: Annotated[
         EstateScope,
-        "apartment = only flats (default). any = non-residential when explicitly requested.",
+        "Allowed: apartment | any.",
     ] = EstateScope.apartment,
 ) -> dict[str, Any]:
-    """Use when the user asks what is new / recently published on the Czech market
-    ("co je nového", "nové byty dnes", "new listings in Prague last 24 hours").
+    """Use when: user asks what is new / recently published (“co je nového”, “new rentals last 24 hours”).
 
-    Defaults to apartments only. Realitify tracks first_seen timestamps across portals.
+    Do NOT use when: user wants a general search without a time window (use search_listings),
+    or only market averages (use locality_stats). Relies on Realitify first_seen, not portal “updated” alone.
     """
     try:
         return await fetch_new(
@@ -196,10 +202,14 @@ async def new_listings(
 
 @mcp.tool(annotations=_annotations("Listing detail"))
 async def get_listing(
-    listing_id: Annotated[str, "Numeric id or listing_key from search/new_listings results"],
+    listing_id: Annotated[
+        str,
+        "Numeric id or listing_key from search_listings/new_listings. Example: 123456 or a listing_key string.",
+    ],
 ) -> dict[str, Any]:
-    """Use when the user wants details for one specific listing already found
-    ("otevři tu první", "detail nabídky", "open listing id …").
+    """Use when: user wants details for one listing already returned (“otevři tu první”, “open listing id …”).
+
+    Do NOT use when: user has not searched yet — call search_listings first. Do not invent ids.
     """
     try:
         return await fetch_listing(listing_id)
@@ -209,12 +219,13 @@ async def get_listing(
 
 @mcp.tool(annotations=_annotations("Locality statistics"))
 async def locality_stats(
-    locality: Annotated[str, "City or district, e.g. Praha, Brno, Praha 5"],
-    offer_type: Annotated[OfferType | None, "pronajem or prodej"] = None,
-    disposition: Annotated[str, "Optional layout filter, e.g. 2+kk"] = "",
+    locality: Annotated[str, "Czech locality. Example: Brno or Praha."],
+    offer_type: Annotated[OfferType | None, "Allowed: pronajem | prodej."] = None,
+    disposition: Annotated[str, "Optional layout filter, e.g. 2+kk."] = "",
 ) -> dict[str, Any]:
-    """Use when the user asks for median/average rent or sale price, price per m² (median primary), or how many
-    active listings are in a locality ("kolik stojí pronájem v Brně", "average rent Prague").
+    """Use when: user asks how many active listings or median/average rent/sale price (incl. CZK/m²) in a locality.
+
+    Do NOT use when: user wants concrete listing cards (use search_listings) or fairness of one asking price (use price_check).
     """
     try:
         return await fetch_locality_stats(
@@ -228,16 +239,16 @@ async def locality_stats(
 
 @mcp.tool(annotations=_annotations("Price check"))
 async def price_check(
-    locality: Annotated[str, "City or district for comparison"],
-    offer_type: Annotated[OfferType, "pronajem or prodej"],
-    price: Annotated[int, "Asked price in CZK"],
-    disposition: Annotated[str, "Layout, e.g. 2+kk"] = "",
-    area: Annotated[int | None, "Floor area m² for tighter comparables"] = None,
+    locality: Annotated[str, "Czech locality for comparables. Example: Vinohrady or Brno."],
+    offer_type: Annotated[OfferType, "Allowed: pronajem | prodej."],
+    price: Annotated[int, "Asked price in CZK. Example: 25000."],
+    disposition: Annotated[str, "Layout, e.g. 2+kk."] = "",
+    area: Annotated[int | None, "Floor area m² for tighter comparables. Example: 55."] = None,
 ) -> dict[str, Any]:
-    """Use when the user asks if a price is fair / overpriced versus the current market
-    ("je 25000 za 2+kk v Praze 5 hodně?", "is this rent expensive?").
+    """Use when: user asks if a price is fair/high/low vs the market (“je 25000 za 2+kk hodně?”).
 
-    Returns median (primary), avg, percentile, vs_median_pct, vs_avg_pct, and comparable_count.
+    Do NOT use when: user wants to browse listings (search_listings) or only locality averages without an asking price (locality_stats).
+    Returns median (primary), avg, percentile, vs_median_pct, vs_avg_pct, comparable_count.
     """
     try:
         return await fetch_price_check(
@@ -255,13 +266,14 @@ async def price_check(
 async def compare_localities(
     localities: Annotated[
         list[str],
-        "Two or more localities, e.g. ['Praha', 'Brno'] or ['Praha 5', 'Praha 8']",
+        "Two or more Czech localities. Example: [\"Praha\", \"Brno\"] or [\"Praha 5\", \"Praha 8\"].",
     ],
-    offer_type: Annotated[OfferType, "pronajem or prodej"] = OfferType.pronajem,
-    disposition: Annotated[str, "Optional layout filter"] = "",
+    offer_type: Annotated[OfferType, "Allowed: pronajem | prodej. Default pronajem."] = OfferType.pronajem,
+    disposition: Annotated[str, "Optional layout filter, e.g. 2+kk."] = "",
 ) -> dict[str, Any]:
-    """Use when the user wants to compare prices or listing counts across cities/districts
-    ("Praha vs Brno nájem", "compare Praha 5 and Praha 10").
+    """Use when: user wants side-by-side prices/counts for 2+ localities (“Praha vs Brno”).
+
+    Do NOT use when: only one locality (use locality_stats) or user wants listing cards (search_listings).
     """
     try:
         return await fetch_compare(localities, offer_type.value, disposition)
@@ -270,7 +282,6 @@ async def compare_localities(
 
 
 def create_app():
-    # Stateless Streamable HTTP avoids session-init 400s behind proxies / Claude connectors.
     app = mcp.http_app(path="/mcp", stateless_http=True, json_response=True)
     app.add_middleware(RateLimitMiddleware, limit_per_min=RATE_LIMIT_PER_MIN)
     return app

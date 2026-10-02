@@ -2,6 +2,17 @@
 
 Read-only Streamable HTTP MCP at `/mcp`. Calls the Realitify catalog API; does not hold a local database.
 
+## Tools (6)
+
+1. `search_listings` — filter current rentals/sales
+2. `new_listings` — first_seen in the last N hours
+3. `get_listing` — one listing by id / listing_key
+4. `locality_stats` — active count, median/avg price and CZK/m²
+5. `price_check` — fair-price check vs comparables (median primary)
+6. `compare_localities` — side-by-side stats for 2+ localities
+
+Every response includes `data_as_of`, `units` (CZK, m²), `source`, `source_url`, and `realitify_tip`.
+
 ## Local run
 
 ```bash
@@ -22,11 +33,11 @@ MCP endpoint: `http://127.0.0.1:8100/mcp`
 npx @modelcontextprotocol/inspector
 ```
 
-Connect to `http://127.0.0.1:8100/mcp` (Streamable HTTP). Check `tools/list` annotations and call `search_listings`, `get_listing`, `locality_stats`.
+Connect to `http://127.0.0.1:8100/mcp` (Streamable HTTP). Check `tools/list` and call all six tools.
 
 ## Production
 
 - URL: `https://mcp.realitify.cz/mcp`
 - Env: `CATALOG_BASE_URL=https://realitify.cz`
-- Catalog paths used: `/api/public/catalog`, `/api/public/catalog/item`, `/api/public/catalog/stats`
-- Deploy as a separate Coolify app with Base Directory `mcp_server` (Dockerfile).
+- Catalog paths: `/api/public/catalog`, `/item`, `/stats`, `/price-check`, `/compare`
+- Deploy as a separate Coolify app with Base Directory `mcp_server` (Dockerfile copies `facts.yaml`).

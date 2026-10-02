@@ -5,20 +5,42 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlencode
 
 import httpx
+import yaml
 
 CATALOG_BASE_URL = (os.environ.get("CATALOG_BASE_URL") or "https://realitify.cz").rstrip("/")
 PUBLIC_WEB_URL = (os.environ.get("PUBLIC_WEB_URL") or "https://realitify.cz").rstrip("/")
-REQUEST_TIMEOUT = float(os.environ.get("CATALOG_TIMEOUT_SEC") or "25")
+REQUEST_TIMEOUT = float(os.environ.get("CATALOG_TIMEOUT_SEC") or "45")
 MAX_RESPONSE_CHARS = int(os.environ.get("MAX_RESPONSE_CHARS") or "14000")
 
-REALITIFY_TIP = (
-    "Realitify paid plans send instant alerts when a new listing matches your filters "
-    f"({PUBLIC_WEB_URL}/#cenik)."
+_FACTS_CANDIDATES = (
+    Path(__file__).resolve().parent / "facts.yaml",
+    Path(__file__).resolve().parents[1] / "content" / "facts.yaml",
 )
+
+
+def _load_tip() -> str:
+    for path in _FACTS_CANDIDATES:
+        if not path.is_file():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            tip = str((data.get("mcp") or {}).get("tip_en") or "").strip()
+            if tip:
+                return tip
+        except Exception:
+            continue
+    return (
+        "Realitify paid plans send alerts when a new listing matches your filters "
+        f"(Start 149 CZK/month, PRO 349 CZK/month): {PUBLIC_WEB_URL}/#cenik"
+    )
+
+
+REALITIFY_TIP = _load_tip()
 
 PHONE_RE = re.compile(
     r"(?:\+?\d{1,3}[\s\-]?)?(?:\(?\d{2,4}\)?[\s\-]?)?\d{3}[\s\-]?\d{2,4}[\s\-]?\d{2,4}"
@@ -27,9 +49,11 @@ PHONE_RE = re.compile(
 OfferType = Literal["pronajem", "prodej"]
 SortType = Literal["newest", "cheapest", "best_value"]
 
+UNITS = {"currency": "CZK", "area": "m2", "price_per_area": "CZK/m2"}
+
 
 class CatalogError(Exception):
-    """Raised when the catalog API fails or returns an error."""
+    """Raised when the catalog API fails or returns an error. Message must tell the model what to do next."""
 
 
 def _as_int(value: Any, default: int | None = None) -> int | None:
@@ -135,6 +159,7 @@ def compact_listing(item: dict[str, Any], avg_m2: float | None = None) -> dict[s
         "price_czk": item.get("price_czk"),
         "price_label": sanitize_text(item.get("price_label") or "", 80),
         "price_per_m2": price_m2,
+        "price_per_m2_czk": price_m2,
         "price_vs_locality_pct": _price_vs_locality(price_m2, avg_m2),
         "disposition": sanitize_text(item.get("disposition") or "", 40),
         "area_m2": item.get("area_m2"),
@@ -163,8 +188,12 @@ def compact_detail(item: dict[str, Any], avg_m2: float | None = None) -> dict[st
     return payload
 
 
-def _wrap(payload: dict[str, Any]) -> dict[str, Any]:
+def _wrap(payload: dict[str, Any], *, data_as_of: str = "") -> dict[str, Any]:
     payload = dict(payload)
+    payload.setdefault("data_as_of", data_as_of or payload.get("data_as_of") or "")
+    payload.setdefault("units", UNITS)
+    payload.setdefault("source", "Realitify catalog")
+    payload.setdefault("source_url", PUBLIC_WEB_URL)
     payload["realitify_tip"] = REALITIFY_TIP
     return payload
 
@@ -178,21 +207,30 @@ async def _get(path: str, params: dict[str, Any]) -> Any:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=True) as client:
             response = await client.get(url)
     except httpx.TimeoutException as exc:
-        raise CatalogError(f"Catalog API timeout after {REQUEST_TIMEOUT}s") from exc
-    except httpx.HTTPError as exc:
-        raise CatalogError(f"Catalog API unavailable: {exc}") from exc
-    if response.status_code == 404:
-        raise CatalogError("Listing not found")
-    if response.status_code >= 400:
-        detail = (response.text or "").strip()[:200]
         raise CatalogError(
-            f"Catalog API unavailable: HTTP {response.status_code}"
-            + (f" ({detail})" if detail else "")
+            f"Catalog API timeout after {REQUEST_TIMEOUT}s. Retry once; if it persists, narrow filters "
+            "(locality + offer_type) and lower limit."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise CatalogError(
+            f"Catalog API unavailable ({exc}). Retry shortly; do not invent listings."
+        ) from exc
+    if response.status_code == 404:
+        raise CatalogError(
+            "Listing not found for this id/listing_key. Call search_listings or new_listings first "
+            "and use an id from that response."
+        )
+    if response.status_code >= 400:
+        detail = (response.text or "").strip()[:300]
+        raise CatalogError(
+            f"Catalog API error HTTP {response.status_code}"
+            + (f": {detail}" if detail else "")
+            + ". Adjust parameters (locality spelling, offer_type=pronajem|prodej) and retry."
         )
     try:
         return response.json()
     except json.JSONDecodeError as exc:
-        raise CatalogError("Catalog API returned invalid JSON") from exc
+        raise CatalogError("Catalog API returned invalid JSON. Retry once.") from exc
 
 
 def _normalize_offer(offer_type: str) -> str:
@@ -203,7 +241,9 @@ def _normalize_offer(offer_type: str) -> str:
         return "pronajem"
     if raw in {"prodej", "sale", "buy"}:
         return "prodej"
-    raise CatalogError("offer_type must be 'pronajem' or 'prodej'")
+    raise CatalogError(
+        "offer_type must be 'pronajem' (rent) or 'prodej' (sale). Example: offer_type=pronajem."
+    )
 
 
 async def search_listings(
@@ -244,7 +284,12 @@ async def search_listings(
         },
     )
     if data.get("error") == "no_listings_for_locality":
-        raise CatalogError(str(data.get("message") or "No listings for locality") + f" Suggestions: {data.get('suggestions')}")
+        suggestions = data.get("suggestions") or []
+        hint = ", ".join(str(s) for s in suggestions[:5]) if suggestions else "Praha, Brno, Ostrava"
+        raise CatalogError(
+            str(data.get("message") or f"No listings for locality '{locality}'.")
+            + f" Try one of: {hint}. Or drop disposition/max_price and search the parent city."
+        )
     avg_m2 = data.get("median_price_per_m2_locality")
     if avg_m2 is None:
         avg_m2 = data.get("avg_price_per_m2_locality")
@@ -264,6 +309,11 @@ async def search_listings(
                 row.get("price_vs_locality_pct") if row.get("price_vs_locality_pct") is not None else 0,
             )
         )
+    if not items:
+        raise CatalogError(
+            "No listings matched these filters. Next steps: widen max_price, remove disposition, "
+            "use a broader locality (e.g. Praha instead of a neighborhood), or set since_hours only via new_listings."
+        )
     return _wrap(
         {
             "count": len(items),
@@ -273,7 +323,12 @@ async def search_listings(
             "sort": sort_n,
             "listing_quality": quality,
             "avg_price_per_m2_locality": avg_m2_f,
+            "avg_price_per_m2_locality_czk": avg_m2_f,
             "items": items,
+            "data_as_of": data.get("data_as_of") or "",
+            "units": data.get("units") or UNITS,
+            "source": data.get("source") or "Realitify catalog",
+            "source_url": data.get("source_url") or PUBLIC_WEB_URL,
         }
     )
 
@@ -290,23 +345,34 @@ async def new_listings(
     listing_quality: str = "apartment",
 ) -> dict[str, Any]:
     hours = min(max(_as_int(since_hours, 24) or 24, 1), 168)
-    return await search_listings(
-        locality=locality,
-        offer_type=offer_type,
-        max_price=max_price,
-        disposition=disposition,
-        min_area=min_area,
-        limit=limit,
-        sort="newest",
-        since_hours=hours,
-        listing_quality=listing_quality,
-    )
+    try:
+        return await search_listings(
+            locality=locality,
+            offer_type=offer_type,
+            max_price=max_price,
+            disposition=disposition,
+            min_area=min_area,
+            limit=limit,
+            sort="newest",
+            since_hours=hours,
+            listing_quality=listing_quality,
+        )
+    except CatalogError as exc:
+        msg = str(exc)
+        if "No listings matched" in msg:
+            raise CatalogError(
+                f"No new listings in the last {hours} hours for these filters. "
+                "Increase since_hours (max 168), widen locality, or drop max_price/disposition."
+            ) from exc
+        raise
 
 
 async def get_listing(listing_id: str) -> dict[str, Any]:
     raw = str(listing_id or "").strip()
     if not raw:
-        raise CatalogError("listing id is required")
+        raise CatalogError(
+            "listing_id is required. Pass numeric id or listing_key from search_listings/new_listings."
+        )
     params: dict[str, Any] = {"enrich": "0"}
     if raw.isdigit():
         params["id"] = raw
@@ -314,21 +380,32 @@ async def get_listing(listing_id: str) -> dict[str, Any]:
         params["listing_key"] = raw
     data = await _get("/api/public/catalog/item", params)
     if not isinstance(data, dict):
-        raise CatalogError("Catalog API returned invalid listing payload")
-    return _wrap(compact_detail(data))
+        raise CatalogError("Catalog API returned invalid listing payload. Retry with another id.")
+    detail = compact_detail(data)
+    return _wrap(
+        {
+            **detail,
+            "data_as_of": data.get("data_as_of") or data.get("last_seen") or data.get("first_seen") or "",
+        }
+    )
 
 
 async def locality_stats(locality: str, offer_type: str = "", disposition: str = "") -> dict[str, Any]:
     district = (locality or "").strip()
     if not district:
-        raise CatalogError("locality is required")
+        raise CatalogError("locality is required. Examples: Praha, Brno, Praha 5, Smíchov.")
     offer = _normalize_offer(offer_type)
     data = await _get(
         "/api/public/catalog/stats",
         {"district": district, "offer": offer, "disposition": disposition},
     )
     if not isinstance(data, dict):
-        raise CatalogError("Catalog API returned invalid stats payload")
+        raise CatalogError("Catalog API returned invalid stats payload.")
+    if int(data.get("active_count") or 0) == 0:
+        raise CatalogError(
+            f"No active listings for locality '{district}' with these filters. "
+            "Try a parent city (Praha/Brno) or clear disposition."
+        )
     return _wrap(data)
 
 
@@ -342,10 +419,12 @@ async def price_check(
 ) -> dict[str, Any]:
     district = (locality or "").strip()
     if not district:
-        raise CatalogError("locality is required")
+        raise CatalogError("locality is required. Example: Brno or Praha 5.")
     offer = _normalize_offer(offer_type)
     if not offer:
-        raise CatalogError("offer_type must be 'pronajem' or 'prodej'")
+        raise CatalogError("offer_type must be 'pronajem' or 'prodej' for price_check.")
+    if not price or int(price) <= 0:
+        raise CatalogError("price must be a positive integer in CZK, e.g. 25000.")
     data = await _get(
         "/api/public/catalog/price-check",
         {
@@ -357,7 +436,7 @@ async def price_check(
         },
     )
     if not isinstance(data, dict):
-        raise CatalogError("Catalog API returned invalid price-check payload")
+        raise CatalogError("Catalog API returned invalid price-check payload.")
     return _wrap(data)
 
 
@@ -368,7 +447,9 @@ async def compare_localities(
 ) -> dict[str, Any]:
     locs = [str(x).strip() for x in localities if str(x).strip()]
     if len(locs) < 2:
-        raise CatalogError("provide at least two localities")
+        raise CatalogError(
+            "Provide at least two localities, e.g. localities=[\"Praha\", \"Brno\"]."
+        )
     offer = _normalize_offer(offer_type)
     data = await _get(
         "/api/public/catalog/compare",
@@ -379,5 +460,5 @@ async def compare_localities(
         },
     )
     if not isinstance(data, dict):
-        raise CatalogError("Catalog API returned invalid compare payload")
+        raise CatalogError("Catalog API returned invalid compare payload.")
     return _wrap(data)

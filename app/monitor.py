@@ -1755,6 +1755,13 @@ class Hub:
             await self._job_db(self.store.set_meta, "catalog_sync_status", "done" if all_today else "partial")
             await self._job_db(self.store.set_meta, "catalog_sync_last", utc_now())
             status = await self._job_db(self.store.catalog_sync_status)
+            try:
+                from app import ssr_cache
+
+                if not newest_only:
+                    await self._job_db(ssr_cache.rebuild, self.store, reason="catalog_sync")
+            except Exception as exc:
+                print(f"ssr_cache rebuild after catalog_sync failed: {exc}", flush=True)
             return {"ok": all_today, "status": status}
         except Exception as exc:
             await self._job_db(self.store.set_meta, "catalog_sync_status", "error")

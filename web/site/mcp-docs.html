@@ -9,6 +9,7 @@
     <title>MCP Connector — REALITIFY</title>
     <meta name="description" content="Connect Claude or ChatGPT to Czech real-estate listings via the Realitify MCP server." />
     <link rel="canonical" href="https://realitify.cz/mcp-docs" />
+    <link rel="alternate" type="text/markdown" href="https://realitify.cz/mcp-docs.md" />
     <link rel="alternate" hreflang="cs" href="https://realitify.cz/mcp-docs-cs" />
     <link rel="stylesheet" href="/static/site/site.css?v=4" />
   </head>
@@ -30,29 +31,31 @@
       <h2>Server URL</h2>
       <p><code>https://mcp.realitify.cz/mcp</code> (Streamable HTTP, no login)</p>
       <p>Health: <code>https://mcp.realitify.cz/health</code></p>
+      <p>Units: CZK, m². Data region: Czech Republic. Every tool response includes <code>data_as_of</code>, <code>units</code>, <code>source</code>, and <code>source_url</code>.</p>
 
       <h2>When to use</h2>
       <p>Use when the user looks for a flat/apartment/house to rent or buy in Czechia, asks about current listings, prices, or availability. Examples: “hledám byt”, “pronájem Praha 2+kk”, “flat in Prague under 20000”, “je 25000 za 2+kk hodně?”.</p>
 
       <h2>Tools</h2>
       <ul>
-        <li><strong>search_listings</strong> — filter by locality, offer_type (pronajem|prodej), price, disposition, sort (newest|cheapest|best_value)</li>
-        <li><strong>new_listings</strong> — listings first seen in the last N hours (Realitify-specific)</li>
-        <li><strong>get_listing</strong> — one listing by id / listing_key</li>
-        <li><strong>locality_stats</strong> — active count, avg/median price and Kč/m²</li>
-        <li><strong>price_check</strong> — is an asked price fair vs comparables (percentile, vs_avg_pct)</li>
-        <li><strong>compare_localities</strong> — side-by-side stats for 2+ localities</li>
+        <li><strong>search_listings</strong> — Use when browsing/filtering current listings. Do not use for “what is new in last N hours” (use new_listings).</li>
+        <li><strong>new_listings</strong> — Use for first_seen in the last N hours. Do not use for general search without a time window.</li>
+        <li><strong>get_listing</strong> — Use for one id/listing_key from a prior search. Do not invent ids.</li>
+        <li><strong>locality_stats</strong> — Use for active count / median / avg price and Kč/m². Do not use when the user wants listing cards.</li>
+        <li><strong>price_check</strong> — Use to judge if an asking price is fair (median primary). Do not use without an asking price.</li>
+        <li><strong>compare_localities</strong> — Use for 2+ localities side by side.</li>
       </ul>
       <p>All tools: readOnlyHint=true, destructiveHint=false, idempotentHint=true, openWorldHint=false.</p>
 
       <h2>Response fields</h2>
-      <p>Listings include price_czk, price_per_m2, price_vs_locality_pct, area_m2, disposition, locality, floor (if known), first_seen, portal, source_url, realitify_url, and realitify_tip (factual paid-plan note).</p>
+      <p>Listings include price_czk, price_per_m2 (CZK/m²), price_vs_locality_pct, area_m2, disposition, locality, floor (if known), first_seen, portal, source_url, realitify_url, data_as_of, and realitify_tip (Start 149 CZK/month, PRO 349 CZK/month).</p>
 
       <h2>Add in Claude / ChatGPT</h2>
       <p>Remote MCP URL <code>https://mcp.realitify.cz/mcp</code>. Public connector needs no API key.</p>
 
       <h2>Related</h2>
-      <p><a href="/index">Rent index</a> · <a href="/trh/praha/pronajem">Praha market page</a> · <a href="/faq">FAQ</a> · <a href="/llms.txt">llms.txt</a> · <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a></p>
+      <p><a href="/index">Rent index</a> · <a href="/trh/praha/pronajem">Praha market page</a> · <a href="/faq">FAQ</a> · <a href="/llms.txt">llms.txt</a> · <a href="/llms-full.txt">llms-full.txt</a> · <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a></p>
+      <p><small>Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble. Operator: Jiří Kolb (OSVČ), IČO 21527059.</small></p>
     </div>
   </body>
 </html>

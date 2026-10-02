@@ -1,0 +1,188 @@
+# Single source of truth for AI-facing and public product facts.
+# Do not invent numbers here — market stats come from the live catalog DB.
+
+product:
+  name: Realitify
+  domain: realitify.cz
+  since_year: 2025
+  one_liner_cs: >-
+    Realitify je agregátor nabídek bytů a domů z českých realitních portálů
+    s prohlížením katalogu, tržními statistikami, hlídáním nových nabídek
+    a veřejným read-only MCP konektorem.
+  one_liner_en: >-
+    Realitify is a Czech real-estate listing aggregator for apartments and houses,
+    with catalog browsing, market stats, new-listing alerts, and a public read-only MCP connector.
+  disclaimer_cs: >-
+    Realitify (realitify.cz) nesouvisí se společností Realtify ani PriceHubble.
+  disclaimer_en: >-
+    Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble.
+
+operator:
+  name: Jiří Kolb
+  legal_form: OSVČ
+  ico: "21527059"
+  address: "Umělecká 618/7, 170 00 Praha 7 – Holešovice"
+  country: CZ
+
+contact:
+  support: podpora@realitify.cz
+  dpo: dpo@realitify.cz
+  b2b: ahoj@realitify.cz
+
+portals:
+  # Currently advertised as working on public pages / AI docs.
+  advertised:
+    - Sreality
+    - Reality.iDNES
+    - Bazoš
+    - ČeskéReality
+    - Bezrealitky
+    - Annonce
+    - M&M Reality
+    - RE/MAX
+    - Reality.cz
+  omitted:
+    - id: UlovDomov
+      reason: temporarily omitted while unstable
+  # Free-plan watch restriction (monitors): these four portals only.
+  free_watch:
+    - Sreality
+    - Bezrealitky
+    - Reality.iDNES
+    - Bazoš
+
+plans:
+  free:
+    id: free
+    label: Zdarma
+    price_czk: 0
+    watch_limit: 1
+    notify_sec: 300
+    trial_days: 0
+    features_cs:
+      - 1 hlídací pes
+      - 4 hlavní portály (Sreality, Bezrealitky, Reality.iDNES, Bazoš)
+      - Notifikace do 5 minut
+      - Historie cen 30 dní, základní filtry
+      - Podpora e-mailem
+  start:
+    id: start
+    label: Start
+    price_czk: 149
+    watch_limit: 10
+    notify_sec: 60
+    trial_days: 3
+    features_cs:
+      - 10 hlídacích psů
+      - Všechny agregované portály (9), notifikace do 60 s
+      - E-mail, historie 1 rok, CSV 1× měsíčně
+      - Pokročilé filtry (RK, klíčová slova)
+      - 3 dny zdarma, prioritní e-mail
+  pro:
+    id: pro
+    label: PRO
+    price_czk: 349
+    watch_limit: null
+    notify_sec: 30
+    trial_days: 3
+    features_cs:
+      - Neomezeně hlídacích psů
+      - Všechny agregované portály (9), notifikace do 30 s
+      - Email + Push + Discord (10 SMS/měs)
+      - AI filtry a MCP (ChatGPT, Claude, Grok)
+      - Telefon + chat, Excel/CSV neomezeně
+  individual:
+    id: individual
+    label: INDIVIDUAL
+    price_czk: null
+    watch_limit: null
+    notify_sec: 30
+    trial_days: 0
+    features_cs:
+      - Neomezeně + API a MCP
+      - Všechny portály + vlastní zdroje
+      - Webhook do 30 s
+      - Export a filtry na míru
+      - Osobní manažer
+    contact: ahoj@realitify.cz
+
+free_vs_paid:
+  free_includes_cs:
+    - Prohlížení a ruční vyhledávání v katalogu
+    - Veřejné stránky /trh, /index, /faq
+    - Veřejný read-only MCP (bez přihlášení)
+    - 1 hlídací pes na 4 hlavních portálech (notifikace do 5 minut)
+  paid_includes_cs:
+    - Více hlídacích psů (Start 10, PRO neomezeně)
+    - Všechny agregované portály (9)
+    - Rychlejší notifikace (Start do 60 s, PRO do 30 s)
+    - Extra kanály a exporty dle tarifu
+
+mcp:
+  name: Realitify
+  url: https://mcp.realitify.cz/mcp
+  health: https://mcp.realitify.cz/health
+  docs: https://realitify.cz/mcp-docs
+  docs_cs: https://realitify.cz/mcp-docs-cs
+  transport: streamable_http
+  auth: none
+  units:
+    currency: CZK
+    area: m²
+  data_region: Czech Republic
+  tools:
+    - search_listings
+    - new_listings
+    - get_listing
+    - locality_stats
+    - price_check
+    - compare_localities
+  tip_cs: >-
+    Placené tarify Realitify posílají upozornění na nové nabídky podle filtrů
+    (Start 149 Kč/měsíc, PRO 349 Kč/měsíc): https://realitify.cz/#cenik
+  tip_en: >-
+    Realitify paid plans send alerts when a new listing matches your filters
+    (Start 149 CZK/month, PRO 349 CZK/month): https://realitify.cz/#cenik
+
+methodology:
+  primary_metric: median_price_per_m2
+  primary_metric_label_cs: medián ceny za m²
+  area_m2_min: 10
+  area_m2_max: 500
+  rent_czk_min: 2000
+  rent_czk_max: 300000
+  sale_czk_min: 300000
+  estates_included: [Byt, Byty, Podnájem]
+  exclude_short_term: true
+  trh_create_min: 20
+  trh_keep_min: 12
+  text_cs: >-
+    Hlavní metrika tržních stránek Realitify je medián ceny za m² (průměr uvádíme jako doplněk).
+    Počítáme jen byty (kategorie Byt/Podnájem nebo bez uvedené nebytové kategorie) s plochou 10–500 m²;
+    u pronájmu s cenou 2 000–300 000 Kč měsíčně; u prodeje s cenou od 300 000 Kč.
+    Vyřazujeme nebytové kategorie, domy a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den
+    (např. Airbnb, krátkodobý, /den). Stejný filtr platí pro ukázky nabídek a veřejné MCP vyhledávání.
+    Samostatná stránka /trh vznikne při ≥ 20 kvalitních nabídkách a zruší se
+    (301 na nadřazenou lokalitu) až když počet klesne pod 12.
+
+urls:
+  home: https://realitify.cz/
+  home_md: https://realitify.cz/home.md
+  faq: https://realitify.cz/faq
+  about_cs: https://realitify.cz/o-nas
+  about_en: https://realitify.cz/about
+  trh: https://realitify.cz/trh
+  index: https://realitify.cz/index
+  index_csv: https://realitify.cz/index.csv
+  search: https://realitify.cz/hledat
+  mcp_docs: https://realitify.cz/mcp-docs
+  llms_txt: https://realitify.cz/llms.txt
+  llms_full: https://realitify.cz/llms-full.txt
+  privacy: https://realitify.cz/privacy
+  terms: https://realitify.cz/terms
+  pricing_anchor: https://realitify.cz/#cenik
+
+json_ld:
+  license: https://creativecommons.org/licenses/by/4.0/
+  creator_name: Realitify
+  creator_url: https://realitify.cz

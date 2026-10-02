@@ -2,6 +2,7 @@
 
 Běží ve web procesu jako asyncio smyčka. Zálohuje:
 - /data/monitor.sqlite (centrální DB: identity, sessions)
+- /data/ssr_cache.sqlite (předpočítané SSR stránky)
 - /data/users/*/monitor.sqlite (per-user data)
 do /data/backups/YYYY-MM-DD/ s retencí BACKUP_KEEP_DAYS dní.
 """
@@ -45,6 +46,9 @@ def run_backup_once(data_dir: Path | None = None, keep_days: int = BACKUP_KEEP_D
         central = data_dir / "monitor.sqlite"
         if central.exists():
             _backup_sqlite(central, dest_root / "monitor.sqlite")
+        ssr_cache = data_dir / "ssr_cache.sqlite"
+        if ssr_cache.exists():
+            _backup_sqlite(ssr_cache, dest_root / "ssr_cache.sqlite")
         # Per-user DB
         users_dir = data_dir / "users"
         if users_dir.is_dir():

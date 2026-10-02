@@ -100,15 +100,22 @@ async def lifespan(_app: FastAPI):
     # Warm SEO inventory + sitemap off the request path (avoids Google 502 on /sitemap.xml).
     def _warm_seo_sitemap() -> None:
         try:
-            from app import market_seo
+            from app import market_seo, ssr_cache
 
             store = hub.store
             market_seo.refresh_market_seo_inventory(store)
             market_seo.cached_sitemap_xml(store, SEO_PAGES)
+            ssr_cache.ensure_fresh(store, force=True, reason="startup")
         except Exception:
             pass
 
     threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
+    try:
+        from app import ssr_cache
+
+        ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
+    except Exception:
+        pass
     try:
         yield
     finally:
@@ -412,28 +419,60 @@ def page() -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
+_SSR_CACHE_NOT_READY = "Public market data cache is not ready yet. Retry shortly."
+_SSR_RETRY_AFTER = "120"
+
+
+def _ssr_cache_not_ready() -> HTTPException:
+    return HTTPException(
+        503,
+        _SSR_CACHE_NOT_READY,
+        headers={"Retry-After": _SSR_RETRY_AFTER},
+    )
+
+
 def landing() -> HTMLResponse:
-    from app import market_pages, market_seo
+    from app import market_pages, ssr_cache
     import html as html_lib
 
+    home = ssr_cache.get_json("home")
+    if not home:
+        raise _ssr_cache_not_ready()
     html = (config.WEB_DIR / "site" / "index.html").read_text(encoding="utf-8")
-    store = _public_store() or hub.store
-    try:
-        active = int(store.catalog_total_active())
-    except Exception:
-        active = 0
-    portals = market_pages.public_portals_sentence()
-    try:
-        top_html = market_seo.top_localities_html(store, 10)
-    except Exception:
-        top_html = ""
+    active = int(home.get("active_count") or 0)
+    portals = str(home.get("portals_list") or market_pages.public_portals_sentence())
+    portal_n = str(home.get("portals_count") or len(market_pages.PUBLIC_PORTAL_LABELS))
+    top_html = str(home.get("top_localities_html") or "")
+    data_as_of = str(home.get("data_as_of") or ssr_cache.last_success_as_of() or "")
     html = (
         html.replace("__ACTIVE_COUNT__", market_pages._fmt_int(active))
         .replace("__PORTALS_LIST__", html_lib.escape(portals))
-        .replace("__PORTALS_COUNT__", str(len(market_pages.PUBLIC_PORTAL_LABELS)))
+        .replace("__PORTALS_COUNT__", portal_n)
         .replace("__TOP_LOCALITIES__", top_html)
     )
-    return HTMLResponse(html, headers={"Cache-Control": _PUBLIC_HTML_CACHE})
+    if 'rel="alternate" type="text/markdown"' not in html:
+        html = html.replace(
+            "</head>",
+            '  <link rel="alternate" type="text/markdown" href="https://realitify.cz/home.md" />\n</head>',
+            1,
+        )
+    headers = {"Cache-Control": _PUBLIC_HTML_CACHE}
+    if data_as_of:
+        headers["X-Data-As-Of"] = data_as_of
+    return HTMLResponse(html, headers=headers)
+
+
+def _ssr_response(page_key: str, *, media_type: str, cache_control: str) -> Response:
+    from app import ssr_cache
+
+    page = ssr_cache.get_page(page_key)
+    if not page or not page.get("body"):
+        raise _ssr_cache_not_ready()
+    headers = {
+        "Cache-Control": cache_control,
+        "X-Data-As-Of": page.get("data_as_of") or "",
+    }
+    return Response(content=page["body"], media_type=media_type, headers=headers)
 
 
 def byt_preview() -> FileResponse:
@@ -468,12 +507,8 @@ def mcp_docs_cs() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "mcp-docs-cs.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
-async def market_index() -> HTMLResponse:
-    from app import market_pages
-
-    store = _public_store() or hub.store
-    html = await asyncio.to_thread(market_pages.render_index, store)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+async def market_index() -> Response:
+    return _ssr_response("index:html", media_type="text/html; charset=utf-8", cache_control="public, max-age=1800")
 
 
 async def market_index_month(month: str) -> Response:
@@ -488,26 +523,24 @@ async def market_index_month(month: str) -> Response:
 
 
 async def market_index_csv() -> Response:
-    from app import market_pages
+    from app import ssr_cache
 
-    store = _public_store() or hub.store
-    csv_text = await asyncio.to_thread(market_pages.index_csv, store)
+    page = ssr_cache.get_page("index:csv")
+    if not page:
+        raise _ssr_cache_not_ready()
     return Response(
-        content=csv_text,
+        content=page["body"],
         media_type="text/csv; charset=utf-8",
         headers={
             "Content-Disposition": 'attachment; filename="realitify-index.csv"',
             "Cache-Control": "public, max-age=1800",
+            "X-Data-As-Of": page.get("data_as_of") or "",
         },
     )
 
 
-async def market_faq() -> HTMLResponse:
-    from app import market_pages
-
-    store = _public_store() or hub.store
-    html = await asyncio.to_thread(market_pages.render_faq, store)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+async def market_faq() -> Response:
+    return _ssr_response("faq:html", media_type="text/html; charset=utf-8", cache_control="public, max-age=1800")
 
 
 async def market_search(q: str = "") -> HTMLResponse:
@@ -518,66 +551,109 @@ async def market_search(q: str = "") -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=300"})
 
 
-def about_cs() -> HTMLResponse:
-    from app import market_pages
-
-    return HTMLResponse(market_pages.render_about_cs(), headers={"Cache-Control": _PUBLIC_HTML_CACHE})
+def about_cs() -> Response:
+    return _ssr_response("about:html", media_type="text/html; charset=utf-8", cache_control=_PUBLIC_HTML_CACHE)
 
 
-def about_en() -> HTMLResponse:
-    from app import market_pages
-
-    return HTMLResponse(market_pages.render_about_en(), headers={"Cache-Control": _PUBLIC_HTML_CACHE})
+def about_en() -> Response:
+    return _ssr_response("about_en:html", media_type="text/html; charset=utf-8", cache_control=_PUBLIC_HTML_CACHE)
 
 
-async def market_trh_hub() -> HTMLResponse:
-    from app import market_seo
+def llms_txt_route() -> Response:
+    return _ssr_response("llms", media_type="text/plain; charset=utf-8", cache_control="public, max-age=3600")
 
-    store = _public_store() or hub.store
-    html = await asyncio.to_thread(market_seo.render_trh_hub, store)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+async def llms_full_txt_route() -> Response:
+    return _ssr_response("llms_full", media_type="text/plain; charset=utf-8", cache_control="public, max-age=3600")
+
+
+async def home_md_route() -> Response:
+    return _ssr_response("home:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+
+
+async def index_md_route() -> Response:
+    return _ssr_response("index:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+
+
+async def faq_md_route() -> Response:
+    return _ssr_response("faq:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+
+
+async def about_md_route() -> Response:
+    return _ssr_response("about:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+
+
+def mcp_docs_md_route() -> Response:
+    return _ssr_response("mcp_docs:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=3600")
+
+
+async def trh_hub_md_route() -> Response:
+    return _ssr_response("trh_hub:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+
+
+async def trh_page_md_route(locality: str, offer: str, disposition: str = "") -> Response:
+    from app import market_pages, market_seo, ssr_cache
+
+    if offer not in {"pronajem", "prodej"}:
+        raise HTTPException(404, "Unknown offer type")
+    loc = market_pages.locality_from_slug(locality)
+    disp = market_seo.disposition_from_slug(disposition) if disposition else ""
+    key = ssr_cache.trh_key(loc, offer, disp) + ":md"
+    page = ssr_cache.get_page(key)
+    if page and page.get("body"):
+        return Response(
+            content=page["body"],
+            media_type="text/markdown; charset=utf-8",
+            headers={"Cache-Control": "public, max-age=1800", "X-Data-As-Of": page.get("data_as_of") or ""},
+        )
+    raise HTTPException(404, "Not enough data")
+
+
+async def market_trh_hub() -> Response:
+    return _ssr_response("trh_hub:html", media_type="text/html; charset=utf-8", cache_control="public, max-age=1800")
 
 
 async def market_trh(
     locality: str, offer: str, disposition: str = ""
 ) -> Response:
-    from app import market_pages, market_seo
+    from app import market_pages, market_seo, ssr_cache
 
     if offer not in {"pronajem", "prodej"}:
         raise HTTPException(404, "Unknown offer type")
-    store = _public_store() or hub.store
     loc = market_pages.locality_from_slug(locality)
     disp = market_seo.disposition_from_slug(disposition) if disposition else ""
-    redirect = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
-    if redirect:
-        return RedirectResponse(redirect, status_code=301)
-    try:
-        html = await asyncio.to_thread(market_pages.render_prehled, store, loc, offer, disp)
-    except ValueError as exc:
-        if str(exc) == "not_enough_data":
-            target = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
-            return RedirectResponse(target or "/trh", status_code=301)
-        raise HTTPException(404, str(exc)) from exc
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+    key = ssr_cache.trh_key(loc, offer, disp) + ":html"
+    page = ssr_cache.get_page(key)
+    if page and page.get("body"):
+        return HTMLResponse(
+            page["body"],
+            headers={"Cache-Control": "public, max-age=1800", "X-Data-As-Of": page.get("data_as_of") or ""},
+        )
+    redirects = ssr_cache.get_json("redirects") or {}
+    path = f"/trh/{market_pages.slugify_locality(loc)}/{offer}"
+    if disp:
+        path += f"/{market_seo.slugify_disposition(disp)}"
+    target = redirects.get(path) or "/trh"
+    return RedirectResponse(target, status_code=301)
 
 
 async def market_trh_og(locality: str, offer: str, disposition: str = "") -> Response:
-    from app import market_pages, market_seo
+    from app import market_pages, market_seo, ssr_cache
 
     if offer not in {"pronajem", "prodej"}:
         raise HTTPException(404, "Unknown offer type")
-    store = _public_store() or hub.store
     loc = market_pages.locality_from_slug(locality)
     disp = market_seo.disposition_from_slug(disposition) if disposition else ""
-    redirect = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
-    if redirect:
-        if redirect == "/trh":
+    report = ssr_cache.get_json(ssr_cache.trh_key(loc, offer, disp) + ":report")
+    if not isinstance(report, dict):
+        redirects = ssr_cache.get_json("redirects") or {}
+        path = f"/trh/{market_pages.slugify_locality(loc)}/{offer}"
+        if disp:
+            path += f"/{market_seo.slugify_disposition(disp)}"
+        target = redirects.get(path)
+        if not target or target == "/trh":
             raise HTTPException(404, "Not enough data")
-        return RedirectResponse(f"{redirect}/og.png", status_code=301)
-    try:
-        report = await asyncio.to_thread(store.catalog_locality_report, loc, offer, disp)
-    except ValueError:
-        raise HTTPException(404, "Not enough data") from None
+        return RedirectResponse(f"{target}/og.png", status_code=301)
     png = await asyncio.to_thread(market_seo.render_og_png, loc, offer, report, disp)
     return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
@@ -724,16 +800,6 @@ def robots_txt() -> Response:
     )
     return Response(content=txt, media_type="text/plain",
                     headers={"Cache-Control": "public, max-age=86400"})
-
-
-def llms_txt_route() -> Response:
-    from app import market_pages
-
-    return Response(
-        content=market_pages.llms_txt(),
-        media_type="text/plain; charset=utf-8",
-        headers={"Cache-Control": "public, max-age=3600"},
-    )
 
 
 def seznam_wmt_verify() -> Response:
@@ -983,6 +1049,20 @@ app.add_api_route("/apple-touch-icon.png", apple_touch_icon, methods=["GET"], in
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
 app.add_api_route("/llms.txt", llms_txt_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/llms-full.txt", llms_full_txt_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/home.md", home_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/index.md", index_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/faq.md", faq_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/o-nas.md", about_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/mcp-docs.md", mcp_docs_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh.md", trh_hub_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh/{locality}/{offer}.md", trh_page_md_route, methods=["GET"], include_in_schema=False)
+app.add_api_route(
+    "/trh/{locality}/{offer}/{disposition}.md",
+    trh_page_md_route,
+    methods=["GET"],
+    include_in_schema=False,
+)
 app.add_api_route(
     "/seznam-wmt-sL6S4B2gcz1qTvH5DrKNiusOIprxIMsB.txt",
     seznam_wmt_verify,
@@ -1963,6 +2043,12 @@ async def perf_diag_snapshot(realitify_admin: str | None = Cookie(default=None, 
     return payload
 
 
+@app.get("/health")
+async def health() -> dict:
+    """Liveness for Coolify — must not touch ssr_cache or catalog SQLite."""
+    return {"ok": True}
+
+
 @app.get("/api/version")
 async def version() -> dict:
     return await version_info()
@@ -2372,6 +2458,13 @@ async def public_catalog(
     result["listing_quality"] = quality_n
     result["avg_price_per_m2_locality"] = avg_m2
     result["median_price_per_m2_locality"] = median_m2
+    try:
+        result["data_as_of"] = await asyncio.to_thread(store.catalog_data_as_of)
+    except Exception:
+        result["data_as_of"] = ""
+    result["units"] = {"currency": "CZK", "area": "m2", "price_per_area": "CZK/m2"}
+    result["source"] = "Realitify catalog"
+    result["source_url"] = "https://realitify.cz"
     return result
 
 
@@ -2387,13 +2480,28 @@ async def public_catalog_stats(district: str = "", offer: str = "", disposition:
         raise HTTPException(400, str(exc)) from exc
     district_n = normalize_locality(district)
     if not district_n:
-        raise HTTPException(400, "district is required")
+        raise HTTPException(
+            400,
+            "district is required. Pass a Czech locality such as Praha, Brno, or Praha 5.",
+        )
     try:
-        return await asyncio.to_thread(
+        data = await asyncio.to_thread(
             store.catalog_stats, district_n, offer_n, normalize_disposition(disposition)
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        suggestions = suggest_localities(district or district_n)
+        raise HTTPException(
+            400,
+            f"{exc}. Try one of: {', '.join(suggestions[:5])}" if suggestions else str(exc),
+        ) from exc
+    try:
+        data["data_as_of"] = await asyncio.to_thread(store.catalog_data_as_of)
+    except Exception:
+        data["data_as_of"] = ""
+    data["units"] = {"currency": "CZK", "area": "m2", "price_per_area": "CZK/m2"}
+    data["source"] = "Realitify catalog"
+    data["source_url"] = "https://realitify.cz"
+    return data
 
 
 @app.get("/api/public/catalog/price-check")
@@ -2404,7 +2512,7 @@ async def public_catalog_price_check(
     disposition: str = "",
     area: int = 0,
 ) -> dict:
-    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer
+    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer, suggest_localities
 
     store = _public_store() or hub.store
     try:
@@ -2413,9 +2521,9 @@ async def public_catalog_price_check(
         raise HTTPException(400, str(exc)) from exc
     district_n = normalize_locality(district)
     if not district_n:
-        raise HTTPException(400, "district is required")
+        raise HTTPException(400, "district is required. Example: Praha, Brno, Vinohrady.")
     try:
-        return await asyncio.to_thread(
+        data = await asyncio.to_thread(
             store.catalog_price_check,
             district_n,
             offer_n,
@@ -2424,7 +2532,22 @@ async def public_catalog_price_check(
             int(area) if area else None,
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        msg = str(exc)
+        if "no comparable" in msg.lower():
+            raise HTTPException(
+                400,
+                f"{msg}. Relax filters: drop disposition or area, or try a parent locality "
+                f"(suggestions: {', '.join(suggest_localities(district_n)[:5])}).",
+            ) from exc
+        raise HTTPException(400, msg) from exc
+    try:
+        data["data_as_of"] = await asyncio.to_thread(store.catalog_data_as_of)
+    except Exception:
+        data["data_as_of"] = ""
+    data["units"] = {"currency": "CZK", "area": "m2"}
+    data["source"] = "Realitify catalog"
+    data["source_url"] = "https://realitify.cz"
+    return data
 
 
 @app.get("/api/public/catalog/compare")
@@ -2443,11 +2566,22 @@ async def public_catalog_compare(
     locs = [normalize_locality(x) for x in localities.split(",") if x.strip()]
     locs = [x for x in locs if x]
     try:
-        return await asyncio.to_thread(
+        data = await asyncio.to_thread(
             store.catalog_compare_localities, locs, offer_n, normalize_disposition(disposition)
         )
     except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+        raise HTTPException(
+            400,
+            f"{exc}. Provide at least two valid Czech localities, e.g. Praha,Brno.",
+        ) from exc
+    try:
+        data["data_as_of"] = await asyncio.to_thread(store.catalog_data_as_of)
+    except Exception:
+        data["data_as_of"] = ""
+    data["units"] = {"currency": "CZK", "area": "m2", "price_per_area": "CZK/m2"}
+    data["source"] = "Realitify catalog"
+    data["source_url"] = "https://realitify.cz"
+    return data
 
 
 @app.get("/api/public/catalog/report")
