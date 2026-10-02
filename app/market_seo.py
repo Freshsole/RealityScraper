@@ -13,6 +13,8 @@ from app.market_pages import (
     DISCLAIMER_CS,
     MARKET_NEIGHBORHOODS,
     MIN_ACTIVE,
+    MIN_ACTIVE_CREATE,
+    MIN_ACTIVE_KEEP,
     PRICE_METHODOLOGY_CS,
     _active_count,
     _children_for_district,
@@ -22,6 +24,7 @@ from app.market_pages import (
     _listings_html,
     _parents_for_neighborhood,
     _sample_listing_items,
+    evaluate_market_page,
     market_inventory,
     slugify_locality,
 )
@@ -114,26 +117,18 @@ def parent_locality(locality: str) -> str | None:
 
 
 def redirect_path_for_thin(store: Store, locality: str, offer: str, disposition: str = "") -> str | None:
-    try:
-        count = int(store.catalog_active_count(locality, offer, disposition, quality=True))
-    except ValueError:
-        count = 0
-    if count >= MIN_ACTIVE:
+    active, _count = evaluate_market_page(store, locality, offer, disposition)
+    if active:
         return None
     if disposition:
-        try:
-            parent_count = int(store.catalog_active_count(locality, offer, quality=True))
-        except ValueError:
-            parent_count = 0
-        if parent_count >= MIN_ACTIVE:
+        parent_active, _ = evaluate_market_page(store, locality, offer, "")
+        if parent_active:
             return f"/trh/{slugify_locality(locality)}/{offer}"
     parent = parent_locality(locality)
     while parent:
-        try:
-            if int(store.catalog_active_count(parent, offer, quality=True)) >= MIN_ACTIVE:
-                return f"/trh/{slugify_locality(parent)}/{offer}"
-        except ValueError:
-            pass
+        parent_active, _ = evaluate_market_page(store, parent, offer, "")
+        if parent_active:
+            return f"/trh/{slugify_locality(parent)}/{offer}"
         parent = parent_locality(parent)
     return "/trh"
 
@@ -146,12 +141,13 @@ def list_disposition_paths(store: Store) -> list[tuple[str, str, str, str]]:
             rows = store.catalog_disposition_counts(loc, offer)
         except ValueError:
             continue
-        for disp_raw, n in rows:
-            if n < MIN_ACTIVE:
-                continue
+        for disp_raw, _n in rows:
             key = (normalize_disposition(disp_raw) or disp_raw).lower()
             label = wanted.get(key)
             if not label:
+                continue
+            active, _count = evaluate_market_page(store, loc, offer, label)
+            if not active:
                 continue
             out.append(
                 (
@@ -164,14 +160,127 @@ def list_disposition_paths(store: Store) -> list[tuple[str, str, str, str]]:
     return out
 
 
-def list_all_seo_paths(store: Store) -> dict[str, list[str]]:
-    loc_paths = [r["path"] for r in market_inventory(store)["included"]]
-    disp_paths = [p for p, *_ in list_disposition_paths(store)]
+def list_all_seo_paths(store: Store, *, sync_if_empty: bool = False) -> dict[str, list[str]]:
+    """SEO paths for sitemap. Prefer DB state (fast); optionally sync when empty."""
+    paths = seo_paths_from_db(store)
+    if sync_if_empty and not paths["locality"]:
+        refresh_market_seo_inventory(store)
+        paths = seo_paths_from_db(store)
+    return paths
+
+
+def seo_paths_from_db(store: Store) -> dict[str, list[str]]:
+    locality: list[str] = []
+    disposition: list[str] = []
+    try:
+        rows = store.list_market_seo_pages(active_only=True)
+    except Exception:
+        rows = []
+    for row in rows:
+        loc = row.get("locality") or ""
+        offer = row.get("offer") or ""
+        disp = (row.get("disposition") or "").strip()
+        if not loc or offer not in {"pronajem", "prodej"}:
+            continue
+        base = f"/trh/{slugify_locality(loc)}/{offer}"
+        if disp:
+            disposition.append(f"{base}/{slugify_disposition(disp)}")
+        else:
+            locality.append(base)
     try:
         months = [f"/index/{m}" for m in store.list_index_months()]
     except Exception:
         months = []
-    return {"hub": ["/trh"], "locality": loc_paths, "disposition": disp_paths, "index_archive": months}
+    return {"hub": ["/trh"], "locality": locality, "disposition": disposition, "index_archive": months}
+
+
+_SITEMAP_LOCK = __import__("threading").Lock()
+_SITEMAP_STATE: dict[str, Any] = {"xml": "", "at": 0.0, "refreshing": False}
+_SITEMAP_TTL_SEC = 3600.0
+
+
+def refresh_market_seo_inventory(store: Store) -> None:
+    """Recompute locality + disposition active flags into market_seo_pages (slow)."""
+    try:
+        market_inventory(store)
+        list_disposition_paths(store)
+    except Exception:
+        pass
+
+
+def _schedule_seo_refresh(store: Store) -> None:
+    import threading
+
+    with _SITEMAP_LOCK:
+        if _SITEMAP_STATE.get("refreshing"):
+            return
+        _SITEMAP_STATE["refreshing"] = True
+
+    def _run() -> None:
+        try:
+            refresh_market_seo_inventory(store)
+            # Invalidate sitemap cache so next hit rebuilds from DB.
+            with _SITEMAP_LOCK:
+                _SITEMAP_STATE["at"] = 0.0
+        finally:
+            with _SITEMAP_LOCK:
+                _SITEMAP_STATE["refreshing"] = False
+
+    threading.Thread(target=_run, name="seo-inventory-refresh", daemon=True).start()
+
+
+def build_sitemap_xml(store: Store | None, static_pages: list[tuple[str, str, str]]) -> str:
+    """Build sitemap XML quickly from DB (+ static pages). Never runs full inventory sync."""
+    from datetime import date
+
+    today = date.today().isoformat()
+    paths = list(static_pages)
+    seo = seo_paths_from_db(store) if store is not None else {"locality": [], "disposition": [], "index_archive": []}
+    if store is not None and not seo.get("locality"):
+        _schedule_seo_refresh(store)
+    for path in seo.get("locality") or []:
+        paths.append((path, "daily", "0.7"))
+    for path in seo.get("disposition") or []:
+        paths.append((path, "daily", "0.65"))
+    for path in seo.get("index_archive") or []:
+        paths.append((path, "monthly", "0.8"))
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    ordered: list[tuple[str, str, str]] = []
+    for path, freq, prio in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        ordered.append((path, freq, prio))
+    urls = "\n".join(
+        f"  <url><loc>https://realitify.cz{path}</loc>"
+        f"<lastmod>{today}</lastmod>"
+        f"<changefreq>{freq}</changefreq>"
+        f"<priority>{prio}</priority></url>"
+        for path, freq, prio in ordered
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{urls}\n"
+        "</urlset>"
+    )
+
+
+def cached_sitemap_xml(store: Store | None, static_pages: list[tuple[str, str, str]]) -> str:
+    import time
+
+    now = time.time()
+    with _SITEMAP_LOCK:
+        xml = str(_SITEMAP_STATE.get("xml") or "")
+        at = float(_SITEMAP_STATE.get("at") or 0.0)
+        if xml and (now - at) < _SITEMAP_TTL_SEC:
+            return xml
+    xml = build_sitemap_xml(store, static_pages)
+    with _SITEMAP_LOCK:
+        _SITEMAP_STATE["xml"] = xml
+        _SITEMAP_STATE["at"] = now
+    return xml
 
 
 def top_localities(store: Store, offer: str = "pronajem", limit: int = 10) -> list[dict[str, Any]]:
@@ -241,11 +350,8 @@ def _related_html(store: Store, locality: str, offer: str, disposition: str = ""
     for disp in SEO_DISPOSITIONS:
         if disposition and disp == disposition:
             continue
-        try:
-            n = int(store.catalog_active_count(locality, offer, disp, quality=True))
-        except ValueError:
-            n = 0
-        if n >= MIN_ACTIVE:
+        active, n = evaluate_market_page(store, locality, offer, disp)
+        if active:
             disp_links.append(
                 f'<a href="/trh/{slugify_locality(locality)}/{offer}/{slugify_disposition(disp)}">'
                 f"{html.escape(disp)} ({_fmt_int(n)})</a>"
@@ -254,23 +360,28 @@ def _related_html(store: Store, locality: str, offer: str, disposition: str = ""
         blocks.append("<h2>Související dispozice</h2><p>" + " · ".join(disp_links[:12]) + "</p>")
     parent = parent_locality(locality)
     links = []
-    if parent and _active_count(store, parent, offer) >= MIN_ACTIVE:
-        links.append(f'<a href="/trh/{slugify_locality(parent)}/{offer}">{html.escape(parent)}</a>')
+    if parent:
+        active, _ = evaluate_market_page(store, parent, offer)
+        if active:
+            links.append(f'<a href="/trh/{slugify_locality(parent)}/{offer}">{html.escape(parent)}</a>')
     for child in _children_for_district(locality)[:12]:
-        if _active_count(store, child, offer) >= MIN_ACTIVE:
+        active, _ = evaluate_market_page(store, child, offer)
+        if active:
             links.append(f'<a href="/trh/{slugify_locality(child)}/{offer}">{html.escape(child)}</a>')
     if locality in MARKET_NEIGHBORHOODS and parent:
         for sib in _children_for_district(parent):
             if sib == locality:
                 continue
-            if _active_count(store, sib, offer) >= MIN_ACTIVE:
+            active, _ = evaluate_market_page(store, sib, offer)
+            if active:
                 links.append(f'<a href="/trh/{slugify_locality(sib)}/{offer}">{html.escape(sib)}</a>')
             if len(links) >= 16:
                 break
     if links:
         blocks.append("<h2>Související lokality</h2><p>" + " · ".join(links[:16]) + "</p>")
     alt = "prodej" if offer == "pronajem" else "pronajem"
-    if _active_count(store, locality, alt) >= MIN_ACTIVE:
+    active, _ = evaluate_market_page(store, locality, alt)
+    if active:
         blocks.append(
             "<p>Stejná lokalita: "
             f'<a href="/trh/{slugify_locality(locality)}/{alt}">{offer_label(alt)}</a></p>'
@@ -711,7 +822,8 @@ def render_trh_hub(store: Store) -> str:
     body = f"""
   <header class="legal-header">
     <h1 class="display">REALITNÍ TRH – LOKALITY</h1>
-    <p>Přehled lokalit s aspoň {MIN_ACTIVE} aktivními nabídkami v katalogu Realitify.</p>
+    <p>Přehled lokalit s kvalitními nabídkami bytů v katalogu Realitify
+    (nová stránka od {MIN_ACTIVE_CREATE} nabídek, zrušení pod {MIN_ACTIVE_KEEP}).</p>
   </header>
   <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
     {''.join(sections)}

@@ -97,14 +97,19 @@ MARKET_NEIGHBORHOODS: list[str] = [
 
 MARKET_LOCALITIES: list[str] = MARKET_CITIES + MARKET_NEIGHBORHOODS
 
-MIN_ACTIVE = 20
+# /trh page hysteresis: create at high water, keep until low water.
+MIN_ACTIVE_CREATE = 20
+MIN_ACTIVE_KEEP = 12
+MIN_ACTIVE = MIN_ACTIVE_CREATE  # backward-compatible alias (= create threshold)
 
 PRICE_METHODOLOGY_CS = (
     "Hlavní metrika tržních stránek Realitify je medián ceny za m² (průměr uvádíme jako doplněk). "
     "Počítáme jen byty (kategorie Byt/Podnájem nebo bez uvedené nebytové kategorie) s plochou 10–500 m²; "
     "u pronájmu s cenou 2 000–300 000 Kč měsíčně; u prodeje s cenou od 300 000 Kč. "
     "Vyřazujeme nebytové kategorie, domy a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den "
-    "(např. Airbnb, krátkodobý, /den). Stejný filtr platí pro ukázky nabídek a veřejné MCP vyhledávání."
+    "(např. Airbnb, krátkodobý, /den). Stejný filtr platí pro ukázky nabídek a veřejné MCP vyhledávání. "
+    f"Samostatná stránka /trh vznikne při ≥ {MIN_ACTIVE_CREATE} kvalitních nabídkách a zruší se "
+    f"(301 na nadřazenou lokalitu) až když počet klesne pod {MIN_ACTIVE_KEEP}."
 )
 
 
@@ -143,6 +148,37 @@ def locality_from_slug(slug: str) -> str:
     return normalize_locality(raw) or raw.title()
 
 
+def decide_market_page_active(was_active: bool, quality_count: int) -> bool:
+    """Hysteresis: new pages need CREATE, existing stay until below KEEP."""
+    if was_active:
+        return int(quality_count) >= MIN_ACTIVE_KEEP
+    return int(quality_count) >= MIN_ACTIVE_CREATE
+
+
+def evaluate_market_page(
+    store: Store,
+    locality: str,
+    offer: str,
+    disposition: str = "",
+) -> tuple[bool, int]:
+    """Update DB state for one /trh page and return (active, quality_count)."""
+    try:
+        count = int(store.catalog_active_count(locality, offer, disposition, quality=True))
+    except ValueError:
+        count = 0
+    prev = store.get_market_seo_page(locality, offer, disposition)
+    was_active = bool(prev and prev.get("active"))
+    active = decide_market_page_active(was_active, count)
+    store.set_market_seo_page(
+        locality,
+        offer,
+        disposition,
+        active=active,
+        quality_count=count,
+    )
+    return active, count
+
+
 def _active_count(store: Store, locality: str, offer: str) -> int:
     try:
         return int(store.catalog_active_count(locality, offer, quality=True))
@@ -151,13 +187,13 @@ def _active_count(store: Store, locality: str, offer: str) -> int:
 
 
 def market_inventory(store: Store) -> dict[str, list[dict[str, Any]]]:
-    """Classify candidates into included (≥20) and skipped (<20) with counts."""
+    """Classify candidates with hysteresis; persist active state in DB."""
     included: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for loc in MARKET_LOCALITIES:
         kind = "neighborhood" if loc in MARKET_NEIGHBORHOODS else "city"
         for offer in ("pronajem", "prodej"):
-            count = _active_count(store, loc, offer)
+            active, count = evaluate_market_page(store, loc, offer)
             row = {
                 "locality": loc,
                 "offer": offer,
@@ -165,8 +201,9 @@ def market_inventory(store: Store) -> dict[str, list[dict[str, Any]]]:
                 "kind": kind,
                 "path": f"/trh/{slugify_locality(loc)}/{offer}",
                 "parents": _parents_for_neighborhood(loc) if kind == "neighborhood" else [],
+                "active": active,
             }
-            if count >= MIN_ACTIVE:
+            if active:
                 included.append(row)
             else:
                 skipped.append(row)
@@ -297,7 +334,8 @@ def _nav_links_html(store: Store, locality: str, offer: str) -> str:
     if locality in MARKET_NEIGHBORHOODS:
         parents = _parents_for_neighborhood(locality)
         for parent in parents:
-            if _active_count(store, parent, offer) >= MIN_ACTIVE:
+            active, _ = evaluate_market_page(store, parent, offer)
+            if active:
                 parts.append(
                     f'<a href="/trh/{slugify_locality(parent)}/{offer}">'
                     f"{html.escape(parent)}</a>"
@@ -310,7 +348,8 @@ def _nav_links_html(store: Store, locality: str, offer: str) -> str:
     children = _children_for_district(locality)
     links: list[str] = []
     for child in children:
-        if _active_count(store, child, offer) >= MIN_ACTIVE:
+        active, _ = evaluate_market_page(store, child, offer)
+        if active:
             links.append(
                 f'<a href="/trh/{slugify_locality(child)}/{offer}">'
                 f"{html.escape(child)}</a>"
@@ -472,6 +511,15 @@ def render_faq(store: Store) -> str:
         {
             "q": "Jak Realitify počítá cenu za m²?",
             "a": PRICE_METHODOLOGY_CS,
+        },
+        {
+            "q": "Kdy vznikne a zanikne stránka /trh?",
+            "a": (
+                f"Nová lokalitní stránka vznikne při ≥ {MIN_ACTIVE_CREATE} kvalitních nabídkách bytů. "
+                f"Existující stránka se zruší (přesměrování 301 na nadřazenou lokalitu) až když počet "
+                f"klesne pod {MIN_ACTIVE_KEEP}. Stav aktivních stránek ukládáme v databázi, aby bylo "
+                "rozhodnutí deterministické."
+            ),
         },
         {
             "q": "Souvisí Realitify se společností Realtify nebo PriceHubble?",

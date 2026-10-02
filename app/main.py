@@ -97,6 +97,18 @@ async def lifespan(_app: FastAPI):
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
+    # Warm SEO inventory + sitemap off the request path (avoids Google 502 on /sitemap.xml).
+    def _warm_seo_sitemap() -> None:
+        try:
+            from app import market_seo
+
+            store = hub.store
+            market_seo.refresh_market_seo_inventory(store)
+            market_seo.cached_sitemap_xml(store, SEO_PAGES)
+        except Exception:
+            pass
+
+    threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
     try:
         yield
     finally:
@@ -667,38 +679,18 @@ SEO_PAGES = [
 
 
 def sitemap_xml() -> Response:
-    from datetime import date
-
     from app import market_seo
 
-    today = date.today().isoformat()
-    paths = list(SEO_PAGES)
     try:
         store = _public_store() or hub.store
-        seo = market_seo.list_all_seo_paths(store)
-        for path in seo.get("locality") or []:
-            paths.append((path, "daily", "0.7"))
-        for path in seo.get("disposition") or []:
-            paths.append((path, "daily", "0.65"))
-        for path in seo.get("index_archive") or []:
-            paths.append((path, "monthly", "0.8"))
     except Exception:
-        pass
-    urls = "\n".join(
-        f'  <url><loc>https://realitify.cz{path}</loc>'
-        f"<lastmod>{today}</lastmod>"
-        f"<changefreq>{freq}</changefreq>"
-        f"<priority>{prio}</priority></url>"
-        for path, freq, prio in paths
+        store = None
+    xml = market_seo.cached_sitemap_xml(store, SEO_PAGES)
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Cache-Control": "public, max-age=3600"},
     )
-    xml = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-        f"{urls}\n"
-        "</urlset>"
-    )
-    return Response(content=xml, media_type="application/xml",
-                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 def robots_txt() -> Response:

@@ -667,6 +667,7 @@ class Store:
                     self._migrate_events(conn)
                     self._ensure_catalog(conn)
                     self._ensure_scrape_schema(conn)
+                    self._ensure_market_seo_pages(conn)
                     self._migrate_monitors(conn)
                     self._ensure_defaults(conn)
                     self._ensure_ping_queue(conn)
@@ -719,6 +720,120 @@ class Store:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_ip ON guest_searches(ip)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_vid ON guest_searches(visitor_id)")
+
+    def _ensure_market_seo_pages(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS market_seo_pages (
+                locality TEXT NOT NULL,
+                offer TEXT NOT NULL,
+                disposition TEXT NOT NULL DEFAULT '',
+                active INTEGER NOT NULL DEFAULT 0,
+                quality_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (locality, offer, disposition)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_market_seo_pages_active ON market_seo_pages(active, offer)"
+        )
+
+    def get_market_seo_page(
+        self,
+        locality: str,
+        offer: str,
+        disposition: str = "",
+    ) -> dict[str, Any] | None:
+        loc = (locality or "").strip()
+        off = (offer or "").strip()
+        disp = (disposition or "").strip()
+        if not loc or not off:
+            return None
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                """
+                SELECT locality, offer, disposition, active, quality_count, updated_at
+                FROM market_seo_pages
+                WHERE locality = ? AND offer = ? AND disposition = ?
+                """,
+                (loc, off, disp),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "locality": row["locality"],
+            "offer": row["offer"],
+            "disposition": row["disposition"] or "",
+            "active": bool(row["active"]),
+            "quality_count": int(row["quality_count"] or 0),
+            "updated_at": row["updated_at"],
+        }
+
+    def set_market_seo_page(
+        self,
+        locality: str,
+        offer: str,
+        disposition: str = "",
+        *,
+        active: bool,
+        quality_count: int,
+    ) -> None:
+        loc = (locality or "").strip()
+        off = (offer or "").strip()
+        disp = (disposition or "").strip()
+        if not loc or not off:
+            raise ValueError("locality and offer are required")
+        now = utc_now()
+        with self.connect() as conn:
+            self._ensure_market_seo_pages(conn)
+            conn.execute(
+                """
+                INSERT INTO market_seo_pages(locality, offer, disposition, active, quality_count, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(locality, offer, disposition) DO UPDATE SET
+                    active = excluded.active,
+                    quality_count = excluded.quality_count,
+                    updated_at = excluded.updated_at
+                """,
+                (loc, off, disp, 1 if active else 0, int(quality_count), now),
+            )
+
+    def list_market_seo_pages(self, *, active_only: bool = True) -> list[dict[str, Any]]:
+        try:
+            with self.connect(readonly=True) as conn:
+                if active_only:
+                    rows = conn.execute(
+                        """
+                        SELECT locality, offer, disposition, active, quality_count, updated_at
+                        FROM market_seo_pages
+                        WHERE active = 1
+                        ORDER BY locality, offer, disposition
+                        """
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT locality, offer, disposition, active, quality_count, updated_at
+                        FROM market_seo_pages
+                        ORDER BY locality, offer, disposition
+                        """
+                    ).fetchall()
+        except sqlite3.OperationalError:
+            with self.connect() as conn:
+                self._ensure_market_seo_pages(conn)
+            return []
+        return [
+            {
+                "locality": r["locality"],
+                "offer": r["offer"],
+                "disposition": r["disposition"] or "",
+                "active": bool(r["active"]),
+                "quality_count": int(r["quality_count"] or 0),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
 
     def _ensure_analytics(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -6414,7 +6529,9 @@ class Store:
         from datetime import datetime, timedelta, timezone
 
         base = self.catalog_stats(district, offer, disposition)
-        if base["active_count"] < 20:
+        from app.market_pages import MIN_ACTIVE_KEEP
+
+        if base["active_count"] < MIN_ACTIVE_KEEP:
             raise ValueError("not_enough_data")
         where, params = self._district_where(district, offer, disposition)
         clause = " AND ".join(where)
