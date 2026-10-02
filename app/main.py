@@ -397,6 +397,53 @@ def mcp_docs_cs() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "mcp-docs-cs.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
+async def market_index() -> HTMLResponse:
+    from app import market_pages
+
+    store = _public_store() or hub.store
+    html = await asyncio.to_thread(market_pages.render_index, store)
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_index_csv() -> Response:
+    from app import market_pages
+
+    store = _public_store() or hub.store
+    csv_text = await asyncio.to_thread(market_pages.index_csv, store)
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="realitify-index.csv"',
+            "Cache-Control": "public, max-age=1800",
+        },
+    )
+
+
+async def market_faq() -> HTMLResponse:
+    from app import market_pages
+
+    store = _public_store() or hub.store
+    html = await asyncio.to_thread(market_pages.render_faq, store)
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_trh(locality: str, offer: str) -> HTMLResponse:
+    from app import market_pages
+
+    if offer not in {"pronajem", "prodej"}:
+        raise HTTPException(404, "Unknown offer type")
+    store = _public_store() or hub.store
+    loc = market_pages.locality_from_slug(locality)
+    try:
+        html = await asyncio.to_thread(market_pages.render_prehled, store, loc, offer)
+    except ValueError as exc:
+        if str(exc) == "not_enough_data":
+            raise HTTPException(404, "Not enough listings for this locality") from exc
+        raise HTTPException(404, str(exc)) from exc
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
 def cookies_page() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "nastaveni-cookies.html", headers={"Cache-Control": "no-store, max-age=0"})
 
@@ -454,6 +501,10 @@ def admin_page() -> FileResponse:
 # --- SEO: sitemap.xml a robots.txt ---
 SEO_PAGES = [
     ("/", "daily", "1.0"),
+    ("/index", "daily", "0.9"),
+    ("/faq", "weekly", "0.8"),
+    ("/mcp-docs", "weekly", "0.8"),
+    ("/llms.txt", "monthly", "0.5"),
     ("/pronajem-praha", "weekly", "0.9"),
     ("/pronajem-brno", "weekly", "0.8"),
     ("/byt", "daily", "0.8"),
@@ -463,18 +514,30 @@ SEO_PAGES = [
     ("/hry/vyssi-nizsi", "weekly", "0.5"),
     ("/hry/najem", "weekly", "0.5"),
     ("/kontakt", "monthly", "0.5"),
+    ("/privacy", "monthly", "0.4"),
+    ("/terms", "monthly", "0.4"),
 ]
 
 
 def sitemap_xml() -> Response:
     from datetime import date
+
+    from app import market_pages
+
     today = date.today().isoformat()
+    paths = list(SEO_PAGES)
+    try:
+        store = _public_store() or hub.store
+        for path, _loc, _offer in market_pages.list_market_paths(store):
+            paths.append((path, "daily", "0.7"))
+    except Exception:
+        pass
     urls = "\n".join(
         f'  <url><loc>https://realitify.cz{path}</loc>'
         f"<lastmod>{today}</lastmod>"
         f"<changefreq>{freq}</changefreq>"
         f"<priority>{prio}</priority></url>"
-        for path, freq, prio in SEO_PAGES
+        for path, freq, prio in paths
     )
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -488,18 +551,44 @@ def sitemap_xml() -> Response:
 
 def robots_txt() -> Response:
     txt = (
+        "User-agent: GPTBot\nAllow: /\n\n"
+        "User-agent: OAI-SearchBot\nAllow: /\n\n"
+        "User-agent: ChatGPT-User\nAllow: /\n\n"
+        "User-agent: ClaudeBot\nAllow: /\n\n"
+        "User-agent: Claude-User\nAllow: /\n\n"
+        "User-agent: Claude-SearchBot\nAllow: /\n\n"
+        "User-agent: PerplexityBot\nAllow: /\n\n"
+        "User-agent: Bingbot\nAllow: /\n\n"
+        "User-agent: Googlebot\nAllow: /\n\n"
         "User-agent: *\n"
         "Allow: /\n"
         "Disallow: /admin\n"
         "Disallow: /api/\n"
         "Disallow: /prihlaseni\n"
+        "Disallow: /registrace\n"
         "Disallow: /heslo\n"
+        "Disallow: /nastaveni\n"
+        "Disallow: /prehled\n"
+        "Disallow: /nabidka\n"
+        "Disallow: /monitory\n"
+        "Disallow: /filtry\n"
+        "Disallow: /zprava\n"
         "Disallow: /nastaveni-cookies\n"
         "\n"
         "Sitemap: https://realitify.cz/sitemap.xml\n"
     )
     return Response(content=txt, media_type="text/plain",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+def llms_txt_route() -> Response:
+    from app import market_pages
+
+    return Response(
+        content=market_pages.llms_txt(),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # --- Watchdog: stav scraperů pro externí monitoring ---
@@ -713,6 +802,7 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
 
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
+app.add_api_route("/llms.txt", llms_txt_route, methods=["GET"], include_in_schema=False)
 app.add_api_route("/api/watchdog", watchdog_status, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-praha", seo_landing_pronajem_praha, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-brno", seo_landing_pronajem_brno, methods=["GET"], include_in_schema=False)
@@ -725,6 +815,10 @@ app.add_api_route("/privacy", privacy_en, methods=["GET"], include_in_schema=Fal
 app.add_api_route("/terms", terms_en, methods=["GET"], include_in_schema=False)
 app.add_api_route("/mcp-docs", mcp_docs, methods=["GET"], include_in_schema=False)
 app.add_api_route("/mcp-docs-cs", mcp_docs_cs, methods=["GET"], include_in_schema=False)
+app.add_api_route("/index", market_index, methods=["GET"], include_in_schema=False)
+app.add_api_route("/index.csv", market_index_csv, methods=["GET"], include_in_schema=False)
+app.add_api_route("/faq", market_faq, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh/{locality}/{offer}", market_trh, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
@@ -1992,39 +2086,170 @@ async def public_catalog(
     limit: int = 20,
     offset: int = 0,
     facets: str = "0",
+    first_seen_from: str = "",
+    since_hours: int = 0,
 ) -> dict:
     """Unauthenticated catalog search for the public MCP connector (server-side filters)."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer, suggest_localities
+
     store = _public_store() or hub.store
     capped = min(max(int(limit or 20), 1), 20)
+    try:
+        offer_n = normalize_offer(offer) if offer else ""
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    district_n = normalize_locality(district) if district else ""
+    disposition_n = normalize_disposition(disposition) if disposition else ""
+    sort_n = (sort or "newest").strip()
+    if sort_n == "cheapest":
+        sort_n = "cheapest"
+    elif sort_n == "best_value":
+        sort_n = "best_value"
+    elif sort_n not in {"newest", "oldest", "price_asc", "price_desc", "price_m2_asc"}:
+        sort_n = "newest"
+    seen_from = (first_seen_from or "").strip()
+    if since_hours and int(since_hours) > 0 and not seen_from:
+        seen_from = (datetime.now(timezone.utc) - timedelta(hours=int(since_hours))).isoformat()
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
             q=q,
-            disposition=disposition,
+            disposition=disposition_n,
             price_from=price_from,
             price_to=price_to,
             area_from=area_from,
             area_to=area_to,
-            offer=offer,
-            district=district,
+            offer=offer_n,
+            district=district_n,
             estate=estate,
-            sort=sort,
+            sort=sort_n,
             limit=capped,
             offset=offset,
             include_pins="0",
             facets=facets,
+            first_seen_from=seen_from,
         )
     )
-    return await _run_catalog_query(payload, store)
+    result = await _run_catalog_query(payload, store)
+    total = int(result.get("total") or 0)
+    if district_n and total == 0 and not (result.get("items") or []):
+        return {
+            "items": [],
+            "total": 0,
+            "count": 0,
+            "locality": district_n,
+            "error": "no_listings_for_locality",
+            "suggestions": suggest_localities(district or district_n),
+            "message": f"No active listings for '{district_n}'. Try one of: {', '.join(suggest_localities(district or district_n)[:5])}",
+        }
+    # Attach locality avg for price_vs_locality when district filter is set
+    avg_m2 = None
+    if district_n:
+        try:
+            stats = await asyncio.to_thread(store.catalog_stats, district_n, offer_n, disposition_n)
+            avg_m2 = stats.get("avg_price_per_m2")
+        except ValueError:
+            avg_m2 = None
+    result["locality"] = district_n
+    result["offer"] = offer_n
+    result["avg_price_per_m2_locality"] = avg_m2
+    return result
 
 
 @app.get("/api/public/catalog/stats")
-async def public_catalog_stats(district: str = "", offer: str = "") -> dict:
+async def public_catalog_stats(district: str = "", offer: str = "", disposition: str = "") -> dict:
     """Unauthenticated locality stats for the public MCP connector."""
+    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer, suggest_localities
+
     store = _public_store() or hub.store
     try:
-        return await asyncio.to_thread(store.catalog_stats, district, offer)
+        offer_n = normalize_offer(offer) if offer else ""
     except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    district_n = normalize_locality(district)
+    if not district_n:
+        raise HTTPException(400, "district is required")
+    try:
+        return await asyncio.to_thread(
+            store.catalog_stats, district_n, offer_n, normalize_disposition(disposition)
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/public/catalog/price-check")
+async def public_catalog_price_check(
+    district: str = "",
+    offer: str = "pronajem",
+    price: int = 0,
+    disposition: str = "",
+    area: int = 0,
+) -> dict:
+    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer
+
+    store = _public_store() or hub.store
+    try:
+        offer_n = normalize_offer(offer)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    district_n = normalize_locality(district)
+    if not district_n:
+        raise HTTPException(400, "district is required")
+    try:
+        return await asyncio.to_thread(
+            store.catalog_price_check,
+            district_n,
+            offer_n,
+            int(price),
+            normalize_disposition(disposition),
+            int(area) if area else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/public/catalog/compare")
+async def public_catalog_compare(
+    localities: str = "",
+    offer: str = "pronajem",
+    disposition: str = "",
+) -> dict:
+    from app.locality_normalize import normalize_disposition, normalize_locality, normalize_offer
+
+    store = _public_store() or hub.store
+    try:
+        offer_n = normalize_offer(offer) if offer else ""
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    locs = [normalize_locality(x) for x in localities.split(",") if x.strip()]
+    locs = [x for x in locs if x]
+    try:
+        return await asyncio.to_thread(
+            store.catalog_compare_localities, locs, offer_n, normalize_disposition(disposition)
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/public/catalog/report")
+async def public_catalog_report(district: str = "", offer: str = "pronajem") -> dict:
+    from app.locality_normalize import normalize_locality, normalize_offer
+
+    store = _public_store() or hub.store
+    try:
+        offer_n = normalize_offer(offer) if offer else "pronajem"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    district_n = normalize_locality(district)
+    if not district_n:
+        raise HTTPException(400, "district is required")
+    try:
+        return await asyncio.to_thread(store.catalog_locality_report, district_n, offer_n)
+    except ValueError as exc:
+        if str(exc) == "not_enough_data":
+            raise HTTPException(404, "Not enough listings for this locality (min 20)") from exc
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -2139,6 +2364,7 @@ def _catalog_filters(
     pins_only: bool = False,
     include_pins: str = "0",
     facets: str = "1",
+    first_seen_from: str = "",
 ) -> dict[str, Any]:
     payload = {
         "portal": portal,
@@ -2176,6 +2402,7 @@ def _catalog_filters(
         "offset": offset,
         "include_pins": include_pins,
         "facets": facets,
+        "first_seen_from": first_seen_from,
     }
     if pins_only:
         payload["pins_only"] = True

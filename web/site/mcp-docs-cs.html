@@ -61,7 +61,8 @@
         <section class="legal-section" id="co">
           <h2><span>1.</span> Co umí</h2>
           <div class="legal-copy">
-            <p>Veřejný MCP connector umožní AI asistentům hledat agregované české nabídky pronájmu a prodeje, otevřít detail nabídky a zobrazit statistiky lokality. Každý výsledek obsahuje odkaz na zdrojový portál i na Realitify. Bez přihlášení, pouze čtení.</p>
+            <p>Veřejný MCP connector pro hledání českých nabídek pronájmu a prodeje, nové nabídky podle first_seen, kontrolu férovosti ceny a srovnání lokalit. Každý výsledek má odkaz na zdrojový portál i Realitify. Bez přihlášení, pouze čtení.</p>
+            <p>Lokality a dispozice se normalizují (Praha 5 / Smíchov / Prague 5; 2kk / 2+kk / dvoupokojový). Neznámá lokalita vrací chybu s návrhy — ne prázdný seznam bez vysvětlení.</p>
           </div>
         </section>
         <section class="legal-section" id="url">
@@ -69,14 +70,19 @@
           <div class="legal-copy">
             <p><code>https://mcp.realitify.cz/mcp</code></p>
             <p>Transport: Streamable HTTP. Health: <code>https://mcp.realitify.cz/health</code>.</p>
+            <p>Související: <a href="/index">index nájmů</a>, <a href="/trh/praha/pronajem">trh Praha</a>, <a href="/llms.txt">llms.txt</a>.</p>
           </div>
         </section>
         <section class="legal-section" id="tools">
           <h2><span>3.</span> Nástroje</h2>
           <div class="legal-copy">
-            <p><strong>search_listings</strong> — lokalita, typ (<code>pronajem</code>/<code>prodej</code>), cena, dispozice, plocha; max 20 výsledků.</p>
+            <p><strong>search_listings</strong> — lokalita, <code>offer_type</code> (pronajem|prodej), cena, dispozice, plocha; řazení newest|cheapest|best_value; max 20.</p>
+            <p><strong>new_listings</strong> — nabídky poprvé viděné za posledních X hodin.</p>
             <p><strong>get_listing</strong> — detail podle id nebo listing_key.</p>
-            <p><strong>locality_stats</strong> — počet aktivních nabídek a průměr Kč/m².</p>
+            <p><strong>locality_stats</strong> — počet aktivních, průměr/medián ceny a Kč/m².</p>
+            <p><strong>price_check</strong> — je cena férová vs srovnatelné nabídky (percentil, vs_avg_pct).</p>
+            <p><strong>compare_localities</strong> — statistiky více lokalit vedle sebe.</p>
+            <p>Anotace u všech: readOnlyHint=true, destructiveHint=false, idempotentHint=true, openWorldHint=false.</p>
           </div>
         </section>
         <section class="legal-section" id="claude">
@@ -95,7 +101,9 @@
           <h2><span>6.</span> Příklady promptů</h2>
           <div class="legal-copy">
             <p>„Hledám 2+kk v Praze do 20 000 Kč měsíčně.“</p>
-            <p>„Jaká je průměrná cena za m² pronájmu v Brně?“</p>
+            <p>„Co nového přibylo v Praze 5 za posledních 24 hodin?“</p>
+            <p>„Je 25 000 Kč za 2+kk 55 m² v Brně férová cena?“</p>
+            <p>„Porovnej průměrný nájem v Praze, Brně a Ostravě.“</p>
             <p>„Otevři detail nabídky z předchozího hledání.“</p>
           </div>
         </section>

@@ -5476,6 +5476,10 @@ class Store:
             params.append(local_day_start())
         elif hits in {"1", "all", "notified", "hits"}:
             where.append("listings.notified = 1")
+        first_seen_from = (filters.get("first_seen_from") or "").strip()
+        if first_seen_from:
+            where.append("listings.first_seen >= ?")
+            params.append(first_seen_from)
         if str(filters.get("discounted") or "").strip() in {"1", "true", "yes"}:
             where.append(
                 """
@@ -5500,9 +5504,22 @@ class Store:
             "newest": "listings.first_seen DESC",
             "oldest": "listings.first_seen ASC",
             "price_asc": "listings.price_czk IS NULL, listings.price_czk ASC",
+            "cheapest": "listings.price_czk IS NULL, listings.price_czk ASC",
             "price_desc": "listings.price_czk IS NULL, listings.price_czk DESC",
             "area_asc": "listings.area_m2 IS NULL, listings.area_m2 ASC",
             "area_desc": "listings.area_m2 IS NULL, listings.area_m2 DESC",
+            "price_m2_asc": (
+                "CASE WHEN listings.price_czk IS NOT NULL AND listings.area_m2 IS NOT NULL "
+                "AND listings.area_m2 > 0 THEN listings.price_czk * 1.0 / listings.area_m2 ELSE NULL END IS NULL, "
+                "CASE WHEN listings.price_czk IS NOT NULL AND listings.area_m2 IS NOT NULL "
+                "AND listings.area_m2 > 0 THEN listings.price_czk * 1.0 / listings.area_m2 ELSE 1e18 END ASC"
+            ),
+            "best_value": (
+                "CASE WHEN listings.price_czk IS NOT NULL AND listings.area_m2 IS NOT NULL "
+                "AND listings.area_m2 > 0 THEN listings.price_czk * 1.0 / listings.area_m2 ELSE NULL END IS NULL, "
+                "CASE WHEN listings.price_czk IS NOT NULL AND listings.area_m2 IS NOT NULL "
+                "AND listings.area_m2 > 0 THEN listings.price_czk * 1.0 / listings.area_m2 ELSE 1e18 END ASC"
+            ),
             "discount_desc": "CASE WHEN listings.old_price_czk IS NOT NULL AND listings.price_czk IS NOT NULL THEN listings.old_price_czk - listings.price_czk ELSE 0 END DESC",
         }
         order = sorts.get((filters.get("sort") or "newest").strip(), sorts["newest"])
@@ -5852,28 +5869,25 @@ class Store:
                 break
         return {"items": items}
 
-    def catalog_stats(self, district: str = "", offer: str = "") -> dict[str, Any]:
-        """Server-side locality stats: active count + average price per m²."""
-        locality = (district or "").strip()
-        if not locality:
-            raise ValueError("district is required")
+    def _district_where(self, district: str, offer: str = "", disposition: str = "") -> tuple[list[str], list[Any]]:
         where = ["IFNULL(listings.gone, 0) = 0"]
         params: list[Any] = []
-        districts = _csv(locality)
+        districts = _csv(district)
         district_parts: list[str] = []
         for item in districts:
-            number = item.replace("praha-", "")
-            if number.isdigit():
+            label = item.strip()
+            if not label:
+                continue
+            if label.startswith("R") and label[1:].isdigit():
+                continue
+            m = re.match(r"(?i)^praha[-\s]*(\d{1,2})$", label)
+            if m:
+                number = m.group(1)
                 district_parts.append("(listings.locality GLOB ? OR listings.locality GLOB ?)")
                 params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*"])
                 for area in PRAGUE_DISTRICTS.get(number) or []:
                     district_parts.append("listings.locality LIKE ?")
                     params.append(f"%{area}%")
-                continue
-            if item.startswith("R") and item[1:].isdigit():
-                continue
-            label = item.strip()
-            if not label:
                 continue
             district_parts.append("listings.locality LIKE ?")
             params.append(f"%{label}%")
@@ -5896,10 +5910,28 @@ class Store:
                     params.extend(['%"offer": "Prodej"%', "%měsíc%"])
             if offer_parts:
                 where.append("(" + " OR ".join(offer_parts) + ")")
+        dispositions = _csv(disposition)
+        if dispositions:
+            where.append(f"listings.disposition IN ({','.join('?' * len(dispositions))})")
+            params.extend(dispositions)
+        return where, params
+
+    def catalog_stats(
+        self,
+        district: str = "",
+        offer: str = "",
+        disposition: str = "",
+    ) -> dict[str, Any]:
+        """Server-side locality stats: count, avg/median price and price per m²."""
+        locality = (district or "").strip()
+        if not locality:
+            raise ValueError("district is required")
+        where, params = self._district_where(locality, offer, disposition)
         clause = " AND ".join(where)
         sql = f"""
             SELECT
                 COUNT(*) AS active_count,
+                AVG(CASE WHEN listings.price_czk > 0 THEN listings.price_czk END) AS avg_price,
                 AVG(
                     CASE
                         WHEN listings.price_czk IS NOT NULL
@@ -5913,16 +5945,186 @@ class Store:
             FROM listings
             WHERE {clause}
         """
+        prices_sql = f"""
+            SELECT listings.price_czk AS price,
+                   CASE
+                     WHEN listings.price_czk > 0 AND listings.area_m2 > 0
+                     THEN listings.price_czk * 1.0 / listings.area_m2
+                   END AS price_m2
+            FROM listings
+            WHERE {clause}
+              AND listings.price_czk IS NOT NULL AND listings.price_czk > 0
+            ORDER BY listings.price_czk ASC
+        """
         with self.connect(readonly=True) as conn:
             row = conn.execute(sql, params).fetchone()
+            price_rows = conn.execute(prices_sql, params).fetchall()
         active = int(row["active_count"] or 0) if row else 0
-        avg_raw = row["avg_price_per_m2"] if row else None
-        avg = round(float(avg_raw), 2) if avg_raw is not None else None
+        avg_price = round(float(row["avg_price"]), 2) if row and row["avg_price"] is not None else None
+        avg_m2 = round(float(row["avg_price_per_m2"]), 2) if row and row["avg_price_per_m2"] is not None else None
+        prices = [float(r["price"]) for r in price_rows if r["price"] is not None]
+        prices_m2 = [float(r["price_m2"]) for r in price_rows if r["price_m2"] is not None]
+        prices_m2.sort()
+
+        def _median(values: list[float]) -> float | None:
+            if not values:
+                return None
+            mid = len(values) // 2
+            if len(values) % 2:
+                return round(values[mid], 2)
+            return round((values[mid - 1] + values[mid]) / 2, 2)
+
         return {
             "locality": locality,
             "offer": (offer or "").strip(),
+            "disposition": (disposition or "").strip(),
             "active_count": active,
-            "avg_price_per_m2": avg,
+            "avg_price": avg_price,
+            "median_price": _median(prices),
+            "avg_price_per_m2": avg_m2,
+            "median_price_per_m2": _median(prices_m2),
+            "sample_size_price": len(prices),
+            "sample_size_price_m2": len(prices_m2),
+        }
+
+    def catalog_price_check(
+        self,
+        district: str,
+        offer: str,
+        price: int,
+        disposition: str = "",
+        area: int | None = None,
+    ) -> dict[str, Any]:
+        """Compare a proposed price against current comparable listings."""
+        if price <= 0:
+            raise ValueError("price must be > 0")
+        where, params = self._district_where(district, offer, disposition)
+        if area is not None and area > 0:
+            # Comparable area ±20%
+            lo = int(area * 0.8)
+            hi = int(area * 1.2)
+            where.append("listings.area_m2 BETWEEN ? AND ?")
+            params.extend([lo, hi])
+        clause = " AND ".join(where)
+        sql = f"""
+            SELECT listings.price_czk AS price
+            FROM listings
+            WHERE {clause}
+              AND listings.price_czk IS NOT NULL AND listings.price_czk > 0
+            ORDER BY listings.price_czk ASC
+        """
+        with self.connect(readonly=True) as conn:
+            rows = [float(r["price"]) for r in conn.execute(sql, params).fetchall()]
+        if not rows:
+            raise ValueError("no comparable listings found for this locality/filters")
+        n = len(rows)
+        avg = sum(rows) / n
+        mid = n // 2
+        median = rows[mid] if n % 2 else (rows[mid - 1] + rows[mid]) / 2
+        below = sum(1 for p in rows if p <= price)
+        percentile = round(100.0 * below / n, 1)
+        vs_avg_pct = round(100.0 * (price - avg) / avg, 1) if avg else None
+        return {
+            "locality": district,
+            "offer": offer,
+            "disposition": disposition,
+            "area_m2": area,
+            "asked_price": price,
+            "comparable_count": n,
+            "avg_price": round(avg, 2),
+            "median_price": round(median, 2),
+            "percentile": percentile,
+            "vs_avg_pct": vs_avg_pct,
+            "assessment": (
+                "below_market" if vs_avg_pct is not None and vs_avg_pct <= -5
+                else "above_market" if vs_avg_pct is not None and vs_avg_pct >= 5
+                else "near_market"
+            ),
+        }
+
+    def catalog_compare_localities(
+        self,
+        localities: list[str],
+        offer: str = "",
+        disposition: str = "",
+    ) -> dict[str, Any]:
+        items = []
+        for loc in localities:
+            label = (loc or "").strip()
+            if not label:
+                continue
+            items.append(self.catalog_stats(label, offer, disposition))
+        if not items:
+            raise ValueError("at least one locality is required")
+        return {"offer": offer, "disposition": disposition, "localities": items}
+
+    def catalog_locality_report(
+        self,
+        district: str,
+        offer: str = "pronajem",
+    ) -> dict[str, Any]:
+        """Market overview for SEO /prehled pages."""
+        from datetime import datetime, timedelta, timezone
+
+        base = self.catalog_stats(district, offer)
+        if base["active_count"] < 20:
+            raise ValueError("not_enough_data")
+        where, params = self._district_where(district, offer)
+        clause = " AND ".join(where)
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        day90 = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+        with self.connect(readonly=True) as conn:
+            new_week = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM listings WHERE {clause} AND listings.first_seen >= ?",
+                    [*params, week_ago],
+                ).fetchone()[0]
+            )
+            by_disp = [
+                {
+                    "disposition": row[0],
+                    "count": int(row[1]),
+                    "avg_price": round(float(row[2]), 2) if row[2] is not None else None,
+                    "avg_price_per_m2": round(float(row[3]), 2) if row[3] is not None else None,
+                }
+                for row in conn.execute(
+                    f"""
+                    SELECT disposition, COUNT(*),
+                           AVG(CASE WHEN price_czk > 0 THEN price_czk END),
+                           AVG(CASE WHEN price_czk > 0 AND area_m2 > 0 THEN price_czk*1.0/area_m2 END)
+                    FROM listings
+                    WHERE {clause} AND disposition IS NOT NULL AND disposition != ''
+                    GROUP BY disposition
+                    ORDER BY COUNT(*) DESC
+                    """,
+                    params,
+                ).fetchall()
+            ]
+            history = [
+                {
+                    "week_start": row[0],
+                    "new_count": int(row[1]),
+                    "avg_price_per_m2": round(float(row[2]), 2) if row[2] is not None else None,
+                }
+                for row in conn.execute(
+                    f"""
+                    SELECT substr(first_seen, 1, 10) AS day,
+                           COUNT(*),
+                           AVG(CASE WHEN price_czk > 0 AND area_m2 > 0 THEN price_czk*1.0/area_m2 END)
+                    FROM listings
+                    WHERE {clause} AND first_seen >= ?
+                    GROUP BY substr(first_seen, 1, 7)
+                    ORDER BY day ASC
+                    """,
+                    [*params, day90],
+                ).fetchall()
+            ]
+        return {
+            **base,
+            "new_last_7_days": new_week,
+            "by_disposition": by_disp,
+            "history_90d": history,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     def catalog_facets(self) -> dict[str, Any]:
