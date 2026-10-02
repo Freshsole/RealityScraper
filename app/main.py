@@ -491,7 +491,7 @@ WATCHDOG_IGNORED_ERRORS = (
 )
 
 
-def watchdog_status(token: str = Query(default="")) -> JSONResponse:
+def watchdog_status(token: str = Query(default=""), detail: str = Query(default="")) -> JSONResponse:
     import os
     expected = os.getenv("WATCHDOG_TOKEN", "").strip()
     if not expected or token != expected:
@@ -543,8 +543,22 @@ def watchdog_status(token: str = Query(default="")) -> JSONResponse:
                 reasons.append("0 nabídek v katalogu")
             status = "down" if reasons else "ok"
             label = PORTAL_LABELS.get(pid, pid)
-            portals.append({"id": pid, "name": label, "status": status,
-                            "offers": n, "last_run": finished_at, "reasons": reasons})
+            entry = {"id": pid, "name": label, "status": status,
+                     "offers": n, "last_run": finished_at, "reasons": reasons}
+            if detail == "1":
+                shards = conn.execute(
+                    "SELECT shard_key, status, last_error, upserts, finished_at FROM scrape_jobs "
+                    "WHERE portal = ? AND kind = 'catalog_daily' "
+                    "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 20",
+                    (pid,),
+                ).fetchall()
+                entry["shards"] = [
+                    {"shard": s["shard_key"], "status": s["status"],
+                     "error": (s["last_error"] or "")[:200], "upserts": s["upserts"],
+                     "finished_at": s["finished_at"]}
+                    for s in shards
+                ]
+            portals.append(entry)
             if reasons:
                 down.append(label)
     return JSONResponse({"ok": not down, "down": down, "portals": portals,
