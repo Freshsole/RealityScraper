@@ -418,6 +418,36 @@ PRAGUE_DISTRICTS = {
 # (they use Praha 4/5/… + neighborhood). Kept empty on purpose — do not invent.
 _PRAHA_PLACE_RE = re.compile(r"praha[\s-]*(\d+)", re.I)
 
+# Okresy adjacent to Prague — locality contains "Praha" but is not in Prague.
+# Cover diacritics, ASCII, spaces around hyphen, and en/em dashes.
+_PRAHA_OKRES_EXCLUDE_NEEDLES = (
+    "%Praha-západ%",
+    "%Praha-východ%",
+    "%Praha - západ%",
+    "%Praha - východ%",
+    "%Praha západ%",
+    "%Praha východ%",
+    "%Praha-zapad%",
+    "%Praha-vychod%",
+    "%Praha - zapad%",
+    "%Praha - vychod%",
+    "%Praha zapad%",
+    "%Praha vychod%",
+    "%Praha–západ%",
+    "%Praha–východ%",
+    "%Praha – západ%",
+    "%Praha – východ%",
+    "%Praha–zapad%",
+    "%Praha–vychod%",
+    "%Praha – zapad%",
+    "%Praha – vychod%",
+)
+
+
+def _praha_okres_exclude_sql() -> tuple[str, list[str]]:
+    parts = ["listings.locality NOT LIKE ?" for _ in _PRAHA_OKRES_EXCLUDE_NEEDLES]
+    return " AND ".join(parts), list(_PRAHA_OKRES_EXCLUDE_NEEDLES)
+
 
 def _prague_number_from_place(geom: dict[str, Any]) -> str | None:
     ident = str(geom.get("id") or "")
@@ -5910,6 +5940,10 @@ class Store:
         if not district_parts:
             raise ValueError("district is required")
         where.append("(" + " OR ".join(district_parts) + ")")
+        # Drop Praha-západ / Praha-východ (and spacing/diacritic variants).
+        excl_sql, excl_params = _praha_okres_exclude_sql()
+        where.append(excl_sql)
+        params.extend(excl_params)
         offers = _csv(offer)
         if offers:
             offer_parts = []
