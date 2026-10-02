@@ -654,6 +654,14 @@ def llms_txt_route() -> Response:
     )
 
 
+def seznam_wmt_verify() -> Response:
+    return Response(
+        content="sL6S4B2gcz1qTvH5DrKNiusOIprxIMsB\n",
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 # --- Watchdog: stav scraperů pro externí monitoring ---
 # Volá se jako /api/watchdog?token=... (token = env WATCHDOG_TOKEN).
 # Vrací stav všech 10 portálů. Cron na pozadí to kontroluje a hlásí pád.
@@ -866,6 +874,12 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
 app.add_api_route("/llms.txt", llms_txt_route, methods=["GET"], include_in_schema=False)
+app.add_api_route(
+    "/seznam-wmt-sL6S4B2gcz1qTvH5DrKNiusOIprxIMsB.txt",
+    seznam_wmt_verify,
+    methods=["GET"],
+    include_in_schema=False,
+)
 app.add_api_route("/api/watchdog", watchdog_status, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-praha", seo_landing_pronajem_praha, methods=["GET"], include_in_schema=False)
 app.add_api_route("/pronajem-brno", seo_landing_pronajem_brno, methods=["GET"], include_in_schema=False)
