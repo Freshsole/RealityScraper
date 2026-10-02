@@ -10,7 +10,7 @@ from app.sreality import Listing
 SITE_HTTPS = "https://www.espolubydleni.cz"
 
 DETAIL_RE = re.compile(
-    r'<a href="(/podnajem-spolubydlici/(\d+)-[^"]+\.htm)" title="([^"]+)"', re.I
+    r'<a href="(/podnajem-spolubydlici/(\d+)-[^"]+\.htm)"\s+title="([^"]+)"', re.I | re.S
 )
 TITLE_RE = re.compile(r'<h3 class="popis"[^>]*>(.*?)</h3>', re.S | re.I)
 PRICE_RE = re.compile(r'([\d\.]+)\s*Kč/měsíc', re.I)

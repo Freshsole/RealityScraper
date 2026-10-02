@@ -2915,6 +2915,22 @@ class Store:
                         prev["listing_key"],
                     ),
                 )
+                # Cenová historie: při změně ceny zapsat záznam
+                if changed:
+                    conn.execute(
+                        """
+                        INSERT INTO catalog_price_history(
+                            listing_key, canonical_key, old_price_czk, new_price_czk, changed_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            prev["listing_key"],
+                            canon,
+                            prev.get("price_czk"),
+                            listing.price_czk,
+                            now,
+                        ),
+                    )
             else:
                 conn.execute(
                     """
@@ -4576,6 +4592,16 @@ class Store:
                 gone INTEGER NOT NULL DEFAULT 0,
                 portal TEXT
             );
+            CREATE TABLE IF NOT EXISTS catalog_price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                listing_key TEXT NOT NULL,
+                canonical_key TEXT,
+                old_price_czk INTEGER,
+                new_price_czk INTEGER,
+                changed_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_catalog_price_history_key
+                ON catalog_price_history(listing_key, changed_at);
             CREATE TABLE IF NOT EXISTS scrape_jobs (
                 id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL,

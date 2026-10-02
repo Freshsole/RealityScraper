@@ -1389,6 +1389,7 @@ class Hub:
         while self.running:
             try:
                 await self.maybe_run_catalog_sync()
+                await self.maybe_run_newest_sync()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -1547,8 +1548,48 @@ class Hub:
             due.append(portal)
         return due
 
+    def _due_newest_portals(self) -> list[str]:
+        """Portály pro častý 'newest' refresh (několikrát denně, jen první stránka)."""
+        due: list[str] = []
+        now = datetime.now(timezone.utc)
+        if now.hour not in config.CATALOG_NEWEST_HOURS:
+            return due
+        for portal in config.CATALOG_NEWEST_PORTALS:
+            if portal not in config.CATALOG_SYNC_HOURS:
+                continue
+            last = self.store.get_meta(f"catalog_newest_{portal}_last") or ""
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    if (now - last_dt).total_seconds() < 4 * 3600:
+                        continue
+                except ValueError:
+                    pass
+            due.append(portal)
+        return due
+
     def _catalog_due_today(self) -> bool:
         return bool(self._due_catalog_portals())
+
+    async def maybe_run_newest_sync(self) -> dict[str, Any]:
+        """Častý refresh nejnovějších nabídek (jen první stránka, 3× denně)."""
+        portals = await self._job_db(self._due_newest_portals)
+        if not portals:
+            return {"ok": False, "reason": "not-due"}
+        to_start = set(portals) - self.catalog_running_portals
+        if not to_start or self.catalog_running_portals:
+            return {"ok": False, "reason": "already-running"}
+        # Jen jeden portál najednou
+        pick = sorted(to_start)[0]
+        self.catalog_running_portals.add(pick)
+        self.catalog_running = True
+        now = datetime.now(timezone.utc).isoformat()
+        await self._job_db(self.store.set_meta, f"catalog_newest_{pick}_last", now)
+        asyncio.create_task(
+            self.run_catalog_sync(portals=[pick], rerun=False, claimed=True, newest_only=True),
+            name=f"catalog-newest-{pick}",
+        )
+        return {"ok": True, "started": True, "portals": [pick], "newest_only": True}
 
     async def maybe_run_catalog_sync(self, force: bool = False) -> dict[str, Any]:
         portals = None if force else await self._job_db(self._due_catalog_portals)
@@ -1595,7 +1636,8 @@ class Hub:
         return {"ok": True, "started": True, "portals": sorted(to_start), "status": self.store.catalog_sync_status()}
 
     async def run_catalog_sync(
-        self, portals: list[str] | None = None, rerun: bool = False, claimed: bool = False
+        self, portals: list[str] | None = None, rerun: bool = False, claimed: bool = False,
+        newest_only: bool = False,
     ) -> dict[str, Any]:
         wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
         if not claimed:
@@ -1608,7 +1650,13 @@ class Hub:
         started = utc_now()
         today = started[:10]
         shards = [item for item in daily_shards() if item["portal"] in wanted]
-        print(f"catalog_sync start portals={sorted(wanted)} shards={len(shards)} rerun={rerun}", flush=True)
+        if newest_only:
+            # Jen "newest" shardy - první stránka nejnovějších
+            shards = [s for s in shards if "newest" in s.get("shard_key", "").lower() or s.get("kind") == "newest"]
+            # Fallback: pokud žádné newest shardy, vezmeme první 2 shardy portálu
+            if not shards:
+                shards = [item for item in daily_shards() if item["portal"] in wanted][:2]
+        print(f"catalog_sync start portals={sorted(wanted)} shards={len(shards)} rerun={rerun} newest_only={newest_only}", flush=True)
         await self._job_db(self.store.set_meta, "catalog_sync_status", "running")
         await self._job_db(self.store.set_meta, "catalog_sync_error", None)
         shard_ok: dict[str, bool] = {}

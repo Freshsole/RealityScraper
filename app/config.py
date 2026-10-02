@@ -154,7 +154,15 @@ CATALOG_SYNC_HOURS = {
     "ulovdomov": _hour_env("CATALOG_SYNC_HOUR_ULOVDOMOV", 8),
     "remax": _hour_env("CATALOG_SYNC_HOUR_REMAX", 9),
     "realitycz": _hour_env("CATALOG_SYNC_HOUR_REALITYCZ", 10),
+    "eurobydleni": _hour_env("CATALOG_SYNC_HOUR_EUROBYDLENI", 11),
+    "realitymix": _hour_env("CATALOG_SYNC_HOUR_REALITYMIX", 12),
+    "realingo": _hour_env("CATALOG_SYNC_HOUR_REALINGO", 13),
+    "espolubydleni": _hour_env("CATALOG_SYNC_HOUR_ESPOLUBYDLENI", 14),
 }
+# Rychlý refresh nejnovějších nabídek - běží častěji než full catalog
+# Hodiny (UTC) kdy se spouští "newest" refresh pro klíčové portály
+CATALOG_NEWEST_HOURS = [int(h) for h in os.getenv("CATALOG_NEWEST_HOURS", "6,12,18").split(",") if h.strip().isdigit()]
+CATALOG_NEWEST_PORTALS = [p.strip() for p in os.getenv("CATALOG_NEWEST_PORTALS", "sreality,bezrealitky,idnes,eurobydleni,realitymix").split(",") if p.strip()]
 IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
 BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")
 NEW_MAX_AGE_DAYS = max(1, int(os.getenv("NEW_MAX_AGE_DAYS", "2")))
