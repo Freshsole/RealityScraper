@@ -20,7 +20,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=10" />
+    <link rel="stylesheet" href="/static/site/site.css?v=8" />
     <link rel="preload" as="image" href="/static/site/assets/room/dum.webp" fetchpriority="high" />
     <style>
       html, body { overflow-x: clip; }
@@ -110,6 +110,7 @@
         <a class="pill pill-nav" href="/registrace">Vyzkoušet zdarma</a>
       </div>
     </header>
+    <main id="main">
 
     <section class="hero">
       <div class="hero-left">
@@ -167,7 +168,11 @@
       <div class="sold-cards" id="sold-cards">
         <article class="sold-card">
           <div class="sold-img">
-            <img src="/static/site/assets/sold-1.webp" width="300" height="220" alt="" loading="lazy" decoding="async" />
+            <picture>
+              <source type="image/avif" srcset="/static/site/assets/sold-1.avif 1x, /static/site/assets/sold-1@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/sold-1.webp 1x, /static/site/assets/sold-1@2x.webp 2x" />
+              <img src="/static/site/assets/sold-1.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
+            </picture>
             <span class="sold-badge">PRONAJATO ZA 3 h</span>
           </div>
           <div class="sold-meta">
@@ -178,7 +183,11 @@
         </article>
         <article class="sold-card">
           <div class="sold-img">
-            <img src="/static/site/assets/sold-2.webp" width="300" height="220" alt="" loading="lazy" decoding="async" />
+            <picture>
+              <source type="image/avif" srcset="/static/site/assets/sold-2.avif 1x, /static/site/assets/sold-2@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/sold-2.webp 1x, /static/site/assets/sold-2@2x.webp 2x" />
+              <img src="/static/site/assets/sold-2.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
+            </picture>
             <span class="sold-badge">PRONAJATO ZA 45 min</span>
           </div>
           <div class="sold-meta">
@@ -189,7 +198,11 @@
         </article>
         <article class="sold-card">
           <div class="sold-img">
-            <img src="/static/site/assets/sold-3.webp" width="300" height="220" alt="" loading="lazy" decoding="async" />
+            <picture>
+              <source type="image/avif" srcset="/static/site/assets/sold-3.avif 1x, /static/site/assets/sold-3@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/sold-3.webp 1x, /static/site/assets/sold-3@2x.webp 2x" />
+              <img src="/static/site/assets/sold-3.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
+            </picture>
             <span class="sold-badge">PRONAJATO ZA 6 h</span>
           </div>
           <div class="sold-meta">
@@ -200,7 +213,11 @@
         </article>
         <article class="sold-card">
           <div class="sold-img">
-            <img src="/static/site/assets/sold-4.webp" width="300" height="220" alt="" loading="lazy" decoding="async" />
+            <picture>
+              <source type="image/avif" srcset="/static/site/assets/sold-4.avif 1x, /static/site/assets/sold-4@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/sold-4.webp 1x, /static/site/assets/sold-4@2x.webp 2x" />
+              <img src="/static/site/assets/sold-4.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
+            </picture>
             <span class="sold-badge">PRONAJATO ZA 1,5 h</span>
           </div>
           <div class="sold-meta">
@@ -224,7 +241,7 @@
         <article class="step-card">
           <div class="step-top">
             <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/sliders.svg" width="22" height="22" alt="" /></span></span>
-            <p class="step-num">01</p>
+            <p class="step-num" aria-hidden="true">01</p>
           </div>
           <div>
             <h3>Nastavte si kritéria</h3>
@@ -234,7 +251,7 @@
         <article class="step-card">
           <div class="step-top">
             <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/globe.svg" width="22" height="22" alt="" /></span></span>
-            <p class="step-num">02</p>
+            <p class="step-num" aria-hidden="true">02</p>
           </div>
           <div>
             <h3>Hlídáme 12+ portálů</h3>
@@ -244,7 +261,7 @@
         <article class="step-card">
           <div class="step-top">
             <span class="step-icon"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/zap.svg" width="22" height="22" alt="" /></span></span>
-            <p class="step-num">03</p>
+            <p class="step-num" aria-hidden="true">03</p>
           </div>
           <div>
             <h3>Okamžitá notifikace</h3>
@@ -309,7 +326,11 @@
         </div>
         <div class="results" id="db-results">
           <article class="mock-card">
-            <div class="thumb"><img src="/static/site/assets/db-1.webp" width="380" height="150" alt="" loading="lazy" decoding="async" /></div>
+            <div class="thumb"><picture>
+              <source type="image/avif" srcset="/static/site/assets/db-1.avif 1x, /static/site/assets/db-1@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/db-1.webp 1x, /static/site/assets/db-1@2x.webp 2x" />
+              <img src="/static/site/assets/db-1.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
+            </picture></div>
             <div class="mock-body">
               <div class="mock-top"><span class="source">Bezrealitky</span><strong>15 900 Kč</strong></div>
               <div>
@@ -319,7 +340,11 @@
             </div>
           </article>
           <article class="mock-card">
-            <div class="thumb"><img src="/static/site/assets/db-2.webp" width="380" height="150" alt="" loading="lazy" decoding="async" /></div>
+            <div class="thumb"><picture>
+              <source type="image/avif" srcset="/static/site/assets/db-2.avif 1x, /static/site/assets/db-2@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/db-2.webp 1x, /static/site/assets/db-2@2x.webp 2x" />
+              <img src="/static/site/assets/db-2.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
+            </picture></div>
             <div class="mock-body">
               <div class="mock-top"><span class="source">Sreality</span><strong>20 500 Kč</strong></div>
               <div>
@@ -329,7 +354,11 @@
             </div>
           </article>
           <article class="mock-card">
-            <div class="thumb"><img src="/static/site/assets/db-3.webp" width="380" height="150" alt="" loading="lazy" decoding="async" /></div>
+            <div class="thumb"><picture>
+              <source type="image/avif" srcset="/static/site/assets/db-3.avif 1x, /static/site/assets/db-3@2x.avif 2x" />
+              <source type="image/webp" srcset="/static/site/assets/db-3.webp 1x, /static/site/assets/db-3@2x.webp 2x" />
+              <img src="/static/site/assets/db-3.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
+            </picture></div>
             <div class="mock-body">
               <div class="mock-top"><span class="source">Reality.cz</span><strong>12 000 Kč</strong></div>
               <div>
@@ -602,6 +631,8 @@
       </div>
     </section>
 
+    </main>
+
     <footer class="footer">
       <div class="footer-top">
         <div class="footer-brand">
@@ -649,9 +680,9 @@
         <div id="landing-modal-body"></div>
       </div>
     </div>
-    <script src="/static/site/site.js?v=1.2.0-n5"></script>
+    <script src="/static/site/site.js?v=8" defer></script>
     <script src="/static/site/landing-search.js?v=2"></script>
-    <script src="/static/t.js?v=7"></script>
+    <script src="/static/t.js?v=8" defer></script>
     <script>
       (() => {
         const scene = document.getElementById("room-scene");

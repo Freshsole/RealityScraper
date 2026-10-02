@@ -170,11 +170,25 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
+_STATIC_CACHE = "public, max-age=31536000, immutable"
+_PUBLIC_HTML_CACHE = "no-cache"
+_PRIVATE_HTML_CACHE = "no-store, max-age=0"
+
+
 @app.middleware("http")
 async def static_asset_cache(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/static/") and response.status_code == 200:
-        response.headers["Cache-Control"] = "public, max-age=2592000"
+    path = request.url.path
+    if response.status_code == 200 and (
+        path.startswith("/static/")
+        or path.startswith("/public/")
+        or path.startswith("/site/")
+        or path.startswith("/assets/")
+        or path.endswith((".png", ".webp", ".avif", ".jpg", ".jpeg", ".gif", ".svg", ".woff2", ".css", ".js"))
+    ):
+        # HTML routes keep their own Cache-Control; only stamp hashed/static assets.
+        if not (response.headers.get("content-type") or "").startswith("text/html"):
+            response.headers["Cache-Control"] = _STATIC_CACHE
     return response
 
 
@@ -203,39 +217,48 @@ async def record_ops_timing(request: Request, call_next):
     return response
 
 
+_PRIVATE_UI_PATHS = {
+    "/prihlaseni",
+    "/registrace",
+    "/heslo",
+    "/prehled",
+    "/nabidka",
+    "/monitory",
+    "/filtry",
+    "/zprava",
+    "/nastaveni",
+    "/admin",
+    "/sw.js",
+    "/manifest.webmanifest",
+}
+_PUBLIC_UI_PATHS = {
+    "/",
+    "/kontakt",
+    "/obchodni-podminky",
+    "/ochrana-soukromi",
+    "/nastaveni-cookies",
+    "/privacy",
+    "/terms",
+    "/mcp-docs",
+    "/mcp-docs-cs",
+    "/uspechy",
+    "/byt",
+    "/pronajem-praha",
+    "/pronajem-brno",
+    "/hry",
+    "/hry/vyssi-nizsi",
+    "/hry/najem",
+}
+
+
 @app.middleware("http")
-async def no_store_ui(request: Request, call_next):
+async def html_cache_policy(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if (
-        path.startswith("/nastaveni")
-        or path.startswith("/admin")
-        or path.startswith("/uspechy")
-        or path in {
-        "/",
-        "/kontakt",
-        "/obchodni-podminky",
-        "/ochrana-soukromi",
-        "/nastaveni-cookies",
-        "/privacy",
-        "/terms",
-        "/mcp-docs",
-        "/mcp-docs-cs",
-        "/prihlaseni",
-        "/registrace",
-        "/heslo",
-        "/prehled",
-        "/nabidka",
-        "/monitory",
-        "/filtry",
-        "/zprava",
-        "/nastaveni",
-        "/admin",
-        "/sw.js",
-        "/manifest.webmanifest",
-    }
-    ):
-        response.headers["Cache-Control"] = "no-store, max-age=0"
+    if path.startswith("/nastaveni") or path.startswith("/admin") or path in _PRIVATE_UI_PATHS:
+        response.headers["Cache-Control"] = _PRIVATE_HTML_CACHE
+    elif path.startswith("/uspechy/") or path in _PUBLIC_UI_PATHS:
+        response.headers["Cache-Control"] = _PUBLIC_HTML_CACHE
     return response
 
 
@@ -358,43 +381,43 @@ def _asset_version() -> str:
 def page() -> HTMLResponse:
     html = (config.WEB_DIR / "index.html").read_text(encoding="utf-8")
     html = html.replace("__ASSET_VERSION__", _asset_version())
-    return HTMLResponse(html, headers={"Cache-Control": "no-store, max-age=0"})
+    return HTMLResponse(html, headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 def landing() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def byt_preview() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "byt.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "byt.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def contact() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "kontakt.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def terms() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "obchodni-podminky.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "obchodni-podminky.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def privacy() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "ochrana-soukromi.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "ochrana-soukromi.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def privacy_en() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "privacy.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "privacy.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def terms_en() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "terms.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "terms.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def mcp_docs() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "mcp-docs.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "mcp-docs.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def mcp_docs_cs() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "mcp-docs-cs.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "mcp-docs-cs.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 async def market_index() -> HTMLResponse:
@@ -445,11 +468,11 @@ async def market_trh(locality: str, offer: str) -> HTMLResponse:
 
 
 def cookies_page() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "nastaveni-cookies.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "nastaveni-cookies.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def stories() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "uspechy.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def games_hub() -> HTMLResponse:
@@ -471,31 +494,31 @@ def game_rent() -> HTMLResponse:
 
 
 def story_article() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "clanek.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def auth_login() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "prihlaseni.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 def auth_register() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 def auth_forgot() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "heslo.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 def seo_landing_pronajem_praha() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "pronajem-praha.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "pronajem-praha.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def seo_landing_pronajem_brno() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "pronajem-brno.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "site" / "pronajem-brno.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def admin_page() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": "no-store, max-age=0"})
+    return FileResponse(config.WEB_DIR / "admin" / "index.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 # --- SEO: sitemap.xml a robots.txt ---

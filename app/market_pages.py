@@ -423,37 +423,28 @@ def render_faq(store: Store) -> str:
 def llms_txt() -> str:
     return """# Realitify
 
-> Czech real-estate listing aggregator and alert service.
+> Czech real-estate listing aggregator and alert service with a public read-only MCP connector.
 
-Realitify monitors major Czech property portals and lets users watch for new rentals and sales.
-Public read-only MCP server for AI assistants: https://mcp.realitify.cz/mcp
-Docs: https://realitify.cz/mcp-docs
+Realitify monitors major Czech property portals and lets users watch for new rentals and sales. Public MCP for AI assistants is available without login.
 
-## Who it is for
-People searching for flats to rent or buy in Czechia (Praha, Brno, Ostrava, and other cities).
-AI assistants that need current listing data, price stats, or newly published ads.
+## Docs
 
-## What it aggregates
-Listings from Czech portals including Sreality, Bezrealitky, iDNES Reality, Bazoš and others tracked by Realitify scrapers.
+- [MCP docs](https://realitify.cz/mcp-docs): Public MCP connector documentation
+- [FAQ](https://realitify.cz/faq): Frequently asked questions about Realitify
 
-## Plans (CZK / month)
-- Free: 1 watch filter, main portals, email support
-- Start: 149 CZK, up to 10 watches, faster alerts
-- PRO: 349 CZK, unlimited watches, Discord/push, MCP for logged-in agents
-- Individual: custom
+## Data
 
-## Public MCP tools
-search_listings, new_listings, get_listing, locality_stats, price_check, compare_localities
+- [Home](https://realitify.cz/): Product landing page
+- [Rent index](https://realitify.cz/index): Czech rent index overview
+- [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page
+- [Smíchov market](https://realitify.cz/trh/smichov/pronajem): Smíchov rental market page
 
-## Key pages
-- https://realitify.cz/
-- https://realitify.cz/index (rent index)
-- https://realitify.cz/faq
-- https://realitify.cz/trh/praha/pronajem
-- https://realitify.cz/trh/smichov/pronajem
-- https://realitify.cz/privacy
-- https://realitify.cz/terms
+## MCP
 
-## Contact
-podpora@realitify.cz
+- [MCP endpoint](https://mcp.realitify.cz/mcp): Streamable HTTP MCP server (search_listings, new_listings, get_listing, locality_stats, price_check, compare_localities)
+
+## Legal
+
+- [Privacy](https://realitify.cz/privacy): Privacy policy
+- [Terms](https://realitify.cz/terms): Terms of service
 """

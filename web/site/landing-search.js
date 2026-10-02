@@ -74,9 +74,19 @@
     return `/nabidka?${params.toString()}`;
   };
 
-  const cardHtml = (item) => `
+  const cardHtml = (item) => {
+    const img = String(item.image || "/static/site/assets/db-1.webp");
+    const match = img.match(/\/static\/site\/assets\/(db-\d+)/);
+    const thumb = match
+      ? `<picture>
+      <source type="image/avif" srcset="/static/site/assets/${match[1]}.avif 1x, /static/site/assets/${match[1]}@2x.avif 2x" />
+      <source type="image/webp" srcset="/static/site/assets/${match[1]}.webp 1x, /static/site/assets/${match[1]}@2x.webp 2x" />
+      <img src="/static/site/assets/${match[1]}.webp" width="378" height="165" alt="" loading="lazy" decoding="async" />
+    </picture>`
+      : `<img src="${escapeHtml(img)}" width="378" height="165" alt="" loading="lazy" decoding="async" />`;
+    return `
     <article class="mock-card" data-monitor="${escapeHtml(item.monitor_id || "")}" data-id="${escapeHtml(item.id ?? "")}" data-key="${escapeHtml(item.listing_key || "")}" data-url="${escapeHtml(item.url || "")}">
-      <div class="thumb"><img src="${escapeHtml(item.image || "/static/site/assets/db-1.webp")}" width="380" height="150" alt="" loading="lazy" decoding="async" /></div>
+      <div class="thumb">${thumb}</div>
       <div class="mock-body">
         <div class="mock-top"><span class="source">${escapeHtml(item.portal || "")}</span><strong>${escapeHtml(item.price || "")}</strong></div>
         <div>
@@ -85,6 +95,7 @@
         </div>
       </div>
     </article>`;
+  };
 
   async function loadListings() {
     try {
@@ -238,11 +249,21 @@
   });
 
   renderDisp();
-  loadListings();
-  fetch("/api/public/guest-search")
-    .then((res) => res.json())
-    .then((data) => {
-      if (!data.logged_in && guestUsed(data)) lockSearch();
-    })
-    .catch(() => {});
+  const afterLoad = (fn) => {
+    const run = () => {
+      if (typeof requestIdleCallback === "function") requestIdleCallback(() => fn(), { timeout: 2000 });
+      else setTimeout(fn, 0);
+    };
+    if (document.readyState === "complete") run();
+    else window.addEventListener("load", run, { once: true });
+  };
+  afterLoad(() => {
+    loadListings();
+    fetch("/api/public/guest-search")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data.logged_in && guestUsed(data)) lockSearch();
+      })
+      .catch(() => {});
+  });
 })();
