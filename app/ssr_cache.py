@@ -164,6 +164,55 @@ def trh_key(locality: str, offer: str, disposition: str = "") -> str:
     return base
 
 
+def _flush_pages(
+    rows: list[tuple[str, str, str, str]],
+    *,
+    data_as_of: str,
+    reason: str,
+    stage: str,
+) -> None:
+    """Persist a batch immediately so / and /trh stop 503 before the full trh rebuild finishes."""
+    if not rows:
+        return
+    with _connect(writable=True) as conn:
+        _init_schema(conn)
+        with conn:
+            _put_many(conn, rows)
+            _set_meta(conn, "last_success_data_as_of", data_as_of)
+            _set_meta(conn, "last_success_at", data_as_of)
+            _set_meta(conn, "last_success_reason", f"{reason}:{stage}")
+            _set_meta(conn, "last_success_page_count", str(len(rows)))
+            _set_meta(conn, "last_error", "")
+    print(f"ssr_cache flush stage={stage} pages={len(rows)} as_of={data_as_of}", flush=True)
+
+
+def _retry_catalog(fn, *, label: str, attempts: int = 8, delay_s: float = 2.0) -> Any:
+    """Retry catalog reads under scrape lock pressure (background thread, long busy_timeout)."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last = exc
+            print(f"ssr_cache {label} attempt={i + 1}/{attempts} err={exc}", flush=True)
+            time.sleep(delay_s * (1 + i * 0.5))
+    assert last is not None
+    raise last
+
+
+def _catalog_active_count(store: Any) -> int:
+    # Background thread → store.connect() uses 30s busy_timeout (not the 5s readonly path).
+    with store.connect() as conn:
+        try:
+            conn.execute("PRAGMA query_only=ON")
+        except sqlite3.OperationalError:
+            pass
+        row = conn.execute(
+            "SELECT COUNT(*) AS active_count FROM listings WHERE IFNULL(gone, 0) = 0"
+        ).fetchone()
+    return int(row["active_count"] or 0) if row else 0
+
+
 def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
     """Heavy recompute from catalog store → write to ssr_cache.sqlite. Keeps old pages on failure."""
     global _last_rebuild_at, _rebuild_running
@@ -174,25 +223,14 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
     started = time.monotonic()
     data_as_of = _utc_now()
     rows: list[tuple[str, str, str, str]] = []
+    trh_count = 0
+    print(f"ssr_cache rebuild start reason={reason}", flush=True)
     try:
         from app import market_pages, market_seo
 
-        # Inventory + disposition paths (writes market_seo_pages in main DB — OK in background).
-        inv = market_pages.market_inventory(store)
-        included = inv.get("included") or []
-        try:
-            disp_paths = market_seo.list_disposition_paths(store)
-        except Exception as exc:
-            log.error("ssr_cache disposition paths failed: %s", exc)
-            disp_paths = []
-
-        # Home / landing substitutes
-        try:
-            active = int(store.catalog_total_active())
-        except Exception as exc:
-            log.error("ssr_cache catalog_total_active failed: %s", exc)
-            raise
-        top_html = market_seo.top_localities_html(store, 10)
+        # 1) Core public pages first — flush ASAP so homepage /trh leave 503.
+        active = int(_retry_catalog(lambda: _catalog_active_count(store), label="catalog_total_active"))
+        top_html = _retry_catalog(lambda: market_seo.top_localities_html(store, 10), label="top_localities_html")
         home_payload = {
             "active_count": active,
             "portals_count": len(market_pages.PUBLIC_PORTAL_LABELS),
@@ -200,26 +238,38 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             "top_localities_html": top_html,
             "data_as_of": data_as_of,
         }
-        rows.append(("home", json.dumps(home_payload, ensure_ascii=False), data_as_of, data_as_of))
-        rows.append(("home:md", market_pages.render_home_md(store), data_as_of, data_as_of))
+        core: list[tuple[str, str, str, str]] = [
+            ("home", json.dumps(home_payload, ensure_ascii=False), data_as_of, data_as_of),
+            ("home:md", market_pages.render_home_md(store), data_as_of, data_as_of),
+            ("trh_hub:html", market_seo.render_trh_hub(store), data_as_of, data_as_of),
+            ("trh_hub:md", market_seo.render_trh_hub_md(store), data_as_of, data_as_of),
+            ("llms", market_pages.llms_txt(store), data_as_of, data_as_of),
+            ("llms_full", market_pages.llms_full_txt(store), data_as_of, data_as_of),
+            ("index:html", market_pages.render_index(store), data_as_of, data_as_of),
+            ("index:md", market_pages.render_index_md(store), data_as_of, data_as_of),
+            ("index:csv", market_pages.index_csv(store), data_as_of, data_as_of),
+            ("faq:html", market_pages.render_faq(store), data_as_of, data_as_of),
+            ("faq:md", market_pages.render_faq_md(store), data_as_of, data_as_of),
+            ("about:html", market_pages.render_about_cs(store), data_as_of, data_as_of),
+            ("about:md", market_pages.render_about_cs_md(store), data_as_of, data_as_of),
+            ("about_en:html", market_pages.render_about_en(), data_as_of, data_as_of),
+            ("mcp_docs:md", market_pages.render_mcp_docs_md(), data_as_of, data_as_of),
+        ]
+        rows.extend(core)
+        _flush_pages(core, data_as_of=data_as_of, reason=reason, stage="core")
 
-        # Core pages
-        rows.append(("index:html", market_pages.render_index(store), data_as_of, data_as_of))
-        rows.append(("index:md", market_pages.render_index_md(store), data_as_of, data_as_of))
-        rows.append(("index:csv", market_pages.index_csv(store), data_as_of, data_as_of))
-        rows.append(("faq:html", market_pages.render_faq(store), data_as_of, data_as_of))
-        rows.append(("faq:md", market_pages.render_faq_md(store), data_as_of, data_as_of))
-        rows.append(("about:html", market_pages.render_about_cs(store), data_as_of, data_as_of))
-        rows.append(("about:md", market_pages.render_about_cs_md(store), data_as_of, data_as_of))
-        rows.append(("about_en:html", market_pages.render_about_en(), data_as_of, data_as_of))
-        rows.append(("llms", market_pages.llms_txt(store), data_as_of, data_as_of))
-        rows.append(("llms_full", market_pages.llms_full_txt(store), data_as_of, data_as_of))
-        rows.append(("trh_hub:html", market_seo.render_trh_hub(store), data_as_of, data_as_of))
-        rows.append(("trh_hub:md", market_seo.render_trh_hub_md(store), data_as_of, data_as_of))
-        rows.append(("mcp_docs:md", market_pages.render_mcp_docs_md(), data_as_of, data_as_of))
+        # 2) Inventory + per-/trh pages (can take minutes under scrape load).
+        inv = _retry_catalog(lambda: market_pages.market_inventory(store), label="market_inventory")
+        included = inv.get("included") or []
+        try:
+            disp_paths = market_seo.list_disposition_paths(store)
+        except Exception as exc:
+            log.error("ssr_cache disposition paths failed: %s", exc)
+            print(f"ssr_cache disposition paths failed: {exc}", flush=True)
+            disp_paths = []
 
         redirects: dict[str, str] = {}
-        trh_count = 0
+        trh_rows: list[tuple[str, str, str, str]] = []
         for row in included:
             loc = row["locality"]
             offer = row["offer"]
@@ -235,10 +285,14 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             except Exception as exc:
                 log.error("ssr_cache trh page failed %s/%s: %s", loc, offer, exc)
                 continue
-            rows.append((f"{key}:html", html, data_as_of, data_as_of))
-            rows.append((f"{key}:md", md, data_as_of, data_as_of))
-            rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
+            trh_rows.append((f"{key}:html", html, data_as_of, data_as_of))
+            trh_rows.append((f"{key}:md", md, data_as_of, data_as_of))
+            trh_rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
             trh_count += 1
+            if len(trh_rows) >= 30:
+                _flush_pages(trh_rows, data_as_of=data_as_of, reason=reason, stage="trh_batch")
+                rows.extend(trh_rows)
+                trh_rows = []
 
         for path, loc, offer, disp in disp_paths:
             key = trh_key(loc, offer, disp)
@@ -252,47 +306,35 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             except Exception as exc:
                 log.error("ssr_cache trh disp failed %s/%s/%s: %s", loc, offer, disp, exc)
                 continue
-            rows.append((f"{key}:html", html, data_as_of, data_as_of))
-            rows.append((f"{key}:md", md, data_as_of, data_as_of))
-            rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
+            trh_rows.append((f"{key}:html", html, data_as_of, data_as_of))
+            trh_rows.append((f"{key}:md", md, data_as_of, data_as_of))
+            trh_rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
             trh_count += 1
+            if len(trh_rows) >= 30:
+                _flush_pages(trh_rows, data_as_of=data_as_of, reason=reason, stage="trh_disp_batch")
+                rows.extend(trh_rows)
+                trh_rows = []
 
-        rows.append(("redirects", json.dumps(redirects, ensure_ascii=False), data_as_of, data_as_of))
-        rows.append(
+        trh_rows.append(("redirects", json.dumps(redirects, ensure_ascii=False), data_as_of, data_as_of))
+        trh_rows.append(
             (
                 "inventory",
-                json.dumps(
-                    {
-                        "included": included,
-                        "data_as_of": data_as_of,
-                    },
-                    ensure_ascii=False,
-                ),
+                json.dumps({"included": included, "data_as_of": data_as_of}, ensure_ascii=False),
                 data_as_of,
                 data_as_of,
             )
         )
-
-        with _connect(writable=True) as conn:
-            _init_schema(conn)
-            with conn:
-                _put_many(conn, rows)
-                _set_meta(conn, "last_success_data_as_of", data_as_of)
-                _set_meta(conn, "last_success_at", data_as_of)
-                _set_meta(conn, "last_success_reason", reason)
-                _set_meta(conn, "last_success_page_count", str(len(rows)))
-                _set_meta(conn, "last_error", "")
+        _flush_pages(trh_rows, data_as_of=data_as_of, reason=reason, stage="final")
+        rows.extend(trh_rows)
 
         elapsed_ms = int((time.monotonic() - started) * 1000)
         _last_rebuild_at = time.monotonic()
-        log.info(
-            "ssr_cache rebuilt reason=%s pages=%s trh=%s ms=%s as_of=%s",
-            reason,
-            len(rows),
-            trh_count,
-            elapsed_ms,
-            data_as_of,
+        msg = (
+            f"ssr_cache rebuilt reason={reason} pages={len(rows)} "
+            f"trh={trh_count} ms={elapsed_ms} as_of={data_as_of}"
         )
+        log.info(msg)
+        print(msg, flush=True)
         return {
             "ok": True,
             "reason": reason,
@@ -303,6 +345,7 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
         }
     except Exception as exc:
         log.exception("ssr_cache rebuild failed reason=%s: %s", reason, exc)
+        print(f"ssr_cache rebuild failed reason={reason}: {exc}", flush=True)
         try:
             with _connect(writable=True) as conn:
                 _init_schema(conn)

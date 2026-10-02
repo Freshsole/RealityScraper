@@ -97,18 +97,28 @@ async def lifespan(_app: FastAPI):
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
-    # Warm SEO inventory + sitemap off the request path (avoids Google 502 on /sitemap.xml).
+    # SSR cache first (homepage /trh), then heavier SEO inventory/sitemap warm.
+    def _warm_ssr_cache() -> None:
+        try:
+            from app import ssr_cache
+
+            print("ssr_cache startup warm begin", flush=True)
+            ssr_cache.ensure_fresh(hub.store, force=True, reason="startup")
+            print("ssr_cache startup warm done", flush=True)
+        except Exception as exc:
+            print(f"ssr_cache startup warm failed: {exc}", flush=True)
+
     def _warm_seo_sitemap() -> None:
         try:
-            from app import market_seo, ssr_cache
+            from app import market_seo
 
             store = hub.store
             market_seo.refresh_market_seo_inventory(store)
             market_seo.cached_sitemap_xml(store, SEO_PAGES)
-            ssr_cache.ensure_fresh(store, force=True, reason="startup")
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"seo sitemap warm failed: {exc}", flush=True)
 
+    threading.Thread(target=_warm_ssr_cache, name="ssr-cache-warm", daemon=True).start()
     threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
     try:
         from app import ssr_cache
