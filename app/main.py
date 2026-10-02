@@ -497,7 +497,11 @@ def watchdog_status(token: str = Query(default="")) -> JSONResponse:
     stale_after = now - timedelta(hours=WATCHDOG_STALE_HOURS)
     portals = []
     down = []
-    with hub.store.connect() as conn:
+    # Joby a katalog žijí ve storu admin uživatele (per-user DB), ne v globálním hub.store
+    astore = _public_store()
+    if astore is None:
+        raise HTTPException(status_code=503, detail="Store unavailable")
+    with astore.connect() as conn:
         for pid in PORTAL_ORDER:
             row = conn.execute(
                 "SELECT COUNT(*) n FROM catalog_listings "
