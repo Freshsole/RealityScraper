@@ -15,7 +15,7 @@ import time
 from urllib.parse import quote, urlencode
 from typing import Any
 
-from fastapi import Body, Cookie, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, Cookie, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import Request
@@ -552,10 +552,17 @@ WATCHDOG_IGNORED_ERRORS = (
 
 
 async def watchdog_status(token: str = Query(default=""), detail: str = Query(default=""),
-                   test: str = Query(default="")) -> JSONResponse:
+                   test: str = Query(default=""),
+                   authorization: str | None = Header(default=None)) -> JSONResponse:
     import os
     expected = os.getenv("WATCHDOG_TOKEN", "").strip()
-    if not expected or token != expected:
+    # Token v Authorization hlavičce (preferováno) nebo query parametru
+    provided = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:].strip()
+    elif token:
+        provided = token
+    if not expected or provided != expected:
         raise HTTPException(status_code=403, detail="Forbidden")
     # Živý test jednoho portálu z produkčního serveru
     if test:
