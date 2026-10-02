@@ -595,7 +595,12 @@ def watchdog_status(token: str = Query(default=""), detail: str = Query(default=
                     # lines jsou (offset, text) nebo dict?
                     matched = []
                     for ln in lines:
-                        text = ln[1] if isinstance(ln, (list, tuple)) else ln.get("text", "")
+                        if isinstance(ln, (list, tuple)) and len(ln) >= 2:
+                            text = ln[1]
+                        elif isinstance(ln, dict):
+                            text = ln.get("text", "")
+                        else:
+                            text = str(ln)
                         if pid in text.lower():
                             matched.append(text[:300])
                     entry["console"] = matched[-15:]
