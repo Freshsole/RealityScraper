@@ -118,7 +118,7 @@ async def lifespan(_app: FastAPI):
             pass
 
 
-app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
+app = FastAPI(title="Sreality Monitor", lifespan=lifespan, redirect_slashes=False)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 _public_dir = config.ROOT / "public"
 if _public_dir.is_dir():
@@ -173,6 +173,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 _STATIC_CACHE = "public, max-age=31536000, immutable"
 _PUBLIC_HTML_CACHE = "no-cache"
 _PRIVATE_HTML_CACHE = "no-store, max-age=0"
+
+
+@app.middleware("http")
+async def strip_trailing_slash(request: Request, call_next):
+    path = request.url.path
+    if len(path) > 1 and path.endswith("/"):
+        target = path.rstrip("/") or "/"
+        url = request.url.replace(path=target)
+        return RedirectResponse(str(url), status_code=301)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -251,6 +261,9 @@ _PUBLIC_UI_PATHS = {
     "/o-nas",
     "/about",
     "/hledat",
+    "/trh",
+    "/index",
+    "/faq",
 }
 
 
@@ -388,7 +401,7 @@ def page() -> HTMLResponse:
 
 
 def landing() -> HTMLResponse:
-    from app import market_pages
+    from app import market_pages, market_seo
     import html as html_lib
 
     html = (config.WEB_DIR / "site" / "index.html").read_text(encoding="utf-8")
@@ -398,10 +411,15 @@ def landing() -> HTMLResponse:
     except Exception:
         active = 0
     portals = market_pages.public_portals_sentence()
+    try:
+        top_html = market_seo.top_localities_html(store, 10)
+    except Exception:
+        top_html = ""
     html = (
         html.replace("__ACTIVE_COUNT__", market_pages._fmt_int(active))
         .replace("__PORTALS_LIST__", html_lib.escape(portals))
         .replace("__PORTALS_COUNT__", str(len(market_pages.PUBLIC_PORTAL_LABELS)))
+        .replace("__TOP_LOCALITIES__", top_html)
     )
     return HTMLResponse(html, headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
@@ -444,6 +462,17 @@ async def market_index() -> HTMLResponse:
     store = _public_store() or hub.store
     html = await asyncio.to_thread(market_pages.render_index, store)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_index_month(month: str) -> Response:
+    from app import market_seo
+
+    store = _public_store() or hub.store
+    try:
+        html = await asyncio.to_thread(market_seo.render_index_month, store, month)
+    except ValueError:
+        return RedirectResponse("/index", status_code=301)
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=86400"})
 
 
 async def market_index_csv() -> Response:
@@ -489,20 +518,74 @@ def about_en() -> HTMLResponse:
     return HTMLResponse(market_pages.render_about_en(), headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
-async def market_trh(locality: str, offer: str) -> HTMLResponse:
-    from app import market_pages
+async def market_trh_hub() -> HTMLResponse:
+    from app import market_seo
+
+    store = _public_store() or hub.store
+    html = await asyncio.to_thread(market_seo.render_trh_hub, store)
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_trh(
+    locality: str, offer: str, disposition: str = ""
+) -> Response:
+    from app import market_pages, market_seo
 
     if offer not in {"pronajem", "prodej"}:
         raise HTTPException(404, "Unknown offer type")
     store = _public_store() or hub.store
     loc = market_pages.locality_from_slug(locality)
+    disp = market_seo.disposition_from_slug(disposition) if disposition else ""
+    redirect = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
+    if redirect:
+        return RedirectResponse(redirect, status_code=301)
     try:
-        html = await asyncio.to_thread(market_pages.render_prehled, store, loc, offer)
+        html = await asyncio.to_thread(market_pages.render_prehled, store, loc, offer, disp)
     except ValueError as exc:
         if str(exc) == "not_enough_data":
-            raise HTTPException(404, "Not enough listings for this locality") from exc
+            target = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
+            return RedirectResponse(target or "/trh", status_code=301)
         raise HTTPException(404, str(exc)) from exc
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_trh_og(locality: str, offer: str, disposition: str = "") -> Response:
+    from app import market_pages, market_seo
+
+    if offer not in {"pronajem", "prodej"}:
+        raise HTTPException(404, "Unknown offer type")
+    store = _public_store() or hub.store
+    loc = market_pages.locality_from_slug(locality)
+    disp = market_seo.disposition_from_slug(disposition) if disposition else ""
+    redirect = await asyncio.to_thread(market_seo.redirect_path_for_thin, store, loc, offer, disp)
+    if redirect:
+        if redirect == "/trh":
+            raise HTTPException(404, "Not enough data")
+        return RedirectResponse(f"{redirect}/og.png", status_code=301)
+    try:
+        report = await asyncio.to_thread(store.catalog_locality_report, loc, offer, disp)
+    except ValueError:
+        raise HTTPException(404, "Not enough data") from None
+    png = await asyncio.to_thread(market_seo.render_og_png, loc, offer, report, disp)
+    return Response(content=png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+
+
+async def market_trh_page(locality: str, offer: str) -> Response:
+    return await market_trh(locality, offer, "")
+
+
+async def market_trh_disp(locality: str, offer: str, disposition: str) -> Response:
+    if disposition == "og.png":
+        raise HTTPException(404)
+    return await market_trh(locality, offer, disposition)
+
+
+async def market_trh_og_page(locality: str, offer: str) -> Response:
+    return await market_trh_og(locality, offer, "")
+
+
+async def market_trh_og_disp(locality: str, offer: str, disposition: str) -> Response:
+    return await market_trh_og(locality, offer, disposition)
 
 
 def cookies_page() -> FileResponse:
@@ -563,6 +646,7 @@ def admin_page() -> FileResponse:
 SEO_PAGES = [
     ("/", "daily", "1.0"),
     ("/index", "daily", "0.9"),
+    ("/trh", "daily", "0.9"),
     ("/faq", "weekly", "0.8"),
     ("/o-nas", "monthly", "0.7"),
     ("/about", "monthly", "0.6"),
@@ -585,14 +669,19 @@ SEO_PAGES = [
 def sitemap_xml() -> Response:
     from datetime import date
 
-    from app import market_pages
+    from app import market_seo
 
     today = date.today().isoformat()
     paths = list(SEO_PAGES)
     try:
         store = _public_store() or hub.store
-        for path, _loc, _offer in market_pages.list_market_paths(store):
+        seo = market_seo.list_all_seo_paths(store)
+        for path in seo.get("locality") or []:
             paths.append((path, "daily", "0.7"))
+        for path in seo.get("disposition") or []:
+            paths.append((path, "daily", "0.65"))
+        for path in seo.get("index_archive") or []:
+            paths.append((path, "monthly", "0.8"))
     except Exception:
         pass
     urls = "\n".join(
@@ -623,6 +712,7 @@ def robots_txt() -> Response:
         "User-agent: PerplexityBot\nAllow: /\n\n"
         "User-agent: Bingbot\nAllow: /\n\n"
         "User-agent: Googlebot\nAllow: /\n\n"
+        "User-agent: SeznamBot\nAllow: /\n\n"
         "User-agent: *\n"
         "Allow: /\n"
         "Disallow: /admin\n"
@@ -894,11 +984,26 @@ app.add_api_route("/mcp-docs", mcp_docs, methods=["GET"], include_in_schema=Fals
 app.add_api_route("/mcp-docs-cs", mcp_docs_cs, methods=["GET"], include_in_schema=False)
 app.add_api_route("/index", market_index, methods=["GET"], include_in_schema=False)
 app.add_api_route("/index.csv", market_index_csv, methods=["GET"], include_in_schema=False)
+app.add_api_route("/index/{month}", market_index_month, methods=["GET"], include_in_schema=False)
 app.add_api_route("/faq", market_faq, methods=["GET"], include_in_schema=False)
 app.add_api_route("/hledat", market_search, methods=["GET"], include_in_schema=False)
 app.add_api_route("/o-nas", about_cs, methods=["GET"], include_in_schema=False)
 app.add_api_route("/about", about_en, methods=["GET"], include_in_schema=False)
-app.add_api_route("/trh/{locality}/{offer}", market_trh, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh", market_trh_hub, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh/{locality}/{offer}/og.png", market_trh_og_page, methods=["GET"], include_in_schema=False)
+app.add_api_route(
+    "/trh/{locality}/{offer}/{disposition}/og.png",
+    market_trh_og_disp,
+    methods=["GET"],
+    include_in_schema=False,
+)
+app.add_api_route("/trh/{locality}/{offer}", market_trh_page, methods=["GET"], include_in_schema=False)
+app.add_api_route(
+    "/trh/{locality}/{offer}/{disposition}",
+    market_trh_disp,
+    methods=["GET"],
+    include_in_schema=False,
+)
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
@@ -2224,17 +2329,21 @@ async def public_catalog(
             "suggestions": suggest_localities(district or district_n),
             "message": f"No active listings for '{district_n}'. Try one of: {', '.join(suggest_localities(district or district_n)[:5])}",
         }
-    # Attach locality avg for price_vs_locality when district filter is set
+    # Attach locality avg/median for price_vs_locality when district filter is set
     avg_m2 = None
+    median_m2 = None
     if district_n:
         try:
             stats = await asyncio.to_thread(store.catalog_stats, district_n, offer_n, disposition_n)
             avg_m2 = stats.get("avg_price_per_m2")
+            median_m2 = stats.get("median_price_per_m2")
         except ValueError:
             avg_m2 = None
+            median_m2 = None
     result["locality"] = district_n
     result["offer"] = offer_n
     result["avg_price_per_m2_locality"] = avg_m2
+    result["median_price_per_m2_locality"] = median_m2
     return result
 
 

@@ -195,7 +195,7 @@ async def locality_stats(
     offer_type: Annotated[OfferType | None, "pronajem or prodej"] = None,
     disposition: Annotated[str, "Optional layout filter, e.g. 2+kk"] = "",
 ) -> dict[str, Any]:
-    """Use when the user asks for average/median rent or sale price, price per m², or how many
+    """Use when the user asks for median/average rent or sale price, price per m² (median primary), or how many
     active listings are in a locality ("kolik stojí pronájem v Brně", "average rent Prague").
     """
     try:
@@ -219,7 +219,7 @@ async def price_check(
     """Use when the user asks if a price is fair / overpriced versus the current market
     ("je 25000 za 2+kk v Praze 5 hodně?", "is this rent expensive?").
 
-    Returns avg, median, percentile, vs_avg_pct, and comparable_count.
+    Returns median (primary), avg, percentile, vs_median_pct, vs_avg_pct, and comparable_count.
     """
     try:
         return await fetch_price_check(

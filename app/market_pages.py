@@ -99,6 +99,14 @@ MARKET_LOCALITIES: list[str] = MARKET_CITIES + MARKET_NEIGHBORHOODS
 
 MIN_ACTIVE = 20
 
+PRICE_METHODOLOGY_CS = (
+    "Hlavní metrika tržních stránek Realitify je medián ceny za m² (průměr uvádíme jako doplněk). "
+    "Do výpočtu cen vstupují jen nabídky s plochou 10–500 m²; u pronájmu s cenou 2 000–300 000 Kč měsíčně; "
+    "u prodeje s cenou od 300 000 Kč. "
+    "Vyřazujeme nebytové kategorie (pokud katalog uvádí estate mimo Byt/Dům/Podnájem) "
+    "a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den (např. Airbnb, krátkodobý, /den)."
+)
+
 
 def _parents_for_neighborhood(name: str) -> list[str]:
     parents: list[str] = []
@@ -311,90 +319,10 @@ def _nav_links_html(store: Store, locality: str, offer: str) -> str:
     return ""
 
 
-def render_prehled(store: Store, locality: str, offer: str) -> str:
-    report = store.catalog_locality_report(locality, offer)
-    offer_label = "pronájem" if offer == "pronajem" else "prodej"
-    title = f"{locality} — {offer_label} | Realitify přehled trhu"
-    updated = str(report.get("updated_at") or "")[:19].replace("T", " ")
-    rows = "".join(
-        f"<tr><td>{html.escape(str(r.get('disposition') or ''))}</td>"
-        f"<td>{int(r.get('count') or 0)}</td>"
-        f"<td>{_fmt_czk(r.get('avg_price'))}</td>"
-        f"<td>{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
-        for r in (report.get("by_disposition") or [])
-    )
-    hist = "".join(
-        f"<li>{html.escape(str(h.get('week_start') or ''))}: "
-        f"{int(h.get('new_count') or 0)} nových, avg {_fmt_m2(h.get('avg_price_per_m2'))}</li>"
-        for h in (report.get("history_90d") or [])[-12:]
-    )
-    nav = _nav_links_html(store, locality, offer)
-    samples = _sample_listing_items(store, locality=locality, offer=offer, limit=12)
-    listings = _listings_html(samples, empty="Momentálně nejsou k dispozici ukázkové nabídky.")
-    dataset = {
-        "@context": "https://schema.org",
-        "@type": "Dataset",
-        "name": title,
-        "description": f"Agregované ceny a počty nabídek: {locality}, {offer_label}.",
-        "url": f"https://realitify.cz/trh/{slugify_locality(locality)}/{offer}",
-        "creator": {"@type": "Organization", "name": "Realitify"},
-        "temporalCoverage": "P90D",
-        "variableMeasured": ["active_count", "avg_price", "avg_price_per_m2", "median_price"],
-    }
-    import json
+def render_prehled(store: Store, locality: str, offer: str, disposition: str = "") -> str:
+    from app import market_seo
 
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{html.escape(title)}</title>
-  <meta name="description" content="Aktuální trh: {html.escape(locality)} {offer_label}. Aktivních nabídek {report.get('active_count')}, medián {_fmt_czk(report.get('median_price'))}, průměr {_fmt_m2(report.get('avg_price_per_m2'))}." />
-  <link rel="canonical" href="https://realitify.cz/trh/{slugify_locality(locality)}/{offer}" />
-  <link rel="stylesheet" href="/static/site/site.css?v=8" />
-  <script type="application/ld+json">{json.dumps(dataset, ensure_ascii=False)}</script>
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/index">Index nájmů</a>
-      <a href="/hledat">Hledat nabídky</a>
-      <a href="/faq">FAQ</a>
-      <a href="/o-nas">O nás</a>
-      <a href="/mcp-docs">MCP</a>
-    </nav>
-  </header>
-  <header class="legal-header">
-    <h1 class="display">{html.escape(locality.upper())} — {offer_label.upper()}</h1>
-    <p>Data z agregovaného katalogu Realitify. Aktualizováno: {html.escape(updated)} UTC</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    {nav}
-    <ul>
-      <li>Aktivní nabídky: <strong>{int(report.get('active_count') or 0)}</strong></li>
-      <li>Nové za 7 dní: <strong>{int(report.get('new_last_7_days') or 0)}</strong></li>
-      <li>Průměrná cena: <strong>{_fmt_czk(report.get('avg_price'))}</strong></li>
-      <li>Medián ceny: <strong>{_fmt_czk(report.get('median_price'))}</strong></li>
-      <li>Průměr Kč/m²: <strong>{_fmt_m2(report.get('avg_price_per_m2'))}</strong></li>
-      <li>Medián Kč/m²: <strong>{_fmt_m2(report.get('median_price_per_m2'))}</strong></li>
-    </ul>
-    <h2>Aktuální nabídky (ukázka)</h2>
-    <p>Odkazy vedou na detail inzerátu u zdrojového portálu. Realitify je agregátor nabídek bytů a domů z českých realitních webů.</p>
-    {listings}
-    <p><a href="/hledat?q={html.escape(locality)}">Další nabídky ve vyhledávání</a></p>
-    <h2>Podle dispozice</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Dispozice</th><th>Počet</th><th>Průměr cena</th><th>Průměr Kč/m²</th></tr></thead>
-      <tbody>{rows or '<tr><td colspan="4">Bez dat</td></tr>'}</tbody>
-    </table>
-    <h2>Vývoj (posledních až 90 dní, po měsících)</h2>
-    <ul>{hist or '<li>Bez historie</li>'}</ul>
-    <p><a href="/o-nas">O Realitify</a> · <a href="https://mcp.realitify.cz/mcp">MCP server</a></p>
-    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
-  </div>
-</body>
-</html>"""
+    return market_seo.render_trh_page(store, locality, offer, disposition)
 
 
 def render_index(store: Store) -> str:
@@ -402,13 +330,31 @@ def render_index(store: Store) -> str:
     brno = store.catalog_stats("Brno", "pronajem")
     ostrava = store.catalog_stats("Ostrava", "pronajem")
     today = date.today().isoformat()
+    current_month = date.today().strftime("%Y-%m")
     import json
 
+    try:
+        months = store.list_index_months(completed_only=True)
+    except Exception:
+        months = []
+    archive = " · ".join(f'<a href="/index/{html.escape(m)}">{html.escape(m)}</a>' for m in months[:18])
+    try:
+        current_rows = store.index_month_city_stats(current_month, allow_incomplete=True)
+    except Exception:
+        current_rows = []
+    current_table = "".join(
+        f"<tr><td>{html.escape(r['locality'])}</td><td>{_fmt_int(r['new_count'])}</td>"
+        f"<td>{_fmt_czk(r.get('median_price'))}</td>"
+        f"<td>{_fmt_m2(r.get('median_price_per_m2'))}</td>"
+        f"<td>{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
+        for r in current_rows
+    )
+    med_m2 = _fmt_m2(praha.get("median_price_per_m2"))
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
         "name": f"Realitify index nájmů {today}",
-        "description": "Souhrn průměrných a mediánových nájmů z agregovaného katalogu Realitify.",
+        "description": f"Souhrn mediánových nájmů z katalogu Realitify. Praha medián Kč/m² {med_m2}.",
         "url": "https://realitify.cz/index",
         "creator": {"@type": "Organization", "name": "Realitify", "url": "https://realitify.cz"},
         "dateModified": today,
@@ -418,28 +364,45 @@ def render_index(store: Store) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Realitify index nájmů — {today}</title>
-  <meta name="description" content="Citovatelný index nájmů Realitify: Praha medián {_fmt_czk(praha.get('median_price'))}, Brno {_fmt_czk(brno.get('median_price'))}. Datum {today}." />
+  <title>Realitify index nájmů – průběžně k {today}</title>
+  <meta name="description" content="Citovatelný index nájmů Realitify: Praha medián {_fmt_czk(praha.get('median_price'))}, medián {_fmt_m2(praha.get('median_price_per_m2'))}. Průběžně k {today}." />
   <link rel="canonical" href="https://realitify.cz/index" />
-  <link rel="stylesheet" href="/static/site/site.css?v=4" />
+  <link rel="stylesheet" href="/static/site/site.css?v=9" />
   <script type="application/ld+json">{json.dumps(dataset, ensure_ascii=False)}</script>
 </head>
 <body class="legal-page">
-  <header class="navbar"><a class="brand" href="/">REALITIFY</a></header>
+  <header class="navbar">
+    <a class="brand" href="/">REALITIFY</a>
+    <nav class="menu">
+      <a href="/trh">Trh</a>
+      <a href="/index">Index</a>
+      <a href="/o-nas">O nás</a>
+    </nav>
+  </header>
   <header class="legal-header">
     <h1 class="display">REALITIFY INDEX NÁJMŮ</h1>
-    <p>Souhrn aktivních nabídek pronájmu. Datum: {today}. Zdroj: katalog Realitify.</p>
+    <p>Souhrn aktivních nabídek pronájmu. Průběžně k {today}. Zdroj: katalog Realitify.</p>
   </header>
   <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
     <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Lokalita</th><th>Aktivní</th><th>Medián</th><th>Průměr</th><th>Medián Kč/m²</th></tr></thead>
+      <thead><tr><th>Lokalita</th><th>Aktivní</th><th>Medián</th><th>Průměr</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
       <tbody>
-        <tr><td>Praha</td><td>{praha.get('active_count')}</td><td>{_fmt_czk(praha.get('median_price'))}</td><td>{_fmt_czk(praha.get('avg_price'))}</td><td>{_fmt_m2(praha.get('median_price_per_m2'))}</td></tr>
-        <tr><td>Brno</td><td>{brno.get('active_count')}</td><td>{_fmt_czk(brno.get('median_price'))}</td><td>{_fmt_czk(brno.get('avg_price'))}</td><td>{_fmt_m2(brno.get('median_price_per_m2'))}</td></tr>
-        <tr><td>Ostrava</td><td>{ostrava.get('active_count')}</td><td>{_fmt_czk(ostrava.get('median_price'))}</td><td>{_fmt_czk(ostrava.get('avg_price'))}</td><td>{_fmt_m2(ostrava.get('median_price_per_m2'))}</td></tr>
+        <tr><td>Praha</td><td>{praha.get('active_count')}</td><td>{_fmt_czk(praha.get('median_price'))}</td><td>{_fmt_czk(praha.get('avg_price'))}</td><td>{_fmt_m2(praha.get('median_price_per_m2'))}</td><td>{_fmt_m2(praha.get('avg_price_per_m2'))}</td></tr>
+        <tr><td>Brno</td><td>{brno.get('active_count')}</td><td>{_fmt_czk(brno.get('median_price'))}</td><td>{_fmt_czk(brno.get('avg_price'))}</td><td>{_fmt_m2(brno.get('median_price_per_m2'))}</td><td>{_fmt_m2(brno.get('avg_price_per_m2'))}</td></tr>
+        <tr><td>Ostrava</td><td>{ostrava.get('active_count')}</td><td>{_fmt_czk(ostrava.get('median_price'))}</td><td>{_fmt_czk(ostrava.get('avg_price'))}</td><td>{_fmt_m2(ostrava.get('median_price_per_m2'))}</td><td>{_fmt_m2(ostrava.get('avg_price_per_m2'))}</td></tr>
       </tbody>
     </table>
-    <p><a href="/index.csv">Stáhnout CSV</a> · <a href="/trh/praha/pronajem">Detail Praha</a> · <a href="/faq">FAQ</a></p>
+    <h2>Aktuální měsíc ({html.escape(current_month)}) – průběžně k {today}</h2>
+    <p>Neukončený měsíc nemá trvalou archivní URL; čísla se mění. Po skončení měsíce vznikne /index/{html.escape(current_month)}.</p>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead><tr><th>Lokalita</th><th>Nové</th><th>Medián</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
+      <tbody>{current_table or '<tr><td colspan="5">Bez dat</td></tr>'}</tbody>
+    </table>
+    <h2>Měsíční archiv (ukončené měsíce)</h2>
+    <p>Trvalé URL pro citace: {archive or 'zatím bez archivních měsíců'}.</p>
+    <h2>Metodika výpočtu Kč/m²</h2>
+    <p>{html.escape(PRICE_METHODOLOGY_CS)}</p>
+    <p><a href="/index.csv">Stáhnout CSV</a> · <a href="/trh/praha/pronajem">Detail Praha</a> · <a href="/trh">Trh</a> · <a href="/faq">FAQ</a></p>
   </div>
 </body>
 </html>"""
@@ -491,14 +454,23 @@ def render_faq(store: Store) -> str:
         {
             "q": "Kolik stojí pronájem 2+kk v Praze?",
             "a": (
-                f"Podle aktuálních dat Realitify je medián {_fmt_czk(praha.get('median_price'))} "
-                f"a průměr {_fmt_czk(praha.get('avg_price'))} "
-                f"(vzorek {praha.get('sample_size_price')} nabídek, datum {date.today().isoformat()})."
+                f"Podle aktuálních dat Realitify je medián {_fmt_czk(praha.get('median_price'))}, "
+                f"medián {_fmt_m2(praha.get('median_price_per_m2'))} "
+                f"(průměr {_fmt_czk(praha.get('avg_price'))}, {_fmt_m2(praha.get('avg_price_per_m2'))}; "
+                f"vzorek {praha.get('sample_size_price_m2')} nabídek po filtru kvality, datum {date.today().isoformat()})."
             ),
         },
         {
             "q": "Jak poznat předraženou nabídku?",
-            "a": "Porovnejte cenu s mediánem a průměrem za m² ve stejné lokalitě a dispozici (nástroj price_check v MCP nebo stránky /trh/…). Odchylka nad +10–15 % vůči průměru si zaslouží vysvětlení (stav, lokalita, vybavení).",
+            "a": (
+                "Porovnejte cenu s mediánem Kč/m² ve stejné lokalitě a dispozici "
+                "(nástroj price_check v MCP nebo stránky /trh/). "
+                "Odchylka nad +10–15 % vůči mediánu si zaslouží vysvětlení (stav, lokalita, vybavení)."
+            ),
+        },
+        {
+            "q": "Jak Realitify počítá cenu za m²?",
+            "a": PRICE_METHODOLOGY_CS,
         },
         {
             "q": "Souvisí Realitify se společností Realtify nebo PriceHubble?",
@@ -521,8 +493,8 @@ def render_faq(store: Store) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FAQ — Realitify</title>
-  <meta name="description" content="Co je Realitify, jak agreguje české realitní nabídky, jak sehnat byt v Praze a jak poznat předražený nájem. S živými čísly z katalogu." />
+  <title>FAQ – Realitify</title>
+  <meta name="description" content="Co je Realitify, jak počítáme medián Kč/m², jak sehnat byt v Praze a jak poznat předražený nájem. S živými čísly z katalogu." />
   <link rel="canonical" href="https://realitify.cz/faq" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
   <script type="application/ld+json">{json.dumps(faq_ld, ensure_ascii=False)}</script>
@@ -545,7 +517,7 @@ def render_search(store: Store, q: str = "") -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hledat nabídky — Realitify</title>
+  <title>Hledat nabídky – Realitify</title>
   <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify. Výsledky s odkazy na detaily u zdrojových portálů." />
   <meta name="robots" content="noindex, follow" />
   <link rel="canonical" href="https://realitify.cz/hledat" />
@@ -588,16 +560,19 @@ def render_about_cs() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>O nás — Realitify</title>
+  <title>O nás – Realitify</title>
   <meta name="description" content="Realitify je agregátor nabídek bytů a domů z českých realitních portálů. Provozuje Jiří Kolb (OSVČ), IČO 21527059." />
   <link rel="canonical" href="https://realitify.cz/o-nas" />
+  <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
   <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
+  <link rel="alternate" hreflang="x-default" href="https://realitify.cz/o-nas" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
 </head>
 <body class="legal-page">
   <header class="navbar">
     <a class="brand" href="/">REALITIFY</a>
     <nav class="menu">
+      <a href="/trh">Trh</a>
       <a href="/hledat">Hledat</a>
       <a href="/faq">FAQ</a>
       <a href="/about">English</a>
@@ -629,16 +604,19 @@ def render_about_en() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>About — Realitify</title>
+  <title>About – Realitify</title>
   <meta name="description" content="Realitify is a Czech real-estate listings aggregator. Operated by Jiří Kolb (sole trader), Company ID 21527059." />
   <link rel="canonical" href="https://realitify.cz/about" />
+  <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
   <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
+  <link rel="alternate" hreflang="x-default" href="https://realitify.cz/o-nas" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
 </head>
 <body class="legal-page">
   <header class="navbar">
     <a class="brand" href="/">REALITIFY</a>
     <nav class="menu">
+      <a href="/trh">Market</a>
       <a href="/hledat">Search</a>
       <a href="/faq">FAQ</a>
       <a href="/o-nas">Česky</a>
@@ -681,6 +659,8 @@ Realitify aggregates active listings from {portals} (UlovDomov currently omitted
 ## Data
 
 - [Home](https://realitify.cz/): Product landing page
+- [Market hub](https://realitify.cz/trh): Locality market pages (SSR)
+- [Rent index](https://realitify.cz/index): Monthly rent index and archive
 - [Search](https://realitify.cz/hledat): Public SSR listing search with links to source details
 - [Rent index](https://realitify.cz/index): Czech rent index overview
 - [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page with sample listings

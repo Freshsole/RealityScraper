@@ -240,7 +240,9 @@ async def search_listings(
     )
     if data.get("error") == "no_listings_for_locality":
         raise CatalogError(str(data.get("message") or "No listings for locality") + f" Suggestions: {data.get('suggestions')}")
-    avg_m2 = data.get("avg_price_per_m2_locality")
+    avg_m2 = data.get("median_price_per_m2_locality")
+    if avg_m2 is None:
+        avg_m2 = data.get("avg_price_per_m2_locality")
     try:
         avg_m2_f = float(avg_m2) if avg_m2 is not None else None
     except (TypeError, ValueError):
