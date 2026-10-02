@@ -229,7 +229,7 @@
           <p class="privacy-copy">Veřejný MCP server na <code>https://mcp.realitify.cz/mcp</code> umožňuje AI klientům (např. Claude, ChatGPT) pouze číst agregované nabídky nemovitostí. Server nevyžaduje přihlášení a neposkytuje nástroje pro zápis.</p>
           <p class="privacy-copy"><strong>Jaká data server přijímá:</strong> parametry vyhledávání zadané AI klientem (lokalita, typ pronájem/prodej, cena, dispozice, plocha, limit, id nabídky). Neukládáme jména uživatelů AI klientů ani obsah konverzací.</p>
           <p class="privacy-copy"><strong>Co logujeme:</strong> IP adresu (pro rate limiting v paměti), čas požadavku a stav odpovědi. Neukládáme telefony ani jména makléřů — ta se ve výstupech odfiltrují.</p>
-          <p class="privacy-copy"><strong>Jak dlouho:</strong> rate-limit počítadla jsou pouze v paměti procesu a typicky se resetují do 60 sekund / při restartu. Trvalé logy přístupů, pokud jsou zapnuté na infrastruktuře, uchováváme nejvýše <strong>[DOPLNIT: doba uchování access logů]</strong>.</p>
+          <p class="privacy-copy"><strong>Jak dlouho:</strong> rate-limit počítadla jsou pouze v paměti procesu a typicky se resetují do 60 sekund / při restartu. Trvalé logy přístupů, pokud jsou zapnuté na infrastruktuře, uchováváme nejvýše <strong>30 dní</strong>.</p>
         </section>
 
         <section class="privacy-block" id="prava">

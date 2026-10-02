@@ -134,7 +134,8 @@ Docs: https://realitify.cz/mcp-docs
 ### Before submit
 
 - [x] Fill company details from ARES (Jiří Kolb, IČO 21527059)
-- [ ] Fill remaining `[DOPLNIT: …]` (access log retention; OpenAI IDs if needed)
+- [x] Access log retention: 30 days
+- [ ] Fill remaining `[DOPLNIT: …]` (OpenAI IDs if needed)
 - [x] Deploy main app so `/api/public/catalog*`, `/privacy`, `/terms`, `/mcp-docs`, `/public/mcp-assets/*` are live
 - [x] Deploy MCP Coolify app on `mcp.realitify.cz` with `CATALOG_BASE_URL=https://realitify.cz`
 - [x] Verify `curl https://mcp.realitify.cz/health`
@@ -172,6 +173,7 @@ Docs: https://realitify.cz/mcp-docs
 
 ### Placeholders still to fill
 
-- `[DOPLNIT: access log retention period]` / `[DOPLNIT: doba uchování access logů]` (still on `/privacy` and `/ochrana-soukromi`)
 - `[DOPLNIT: OpenAI organization / project IDs if forms require them]`
 - Claude publisher / contact: use **Jiří Kolb** / `podpora@realitify.cz` unless the form asks for something else
+
+Access logs: **30 days** (set on `/privacy` and `/ochrana-soukromi`).

@@ -76,7 +76,7 @@
           <div class="privacy-h"><span class="privacy-num">3</span><h2>Public MCP connector</h2></div>
           <p class="privacy-copy">The public MCP server at <code>https://mcp.realitify.cz/mcp</code> is read-only. It accepts search parameters from AI clients (locality, rent/sale, price, disposition, area, limit, listing id). It does not store AI chat transcripts or end-user names from Claude/ChatGPT.</p>
           <p class="privacy-copy"><strong>Logging:</strong> client IP (in-memory rate limiting), request time, and response status. Listing responses strip broker names and phone numbers even if source portals contain them.</p>
-          <p class="privacy-copy"><strong>Retention:</strong> in-memory rate-limit counters expire within about 60 seconds or on process restart. Infrastructure access logs, if enabled, are kept for at most <strong>[DOPLNIT: access log retention period]</strong>.</p>
+          <p class="privacy-copy"><strong>Retention:</strong> in-memory rate-limit counters expire within about 60 seconds or on process restart. Infrastructure access logs, if enabled, are kept for at most <strong>30 days</strong>.</p>
         </section>
 
         <section class="privacy-block" id="retention">
