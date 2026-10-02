@@ -115,14 +115,14 @@ def parent_locality(locality: str) -> str | None:
 
 def redirect_path_for_thin(store: Store, locality: str, offer: str, disposition: str = "") -> str | None:
     try:
-        count = int(store.catalog_active_count(locality, offer, disposition))
+        count = int(store.catalog_active_count(locality, offer, disposition, quality=True))
     except ValueError:
         count = 0
     if count >= MIN_ACTIVE:
         return None
     if disposition:
         try:
-            parent_count = int(store.catalog_active_count(locality, offer))
+            parent_count = int(store.catalog_active_count(locality, offer, quality=True))
         except ValueError:
             parent_count = 0
         if parent_count >= MIN_ACTIVE:
@@ -130,7 +130,7 @@ def redirect_path_for_thin(store: Store, locality: str, offer: str, disposition:
     parent = parent_locality(locality)
     while parent:
         try:
-            if int(store.catalog_active_count(parent, offer)) >= MIN_ACTIVE:
+            if int(store.catalog_active_count(parent, offer, quality=True)) >= MIN_ACTIVE:
                 return f"/trh/{slugify_locality(parent)}/{offer}"
         except ValueError:
             pass
@@ -242,7 +242,7 @@ def _related_html(store: Store, locality: str, offer: str, disposition: str = ""
         if disposition and disp == disposition:
             continue
         try:
-            n = int(store.catalog_active_count(locality, offer, disp))
+            n = int(store.catalog_active_count(locality, offer, disp, quality=True))
         except ValueError:
             n = 0
         if n >= MIN_ACTIVE:

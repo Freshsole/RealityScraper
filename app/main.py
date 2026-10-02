@@ -2267,6 +2267,7 @@ async def public_catalog(
     offer: str = "",
     district: str = "",
     estate: str = "",
+    listing_quality: str = "apartment",
     sort: str = "newest",
     limit: int = 20,
     offset: int = 0,
@@ -2297,6 +2298,12 @@ async def public_catalog(
     seen_from = (first_seen_from or "").strip()
     if since_hours and int(since_hours) > 0 and not seen_from:
         seen_from = (datetime.now(timezone.utc) - timedelta(hours=int(since_hours))).isoformat()
+    # Default = apartments only. Non-residential when estate is explicitly non-byt or listing_quality=any.
+    quality_n = (listing_quality or "apartment").strip().lower() or "apartment"
+    estate_n = (estate or "").strip().lower()
+    non_apt = {"komercni", "pozemek", "ostatni", "projekt", "dum"}
+    if any(part in non_apt for part in estate_n.replace(";", ",").split(",") if part):
+        quality_n = "any"
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -2317,6 +2324,7 @@ async def public_catalog(
             first_seen_from=seen_from,
         )
     )
+    payload["listing_quality"] = quality_n
     result = await _run_catalog_query(payload, store)
     total = int(result.get("total") or 0)
     if district_n and total == 0 and not (result.get("items") or []):
@@ -2342,6 +2350,7 @@ async def public_catalog(
             median_m2 = None
     result["locality"] = district_n
     result["offer"] = offer_n
+    result["listing_quality"] = quality_n
     result["avg_price_per_m2_locality"] = avg_m2
     result["median_price_per_m2_locality"] = median_m2
     return result

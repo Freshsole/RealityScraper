@@ -217,12 +217,16 @@ async def search_listings(
     limit: int = 10,
     sort: str = "newest",
     since_hours: int | None = None,
+    listing_quality: str = "apartment",
 ) -> dict[str, Any]:
     limit_n = min(max(_as_int(limit, 10) or 10, 1), 20)
     offer = _normalize_offer(offer_type)
     sort_n = (sort or "newest").strip()
     if sort_n not in {"newest", "cheapest", "best_value"}:
         sort_n = "newest"
+    quality = (listing_quality or "apartment").strip().lower() or "apartment"
+    if quality not in {"apartment", "any", "all", "nebyt", "non_residential"}:
+        quality = "apartment"
     data = await _get(
         "/api/public/catalog",
         {
@@ -236,6 +240,7 @@ async def search_listings(
             "facets": "0",
             "sort": sort_n,
             "since_hours": since_hours if since_hours else "",
+            "listing_quality": quality,
         },
     )
     if data.get("error") == "no_listings_for_locality":
@@ -266,6 +271,7 @@ async def search_listings(
             "locality": data.get("locality") or locality,
             "offer": offer,
             "sort": sort_n,
+            "listing_quality": quality,
             "avg_price_per_m2_locality": avg_m2_f,
             "items": items,
         }
@@ -281,6 +287,7 @@ async def new_listings(
     max_price: int | None = None,
     min_area: int | None = None,
     limit: int = 10,
+    listing_quality: str = "apartment",
 ) -> dict[str, Any]:
     hours = min(max(_as_int(since_hours, 24) or 24, 1), 168)
     return await search_listings(
@@ -292,6 +299,7 @@ async def new_listings(
         limit=limit,
         sort="newest",
         since_hours=hours,
+        listing_quality=listing_quality,
     )
 
 

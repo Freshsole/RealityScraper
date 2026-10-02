@@ -101,10 +101,10 @@ MIN_ACTIVE = 20
 
 PRICE_METHODOLOGY_CS = (
     "Hlavní metrika tržních stránek Realitify je medián ceny za m² (průměr uvádíme jako doplněk). "
-    "Do výpočtu cen vstupují jen nabídky s plochou 10–500 m²; u pronájmu s cenou 2 000–300 000 Kč měsíčně; "
-    "u prodeje s cenou od 300 000 Kč. "
-    "Vyřazujeme nebytové kategorie (pokud katalog uvádí estate mimo Byt/Dům/Podnájem) "
-    "a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den (např. Airbnb, krátkodobý, /den)."
+    "Počítáme jen byty (kategorie Byt/Podnájem nebo bez uvedené nebytové kategorie) s plochou 10–500 m²; "
+    "u pronájmu s cenou 2 000–300 000 Kč měsíčně; u prodeje s cenou od 300 000 Kč. "
+    "Vyřazujeme nebytové kategorie, domy a krátkodobé pronájmy rozpoznané z názvu nebo ceny za den "
+    "(např. Airbnb, krátkodobý, /den). Stejný filtr platí pro ukázky nabídek a veřejné MCP vyhledávání."
 )
 
 
@@ -145,7 +145,7 @@ def locality_from_slug(slug: str) -> str:
 
 def _active_count(store: Store, locality: str, offer: str) -> int:
     try:
-        return int(store.catalog_active_count(locality, offer))
+        return int(store.catalog_active_count(locality, offer, quality=True))
     except ValueError:
         return 0
 
@@ -240,6 +240,7 @@ def _sample_listing_items(store: Store, *, locality: str = "", offer: str = "", 
         "limit": limit,
         "offset": 0,
         "facets": "0",
+        "listing_quality": "apartment",
     }
     if locality:
         filters["district"] = locality

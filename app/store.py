@@ -5400,6 +5400,24 @@ class Store:
                     )
             if estate_parts:
                 where.append("(" + " OR ".join(estate_parts) + ")")
+        # Public listing quality filter (area/price/short-term; apartments by default).
+        listing_quality = str(filters.get("listing_quality") or filters.get("quality") or "").strip().lower()
+        if listing_quality in {"1", "true", "yes", "apartment", "byt", "byty"}:
+            where.append("IFNULL(listings.gone, 0) = 0")
+            q_sql, q_params = self._listing_quality_sql(
+                ",".join(_csv(filters.get("offer"))),
+                estate_scope="apartment",
+            )
+            where.append(q_sql)
+            params.extend(q_params)
+        elif listing_quality in {"any", "all", "nebyt", "non_residential"}:
+            where.append("IFNULL(listings.gone, 0) = 0")
+            q_sql, q_params = self._listing_quality_sql(
+                ",".join(_csv(filters.get("offer"))),
+                estate_scope="any",
+            )
+            where.append(q_sql)
+            params.extend(q_params)
         ownership = _csv(filters.get("ownership"))
         if ownership:
             _or_likes(
@@ -5966,28 +5984,34 @@ class Store:
             params.extend(dispositions)
         return where, params
 
-    # --- Public market price metrics (median Kč/m² primary) ---
+    # --- Public market listing quality (apartments; median Kč/m² primary) ---
     PRICE_AREA_MIN_M2 = 10.0
     PRICE_AREA_MAX_M2 = 500.0
     PRICE_RENT_MIN_CZK = 2_000
     PRICE_RENT_MAX_CZK = 300_000
     PRICE_SALE_MIN_CZK = 300_000
-    PRICE_RESIDENTIAL_ESTATES = ("Byt", "Byty", "Dům", "Podnájem")
+    # Default public/MCP scope = byty (title „bytů“). Dům is excluded unless estate_scope=any.
+    PRICE_APARTMENT_ESTATES = ("Byt", "Byty", "Podnájem")
+    PRICE_RESIDENTIAL_ESTATES = PRICE_APARTMENT_ESTATES  # alias for older callers
 
-    def _price_quality_sql(self, offer: str = "") -> tuple[str, list[Any]]:
-        """SQL fragment for valid price / Kč/m² samples (AND-joined)."""
+    def _listing_quality_sql(
+        self,
+        offer: str = "",
+        *,
+        estate_scope: str = "apartment",
+    ) -> tuple[str, list[Any]]:
+        """SQL fragment for valid public listings (AND-joined).
+
+        estate_scope:
+          - apartment: Byt/Byty/Podnájem or missing estate (default for /trh, MCP)
+          - any: no estate filter (non-residential allowed when explicitly requested)
+        """
         clauses = [
             "listings.price_czk IS NOT NULL",
             "listings.price_czk > 0",
             "listings.area_m2 IS NOT NULL",
             "listings.area_m2 >= ?",
             "listings.area_m2 <= ?",
-            (
-                "(json_extract(listings.extras, '$.estate') IS NULL "
-                "OR json_extract(listings.extras, '$.estate') IN ("
-                + ",".join("?" * len(self.PRICE_RESIDENTIAL_ESTATES))
-                + "))"
-            ),
             (
                 "NOT ("
                 "lower(IFNULL(listings.name, '')) LIKE '%krátkodob%' OR "
@@ -5998,7 +6022,17 @@ class Store:
                 ")"
             ),
         ]
-        params: list[Any] = [self.PRICE_AREA_MIN_M2, self.PRICE_AREA_MAX_M2, *self.PRICE_RESIDENTIAL_ESTATES]
+        params: list[Any] = [self.PRICE_AREA_MIN_M2, self.PRICE_AREA_MAX_M2]
+        scope = (estate_scope or "apartment").strip().lower()
+        if scope not in {"any", "all", "nebyt", "non_residential"}:
+            estates = self.PRICE_APARTMENT_ESTATES
+            clauses.append(
+                "(json_extract(listings.extras, '$.estate') IS NULL "
+                "OR json_extract(listings.extras, '$.estate') IN ("
+                + ",".join("?" * len(estates))
+                + "))"
+            )
+            params.extend(estates)
         offers = _csv(offer)
         if "pronajem" in offers and "prodej" not in offers:
             clauses.append("listings.price_czk >= ?")
@@ -6008,6 +6042,10 @@ class Store:
             clauses.append("listings.price_czk >= ?")
             params.append(self.PRICE_SALE_MIN_CZK)
         return " AND ".join(clauses), params
+
+    def _price_quality_sql(self, offer: str = "", *, estate_scope: str = "apartment") -> tuple[str, list[Any]]:
+        """Backward-compatible alias for listing quality SQL."""
+        return self._listing_quality_sql(offer, estate_scope=estate_scope)
 
     @staticmethod
     def _median(values: list[float]) -> float | None:
@@ -6081,7 +6119,7 @@ class Store:
         after_prices_m2: list[float] = []
         before_prices: list[float] = []
         after_prices: list[float] = []
-        residential = set(self.PRICE_RESIDENTIAL_ESTATES)
+        residential = set(self.PRICE_APARTMENT_ESTATES)
         offers = _csv(offer)
         is_rent = "pronajem" in offers and "prodej" not in offers
         is_sale = "prodej" in offers and "pronajem" not in offers
@@ -6178,10 +6216,13 @@ class Store:
             where.append(f"listings.disposition IN ({','.join('?' * len(dispositions))})")
             params.extend(dispositions)
         clause = " AND ".join(where)
-        quality_sql, quality_params = self._price_quality_sql(offer)
+        quality_sql, quality_params = self._listing_quality_sql(offer)
         with self.connect(readonly=True) as conn:
             active = int(
-                conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
+                conn.execute(
+                    f"SELECT COUNT(*) FROM listings WHERE {clause} AND {quality_sql}",
+                    [*params, *quality_params],
+                ).fetchone()[0]
             )
             price_rows = conn.execute(
                 f"""
@@ -6207,12 +6248,19 @@ class Store:
         district: str = "",
         offer: str = "",
         disposition: str = "",
+        *,
+        quality: bool = False,
+        estate_scope: str = "apartment",
     ) -> int:
-        """Fast active listing count for a locality filter."""
+        """Active listing count for a locality filter. quality=True applies public listing filter."""
         locality = (district or "").strip()
         if not locality:
             raise ValueError("district is required")
         where, params = self._district_where(locality, offer, disposition)
+        if quality:
+            q_sql, q_params = self._listing_quality_sql(offer, estate_scope=estate_scope)
+            where.append(q_sql)
+            params.extend(q_params)
         clause = " AND ".join(where)
         with self.connect(readonly=True) as conn:
             row = conn.execute(
@@ -6222,23 +6270,24 @@ class Store:
         return int(row["active_count"] or 0) if row else 0
 
     def catalog_disposition_counts(self, district: str = "", offer: str = "") -> list[tuple[str, int]]:
-        """Active listing counts grouped by disposition for one locality."""
+        """Quality-filtered active listing counts grouped by disposition for one locality."""
         locality = (district or "").strip()
         if not locality:
             raise ValueError("district is required")
         where, params = self._district_where(locality, offer)
+        quality_sql, quality_params = self._listing_quality_sql(offer)
         clause = " AND ".join(where)
         with self.connect(readonly=True) as conn:
             rows = conn.execute(
                 f"""
                 SELECT disposition, COUNT(*) AS c
                 FROM listings
-                WHERE {clause}
+                WHERE {clause} AND {quality_sql}
                   AND disposition IS NOT NULL AND disposition != ''
                   AND disposition NOT IN ('-', 'UNDEFINED')
                 GROUP BY disposition
                 """,
-                params,
+                [*params, *quality_params],
             ).fetchall()
         return [(str(r[0]), int(r[1] or 0)) for r in rows if r[0]]
 
@@ -6254,10 +6303,13 @@ class Store:
             raise ValueError("district is required")
         where, params = self._district_where(locality, offer, disposition)
         clause = " AND ".join(where)
-        quality_sql, quality_params = self._price_quality_sql(offer)
+        quality_sql, quality_params = self._listing_quality_sql(offer)
         with self.connect(readonly=True) as conn:
             active = int(
-                conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0]
+                conn.execute(
+                    f"SELECT COUNT(*) FROM listings WHERE {clause} AND {quality_sql}",
+                    [*params, *quality_params],
+                ).fetchone()[0]
             )
             price_rows = conn.execute(
                 f"""
@@ -6385,22 +6437,22 @@ class Store:
                     "avg_price": round(float(row[2]), 2) if row[2] is not None else None,
                     "median_price": None,
                     "avg_price_per_m2": round(float(row[3]), 2) if row[3] is not None else None,
-                    "median_price_per_m2": round(float(row[4]), 2) if row[4] is not None else None,
+                    "median_price_per_m2": None,
                 }
                 for row in conn.execute(
                     f"""
                     SELECT disposition,
                            COUNT(*),
-                           AVG(CASE WHEN {quality_sql} THEN price_czk END),
-                           AVG(CASE WHEN {quality_sql} THEN price_czk*1.0/area_m2 END),
-                           NULL
+                           AVG(price_czk),
+                           AVG(price_czk*1.0/area_m2)
                     FROM listings
-                    WHERE {clause} AND disposition IS NOT NULL AND disposition != ''
+                    WHERE {clause} AND {quality_sql}
+                      AND disposition IS NOT NULL AND disposition != ''
                       AND disposition NOT IN ('-', 'UNDEFINED')
                     GROUP BY disposition
                     ORDER BY COUNT(*) DESC
                     """,
-                    [*quality_params, *quality_params, *params],
+                    [*params, *quality_params],
                 ).fetchall()
             ]
             # Fill median Kč/m² per disposition from quality-filtered sample.

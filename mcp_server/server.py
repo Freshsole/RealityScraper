@@ -42,6 +42,11 @@ class SortType(str, Enum):
     best_value = "best_value"
 
 
+class EstateScope(str, Enum):
+    apartment = "apartment"
+    any = "any"
+
+
 def _annotations(title: str) -> ToolAnnotations:
     return ToolAnnotations(
         title=title,
@@ -123,9 +128,16 @@ async def search_listings(
         SortType,
         "newest | cheapest | best_value (lowest CZK/m² vs locality average)",
     ] = SortType.newest,
+    estate_scope: Annotated[
+        EstateScope,
+        "apartment = only flats (default). any = also non-residential when user explicitly asks for commercial/land/etc.",
+    ] = EstateScope.apartment,
 ) -> dict[str, Any]:
-    """Use when the user is looking for a flat/apartment/house to rent or buy in the Czech Republic,
+    """Use when the user is looking for a flat/apartment to rent or buy in the Czech Republic,
     asks about current listings, prices, or what's available in a city/district.
+
+    Defaults to apartments only (quality filter). Set estate_scope=any only when the user
+    explicitly wants non-residential (kancelář, obchod, pozemek, …).
 
     Examples: "hledám byt v Praze", "pronájem 2+kk Praha 5 do 20000", "flat in Prague under 20000 CZK",
     "prodej bytu Brno", "what's for rent in Ostrava".
@@ -142,6 +154,7 @@ async def search_listings(
             min_area=min_area,
             limit=limit,
             sort=sort.value if isinstance(sort, SortType) else str(sort or "newest"),
+            listing_quality=estate_scope.value if isinstance(estate_scope, EstateScope) else str(estate_scope or "apartment"),
         )
     except CatalogError as exc:
         raise ToolError(str(exc)) from exc
@@ -156,11 +169,15 @@ async def new_listings(
     max_price: Annotated[int | None, "Optional max price CZK"] = None,
     min_area: Annotated[int | None, "Optional min m²"] = None,
     limit: Annotated[int, "Max results (1-20)"] = 10,
+    estate_scope: Annotated[
+        EstateScope,
+        "apartment = only flats (default). any = non-residential when explicitly requested.",
+    ] = EstateScope.apartment,
 ) -> dict[str, Any]:
     """Use when the user asks what is new / recently published on the Czech market
     ("co je nového", "nové byty dnes", "new listings in Prague last 24 hours").
 
-    Realitify tracks first_seen timestamps across portals — this is not available from a single portal search.
+    Defaults to apartments only. Realitify tracks first_seen timestamps across portals.
     """
     try:
         return await fetch_new(
@@ -171,6 +188,7 @@ async def new_listings(
             max_price=max_price,
             min_area=min_area,
             limit=limit,
+            listing_quality=estate_scope.value if isinstance(estate_scope, EstateScope) else str(estate_scope or "apartment"),
         )
     except CatalogError as exc:
         raise ToolError(str(exc)) from exc
