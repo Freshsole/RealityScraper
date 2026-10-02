@@ -28,4 +28,5 @@ Connect to `http://127.0.0.1:8100/mcp` (Streamable HTTP). Check `tools/list` ann
 
 - URL: `https://mcp.realitify.cz/mcp`
 - Env: `CATALOG_BASE_URL=https://realitify.cz`
+- Catalog paths used: `/api/public/catalog`, `/api/public/catalog/item`, `/api/public/catalog/stats`
 - Deploy as a separate Coolify app with Base Directory `mcp_server` (Dockerfile).
