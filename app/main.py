@@ -953,6 +953,33 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
                          "checked_at": now.isoformat()})
 
 
+def favicon_ico() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "favicon.ico",
+        media_type="image/x-icon",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+def favicon_svg() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "site" / "assets" / "favicon.svg",
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+def apple_touch_icon() -> FileResponse:
+    return FileResponse(
+        config.WEB_DIR / "site" / "assets" / "apple-touch-icon.png",
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+app.add_api_route("/favicon.ico", favicon_ico, methods=["GET"], include_in_schema=False)
+app.add_api_route("/favicon.svg", favicon_svg, methods=["GET"], include_in_schema=False)
+app.add_api_route("/apple-touch-icon.png", apple_touch_icon, methods=["GET"], include_in_schema=False)
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
 app.add_api_route("/llms.txt", llms_txt_route, methods=["GET"], include_in_schema=False)

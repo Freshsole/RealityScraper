@@ -132,7 +132,7 @@ def _payload(title: str, body: str, url: str = "/nabidka", tag: str = "realitify
             "body": body[:180],
             "url": url or "/nabidka",
             "tag": tag,
-            "icon": "/static/site/assets/logo.svg",
+            "icon": "/apple-touch-icon.png",
         },
         ensure_ascii=False,
     )

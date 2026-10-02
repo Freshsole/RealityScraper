@@ -404,6 +404,9 @@ def render_index(store: Store) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>Realitify index nájmů – průběžně k {today}</title>
   <meta name="description" content="Citovatelný index nájmů Realitify: Praha medián {_fmt_czk(praha.get('median_price'))}, medián {_fmt_m2(praha.get('median_price_per_m2'))}. Průběžně k {today}." />
   <link rel="canonical" href="https://realitify.cz/index" />
@@ -542,6 +545,9 @@ def render_faq(store: Store) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>FAQ – Realitify</title>
   <meta name="description" content="Co je Realitify, jak počítáme medián Kč/m², jak sehnat byt v Praze a jak poznat předražený nájem. S živými čísly z katalogu." />
   <link rel="canonical" href="https://realitify.cz/faq" />
@@ -566,6 +572,9 @@ def render_search(store: Store, q: str = "") -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>Hledat nabídky – Realitify</title>
   <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify. Výsledky s odkazy na detaily u zdrojových portálů." />
   <meta name="robots" content="noindex, follow" />
@@ -609,6 +618,9 @@ def render_about_cs() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>O nás – Realitify</title>
   <meta name="description" content="Realitify je agregátor nabídek bytů a domů z českých realitních portálů. Provozuje Jiří Kolb (OSVČ), IČO 21527059." />
   <link rel="canonical" href="https://realitify.cz/o-nas" />
@@ -653,6 +665,9 @@ def render_about_en() -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <title>About – Realitify</title>
   <meta name="description" content="Realitify is a Czech real-estate listings aggregator. Operated by Jiří Kolb (sole trader), Company ID 21527059." />
   <link rel="canonical" href="https://realitify.cz/about" />
