@@ -500,35 +500,39 @@ def watchdog_status(token: str = Query(default="")) -> JSONResponse:
     with hub.store.connect() as conn:
         for pid in PORTAL_ORDER:
             row = conn.execute(
-                "SELECT COUNT(*) n, MAX(last_seen) seen FROM catalog_listings "
+                "SELECT COUNT(*) n FROM catalog_listings "
                 "WHERE portal = ? AND IFNULL(gone, 0) = 0",
                 (pid,),
             ).fetchone()
             n = int(row["n"] or 0)
-            seen = row["seen"]
             err_row = conn.execute(
-                "SELECT last_error, finished_at FROM scrape_jobs "
+                "SELECT last_error, finished_at, started_at FROM scrape_jobs "
                 "WHERE portal = ? AND kind = 'monitor_live' "
                 "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1",
                 (pid,),
             ).fetchone()
             last_error = (err_row["last_error"] or "").strip() if err_row else ""
-            # DOWN pokud: chyba v posledním jobu, nebo žádná data, nebo data starší než limit
+            finished_at = (err_row["finished_at"] or err_row["started_at"]) if err_row else None
+            try:
+                fin_dt = datetime.fromisoformat(str(finished_at).replace("Z", "+00:00")) if finished_at else None
+                if fin_dt is not None and fin_dt.tzinfo is None:
+                    fin_dt = fin_dt.replace(tzinfo=timezone.utc)
+            except ValueError:
+                fin_dt = None
+            # DOWN pokud: chyba v posledním jobu, nebo job neběžel > 6 hodin
             reasons = []
             if last_error:
                 reasons.append(f"chyba: {last_error[:120]}")
-            if n == 0:
+            if fin_dt is None:
+                reasons.append("job nikdy neběžel")
+            elif fin_dt < stale_after:
+                reasons.append(f"poslední běh: {finished_at}")
+            if n == 0 and fin_dt is None:
                 reasons.append("0 nabídek v katalogu")
-            try:
-                seen_dt = datetime.fromisoformat(str(seen).replace("Z", "+00:00")) if seen else None
-            except ValueError:
-                seen_dt = None
-            if seen_dt is None or seen_dt < stale_after:
-                reasons.append(f"poslední data: {seen or 'nikdy'}")
             status = "down" if reasons else "ok"
             label = PORTAL_LABELS.get(pid, pid)
             portals.append({"id": pid, "name": label, "status": status,
-                            "offers": n, "last_seen": seen, "reasons": reasons})
+                            "offers": n, "last_run": finished_at, "reasons": reasons})
             if reasons:
                 down.append(label)
     return JSONResponse({"ok": not down, "down": down, "portals": portals,
