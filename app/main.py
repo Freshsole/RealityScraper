@@ -502,6 +502,10 @@ async def _watchdog_live_test(portal: str) -> dict:
             "remax": ("app.remax", "RemaxClient"),
             "ulovdomov": ("app.ulovdomov", "UlovdomovClient"),
             "sreality": ("app.sreality", "SrealityClient"),
+            "eurobydleni": ("app.eurobydleni", "EurobydleniClient"),
+            "realitymix": ("app.realitymix", "RealitymixClient"),
+            "realingo": ("app.realingo", "RealingoClient"),
+            "espolubydleni": ("app.espolubydleni", "EspolubydleniClient"),
         }
         cm = client_map.get(pid)
         if not cm:
