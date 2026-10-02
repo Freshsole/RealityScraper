@@ -568,10 +568,24 @@ def watchdog_status(token: str = Query(default=""), detail: str = Query(default=
                     (pid,),
                 ).fetchall()
                 entry["error_breakdown"] = [
-                    {"error": (e["last_error"] or "")[:200], "count": e["n"],
-                     "last_at": e["last_at"]}
+                    {"error": (e[0] or "")[:200], "count": e[1],
+                     "last_at": e[2]}
                     for e in errs
                 ]
+            # Důvody circuit breakeru (in-memory stav) pro diagnostiku
+            if detail in ("1", "errors"):
+                try:
+                    from app import portal_health
+                    snap = portal_health.snapshot()
+                    b = snap.get(pid) or snap.get(pid.lower())
+                    if b and b.get("disabled"):
+                        entry["breaker"] = {
+                            "reason": b.get("reason", ""),
+                            "disabled_until": b.get("disabled_until"),
+                            "disable_count": b.get("disable_count", 0),
+                        }
+                except Exception:
+                    pass
             portals.append(entry)
             if reasons:
                 down.append(label)
