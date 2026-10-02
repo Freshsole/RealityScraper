@@ -240,6 +240,10 @@ class UlovdomovClient(HtmlPortalClient):
                     seen.add(listing.url)
                     listings.append(listing)
             return listings, total or len(listings)
+        if response.status_code == 500:
+            # UlovDomov API má občasné výpadky - neházet výjimku,
+            # aby to nespouštělo circuit breaker. Vrátíme prázdný výsledek.
+            return [], 0
         # 403/500 will not improve on an HTML fallback of the same listing.
         response.raise_for_status()
         return [], 0

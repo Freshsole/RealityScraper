@@ -1718,6 +1718,16 @@ class Hub:
                             await run_shard(shard)
 
                     await asyncio.gather(*(run_idnes_shard(shard) for shard in portal_shards))
+                elif portal == "sreality":
+                    # Sreality má stovky shardů - mírný paralelismus (4) pro rychlost,
+                    # ale ne moc aby to nespouštělo rate limiting
+                    shard_gate = asyncio.Semaphore(4)
+
+                    async def run_sreality_shard(shard: dict[str, str]) -> None:
+                        async with shard_gate:
+                            await run_shard(shard)
+
+                    await asyncio.gather(*(run_sreality_shard(shard) for shard in portal_shards))
                 else:
                     for shard in portal_shards:
                         await run_shard(shard)

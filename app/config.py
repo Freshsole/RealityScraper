@@ -130,12 +130,12 @@ SCRAPE_CONCURRENCY_OVERRIDES = {**_DEFAULT_CONCURRENCY_OVERRIDES, **_env_overrid
 # Split connect/read so they cannot stack into 50s+ zombie waits.
 # Successful Sreality/Bazos fetches are typically <1s; 8s is ~10× that p95.
 SCRAPE_HTTP_CONNECT_TIMEOUT = max(1.0, min(15.0, float(os.getenv("SCRAPE_HTTP_CONNECT_TIMEOUT", "5"))))
-SCRAPE_HTTP_TIMEOUT = max(2.0, min(30.0, float(os.getenv("SCRAPE_HTTP_TIMEOUT", "8"))))
+SCRAPE_HTTP_TIMEOUT = max(2.0, min(60.0, float(os.getenv("SCRAPE_HTTP_TIMEOUT", "15"))))
 # List-crawl attempts per request (1 = no retry). 403/500 will not improve on retry.
-SCRAPE_HTTP_RETRIES = max(1, min(3, int(os.getenv("SCRAPE_HTTP_RETRIES", "1"))))
-SCRAPE_PORTAL_FAILS_TO_DISABLE = max(2, min(20, int(os.getenv("SCRAPE_PORTAL_FAILS_TO_DISABLE", "5"))))
-SCRAPE_PORTAL_COOLDOWN_SEC = max(30, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_SEC", str(15 * 60))))
-SCRAPE_PORTAL_COOLDOWN_CAP_SEC = max(SCRAPE_PORTAL_COOLDOWN_SEC, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_CAP_SEC", str(60 * 60))))
+SCRAPE_HTTP_RETRIES = max(1, min(5, int(os.getenv("SCRAPE_HTTP_RETRIES", "3"))))
+SCRAPE_PORTAL_FAILS_TO_DISABLE = max(2, min(30, int(os.getenv("SCRAPE_PORTAL_FAILS_TO_DISABLE", "10"))))
+SCRAPE_PORTAL_COOLDOWN_SEC = max(30, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_SEC", str(5 * 60))))
+SCRAPE_PORTAL_COOLDOWN_CAP_SEC = max(SCRAPE_PORTAL_COOLDOWN_SEC, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_CAP_SEC", str(30 * 60))))
 
 
 def _hour_env(name: str, default: int) -> int:
