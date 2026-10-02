@@ -586,6 +586,21 @@ def watchdog_status(token: str = Query(default=""), detail: str = Query(default=
                         }
                 except Exception:
                     pass
+            # Poslední console řádky pro tento portál (z produkčního logu)
+            if detail == "console":
+                try:
+                    from app import scrape_console
+                    data = scrape_console.read_since(0, limit=2000)
+                    lines = data.get("lines", [])
+                    # lines jsou (offset, text) nebo dict?
+                    matched = []
+                    for ln in lines:
+                        text = ln[1] if isinstance(ln, (list, tuple)) else ln.get("text", "")
+                        if pid in text.lower():
+                            matched.append(text[:300])
+                    entry["console"] = matched[-15:]
+                except Exception as e:
+                    entry["console"] = [f"console error: {e}"]
             portals.append(entry)
             if reasons:
                 down.append(label)
