@@ -41,6 +41,43 @@ class AnnonceClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "strana"
     PAGE_SIZE = 20
+    # Annonce blokuje datacentrové IP - zkusíme vypadat jako reálný prohlížeč
+    EXTRA_HEADERS = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
+        "Cache-Control": "max-age=0",
+        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    def __init__(self, search_url: str) -> None:
+        super().__init__(search_url)
+        # Přidáme browser-like hlavičky
+        for k, v in self.EXTRA_HEADERS.items():
+            self._client.headers[k] = v
+        self._warmed_up = False
+
+    async def _warmup(self) -> None:
+        """Warmup: nejdřív homepage pro získání cookies."""
+        if self._warmed_up:
+            return
+        self._warmed_up = True
+        try:
+            import asyncio
+            await self._client.get("https://www.annonce.cz/", timeout=15)
+            await asyncio.sleep(2)  # pauza jako člověk
+        except Exception:
+            pass
+
+    async def fetch_page(self, page: int = 1, **kwargs):
+        await self._warmup()
+        return await super().fetch_page(page, **kwargs)
 
     def _context(self) -> str:
         path = (self.search_url or "").lower()
