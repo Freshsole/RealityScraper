@@ -133,11 +133,12 @@ Docs: https://realitify.cz/mcp-docs
 
 ### Before submit
 
-- [ ] Fill every `[DOPLNIT: …]` in this file and on `/privacy`, `/terms`, `/ochrana-soukromi`, `/obchodni-podminky`
-- [ ] Deploy main app so `/api/public/catalog*`, `/privacy`, `/terms`, `/mcp-docs`, `/public/mcp-assets/*` are live
-- [ ] Deploy MCP Coolify app on `mcp.realitify.cz` with `CATALOG_BASE_URL=https://realitify.cz`
-- [ ] Verify `curl https://mcp.realitify.cz/health`
-- [ ] Verify one real `search_listings` call
+- [x] Fill company details from ARES (Jiří Kolb, IČO 21527059)
+- [ ] Fill remaining `[DOPLNIT: …]` (access log retention; OpenAI IDs if needed)
+- [x] Deploy main app so `/api/public/catalog*`, `/privacy`, `/terms`, `/mcp-docs`, `/public/mcp-assets/*` are live
+- [x] Deploy MCP Coolify app on `mcp.realitify.cz` with `CATALOG_BASE_URL=https://realitify.cz`
+- [x] Verify `curl https://mcp.realitify.cz/health`
+- [x] Verify one real `search_listings` call
 - [ ] Optional: run `scripts/mcp_screenshots.sh` and upload screenshots
 - [ ] Record the 1–2 min demo video
 
@@ -161,12 +162,16 @@ Docs: https://realitify.cz/mcp-docs
 - [ ] Upload demo video and icon
 - [ ] Submit for review
 
+### Operator (from ARES / RES)
+
+- **Name:** Jiří Kolb (OSVČ)
+- **IČO:** 21527059
+- **Address:** Umělecká 618/7, 170 00 Praha 7 – Holešovice
+- **Register:** RES / živnostenský rejstřík (not OR — no spisová značka)
+- **Source:** [Finmag ARES 21527059](https://www.finmag.cz/obchodni-rejstrik/ares/21527059-jiri-kolb)
+
 ### Placeholders still to fill
 
-- `[DOPLNIT: company legal name]` / `[DOPLNIT: obchodní název]`
-- `[DOPLNIT: IČO]`
-- `[DOPLNIT: registered address]` / `[DOPLNIT: sídlo]`
-- `[DOPLNIT: soud a spisová značka]`
-- `[DOPLNIT: access log retention period]` / `[DOPLNIT: doba uchování access logů]`
+- `[DOPLNIT: access log retention period]` / `[DOPLNIT: doba uchování access logů]` (still on `/privacy` and `/ochrana-soukromi`)
 - `[DOPLNIT: OpenAI organization / project IDs if forms require them]`
-- `[DOPLNIT: Claude publisher / contact name if forms require them]`
+- Claude publisher / contact: use **Jiří Kolb** / `podpora@realitify.cz` unless the form asks for something else
