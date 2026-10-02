@@ -558,6 +558,20 @@ def watchdog_status(token: str = Query(default=""), detail: str = Query(default=
                      "finished_at": s["finished_at"]}
                     for s in shards
                 ]
+            if detail == "errors":
+                errs = conn.execute(
+                    "SELECT last_error, COUNT(*) AS n, MAX(finished_at) AS last_at "
+                    "FROM scrape_jobs WHERE portal = ? AND kind = 'catalog_daily' "
+                    "AND status = 'error' AND last_error IS NOT NULL AND last_error != '' "
+                    "AND COALESCE(finished_at, started_at) > datetime('now', '-24 hours') "
+                    "GROUP BY last_error ORDER BY n DESC LIMIT 10",
+                    (pid,),
+                ).fetchall()
+                entry["error_breakdown"] = [
+                    {"error": (e["last_error"] or "")[:200], "count": e["n"],
+                     "last_at": e["last_at"]}
+                    for e in errs
+                ]
             portals.append(entry)
             if reasons:
                 down.append(label)
