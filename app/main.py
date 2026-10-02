@@ -485,9 +485,8 @@ def robots_txt() -> Response:
 WATCHDOG_STALE_HOURS = 26  # catalog_daily běží 1x denně + rezerva
 
 
-def _watchdog_live_test(portal: str) -> dict:
+async def _watchdog_live_test(portal: str) -> dict:
     """Spustí jeden rychlý scrape test daného portálu a vrátí výsledek."""
-    import asyncio
     from app.sources import PORTAL_LABELS
     pid = portal.strip().lower()
     if pid not in PORTAL_LABELS:
@@ -497,7 +496,6 @@ def _watchdog_live_test(portal: str) -> dict:
         mod = portal_urls.MODULES.get(pid)
         if not mod:
             return {"ok": False, "error": "není URL modul"}
-        # Najdeme client třídu podle portálu
         import importlib
         client_map = {
             "annonce": ("app.annonce", "AnnonceClient"),
@@ -508,34 +506,24 @@ def _watchdog_live_test(portal: str) -> dict:
         cm = client_map.get(pid)
         if not cm:
             return {"ok": False, "error": "test není pro tento portál implementován"}
-        urls = mod.catalog()
-        # Vezmeme první URL z katalogu
         test_url = None
-        if isinstance(urls, dict):
-            for v in urls.values():
-                if isinstance(v, str) and v.startswith("http"):
-                    test_url = v
-                    break
-                if isinstance(v, (list, tuple)) and v:
-                    test_url = v[0]
-                    break
-        if not test_url:
-            test_url = mod.build_url({}) if hasattr(mod, "build_url") else None
+        try:
+            df = mod.default_filters() if hasattr(mod, "default_filters") else {}
+            test_url = mod.build_url(df) if hasattr(mod, "build_url") else None
+        except Exception:
+            pass
         if not test_url:
             return {"ok": False, "error": "nenašlo se testovací URL"}
 
-        async def _run():
-            m = importlib.import_module(cm[0])
-            cls = getattr(m, cm[1])
-            c = cls(test_url)
-            try:
-                listings, total = await c.fetch_page(page=1)
-                return {"listings": len(listings), "total": total}
-            finally:
-                await c.aclose()
-
-        result = asyncio.run(_run())
-        return {"ok": True, "portal": pid, "url": test_url[:120], **result}
+        m = importlib.import_module(cm[0])
+        cls = getattr(m, cm[1])
+        c = cls(test_url)
+        try:
+            listings, total = await c.fetch_page(page=1)
+            return {"ok": True, "portal": pid, "url": test_url[:120],
+                    "listings": len(listings), "total": total}
+        finally:
+            await c.aclose()
     except Exception as e:
         return {"ok": False, "portal": pid,
                 "error": f"{type(e).__name__}: {str(e)[:300]}"}
@@ -547,7 +535,7 @@ WATCHDOG_IGNORED_ERRORS = (
 )
 
 
-def watchdog_status(token: str = Query(default=""), detail: str = Query(default=""),
+async def watchdog_status(token: str = Query(default=""), detail: str = Query(default=""),
                    test: str = Query(default="")) -> JSONResponse:
     import os
     expected = os.getenv("WATCHDOG_TOKEN", "").strip()
@@ -555,7 +543,7 @@ def watchdog_status(token: str = Query(default=""), detail: str = Query(default=
         raise HTTPException(status_code=403, detail="Forbidden")
     # Živý test jednoho portálu z produkčního serveru
     if test:
-        return JSONResponse(_watchdog_live_test(test))
+        return JSONResponse(await _watchdog_live_test(test))
     from datetime import datetime, timedelta, timezone
     from app.sources import PORTAL_LABELS, PORTAL_ORDER
 
