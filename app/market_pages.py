@@ -189,6 +189,100 @@ def _fmt_m2(value: Any) -> str:
         return "—"
 
 
+def _fmt_int(value: Any) -> str:
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return "0"
+
+
+# Portals currently advertised as working on public pages (UlovDomov omitted while unstable).
+PUBLIC_PORTAL_LABELS: tuple[str, ...] = (
+    "Sreality",
+    "Reality.iDNES",
+    "Bazoš",
+    "ČeskéReality",
+    "Bezrealitky",
+    "Annonce",
+    "M&M Reality",
+    "RE/MAX",
+    "Reality.cz",
+)
+
+DISCLAIMER_CS = (
+    "Realitify (realitify.cz) nesouvisí se společností Realtify ani PriceHubble."
+)
+DISCLAIMER_EN = (
+    "Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble."
+)
+
+
+def public_portals_sentence(*, oxford: bool = True) -> str:
+    labels = list(PUBLIC_PORTAL_LABELS)
+    if len(labels) <= 1:
+        return labels[0] if labels else ""
+    if oxford:
+        return ", ".join(labels[:-1]) + " a " + labels[-1]
+    return ", ".join(labels)
+
+
+def _sample_listing_items(store: Store, *, locality: str = "", offer: str = "", q: str = "", limit: int = 12) -> list[dict[str, Any]]:
+    filters: dict[str, Any] = {
+        "sort": "newest",
+        "limit": limit,
+        "offset": 0,
+        "facets": "0",
+    }
+    if locality:
+        filters["district"] = locality
+    if offer:
+        filters["offer"] = offer
+    if q:
+        filters["q"] = q
+    try:
+        data = store.catalog(filters)
+    except Exception:
+        return []
+    items = []
+    for item in data.get("items") or []:
+        url = str(item.get("url") or "").strip()
+        if not url.startswith("http"):
+            continue
+        price = str(item.get("price_label") or "").strip()
+        if not price and item.get("price_czk") is not None:
+            price = _fmt_czk(item.get("price_czk"))
+        items.append(
+            {
+                "name": str(item.get("name") or item.get("locality") or "Nabídka").strip(),
+                "locality": str(item.get("locality") or "").strip(),
+                "disposition": str(item.get("disposition") or "").strip(),
+                "price": price,
+                "portal": str(item.get("portal") or "").strip(),
+                "url": url,
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _listings_html(items: list[dict[str, Any]], *, empty: str) -> str:
+    if not items:
+        return f"<p>{html.escape(empty)}</p>"
+    rows = []
+    for item in items:
+        meta_bits = [b for b in (item.get("locality"), item.get("disposition"), item.get("portal"), item.get("price")) if b]
+        meta = " · ".join(html.escape(str(b)) for b in meta_bits)
+        rows.append(
+            "<li>"
+            f'<a href="{html.escape(item["url"])}" rel="noopener noreferrer">'
+            f"{html.escape(item['name'])}</a>"
+            f"<br /><span>{meta}</span>"
+            "</li>"
+        )
+    return "<ol>" + "".join(rows) + "</ol>"
+
+
 def _nav_links_html(store: Store, locality: str, offer: str) -> str:
     parts: list[str] = []
     if locality in MARKET_NEIGHBORHOODS:
@@ -235,6 +329,8 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
         for h in (report.get("history_90d") or [])[-12:]
     )
     nav = _nav_links_html(store, locality, offer)
+    samples = _sample_listing_items(store, locality=locality, offer=offer, limit=12)
+    listings = _listings_html(samples, empty="Momentálně nejsou k dispozici ukázkové nabídky.")
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
@@ -255,7 +351,7 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
   <title>{html.escape(title)}</title>
   <meta name="description" content="Aktuální trh: {html.escape(locality)} {offer_label}. Aktivních nabídek {report.get('active_count')}, medián {_fmt_czk(report.get('median_price'))}, průměr {_fmt_m2(report.get('avg_price_per_m2'))}." />
   <link rel="canonical" href="https://realitify.cz/trh/{slugify_locality(locality)}/{offer}" />
-  <link rel="stylesheet" href="/static/site/site.css?v=4" />
+  <link rel="stylesheet" href="/static/site/site.css?v=8" />
   <script type="application/ld+json">{json.dumps(dataset, ensure_ascii=False)}</script>
 </head>
 <body class="legal-page">
@@ -263,7 +359,9 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
     <a class="brand" href="/">REALITIFY</a>
     <nav class="menu">
       <a href="/index">Index nájmů</a>
+      <a href="/hledat">Hledat nabídky</a>
       <a href="/faq">FAQ</a>
+      <a href="/o-nas">O nás</a>
       <a href="/mcp-docs">MCP</a>
     </nav>
   </header>
@@ -281,6 +379,10 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
       <li>Průměr Kč/m²: <strong>{_fmt_m2(report.get('avg_price_per_m2'))}</strong></li>
       <li>Medián Kč/m²: <strong>{_fmt_m2(report.get('median_price_per_m2'))}</strong></li>
     </ul>
+    <h2>Aktuální nabídky (ukázka)</h2>
+    <p>Odkazy vedou na detail inzerátu u zdrojového portálu. Realitify je agregátor nabídek bytů a domů z českých realitních webů.</p>
+    {listings}
+    <p><a href="/hledat?q={html.escape(locality)}">Další nabídky ve vyhledávání</a></p>
     <h2>Podle dispozice</h2>
     <table border="1" cellpadding="6" cellspacing="0">
       <thead><tr><th>Dispozice</th><th>Počet</th><th>Průměr cena</th><th>Průměr Kč/m²</th></tr></thead>
@@ -288,8 +390,8 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
     </table>
     <h2>Vývoj (posledních až 90 dní, po měsících)</h2>
     <ul>{hist or '<li>Bez historie</li>'}</ul>
-    <p><a href="/nabidka">Otevřít aktuální nabídky v Realitify</a> ·
-       <a href="https://mcp.realitify.cz/mcp">MCP server</a></p>
+    <p><a href="/o-nas">O Realitify</a> · <a href="https://mcp.realitify.cz/mcp">MCP server</a></p>
+    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
   </div>
 </body>
 </html>"""
@@ -362,9 +464,18 @@ def index_csv(store: Store) -> str:
 
 def render_faq(store: Store) -> str:
     praha = store.catalog_stats("Praha", "pronajem", "2+kk")
+    portals = public_portals_sentence()
     import json
 
     faqs = [
+        {
+            "q": "Co je Realitify?",
+            "a": (
+                "Realitify je agregátor nabídek bytů a domů z českých realitních portálů. "
+                f"Sjednocuje inzeráty z {portals} a dalších sledovaných zdrojů, "
+                "ukazuje tržní statistiky a umí hlídat nové nabídky podle filtrů."
+            ),
+        },
         {
             "q": "Jak rychle sehnat byt v Praze?",
             "a": (
@@ -389,6 +500,10 @@ def render_faq(store: Store) -> str:
             "q": "Jak poznat předraženou nabídku?",
             "a": "Porovnejte cenu s mediánem a průměrem za m² ve stejné lokalitě a dispozici (nástroj price_check v MCP nebo stránky /trh/…). Odchylka nad +10–15 % vůči průměru si zaslouží vysvětlení (stav, lokalita, vybavení).",
         },
+        {
+            "q": "Souvisí Realitify se společností Realtify nebo PriceHubble?",
+            "a": DISCLAIMER_CS,
+        },
     ]
     faq_ld = {
         "@context": "https://schema.org",
@@ -407,9 +522,9 @@ def render_faq(store: Store) -> str:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FAQ — Realitify</title>
-  <meta name="description" content="Odpovědi: jak sehnat byt v Praze, být první u nabídky, kolik stojí 2+kk, jak poznat předražený nájem. S živými čísly z katalogu." />
+  <meta name="description" content="Co je Realitify, jak agreguje české realitní nabídky, jak sehnat byt v Praze a jak poznat předražený nájem. S živými čísly z katalogu." />
   <link rel="canonical" href="https://realitify.cz/faq" />
-  <link rel="stylesheet" href="/static/site/site.css?v=4" />
+  <link rel="stylesheet" href="/static/site/site.css?v=8" />
   <script type="application/ld+json">{json.dumps(faq_ld, ensure_ascii=False)}</script>
 </head>
 <body class="legal-page">
@@ -420,23 +535,154 @@ def render_faq(store: Store) -> str:
 </html>"""
 
 
+def render_search(store: Store, q: str = "") -> str:
+    query = (q or "").strip()[:120]
+    items = _sample_listing_items(store, q=query, offer="pronajem", limit=20) if query else _sample_listing_items(store, offer="pronajem", limit=20)
+    listings = _listings_html(items, empty="Žádné nabídky pro tento dotaz.")
+    title_q = html.escape(query) if query else "aktuální nabídky"
+    return f"""<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hledat nabídky — Realitify</title>
+  <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify. Výsledky s odkazy na detaily u zdrojových portálů." />
+  <link rel="canonical" href="https://realitify.cz/hledat" />
+  <link rel="stylesheet" href="/static/site/site.css?v=8" />
+</head>
+<body class="legal-page">
+  <header class="navbar">
+    <a class="brand" href="/">REALITIFY</a>
+    <nav class="menu">
+      <a href="/trh/praha/pronajem">Praha</a>
+      <a href="/index">Index</a>
+      <a href="/o-nas">O nás</a>
+    </nav>
+  </header>
+  <header class="legal-header">
+    <h1 class="display">HLEDAT NABÍDKY</h1>
+    <p>Realitify agreguje nabídky bytů a domů z českých realitních portálů. Výsledky: {title_q}.</p>
+  </header>
+  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
+    <form method="get" action="/hledat" style="margin-bottom:1.5rem;display:flex;gap:8px;flex-wrap:wrap">
+      <label for="q" style="flex:1;min-width:220px">
+        <span class="field-label">Lokalita, dispozice nebo text</span>
+        <input id="q" name="q" type="search" value="{html.escape(query)}" placeholder="např. Praha 5 2+kk" style="width:100%;padding:10px;border:1px solid #d0d4cd;border-radius:8px" />
+      </label>
+      <button class="pill" type="submit" style="align-self:flex-end;padding:10px 20px">Hledat</button>
+    </form>
+    <h2>Výsledky</h2>
+    {listings}
+    <p><a href="/trh/praha/pronajem">Přehled trhu Praha</a> · <a href="/o-nas">O Realitify</a></p>
+    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
+  </div>
+</body>
+</html>"""
+
+
+def render_about_cs() -> str:
+    portals = public_portals_sentence()
+    return f"""<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>O nás — Realitify</title>
+  <meta name="description" content="Realitify je agregátor nabídek bytů a domů z českých realitních portálů. Provozuje Jiří Kolb (OSVČ), IČO 21527059." />
+  <link rel="canonical" href="https://realitify.cz/o-nas" />
+  <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
+  <link rel="stylesheet" href="/static/site/site.css?v=8" />
+</head>
+<body class="legal-page">
+  <header class="navbar">
+    <a class="brand" href="/">REALITIFY</a>
+    <nav class="menu">
+      <a href="/hledat">Hledat</a>
+      <a href="/faq">FAQ</a>
+      <a href="/about">English</a>
+    </nav>
+  </header>
+  <header class="legal-header">
+    <h1 class="display">O NÁS</h1>
+    <p>Realitify – všechny nabídky bytů a domů z českých realitních portálů na jednom místě.</p>
+  </header>
+  <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
+    <h2>Co je Realitify</h2>
+    <p>Realitify je český agregátor realitních nabídek. Stahuje a sjednocuje inzeráty bytů a domů z hlavních portálů ({html.escape(portals)}), odstraňuje duplicity a umožňuje prohlížet trh, porovnávat ceny a hlídat nové nabídky podle filtrů.</p>
+    <h2>Kdo provozuje službu</h2>
+    <p>Provozovatel: <strong>Jiří Kolb</strong>, podnikající fyzická osoba (OSVČ), IČO <strong>21527059</strong>, sídlo <strong>Umělecká 618/7, 170 00 Praha 7 – Holešovice</strong>. Kontakt: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>.</p>
+    <h2>Od kdy</h2>
+    <p>Služba Realitify je v provozu od roku 2025.</p>
+    <h2>Jak funguje agregace</h2>
+    <p>Scrapery průběžně procházejí veřejné výpisy portálů, ukládají aktivní inzeráty do katalogu a aktualizují first_seen / last_seen. Veřejné stránky (/trh/…, /index, /hledat) a MCP server čtou z tohoto katalogu. Placené hlídání posílá notifikace při nových shodách s nastavenými filtry.</p>
+    <p>{html.escape(DISCLAIMER_CS)}</p>
+  </div>
+</body>
+</html>"""
+
+
+def render_about_en() -> str:
+    portals = ", ".join(PUBLIC_PORTAL_LABELS[:-1]) + ", and " + PUBLIC_PORTAL_LABELS[-1]
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About — Realitify</title>
+  <meta name="description" content="Realitify is a Czech real-estate listings aggregator. Operated by Jiří Kolb (sole trader), Company ID 21527059." />
+  <link rel="canonical" href="https://realitify.cz/about" />
+  <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
+  <link rel="stylesheet" href="/static/site/site.css?v=8" />
+</head>
+<body class="legal-page">
+  <header class="navbar">
+    <a class="brand" href="/">REALITIFY</a>
+    <nav class="menu">
+      <a href="/hledat">Search</a>
+      <a href="/faq">FAQ</a>
+      <a href="/o-nas">Česky</a>
+    </nav>
+  </header>
+  <header class="legal-header">
+    <h1 class="display">ABOUT</h1>
+    <p>Realitify — Czech apartment and house listings from major portals, in one place.</p>
+  </header>
+  <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
+    <h2>What Realitify is</h2>
+    <p>Realitify is a Czech real-estate listings aggregator. It collects and deduplicates ads for flats and houses from major portals ({html.escape(portals)}), exposes market stats, and can watch for new matches against user filters.</p>
+    <h2>Operator</h2>
+    <p>Operator: <strong>Jiří Kolb</strong>, sole trader (OSVČ), Company ID (IČO) <strong>21527059</strong>, registered office <strong>Umělecká 618/7, 170 00 Praha 7 – Holešovice</strong>, Czech Republic. Contact: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>.</p>
+    <h2>Since when</h2>
+    <p>Realitify has been operating since 2025.</p>
+    <h2>How aggregation works</h2>
+    <p>Scrapers continuously read public portal listings into a catalog (first_seen / last_seen). Public pages (/trh/…, /index, /hledat) and the MCP server read from that catalog. Paid watches send alerts when new listings match a filter.</p>
+    <p>{html.escape(DISCLAIMER_EN)}</p>
+  </div>
+</body>
+</html>"""
+
+
 def llms_txt() -> str:
-    return """# Realitify
+    portals = public_portals_sentence()
+    return f"""# Realitify
 
-> Czech real-estate listing aggregator and alert service with a public read-only MCP connector.
+> Czech real-estate listing aggregator for apartments and houses from major Czech portals, with alerts and a public read-only MCP connector.
 
-Realitify monitors major Czech property portals and lets users watch for new rentals and sales. Public MCP for AI assistants is available without login.
+Realitify aggregates active listings from {portals} (UlovDomov currently omitted while unstable). It is operated by Jiří Kolb (sole trader / OSVČ, IČO 21527059) since 2025. {DISCLAIMER_EN}
 
 ## Docs
 
 - [MCP docs](https://realitify.cz/mcp-docs): Public MCP connector documentation
 - [FAQ](https://realitify.cz/faq): Frequently asked questions about Realitify
+- [About](https://realitify.cz/o-nas): What Realitify is and who operates it
+- [About (EN)](https://realitify.cz/about): English about page
 
 ## Data
 
 - [Home](https://realitify.cz/): Product landing page
+- [Search](https://realitify.cz/hledat): Public SSR listing search with links to source details
 - [Rent index](https://realitify.cz/index): Czech rent index overview
-- [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page
+- [Praha market](https://realitify.cz/trh/praha/pronajem): Praha rental market page with sample listings
 - [Smíchov market](https://realitify.cz/trh/smichov/pronajem): Smíchov rental market page
 
 ## MCP

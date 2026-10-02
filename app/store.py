@@ -5966,6 +5966,14 @@ class Store:
             params.extend(dispositions)
         return where, params
 
+    def catalog_total_active(self) -> int:
+        """Count of currently active listings across the whole catalog."""
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS active_count FROM listings WHERE IFNULL(gone, 0) = 0"
+            ).fetchone()
+        return int(row["active_count"] or 0) if row else 0
+
     def catalog_active_count(
         self,
         district: str = "",

@@ -248,6 +248,9 @@ _PUBLIC_UI_PATHS = {
     "/hry",
     "/hry/vyssi-nizsi",
     "/hry/najem",
+    "/o-nas",
+    "/about",
+    "/hledat",
 }
 
 
@@ -384,8 +387,23 @@ def page() -> HTMLResponse:
     return HTMLResponse(html, headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
-def landing() -> FileResponse:
-    return FileResponse(config.WEB_DIR / "site" / "index.html", headers={"Cache-Control": _PUBLIC_HTML_CACHE})
+def landing() -> HTMLResponse:
+    from app import market_pages
+    import html as html_lib
+
+    html = (config.WEB_DIR / "site" / "index.html").read_text(encoding="utf-8")
+    store = _public_store() or hub.store
+    try:
+        active = int(store.catalog_total_active())
+    except Exception:
+        active = 0
+    portals = market_pages.public_portals_sentence()
+    html = (
+        html.replace("__ACTIVE_COUNT__", market_pages._fmt_int(active))
+        .replace("__PORTALS_LIST__", html_lib.escape(portals))
+        .replace("__PORTALS_COUNT__", str(len(market_pages.PUBLIC_PORTAL_LABELS)))
+    )
+    return HTMLResponse(html, headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 def byt_preview() -> FileResponse:
@@ -449,6 +467,26 @@ async def market_faq() -> HTMLResponse:
     store = _public_store() or hub.store
     html = await asyncio.to_thread(market_pages.render_faq, store)
     return HTMLResponse(html, headers={"Cache-Control": "public, max-age=1800"})
+
+
+async def market_search(q: str = "") -> HTMLResponse:
+    from app import market_pages
+
+    store = _public_store() or hub.store
+    html = await asyncio.to_thread(market_pages.render_search, store, q)
+    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=300"})
+
+
+def about_cs() -> HTMLResponse:
+    from app import market_pages
+
+    return HTMLResponse(market_pages.render_about_cs(), headers={"Cache-Control": _PUBLIC_HTML_CACHE})
+
+
+def about_en() -> HTMLResponse:
+    from app import market_pages
+
+    return HTMLResponse(market_pages.render_about_en(), headers={"Cache-Control": _PUBLIC_HTML_CACHE})
 
 
 async def market_trh(locality: str, offer: str) -> HTMLResponse:
@@ -525,7 +563,10 @@ def admin_page() -> FileResponse:
 SEO_PAGES = [
     ("/", "daily", "1.0"),
     ("/index", "daily", "0.9"),
+    ("/hledat", "daily", "0.9"),
     ("/faq", "weekly", "0.8"),
+    ("/o-nas", "monthly", "0.7"),
+    ("/about", "monthly", "0.6"),
     ("/mcp-docs", "weekly", "0.8"),
     ("/llms.txt", "monthly", "0.5"),
     ("/pronajem-praha", "weekly", "0.9"),
@@ -841,6 +882,9 @@ app.add_api_route("/mcp-docs-cs", mcp_docs_cs, methods=["GET"], include_in_schem
 app.add_api_route("/index", market_index, methods=["GET"], include_in_schema=False)
 app.add_api_route("/index.csv", market_index_csv, methods=["GET"], include_in_schema=False)
 app.add_api_route("/faq", market_faq, methods=["GET"], include_in_schema=False)
+app.add_api_route("/hledat", market_search, methods=["GET"], include_in_schema=False)
+app.add_api_route("/o-nas", about_cs, methods=["GET"], include_in_schema=False)
+app.add_api_route("/about", about_en, methods=["GET"], include_in_schema=False)
 app.add_api_route("/trh/{locality}/{offer}", market_trh, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
