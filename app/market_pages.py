@@ -472,7 +472,7 @@ def render_faq(store: Store) -> str:
             "q": "Co je Realitify?",
             "a": (
                 "Realitify je agregátor nabídek bytů a domů z českých realitních portálů. "
-                f"Sjednocuje inzeráty z {portals} a dalších sledovaných zdrojů, "
+                f"Sjednocuje inzeráty ze {portals} a dalších sledovaných zdrojů, "
                 "ukazuje tržní statistiky a umí hlídat nové nabídky podle filtrů."
             ),
         },
@@ -547,6 +547,7 @@ def render_search(store: Store, q: str = "") -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hledat nabídky — Realitify</title>
   <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify. Výsledky s odkazy na detaily u zdrojových portálů." />
+  <meta name="robots" content="noindex, follow" />
   <link rel="canonical" href="https://realitify.cz/hledat" />
   <link rel="stylesheet" href="/static/site/site.css?v=8" />
 </head>

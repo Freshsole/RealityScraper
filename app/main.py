@@ -563,7 +563,6 @@ def admin_page() -> FileResponse:
 SEO_PAGES = [
     ("/", "daily", "1.0"),
     ("/index", "daily", "0.9"),
-    ("/hledat", "daily", "0.9"),
     ("/faq", "weekly", "0.8"),
     ("/o-nas", "monthly", "0.7"),
     ("/about", "monthly", "0.6"),

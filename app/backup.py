@@ -144,7 +144,7 @@ def _write_env(settings: dict[str, Any]) -> None:
 
 def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) -> None:
     if payload.get("kind") not in {None, "sreality-monitor"}:
-        raise ValueError("Soubor není export z Sreality monitoru")
+        raise ValueError("Soubor není export ze Sreality monitoru")
     apply_settings(payload.get("settings") if isinstance(payload.get("settings"), dict) else None)
     now = utc_now()
     with store.connect() as conn:
