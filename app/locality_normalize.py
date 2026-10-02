@@ -30,6 +30,7 @@ KNOWN_CITIES = [
     "Jihlava",
     "Teplice",
     "Děčín",
+    "Karlovy Vary",
 ]
 
 
@@ -56,8 +57,16 @@ _ALIASES: dict[str, str] = {
     "pilsen": "Plzeň",
     "olomouc": "Olomouc",
     "liberec": "Liberec",
+    "hradec kralove": "Hradec Králové",
+    "pardubice": "Pardubice",
+    "ceske budejovice": "České Budějovice",
+    "usti nad labem": "Ústí nad Labem",
+    "zlin": "Zlín",
+    "jihlava": "Jihlava",
+    "karlovy vary": "Karlovy Vary",
     "smichov": "Praha 5",
     "kosire": "Praha 5",
+    "stodulky": "Praha 5",
     "vinohrady": "Praha 2",
     "zizkov": "Praha 3",
     "karlin": "Praha 8",
@@ -66,8 +75,11 @@ _ALIASES: dict[str, str] = {
     "vrsovice": "Praha 10",
     "nusle": "Praha 4",
     "krc": "Praha 4",
+    "chodov": "Praha 4",
+    "liben": "Praha 8",
+    "strasnice": "Praha 10",
 }
-for n in range(1, 11):
+for n in range(1, 23):
     _ALIASES[f"prague {n}"] = f"Praha {n}"
     _ALIASES[f"praha {n}"] = f"Praha {n}"
     _ALIASES[f"praha{n}"] = f"Praha {n}"

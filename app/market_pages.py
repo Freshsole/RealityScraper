@@ -5,42 +5,170 @@ from __future__ import annotations
 import csv
 import html
 import io
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
-from app.locality_normalize import normalize_locality
+from app.locality_normalize import _fold, normalize_locality
 from app.store import PRAGUE_DISTRICTS, Store
 
-MARKET_LOCALITIES: list[str] = (
-    [f"Praha {n}" for n in range(1, 11)]
-    + ["Praha", "Brno", "Ostrava", "Plzeň", "Olomouc"]
+# Cities / numbered city parts candidates (pages only if ≥20 active for that offer).
+MARKET_CITIES: list[str] = (
+    ["Praha"]
+    + [f"Praha {n}" for n in range(1, 23)]
+    + [
+        "Brno",
+        "Ostrava",
+        "Plzeň",
+        "Olomouc",
+        "Liberec",
+        "Hradec Králové",
+        "Pardubice",
+        "České Budějovice",
+        "Ústí nad Labem",
+        "Zlín",
+        "Jihlava",
+        "Karlovy Vary",
+    ]
 )
+
+# Prague neighborhoods reliably present as text in listings.locality
+# (typically "Praha N - Název"). Filtered with locality LIKE name AND LIKE '%Praha%'.
+# Excluded after data check: Letná (almost no Praha+Letná rows; Děčín-Letná noise),
+# Bubny (0 rows).
+MARKET_NEIGHBORHOODS: list[str] = [
+    "Smíchov",
+    "Vinohrady",
+    "Žižkov",
+    "Karlín",
+    "Holešovice",
+    "Dejvice",
+    "Nusle",
+    "Vršovice",
+    "Libeň",
+    "Strašnice",
+    "Stodůlky",
+    "Chodov",
+    "Košíře",
+    "Bubeneč",
+    "Břevnov",
+    "Prosek",
+    "Vysočany",
+    "Michle",
+    "Malešice",
+    "Záběhlice",
+    "Krč",
+    "Podolí",
+    "Jinonice",
+    "Radlice",
+    "Hlubočepy",
+    "Motol",
+    "Braník",
+    "Kunratice",
+    "Hloubětín",
+    "Kbely",
+    "Bohnice",
+    "Kobylisy",
+    "Čimice",
+    "Ďáblice",
+    "Střížkov",
+    "Nové Město",
+    "Malá Strana",
+    "Staré Město",
+    "Josefov",
+    "Hradčany",
+    "Vyšehrad",
+    "Troja",
+    "Veleslavín",
+    "Vokovice",
+    "Liboc",
+    "Ruzyně",
+    "Suchdol",
+    "Nebušice",
+    "Háje",
+    "Modřany",
+    "Řepy",
+    "Letňany",
+    "Černý Most",
+    "Hostivař",
+    "Zbraslav",
+    "Radotín",
+    "Uhříněves",
+]
+
+MARKET_LOCALITIES: list[str] = MARKET_CITIES + MARKET_NEIGHBORHOODS
+
+MIN_ACTIVE = 20
+
+
+def _parents_for_neighborhood(name: str) -> list[str]:
+    parents: list[str] = []
+    for num, areas in PRAGUE_DISTRICTS.items():
+        if name in areas:
+            parents.append(f"Praha {num}")
+    return parents
+
+
+def _children_for_district(district: str) -> list[str]:
+    m = __import__("re").match(r"(?i)^praha[-\s]*(\d{1,2})$", district.strip())
+    if not m:
+        return []
+    areas = PRAGUE_DISTRICTS.get(m.group(1)) or []
+    return [a for a in areas if a in MARKET_NEIGHBORHOODS]
 
 
 def slugify_locality(label: str) -> str:
-    from app.locality_normalize import _fold
-
     return _fold(label).replace(" ", "-")
 
 
 def locality_from_slug(slug: str) -> str:
+    """Resolve URL slug to a market locality label without collapsing neighborhoods."""
     raw = (slug or "").replace("-", " ").strip()
+    folded = _fold(raw)
+    for label in MARKET_LOCALITIES:
+        if _fold(label) == folded:
+            return label
+    # Known neighborhood aliases that normalize to Praha N for MCP search —
+    # keep the neighborhood label for /trh/ pages.
+    for label in MARKET_NEIGHBORHOODS:
+        if _fold(label) == folded:
+            return label
     return normalize_locality(raw) or raw.title()
+
+
+def _active_count(store: Store, locality: str, offer: str) -> int:
+    try:
+        return int(store.catalog_active_count(locality, offer))
+    except ValueError:
+        return 0
+
+
+def market_inventory(store: Store) -> dict[str, list[dict[str, Any]]]:
+    """Classify candidates into included (≥20) and skipped (<20) with counts."""
+    included: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for loc in MARKET_LOCALITIES:
+        kind = "neighborhood" if loc in MARKET_NEIGHBORHOODS else "city"
+        for offer in ("pronajem", "prodej"):
+            count = _active_count(store, loc, offer)
+            row = {
+                "locality": loc,
+                "offer": offer,
+                "active_count": count,
+                "kind": kind,
+                "path": f"/trh/{slugify_locality(loc)}/{offer}",
+                "parents": _parents_for_neighborhood(loc) if kind == "neighborhood" else [],
+            }
+            if count >= MIN_ACTIVE:
+                included.append(row)
+            else:
+                skipped.append(row)
+    return {"included": included, "skipped": skipped}
 
 
 def list_market_paths(store: Store) -> list[tuple[str, str, str]]:
     """Return (path, locality, offer) for localities with enough data."""
-    paths: list[tuple[str, str, str]] = []
-    for loc in MARKET_LOCALITIES:
-        for offer in ("pronajem", "prodej"):
-            try:
-                stats = store.catalog_stats(loc, offer)
-            except ValueError:
-                continue
-            if int(stats.get("active_count") or 0) < 20:
-                continue
-            paths.append((f"/trh/{slugify_locality(loc)}/{offer}", loc, offer))
-    return paths
+    inv = market_inventory(store)
+    return [(r["path"], r["locality"], r["offer"]) for r in inv["included"]]
 
 
 def _fmt_czk(value: Any) -> str:
@@ -61,6 +189,34 @@ def _fmt_m2(value: Any) -> str:
         return "—"
 
 
+def _nav_links_html(store: Store, locality: str, offer: str) -> str:
+    parts: list[str] = []
+    if locality in MARKET_NEIGHBORHOODS:
+        parents = _parents_for_neighborhood(locality)
+        for parent in parents:
+            if _active_count(store, parent, offer) >= MIN_ACTIVE:
+                parts.append(
+                    f'<a href="/trh/{slugify_locality(parent)}/{offer}">'
+                    f"{html.escape(parent)}</a>"
+                )
+        if parts:
+            return "<p>Městská část: " + ", ".join(parts) + "</p>"
+        if parents:
+            return "<p>Městská část: " + ", ".join(html.escape(p) for p in parents) + " (bez samostatné stránky)</p>"
+        return ""
+    children = _children_for_district(locality)
+    links: list[str] = []
+    for child in children:
+        if _active_count(store, child, offer) >= MIN_ACTIVE:
+            links.append(
+                f'<a href="/trh/{slugify_locality(child)}/{offer}">'
+                f"{html.escape(child)}</a>"
+            )
+    if links:
+        return "<p>Čtvrti: " + ", ".join(links) + "</p>"
+    return ""
+
+
 def render_prehled(store: Store, locality: str, offer: str) -> str:
     report = store.catalog_locality_report(locality, offer)
     offer_label = "pronájem" if offer == "pronajem" else "prodej"
@@ -78,6 +234,7 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
         f"{int(h.get('new_count') or 0)} nových, avg {_fmt_m2(h.get('avg_price_per_m2'))}</li>"
         for h in (report.get("history_90d") or [])[-12:]
     )
+    nav = _nav_links_html(store, locality, offer)
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
@@ -115,6 +272,7 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
     <p>Data z agregovaného katalogu Realitify. Aktualizováno: {html.escape(updated)} UTC</p>
   </header>
   <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
+    {nav}
     <ul>
       <li>Aktivní nabídky: <strong>{int(report.get('active_count') or 0)}</strong></li>
       <li>Nové za 7 dní: <strong>{int(report.get('new_last_7_days') or 0)}</strong></li>
@@ -138,8 +296,7 @@ def render_prehled(store: Store, locality: str, offer: str) -> str:
 
 
 def render_index(store: Store) -> str:
-    cz = store.catalog_stats("Praha", "pronajem")  # baseline; also fetch Brno etc
-    praha = cz
+    praha = store.catalog_stats("Praha", "pronajem")
     brno = store.catalog_stats("Brno", "pronajem")
     ostrava = store.catalog_stats("Ostrava", "pronajem")
     today = date.today().isoformat()
@@ -293,6 +450,7 @@ search_listings, new_listings, get_listing, locality_stats, price_check, compare
 - https://realitify.cz/index (rent index)
 - https://realitify.cz/faq
 - https://realitify.cz/trh/praha/pronajem
+- https://realitify.cz/trh/smichov/pronajem
 - https://realitify.cz/privacy
 - https://realitify.cz/terms
 

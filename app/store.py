@@ -406,14 +406,16 @@ PRAGUE_DISTRICTS = {
     "1": ["Staré Město", "Josefov", "Malá Strana", "Hradčany", "Nové Město"],
     "2": ["Vinohrady", "Nové Město", "Vyšehrad", "Nusle"],
     "3": ["Žižkov", "Vinohrady"],
-    "4": ["Nusle", "Podolí", "Braník", "Hodkovičky", "Krč", "Lhotka", "Kamýk", "Kunratice"],
-    "5": ["Smíchov", "Košíře", "Motol", "Radlice", "Jinonice", "Hlubočepy"],
-    "6": ["Dejvice", "Bubeneč", "Střešovice", "Břevnov", "Veleslavín", "Vokovice", "Liboc", "Ruzyně", "Lysolaje", "Sedlec", "Suchdol", "Nebušice"],
+    "4": ["Nusle", "Podolí", "Braník", "Hodkovičky", "Krč", "Lhotka", "Kamýk", "Kunratice", "Chodov", "Háje", "Modřany"],
+    "5": ["Smíchov", "Košíře", "Motol", "Radlice", "Jinonice", "Hlubočepy", "Stodůlky", "Zbraslav", "Radotín"],
+    "6": ["Dejvice", "Bubeneč", "Střešovice", "Břevnov", "Veleslavín", "Vokovice", "Liboc", "Ruzyně", "Lysolaje", "Sedlec", "Suchdol", "Nebušice", "Řepy"],
     "7": ["Holešovice", "Bubny", "Letná", "Troja"],
     "8": ["Karlín", "Libeň", "Bohnice", "Kobylisy", "Čimice", "Ďáblice", "Dolní Chabry", "Troja"],
-    "9": ["Vysočany", "Prosek", "Střížkov", "Hloubětín", "Hrdlořezy", "Kbely"],
-    "10": ["Vršovice", "Strašnice", "Malešice", "Záběhlice", "Michle"],
+    "9": ["Vysočany", "Prosek", "Střížkov", "Hloubětín", "Hrdlořezy", "Kbely", "Letňany", "Černý Most"],
+    "10": ["Vršovice", "Strašnice", "Malešice", "Záběhlice", "Michle", "Hostivař", "Uhříněves"],
 }
+# Praha 11–22: portals almost never write these numbers in locality text
+# (they use Praha 4/5/… + neighborhood). Kept empty on purpose — do not invent.
 _PRAHA_PLACE_RE = re.compile(r"praha[\s-]*(\d+)", re.I)
 
 
@@ -5874,6 +5876,11 @@ class Store:
         params: list[Any] = []
         districts = _csv(district)
         district_parts: list[str] = []
+        # Neighborhoods that appear in locality text; require "Praha" to avoid
+        # false hits (e.g. Staré Město elsewhere, Děčín-Letná).
+        prague_neighborhoods = {
+            area for areas in PRAGUE_DISTRICTS.values() for area in areas
+        }
         for item in districts:
             label = item.strip()
             if not label:
@@ -5886,8 +5893,17 @@ class Store:
                 district_parts.append("(listings.locality GLOB ? OR listings.locality GLOB ?)")
                 params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*"])
                 for area in PRAGUE_DISTRICTS.get(number) or []:
-                    district_parts.append("listings.locality LIKE ?")
+                    # Neighborhood under a numbered district: name + Praha context
+                    district_parts.append(
+                        "(listings.locality LIKE ? AND listings.locality LIKE '%Praha%')"
+                    )
                     params.append(f"%{area}%")
+                continue
+            if label in prague_neighborhoods:
+                district_parts.append(
+                    "(listings.locality LIKE ? AND listings.locality LIKE '%Praha%')"
+                )
+                params.append(f"%{label}%")
                 continue
             district_parts.append("listings.locality LIKE ?")
             params.append(f"%{label}%")
@@ -5915,6 +5931,25 @@ class Store:
             where.append(f"listings.disposition IN ({','.join('?' * len(dispositions))})")
             params.extend(dispositions)
         return where, params
+
+    def catalog_active_count(
+        self,
+        district: str = "",
+        offer: str = "",
+        disposition: str = "",
+    ) -> int:
+        """Fast active listing count for a locality filter."""
+        locality = (district or "").strip()
+        if not locality:
+            raise ValueError("district is required")
+        where, params = self._district_where(locality, offer, disposition)
+        clause = " AND ".join(where)
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS active_count FROM listings WHERE {clause}",
+                params,
+            ).fetchone()
+        return int(row["active_count"] or 0) if row else 0
 
     def catalog_stats(
         self,
