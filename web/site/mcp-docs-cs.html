@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP connector — REALITIFY</title>
+    <meta name="description" content="Připojte Claude nebo ChatGPT k českým realitním nabídkám přes Realitify MCP server." />
+    <link rel="canonical" href="https://realitify.cz/mcp-docs-cs" />
+    <link rel="alternate" hreflang="en" href="https://realitify.cz/mcp-docs" />
+    <link rel="alternate" hreflang="cs" href="https://realitify.cz/mcp-docs-cs" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=4" />
+  </head>
+  <body class="legal-page">
+    <header class="navbar">
+      <a class="brand" href="/">
+        <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
+        REALITIFY
+      </a>
+      <nav class="menu">
+        <a href="/ochrana-soukromi">Soukromí</a>
+        <a href="/obchodni-podminky">Podmínky</a>
+        <a href="/mcp-docs">English</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="pill pill-nav" href="mailto:podpora@realitify.cz">Podpora</a>
+      </div>
+    </header>
+
+    <div class="legal-crumbs">
+      <a href="/">Realitify</a>
+      <span>/</span>
+      <strong>MCP dokumentace</strong>
+    </div>
+
+    <header class="legal-header">
+      <h1 class="display">REALITIFY MCP</h1>
+      <div class="legal-meta">
+        <span class="legal-chip">CONNECTOR</span>
+        <p>Read-only české nabídky pro Claude a ChatGPT</p>
+      </div>
+    </header>
+
+    <div class="legal-cols">
+      <aside class="legal-toc">
+        <h2>OBSAH</h2>
+        <nav>
+          <a class="is-active" href="#co"><span class="toc-bar"></span>Co umí</a>
+          <a href="#url"><span class="toc-bar"></span>URL serveru</a>
+          <a href="#tools"><span class="toc-bar"></span>Nástroje</a>
+          <a href="#claude"><span class="toc-bar"></span>Přidání do Claude</a>
+          <a href="#chatgpt"><span class="toc-bar"></span>Přidání do ChatGPT</a>
+          <a href="#prompty"><span class="toc-bar"></span>Příklady promptů</a>
+          <a href="#podpora"><span class="toc-bar"></span>Podpora</a>
+        </nav>
+      </aside>
+
+      <div class="legal-body">
+        <section class="legal-section" id="co">
+          <h2><span>1.</span> Co umí</h2>
+          <div class="legal-copy">
+            <p>Veřejný MCP connector umožní AI asistentům hledat agregované české nabídky pronájmu a prodeje, otevřít detail nabídky a zobrazit statistiky lokality. Každý výsledek obsahuje odkaz na zdrojový portál i na Realitify. Bez přihlášení, pouze čtení.</p>
+          </div>
+        </section>
+        <section class="legal-section" id="url">
+          <h2><span>2.</span> URL serveru</h2>
+          <div class="legal-copy">
+            <p><code>https://mcp.realitify.cz/mcp</code></p>
+            <p>Transport: Streamable HTTP. Health: <code>https://mcp.realitify.cz/health</code>.</p>
+          </div>
+        </section>
+        <section class="legal-section" id="tools">
+          <h2><span>3.</span> Nástroje</h2>
+          <div class="legal-copy">
+            <p><strong>search_listings</strong> — lokalita, typ (<code>pronajem</code>/<code>prodej</code>), cena, dispozice, plocha; max 20 výsledků.</p>
+            <p><strong>get_listing</strong> — detail podle id nebo listing_key.</p>
+            <p><strong>locality_stats</strong> — počet aktivních nabídek a průměr Kč/m².</p>
+          </div>
+        </section>
+        <section class="legal-section" id="claude">
+          <h2><span>4.</span> Přidání do Claude</h2>
+          <div class="legal-copy">
+            <p>V Claude otevřete Connectors a přidejte vzdálené MCP URL <code>https://mcp.realitify.cz/mcp</code>. Veřejný connector nevyžaduje API klíč.</p>
+          </div>
+        </section>
+        <section class="legal-section" id="chatgpt">
+          <h2><span>5.</span> Přidání do ChatGPT</h2>
+          <div class="legal-copy">
+            <p>V ChatGPT Apps zvolte variantu <strong>With MCP</strong> a zadejte <code>https://mcp.realitify.cz/mcp</code>. Podle potřeby ověřte doménu <code>realitify.cz</code>.</p>
+          </div>
+        </section>
+        <section class="legal-section" id="prompty">
+          <h2><span>6.</span> Příklady promptů</h2>
+          <div class="legal-copy">
+            <p>„Hledám 2+kk v Praze do 20 000 Kč měsíčně.“</p>
+            <p>„Jaká je průměrná cena za m² pronájmu v Brně?“</p>
+            <p>„Otevři detail nabídky z předchozího hledání.“</p>
+          </div>
+        </section>
+        <section class="legal-section" id="podpora">
+          <h2><span>7.</span> Podpora</h2>
+          <div class="legal-copy">
+            <p>E-mail: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a></p>
+            <p><a href="/ochrana-soukromi">Ochrana soukromí</a> · <a href="/obchodni-podminky">Obchodní podmínky</a> · <a href="/mcp-docs">English</a></p>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <div class="footer-bot">
+        <p>© 2026 Realitify · MCP <code>https://mcp.realitify.cz/mcp</code></p>
+      </div>
+    </footer>
+    <script src="/static/site/legal.js"></script>
+  </body>
+</html>

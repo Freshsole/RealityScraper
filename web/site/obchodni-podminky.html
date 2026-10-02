@@ -26,6 +26,7 @@
     <link rel="stylesheet" href="/static/site/site.css?v=4" />
   </head>
   <body class="legal-page">
+    <!-- TODO: zkontrolovat právní text a firemní údaje před submitem do Claude/OpenAI directory -->
     <header class="navbar">
       <a class="brand" href="/">
         <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
@@ -70,7 +71,8 @@
           <a href="#prava"><span class="toc-bar"></span>5. Práva a povinnosti</a>
           <a href="#odpovednost"><span class="toc-bar"></span>6. Odpovědnost za škodu</a>
           <a href="#reklamace"><span class="toc-bar"></span>7. Reklamace a odstoupení</a>
-          <a href="#zaver"><span class="toc-bar"></span>8. Závěrečná ustanovení</a>
+          <a href="#mcp"><span class="toc-bar"></span>8. Veřejný MCP connector</a>
+          <a href="#zaver"><span class="toc-bar"></span>9. Závěrečná ustanovení</a>
         </nav>
         <hr />
         <div class="legal-toc-note">
@@ -129,8 +131,16 @@
             <p>Reklamace nefunkčnosti placených služeb je nutné uplatnit bez zbytečného odkladu písemně na e-mailovou adresu <a href="mailto:podpora@realitify.cz" style="text-decoration:underline">podpora@realitify.cz</a>. Poskytovatel se zavazuje vyřešit reklamaci nejpozději do 30 kalendářních dnů.</p>
           </div>
         </section>
+        <section class="legal-section" id="mcp">
+          <h2><span>8.</span> Veřejný MCP connector</h2>
+          <div class="legal-copy">
+            <p>Realitify provozuje veřejný read-only MCP server na adrese <code>https://mcp.realitify.cz/mcp</code>. Connector slouží AI klientům k vyhledávání a čtení agregovaných nabídek nemovitostí. Neumožňuje vytváření účtů, monitorů ani jiné zápisové operace.</p>
+            <p>Použitím connectoru se uživatel (nebo provozovatel AI klienta) zavazuje nepřetěžovat službu, neobcházet rate limiting a nevyužívat výstupy k hromadnému scrapování či redistribuci celé databáze. Dokumentace: <a href="/mcp-docs" style="text-decoration:underline">/mcp-docs</a>.</p>
+            <p>Provozovatel: <strong>[DOPLNIT: obchodní název]</strong>, IČO <strong>[DOPLNIT: IČO]</strong>, sídlo <strong>[DOPLNIT: sídlo]</strong>. Kontakt: <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>.</p>
+          </div>
+        </section>
         <section class="legal-section" id="zaver">
-          <h2><span>8.</span> Závěrečná ustanovení</h2>
+          <h2><span>9.</span> Závěrečná ustanovení</h2>
           <div class="legal-copy">
             <p>Tyto obchodní podmínky se řídí právním řádem České republiky, zejména zákonem č. 89/2012 Sb., občanský zákoník. Případné spory budou řešeny věcně a místně příslušnými soudy ČR.</p>
             <p>Poskytovatel si vyhrazuje právo na změnu znění těchto obchodních podmínek. O významných změnách budou uživatelé informováni e-mailem s dostatečným předstihem, minimálně 15 dní před nabytím účinnosti změn.</p>

@@ -5852,6 +5852,79 @@ class Store:
                 break
         return {"items": items}
 
+    def catalog_stats(self, district: str = "", offer: str = "") -> dict[str, Any]:
+        """Server-side locality stats: active count + average price per m²."""
+        locality = (district or "").strip()
+        if not locality:
+            raise ValueError("district is required")
+        where = ["IFNULL(listings.gone, 0) = 0"]
+        params: list[Any] = []
+        districts = _csv(locality)
+        district_parts: list[str] = []
+        for item in districts:
+            number = item.replace("praha-", "")
+            if number.isdigit():
+                district_parts.append("(listings.locality GLOB ? OR listings.locality GLOB ?)")
+                params.extend([f"*Praha {number}", f"*Praha {number}[!0-9]*"])
+                for area in PRAGUE_DISTRICTS.get(number) or []:
+                    district_parts.append("listings.locality LIKE ?")
+                    params.append(f"%{area}%")
+                continue
+            if item.startswith("R") and item[1:].isdigit():
+                continue
+            label = item.strip()
+            if not label:
+                continue
+            district_parts.append("listings.locality LIKE ?")
+            params.append(f"%{label}%")
+        if not district_parts:
+            raise ValueError("district is required")
+        where.append("(" + " OR ".join(district_parts) + ")")
+        offers = _csv(offer)
+        if offers:
+            offer_parts = []
+            for offer_key in offers:
+                if offer_key == "pronajem":
+                    offer_parts.append(
+                        "(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label LIKE ?))"
+                    )
+                    params.extend(['%"offer": "Pronájem"%', "%měsíc%"])
+                elif offer_key == "prodej":
+                    offer_parts.append(
+                        "(listings.extras LIKE ? OR ((listings.extras IS NULL OR listings.extras IN ('', '{}')) AND listings.price_label NOT LIKE ?))"
+                    )
+                    params.extend(['%"offer": "Prodej"%', "%měsíc%"])
+            if offer_parts:
+                where.append("(" + " OR ".join(offer_parts) + ")")
+        clause = " AND ".join(where)
+        sql = f"""
+            SELECT
+                COUNT(*) AS active_count,
+                AVG(
+                    CASE
+                        WHEN listings.price_czk IS NOT NULL
+                         AND listings.price_czk > 0
+                         AND listings.area_m2 IS NOT NULL
+                         AND listings.area_m2 > 0
+                        THEN listings.price_czk * 1.0 / listings.area_m2
+                        ELSE NULL
+                    END
+                ) AS avg_price_per_m2
+            FROM listings
+            WHERE {clause}
+        """
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(sql, params).fetchone()
+        active = int(row["active_count"] or 0) if row else 0
+        avg_raw = row["avg_price_per_m2"] if row else None
+        avg = round(float(avg_raw), 2) if avg_raw is not None else None
+        return {
+            "locality": locality,
+            "offer": (offer or "").strip(),
+            "active_count": active,
+            "avg_price_per_m2": avg,
+        }
+
     def catalog_facets(self) -> dict[str, Any]:
         now = time.monotonic()
         if self._facets_cache is not None and now - self._facets_at < config.FACETS_CACHE_SEC:

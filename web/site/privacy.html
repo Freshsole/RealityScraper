@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy Policy — REALITIFY</title>
+    <meta name="description" content="Realitify privacy policy, including the public MCP connector." />
+    <link rel="canonical" href="https://realitify.cz/privacy" />
+    <link rel="alternate" hreflang="cs" href="https://realitify.cz/ochrana-soukromi" />
+    <link rel="alternate" hreflang="en" href="https://realitify.cz/privacy" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=4" />
+  </head>
+  <body class="legal-page privacy-page">
+    <!-- TODO: review legal text and company details before Claude/OpenAI directory submit -->
+    <header class="navbar">
+      <a class="brand" href="/">
+        <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
+        REALITIFY
+      </a>
+      <nav class="menu">
+        <a href="/mcp-docs">MCP docs</a>
+        <a href="/terms">Terms</a>
+        <a href="/ochrana-soukromi">Česky</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="nav-login" href="/prihlaseni">Sign in</a>
+        <a class="pill pill-nav" href="/registrace">Try free</a>
+      </div>
+    </header>
+
+    <div class="legal-crumbs">
+      <a href="/terms">Legal</a>
+      <span>/</span>
+      <strong>Privacy Policy</strong>
+    </div>
+
+    <header class="privacy-hero">
+      <span class="privacy-pill">Updated for MCP connector</span>
+      <h1 class="display">PRIVACY POLICY</h1>
+      <p>How Realitify processes personal data, including the public MCP server</p>
+    </header>
+
+    <div class="legal-cols">
+      <aside class="legal-toc">
+        <h2>CONTENTS</h2>
+        <nav>
+          <a class="is-active" href="#controller"><span class="toc-bar"></span>1. Controller</a>
+          <a href="#data"><span class="toc-bar"></span>2. Data we process</a>
+          <a href="#mcp"><span class="toc-bar"></span>3. Public MCP connector</a>
+          <a href="#retention"><span class="toc-bar"></span>4. Retention</a>
+          <a href="#rights"><span class="toc-bar"></span>5. Your rights</a>
+          <a href="#contact"><span class="toc-bar"></span>6. Contact</a>
+        </nav>
+        <hr />
+        <div class="legal-toc-note">
+          <p>Questions?</p>
+          <a href="mailto:podpora@realitify.cz">podpora@realitify.cz</a>
+        </div>
+      </aside>
+
+      <div class="legal-body">
+        <section class="privacy-block" id="controller">
+          <div class="privacy-h"><span class="privacy-num">1</span><h2>Controller</h2></div>
+          <p class="privacy-copy">The controller is <strong>[DOPLNIT: company legal name]</strong>, registered office <strong>[DOPLNIT: registered address]</strong>, Czech Republic. Company ID (IČO): <strong>[DOPLNIT: IČO]</strong>. Contact: <strong>podpora@realitify.cz</strong>.</p>
+        </section>
+
+        <section class="privacy-block" id="data">
+          <div class="privacy-h"><span class="privacy-num">2</span><h2>Data we process</h2></div>
+          <p class="privacy-copy">For the Realitify web app we process account data (name, email, phone if provided), monitor settings, and technical logs needed to run the service. Details in Czech: <a href="/ochrana-soukromi">/ochrana-soukromi</a>.</p>
+        </section>
+
+        <section class="privacy-block" id="mcp">
+          <div class="privacy-h"><span class="privacy-num">3</span><h2>Public MCP connector</h2></div>
+          <p class="privacy-copy">The public MCP server at <code>https://mcp.realitify.cz/mcp</code> is read-only. It accepts search parameters from AI clients (locality, rent/sale, price, disposition, area, limit, listing id). It does not store AI chat transcripts or end-user names from Claude/ChatGPT.</p>
+          <p class="privacy-copy"><strong>Logging:</strong> client IP (in-memory rate limiting), request time, and response status. Listing responses strip broker names and phone numbers even if source portals contain them.</p>
+          <p class="privacy-copy"><strong>Retention:</strong> in-memory rate-limit counters expire within about 60 seconds or on process restart. Infrastructure access logs, if enabled, are kept for at most <strong>[DOPLNIT: access log retention period]</strong>.</p>
+        </section>
+
+        <section class="privacy-block" id="retention">
+          <div class="privacy-h"><span class="privacy-num">4</span><h2>Retention</h2></div>
+          <p class="privacy-copy">Account data is kept while the account is active and deleted or anonymized after closure, subject to legal retention (e.g. invoices). See the Czech policy for full detail.</p>
+        </section>
+
+        <section class="privacy-block" id="rights">
+          <div class="privacy-h"><span class="privacy-num">5</span><h2>Your rights</h2></div>
+          <p class="privacy-copy">Under GDPR you may request access, rectification, erasure, portability, or object to processing. Contact <a href="mailto:dpo@realitify.cz">dpo@realitify.cz</a>.</p>
+        </section>
+
+        <section class="privacy-block" id="contact">
+          <div class="privacy-h"><span class="privacy-num">6</span><h2>Contact</h2></div>
+          <p class="privacy-copy">Support: <strong>podpora@realitify.cz</strong>. DPO: <strong>dpo@realitify.cz</strong>. Postal: [DOPLNIT: company legal name], [DOPLNIT: registered address].</p>
+        </section>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <div class="footer-bot">
+        <p>© 2026 Realitify. <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/mcp-docs">MCP</a></p>
+      </div>
+    </footer>
+    <script src="/static/site/legal.js"></script>
+  </body>
+</html>

@@ -120,6 +120,9 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Sreality Monitor", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
+_public_dir = config.ROOT / "public"
+if _public_dir.is_dir():
+    app.mount("/public", StaticFiles(directory=_public_dir), name="public")
 
 
 def public_error(exc: BaseException, fallback: str = "Něco se nepovedlo. Zkuste to prosím znovu.") -> str:
@@ -214,6 +217,10 @@ async def no_store_ui(request: Request, call_next):
         "/obchodni-podminky",
         "/ochrana-soukromi",
         "/nastaveni-cookies",
+        "/privacy",
+        "/terms",
+        "/mcp-docs",
+        "/mcp-docs-cs",
         "/prihlaseni",
         "/registrace",
         "/heslo",
@@ -372,6 +379,22 @@ def terms() -> FileResponse:
 
 def privacy() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "ochrana-soukromi.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def privacy_en() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "privacy.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def terms_en() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "terms.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def mcp_docs() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "mcp-docs.html", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+def mcp_docs_cs() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "mcp-docs-cs.html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 def cookies_page() -> FileResponse:
@@ -698,6 +721,10 @@ app.add_api_route("/byt", byt_preview, methods=["GET"], include_in_schema=False)
 app.add_api_route("/kontakt", contact, methods=["GET"], include_in_schema=False)
 app.add_api_route("/obchodni-podminky", terms, methods=["GET"], include_in_schema=False)
 app.add_api_route("/ochrana-soukromi", privacy, methods=["GET"], include_in_schema=False)
+app.add_api_route("/privacy", privacy_en, methods=["GET"], include_in_schema=False)
+app.add_api_route("/terms", terms_en, methods=["GET"], include_in_schema=False)
+app.add_api_route("/mcp-docs", mcp_docs, methods=["GET"], include_in_schema=False)
+app.add_api_route("/mcp-docs-cs", mcp_docs_cs, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni-cookies", cookies_page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy", stories, methods=["GET"], include_in_schema=False)
 app.add_api_route("/uspechy/{slug}", story_article, methods=["GET"], include_in_schema=False)
@@ -1949,6 +1976,73 @@ async def public_gone_fast() -> dict:
     return {"items": items}
 
 
+@app.get("/api/public/catalog")
+async def public_catalog(
+    portal: str = "",
+    q: str = "",
+    disposition: str = "",
+    price_from: str = "",
+    price_to: str = "",
+    area_from: str = "",
+    area_to: str = "",
+    offer: str = "",
+    district: str = "",
+    estate: str = "",
+    sort: str = "newest",
+    limit: int = 20,
+    offset: int = 0,
+    facets: str = "0",
+) -> dict:
+    """Unauthenticated catalog search for the public MCP connector (server-side filters)."""
+    store = _public_store() or hub.store
+    capped = min(max(int(limit or 20), 1), 20)
+    payload = await place_geo.attach_geoms(
+        _catalog_filters(
+            portal=portal,
+            q=q,
+            disposition=disposition,
+            price_from=price_from,
+            price_to=price_to,
+            area_from=area_from,
+            area_to=area_to,
+            offer=offer,
+            district=district,
+            estate=estate,
+            sort=sort,
+            limit=capped,
+            offset=offset,
+            include_pins="0",
+            facets=facets,
+        )
+    )
+    return await _run_catalog_query(payload, store)
+
+
+@app.get("/api/public/catalog/stats")
+async def public_catalog_stats(district: str = "", offer: str = "") -> dict:
+    """Unauthenticated locality stats for the public MCP connector."""
+    store = _public_store() or hub.store
+    try:
+        return await asyncio.to_thread(store.catalog_stats, district, offer)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/public/catalog/item")
+async def public_catalog_item(
+    monitor_id: str = "",
+    id: str = "",
+    listing_key: str = "",
+    url: str = "",
+) -> dict:
+    """Unauthenticated listing detail (DB only, no live enrich) for the public MCP connector."""
+    store = _public_store() or hub.store
+    item = await asyncio.to_thread(store.catalog_item, monitor_id, id, listing_key, url)
+    if not item:
+        raise HTTPException(404, "Nabídka se nenašla")
+    return item
+
+
 @app.get("/api/public/games/higher-lower")
 async def public_game_higher_lower() -> dict:
     from app import games as marketing_games
@@ -2251,12 +2345,26 @@ async def catalog_pins(
     return await _run_catalog_query(payload, ustore)
 
 
+@app.get("/api/catalog/stats")
+async def catalog_stats(
+    district: str = "",
+    offer: str = "",
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    _, ustore = _user_store(realitify_session)
+    try:
+        return await asyncio.to_thread(ustore.catalog_stats, district, offer)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/catalog/item")
 async def catalog_item(
     monitor_id: str = "",
     id: str = "",
     listing_key: str = "",
     url: str = "",
+    enrich: str = "1",
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
     user, ustore = _user_store(realitify_session)
@@ -2265,6 +2373,9 @@ async def catalog_item(
     )
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
+    do_enrich = str(enrich or "1").strip().lower() not in {"0", "false", "no"}
+    if not do_enrich:
+        return item
     source_url = item.get("url") or url
     if source_url:
         try:

@@ -14,3 +14,7 @@ data/
 dist/
 build/
 core
+
+coolify.json
+.env.coolify
+mcp_server/.venv/
