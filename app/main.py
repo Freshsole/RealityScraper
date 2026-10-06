@@ -97,20 +97,9 @@ async def lifespan(_app: FastAPI):
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
-    # SSR cache first (homepage /trh), then heavier SEO inventory/sitemap warm.
-    # Delayed and non-forced: a blocking rebuild at startup can stall FastAPI
-    # lifespan past Coolify's healthcheck window. The scheduled loop keeps it fresh.
-    def _warm_ssr_cache() -> None:
-        try:
-            time.sleep(15)
-            from app import ssr_cache
-
-            print("ssr_cache startup warm begin", flush=True)
-            ssr_cache.ensure_fresh(hub.store, force=False, reason="startup")
-            print("ssr_cache startup warm done", flush=True)
-        except Exception as exc:
-            print(f"ssr_cache startup warm failed: {exc}", flush=True)
-
+    # SSR cache warm is handled by the scheduled loop below (starts in 5s).
+    # Do NOT warm at startup: a blocking rebuild stalls FastAPI lifespan past
+    # Coolify's healthcheck window and kills deployments. The loop keeps it fresh.
     def _warm_seo_sitemap() -> None:
         try:
             from app import market_seo
@@ -121,7 +110,6 @@ async def lifespan(_app: FastAPI):
         except Exception as exc:
             print(f"seo sitemap warm failed: {exc}", flush=True)
 
-    threading.Thread(target=_warm_ssr_cache, name="ssr-cache-warm", daemon=True).start()
     threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
     try:
         from app import ssr_cache
