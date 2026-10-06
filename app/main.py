@@ -933,12 +933,22 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
             n = int(row["n"] or 0)
             err_row = conn.execute(
                 "SELECT last_error, finished_at, started_at, upserts FROM scrape_jobs "
-                "WHERE portal = ? AND kind = 'catalog_daily' "
+                "WHERE portal = ? AND kind IN ('catalog_daily', 'catalog_recent') "
                 "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 1",
                 (pid,),
             ).fetchone()
             last_error = (err_row["last_error"] or "").strip() if err_row else ""
             finished_at = (err_row["finished_at"] or err_row["started_at"]) if err_row else None
+            # Listings refreshed by the high-priority discovery tick (catalog_recent shards)
+            # don't write scrape_jobs rows, so also check last_seen in catalog_listings.
+            seen_row = conn.execute(
+                "SELECT MAX(last_seen) m FROM catalog_listings "
+                "WHERE portal = ? AND IFNULL(gone, 0) = 0",
+                (pid,),
+            ).fetchone()
+            last_seen = seen_row["m"] if seen_row else None
+            if last_seen and (not finished_at or str(last_seen) > str(finished_at)):
+                finished_at = last_seen
             try:
                 fin_dt = datetime.fromisoformat(str(finished_at).replace("Z", "+00:00")) if finished_at else None
                 if fin_dt is not None and fin_dt.tzinfo is None:
@@ -964,7 +974,7 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
             if detail == "1":
                 shards = conn.execute(
                     "SELECT shard_key, status, last_error, upserts, finished_at FROM scrape_jobs "
-                    "WHERE portal = ? AND kind = 'catalog_daily' "
+                    "WHERE portal = ? AND kind IN ('catalog_daily', 'catalog_recent') "
                     "ORDER BY COALESCE(finished_at, started_at) DESC LIMIT 20",
                     (pid,),
                 ).fetchall()
@@ -977,7 +987,7 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
             if detail == "errors":
                 errs = conn.execute(
                     "SELECT last_error, COUNT(*) AS n, MAX(finished_at) AS last_at "
-                    "FROM scrape_jobs WHERE portal = ? AND kind = 'catalog_daily' "
+                    "FROM scrape_jobs WHERE portal = ? AND kind IN ('catalog_daily', 'catalog_recent') "
                     "AND status = 'error' AND last_error IS NOT NULL AND last_error != '' "
                     "AND COALESCE(finished_at, started_at) > datetime('now', '-24 hours') "
                     "GROUP BY last_error ORDER BY n DESC LIMIT 10",
