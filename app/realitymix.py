@@ -13,7 +13,7 @@ DETAIL_RE = re.compile(
     r'href="(https://realitymix\.cz/detail/[^"]+-(\d{7})\.html)"', re.I
 )
 TITLE_RE = re.compile(
-    r'class="[^"]*text-lg sm:text-xl font-extrabold[^"]*"[^>]*>(.*?)<',
+    r'<h2[^>]*class="[^"]*text-lg[^"]*"[^>]*>.*?<a[^>]*>(.*?)</a>',
     re.S | re.I,
 )
 PRICE_RE = re.compile(r'([\d\s\xa0]{4,12})\s*Kč', re.I)
@@ -55,7 +55,7 @@ class RealitymixClient(HtmlPortalClient):
         seen: set[str] = set()
         ctx = self._context()
         blocks = re.findall(
-            r'<li class="[^"]*advert-item[^"]*">(.*?)</li>', html or "", re.S | re.I
+            r'<li[^>]*class="[^"]*advert-item[^"]*"[^>]*>(.*?)</li>', html or "", re.S | re.I
         )
         for block in blocks:
             dm = DETAIL_RE.search(block)
