@@ -958,6 +958,10 @@ async def watchdog_status(token: str = Query(default=""), detail: str = Query(de
                 reasons.append(f"poslední běh: {finished_at}")
             if n == 0 and fin_dt is None:
                 reasons.append("0 nabídek v katalogu")
+            elif n == 0 and fin_dt is not None and not last_error:
+                # Portal ran successfully but has zero active listings —
+                # parser is likely broken (site changed HTML structure).
+                reasons.append("0 aktivních nabídek po úspěšném běhu (rozbitý parser?)")
             status = "down" if reasons else "ok"
             label = PORTAL_LABELS.get(pid, pid)
             entry = {"id": pid, "name": label, "status": status,
