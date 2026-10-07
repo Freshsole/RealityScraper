@@ -13,7 +13,7 @@ from app.portal_urls import (
 )
 from app.realitycz import RealityczClient
 from app.remax import RemaxClient
-from app.ulovdomov import UlovdomovClient, offers_from_payload
+from app.ulovdomov import UlovdomovClient, listing_from_detail, offers_from_payload
 
 
 CESKE = """
@@ -178,6 +178,109 @@ class ExtraPortalTests(unittest.TestCase):
         listing = client.listing_from_offer(rows[0], "pronajem")
         self.assertEqual(listing.id, 42)
         self.assertEqual(listing.price_czk, 15000)
+
+    def test_ulovdomov_detail_mapper(self):
+        data = {
+            "id": 3496443,
+            "offerTypeId": "rent",
+            "title": "Pronájem bytu 1+kk 18 m2",
+            "status": "ACTIVE",
+            "seo": "pronajem-usti-nad-labem-predlice-tovarni-1-kk",
+            "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-usti-nad-labem-predlice-tovarni-1-kk/3496443",
+            "rentalPrice": {"value": 6000, "currency": "CZK"},
+            "priceNote": "+ voda + elektřina",
+            "street": {"name": "Tovární"},
+            "village": {"name": "Ústí nad Labem"},
+            "geoCoordinates": {"lat": 50.65715, "lng": 14.00863},
+            "photos": [{"path": "https://storage.livendo.eu/cdn/image?id=abc&size=large"}],
+            "parameters": {
+                "disposition": {"options": [{"title": "1+kk"}]},
+                "floorArea": {"value": "18 m2"},
+            },
+        }
+        listing = listing_from_detail(data)
+        self.assertIsNotNone(listing)
+        self.assertEqual(listing.id, 3496443)
+        self.assertEqual(listing.price_czk, 6000)
+        self.assertEqual(listing.disposition, "1+kk")
+        self.assertEqual(listing.area_m2, 18)
+        self.assertIn("Ústí nad Labem", listing.locality)
+        self.assertAlmostEqual(listing.lat, 50.65715, places=4)
+        # Neaktivní nabídky se mapují na None (nesmí se dostat do katalogu).
+        self.assertIsNone(listing_from_detail({**data, "status": "INACTIVE"}))
+        self.assertIsNone(listing_from_detail({**data, "status": "DELETED"}))
+
+    def test_ulovdomov_sitemap_fallback_on_find_500(self):
+        import asyncio
+
+        from app import ulovdomov as ulov_mod
+
+        client = UlovdomovClient("https://www.ulovdomov.cz/pronajem/byty")
+
+        class FakeResp:
+            def __init__(self, status_code, text="", payload=None):
+                self.status_code = status_code
+                self._text = text
+                self._payload = payload
+
+            @property
+            def text(self):
+                return self._text
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        sitemap_xml = (
+            "<urlset>"
+            "<url><loc>https://www.ulovdomov.cz/inzerat/pronajem-praha/111</loc></url>"
+            "<url><loc>https://www.ulovdomov.cz/inzerat/prodej-praha/222</loc></url>"
+            "<url><loc>https://www.ulovdomov.cz/inzerat/-praha-oneroom/333</loc></url>"
+            "</urlset>"
+        )
+        detail_payload = {
+            "success": True,
+            "data": {
+                "id": 111,
+                "offerTypeId": "rent",
+                "title": "Pronájem bytu 2+kk",
+                "status": "ACTIVE",
+                "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-praha/111",
+                "rentalPrice": {"value": 20000, "currency": "CZK"},
+            },
+        }
+
+        async def fake_request(client_, method, url, **kwargs):
+            if url == ulov_mod.API:
+                return FakeResp(500)
+            if url == ulov_mod.SITEMAP_URL:
+                return FakeResp(200, text=sitemap_xml)
+            if url == ulov_mod.DETAIL_API:
+                return FakeResp(200, payload=detail_payload)
+            raise AssertionError(f"neočekávané URL: {url}")
+
+        async def run():
+            import app.scrape_http as sh
+
+            async def spy(c, method, url, **kw):
+                return await fake_request(c, method, url, **kw)
+
+            real = sh.request_with_log
+            sh.request_with_log = spy
+            try:
+                return await client.fetch_page(1)
+            finally:
+                sh.request_with_log = real
+                await client.aclose()
+
+        listings, total = asyncio.run(run())
+        # Jen pronájem ze sitemap (prodej se přeskočí), detail se namapuje.
+        self.assertEqual(total, 1)
+        self.assertEqual(len(listings), 1)
+        self.assertEqual(listings[0].id, 111)
+        self.assertEqual(listings[0].price_czk, 20000)
 
     def test_parse_total_is_bounded(self):
         from app.html_listing import parse_total
