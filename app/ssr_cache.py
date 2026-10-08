@@ -370,16 +370,52 @@ def ensure_fresh(store: Any, *, force: bool = False, reason: str = "interval") -
     return rebuild(store, reason=reason)
 
 
+def _persisted_cache_fresh() -> bool:
+    """True if the on-disk SSR cache was rebuilt within REBUILD_INTERVAL_SEC.
+
+    The ssr_cache.sqlite lives on the persistent volume, so it survives
+    container restarts/deploys. A fresh process boot must NOT trigger a heavy
+    full rebuild when the previous container rebuilt recently — that rebuild
+    starves the event loop (GIL) during exactly the Coolify healthcheck
+    window and gets deployments rolled back.
+    """
+    try:
+        page = get_page("home")
+        if not page:
+            return False
+        updated_raw = (page.get("updated_at") or "").strip()
+        if not updated_raw:
+            return False
+        updated = datetime.fromisoformat(updated_raw)
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - updated).total_seconds()
+        return 0 <= age < REBUILD_INTERVAL_SEC
+    except Exception:
+        return False
+
+
 def schedule_loop(store_factory: Any) -> None:
     """Daemon thread: rebuild every 15 minutes (and immediately if cache empty)."""
 
     def _run() -> None:
         time.sleep(5)
+        first = True
         while True:
             try:
                 store = store_factory() if callable(store_factory) else store_factory
                 if store is not None:
-                    ensure_fresh(store, reason="interval")
+                    if first:
+                        first = False
+                        if _persisted_cache_fresh():
+                            log.info(
+                                "ssr_cache: persisted cache is fresh, "
+                                "skipping heavy boot rebuild (deploy health)"
+                            )
+                        else:
+                            ensure_fresh(store, reason="interval")
+                    else:
+                        ensure_fresh(store, reason="interval")
             except Exception:
                 log.exception("ssr_cache schedule loop error")
             time.sleep(REBUILD_INTERVAL_SEC)

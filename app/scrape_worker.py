@@ -30,6 +30,12 @@ class ScrapeWorker:
         self._rescan_task: asyncio.Task[None] | None = None
         self._watch_task: asyncio.Task[None] | None = None
 
+    # Grace period after (re)deploy: keep the worker idle while Coolify
+    # healthchecks the new container (60s start + 3x30s attempts). Scraping
+    # is CPU-heavy and used to saturate the container during the healthcheck
+    # window, which got deployments rolled back.
+    BOOT_GRACE_SEC = 180
+
     async def run(self) -> None:
         self.running = True
         print(
@@ -38,6 +44,12 @@ class ScrapeWorker:
             f"recent_pages={config.SCRAPE_RECENT_PAGES}",
             flush=True,
         )
+        print(
+            f"scrape_worker boot grace {self.BOOT_GRACE_SEC}s "
+            "(deploy healthcheck window)",
+            flush=True,
+        )
+        await asyncio.sleep(self.BOOT_GRACE_SEC)
         await self._rescan_users()
         self._rescan_task = asyncio.create_task(self._rescan_loop(), name="worker-rescan-users")
         self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
