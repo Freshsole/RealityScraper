@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 
 from app.annonce import AnnonceClient
@@ -126,6 +127,29 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertEqual(items[0].area_m2, 52)
         self.assertIn("Praha", items[0].locality)
         self.assertTrue(items[0].url.endswith("/nemovitosti/778899/"))
+
+    def test_mmreality_bot_bypass(self):
+        # M&M blokuje datacentrové IP (Cloudflare 403) - klient musí mít
+        # browser-like hlavičky a homepage warmup jako Annonce.
+        client = MmrealityClient("https://www.mmreality.cz/nemovitosti/pronajem/")
+        self.assertEqual(client._client.headers.get("Sec-Fetch-Dest"), "document")
+        self.assertEqual(client._client.headers.get("Sec-Fetch-Mode"), "navigate")
+        self.assertIn("Chromium", client._client.headers.get("Sec-Ch-Ua"))
+        self.assertIn("cs-CZ", client._client.headers.get("Accept-Language"))
+
+        calls = []
+
+        async def fake_get(url, **kwargs):
+            calls.append(url)
+            return None
+
+        async def run():
+            client._client.get = fake_get
+            await client._warmup()
+            await client._warmup()  # podruhé už nic nedělá
+
+        asyncio.run(run())
+        self.assertEqual(calls, ["https://www.mmreality.cz/"])
 
     def test_mmreality_url_builder(self):
         self.assertTrue(
