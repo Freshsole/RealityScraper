@@ -102,6 +102,7 @@ async def _background_startup() -> None:
             print(f"seo sitemap warm failed: {exc}", flush=True)
 
     threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
+    threading.Thread(target=_diag_localhost_health, name="localhost-diag", daemon=True).start()
     try:
         from app import ssr_cache
 
@@ -109,6 +110,41 @@ async def _background_startup() -> None:
     except Exception:
         pass
     print("lifespan: background startup complete", flush=True)
+
+
+def _diag_localhost_health() -> None:
+    """Diagnose Docker healthcheck connectivity from inside the container.
+
+    Probes http://localhost:<port>/health via every resolved address family
+    and logs which succeed. This tells us definitively whether the
+    Coolify/Docker healthcheck failure is IPv6 (::1) vs IPv4 (127.0.0.1).
+    """
+    import socket as _socket
+
+    try:
+        port = int(os.environ.get("PORT") or config.PORT)
+    except Exception:
+        port = 8000
+    try:
+        infos = _socket.getaddrinfo("localhost", port, type=_socket.SOCK_STREAM)
+        print(
+            f"diag: localhost resolves to {[i[4] for i in infos]}",
+            flush=True,
+        )
+        for fam, _typ, _proto, _canon, sockaddr in infos:
+            s = _socket.socket(fam, _socket.SOCK_STREAM)
+            s.settimeout(3)
+            try:
+                s.connect(sockaddr)
+                s.sendall(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n")
+                resp = s.recv(60)
+                print(f"diag: {sockaddr} -> {resp[:40]!r}", flush=True)
+            except Exception as exc:
+                print(f"diag: {sockaddr} FAIL {type(exc).__name__}: {exc}", flush=True)
+            finally:
+                s.close()
+    except Exception as exc:
+        print(f"diag: localhost check error: {exc}", flush=True)
 
 
 @asynccontextmanager
