@@ -44,7 +44,7 @@ def _kill(proc: subprocess.Popen[bytes] | None) -> None:
 
 
 def _spawn_web() -> subprocess.Popen[bytes]:
-    port = os.environ.get("PORT") or str(config.PORT)
+    port = os.environ.get("PORT") or "8000"
     return subprocess.Popen(
         [
             sys.executable,

@@ -67,15 +67,8 @@ async def maybe_auto_update() -> None:
         print(f"Aktualizace se nepodařila: {exc}")
 
 
-@asynccontextmanager
-async def lifespan(_app: FastAPI):
-    from app.scrape_console import install_stdout_tee
-
-    install_stdout_tee()
-    print(
-        f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE} scrape_role={config.SCRAPE_ROLE}",
-        flush=True,
-    )
+async def _background_startup() -> None:
+    """Heavy init after lifespan yield so Coolify /health can pass immediately."""
     from app import perf_diag
 
     perf_diag.install_default_executor()
@@ -97,9 +90,7 @@ async def lifespan(_app: FastAPI):
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
-    # SSR cache warm is handled by the scheduled loop below (starts in 5s).
-    # Do NOT warm at startup: a blocking rebuild stalls FastAPI lifespan past
-    # Coolify's healthcheck window and kills deployments. The loop keeps it fresh.
+
     def _warm_seo_sitemap() -> None:
         try:
             from app import market_seo
@@ -117,9 +108,28 @@ async def lifespan(_app: FastAPI):
         ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
     except Exception:
         pass
+    print("lifespan: background startup complete", flush=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    install_stdout_tee()
+    print(
+        f"SQLite: {config.DB_PATH} persistent={config.PERSISTENT_STORAGE} scrape_role={config.SCRAPE_ROLE}",
+        flush=True,
+    )
+    startup_task = asyncio.create_task(_background_startup(), name="app-background-startup")
     try:
         yield
     finally:
+        if not startup_task.done():
+            startup_task.cancel()
+            try:
+                await startup_task
+            except asyncio.CancelledError:
+                pass
+        elif startup_task.exception() is not None:
+            print(f"lifespan: background startup failed: {startup_task.exception()!r}", flush=True)
         def _force_exit() -> None:
             time.sleep(2.5)
             os._exit(130)
@@ -225,7 +235,7 @@ async def static_asset_cache(request: Request, call_next):
 @app.middleware("http")
 async def record_ops_timing(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/static/"):
+    if path.startswith("/static/") or path == "/health":
         return await call_next(request)
     started = time.perf_counter()
     try:
@@ -2058,7 +2068,7 @@ async def perf_diag_snapshot(realitify_admin: str | None = Cookie(default=None, 
     return payload
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict:
     """Liveness for Coolify — must not touch ssr_cache or catalog SQLite."""
     return {"ok": True}
