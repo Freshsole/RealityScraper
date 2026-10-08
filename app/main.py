@@ -115,22 +115,44 @@ async def _background_startup() -> None:
 def _diag_localhost_health() -> None:
     """Diagnose Docker healthcheck connectivity from inside the container.
 
-    Probes http://localhost:<port>/health via every resolved address family
-    and logs which succeed. This tells us definitively whether the
-    Coolify/Docker healthcheck failure is IPv6 (::1) vs IPv4 (127.0.0.1).
+    Waits for uvicorn to finish binding, then polls http://localhost:<port>/
+    health via every resolved address family and dumps the actual listening
+    sockets from /proc. Definitive diagnosis for the Coolify healthcheck
+    failures (probes fail fast with exit 1 while the app reports ready).
     """
     import socket as _socket
+    import time as _time
 
     try:
         port = int(os.environ.get("PORT") or config.PORT)
     except Exception:
         port = 8000
+
+    def _listening_sockets() -> list[str]:
+        out: list[str] = []
+        for path, fam in (("/proc/net/tcp", "v4"), ("/proc/net/tcp6", "v6")):
+            try:
+                with open(path) as fh:
+                    lines = fh.read().splitlines()[1:]
+                for ln in lines:
+                    parts = ln.split()
+                    if len(parts) >= 4 and parts[3] == "0A":  # LISTEN
+                        out.append(f"{fam}:{parts[1]}")
+            except Exception as exc:
+                out.append(f"{fam}:err:{exc}")
+        return out
+
+    print(f"diag: PORT={port} listening={_listening_sockets()}", flush=True)
     try:
         infos = _socket.getaddrinfo("localhost", port, type=_socket.SOCK_STREAM)
-        print(
-            f"diag: localhost resolves to {[i[4] for i in infos]}",
-            flush=True,
-        )
+        print(f"diag: localhost -> {[i[4] for i in infos]}", flush=True)
+    except Exception as exc:
+        print(f"diag: getaddrinfo failed: {exc}", flush=True)
+        return
+    deadline = _time.monotonic() + 90
+    attempt = 0
+    while _time.monotonic() < deadline:
+        attempt += 1
         for fam, _typ, _proto, _canon, sockaddr in infos:
             s = _socket.socket(fam, _socket.SOCK_STREAM)
             s.settimeout(3)
@@ -138,13 +160,21 @@ def _diag_localhost_health() -> None:
                 s.connect(sockaddr)
                 s.sendall(b"GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n")
                 resp = s.recv(60)
-                print(f"diag: {sockaddr} -> {resp[:40]!r}", flush=True)
+                print(f"diag: attempt {attempt} {sockaddr} -> {resp[:40]!r} OK", flush=True)
+                return
             except Exception as exc:
-                print(f"diag: {sockaddr} FAIL {type(exc).__name__}: {exc}", flush=True)
+                print(
+                    f"diag: attempt {attempt} {sockaddr} FAIL "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
             finally:
                 s.close()
-    except Exception as exc:
-        print(f"diag: localhost check error: {exc}", flush=True)
+        _time.sleep(5)
+    print(
+        f"diag: GAVE UP after {attempt} attempts; listening={_listening_sockets()}",
+        flush=True,
+    )
 
 
 @asynccontextmanager
