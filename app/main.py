@@ -111,7 +111,24 @@ async def _background_startup() -> None:
         ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
     except Exception:
         pass
+    threading.Thread(target=_warm_admin_caches, name="admin-cache-warm", daemon=True).start()
     print("lifespan: background startup complete", flush=True)
+
+
+def _warm_admin_caches() -> None:
+    """Keep the heavy admin payload caches warm so the admin pages don't time out on first open."""
+    time.sleep(20)
+    while True:
+        try:
+            admin_id = _admin_user_id()
+            if admin_id:
+                astore = hub.store_for(admin_id)
+                admin_panel.ops_payload_cached(astore, hub)
+                admin_panel.billing_payload(astore, hub)
+                admin_panel.promo_payload(astore, "")
+        except Exception as exc:
+            print(f"admin cache warm failed: {exc}", flush=True)
+        time.sleep(240)
 
 
 def _diag_localhost_health() -> None:
@@ -1833,7 +1850,7 @@ async def admin_user_detail(
         raise HTTPException(404, "Uživatel neexistuje")
     try:
         return await asyncio.to_thread(
-            admin_panel.user_detail_payload, hub.store_for(str(target.get("id"))), target
+            admin_panel.user_detail_payload, hub.store_for(str(target.get("id"))), target, hub.store
         )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -1843,13 +1860,13 @@ async def admin_user_detail(
 async def admin_monitors(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     loop = asyncio.get_running_loop()
     _, astore = await loop.run_in_executor(hub.auth_pool, _admin_store, realitify_admin)
-    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, astore)
+    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, astore, hub.store, hub.store_for)
 
 
 @app.get("/api/admin/notifications")
 async def admin_notifications(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(admin_panel.notifications_payload, astore)
+    return await asyncio.to_thread(admin_panel.notifications_payload, astore, hub.store, hub.store_for)
 
 
 @app.post("/api/admin/broadcast")
@@ -1865,7 +1882,7 @@ async def admin_broadcast(
 @app.get("/api/admin/ops")
 async def admin_ops(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _, astore = await asyncio.to_thread(_admin_store, realitify_admin)
-    return await asyncio.to_thread(admin_panel.ops_payload, astore, hub)
+    return await asyncio.to_thread(admin_panel.ops_payload_cached, astore, hub)
 
 
 @app.get("/api/admin/scrape-progress")
@@ -1901,7 +1918,8 @@ async def admin_games(realitify_admin: str | None = Cookie(default=None, alias="
     from app import games as marketing_games
 
     await asyncio.to_thread(_admin_user, realitify_admin)
-    return await asyncio.to_thread(marketing_games.leaderboard, hub.store)
+    # Rounds are saved by public_game_rent_score() into the public (admin) store, not the global one.
+    return await asyncio.to_thread(marketing_games.leaderboard, _public_store() or hub.store)
 
 
 @app.post("/api/admin/scrape-url")
@@ -2004,6 +2022,10 @@ async def admin_dedupe_scan(realitify_admin: str | None = Cookie(default=None, a
     return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
+_CATALOG_QUALITY_CACHE: dict[int, dict[str, Any]] = {}
+_CATALOG_QUALITY_TTL = 300.0
+
+
 @app.get("/api/admin/catalog-quality")
 async def admin_catalog_quality_dry_run(
     max_age_hours: int = 72,
@@ -2012,7 +2034,25 @@ async def admin_catalog_quality_dry_run(
     """Dry-run counts via hub job_pool Store connection (not a side-process sqlite)."""
     _admin_user(realitify_admin)
     hours = max(24, min(720, int(max_age_hours or 72)))
-    return await hub.catalog_quality_dry_run(hours)
+    # The dry run json-decodes every live catalog row (seconds locally, far more in
+    # production), so serve a cached result and recompute in the background.
+    entry = _CATALOG_QUALITY_CACHE.setdefault(hours, {"at": 0.0, "data": None, "task": None})
+    if entry["data"] is not None and time.time() - entry["at"] < _CATALOG_QUALITY_TTL:
+        return {**entry["data"], "cached": True}
+    task = entry["task"]
+    if task is None or task.done():
+        async def _refresh() -> dict:
+            data = await hub.catalog_quality_dry_run(hours)
+            entry.update(at=time.time(), data=data)
+            return data
+
+        task = entry["task"] = asyncio.create_task(_refresh())
+    if entry["data"] is not None:
+        return {**entry["data"], "cached": True, "stale": True}
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=20)
+    except asyncio.TimeoutError:
+        return {"pending": True, "detail": "Kontrola katalogu se počítá na pozadí, zkus to za chvíli."}
 
 
 @app.post("/api/admin/catalog-quality/run")
@@ -2035,6 +2075,8 @@ async def admin_catalog_quality_run(
     result = await hub.run_catalog_quality_cleanup(
         max_age_hours=hours, dry_run=dry_run, chunk_size=chunk
     )
+    if not dry_run:
+        _CATALOG_QUALITY_CACHE.clear()
     if not result.get("ok"):
         reason = result.get("reason") or result.get("error") or "cleanup failed"
         raise HTTPException(409 if result.get("reason") == "already-running" else 500, str(reason))
@@ -2044,7 +2086,7 @@ async def admin_catalog_quality_run(
 @app.get("/api/admin/billing")
 async def admin_billing(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(admin_panel.billing_payload, astore)
+    return await asyncio.to_thread(admin_panel.billing_payload, astore, hub)
 
 
 @app.get("/api/admin/promo")
@@ -2156,7 +2198,7 @@ async def public_inquiry(payload: dict[str, Any] | None = Body(None)) -> dict:
 @app.get("/api/admin/cms")
 async def admin_cms_list(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(stories_cms.list_articles, astore)
+    return await asyncio.to_thread(stories_cms.list_articles, astore, hub.store)
 
 
 @app.post("/api/admin/cms-inquiry/{inquiry_id}")
@@ -2532,11 +2574,69 @@ async def public_stats() -> dict:
     return {"new_today": await asyncio.to_thread(store.catalog_new_today_count)}
 
 
+_IMG_OK_TTL_S = 6 * 3600
+_img_ok_cache: dict[str, tuple[float, bool]] = {}
+_CITY_LOCATIVE = {
+    "Praha": "v Praze",
+    "Brno": "v Brně",
+    "Ostrava": "v Ostravě",
+    "Plzeň": "v Plzni",
+    "Liberec": "v Liberci",
+    "Olomouc": "v Olomouci",
+    "České Budějovice": "v Českých Budějovicích",
+    "Hradec Králové": "v Hradci Králové",
+    "Pardubice": "v Pardubicích",
+    "Ústí nad Labem": "v Ústí nad Labem",
+}
+
+
+async def _image_loads(client: Any, url: str) -> bool:
+    hit = _img_ok_cache.get(url)
+    if hit and time.time() - hit[0] < _IMG_OK_TTL_S:
+        return hit[1]
+    ok = False
+    try:
+        async with client.stream("GET", url, headers={"Range": "bytes=0-1023"}) as r:
+            ctype = (r.headers.get("content-type") or "").lower()
+            ok = r.status_code in (200, 206) and ctype.startswith("image/")
+    except Exception:
+        ok = False
+    if len(_img_ok_cache) > 5000:
+        _img_ok_cache.clear()
+    _img_ok_cache[url] = (time.time(), ok)
+    return ok
+
+
+async def _loadable_cards(store: Any, city: str, need: int) -> list[dict[str, Any]]:
+    import httpx
+
+    cards = await asyncio.to_thread(store.landing_preview_listings, city, 12)
+    cards = [c for c in cards if str(c.get("image") or "").startswith("https://")]
+    if not cards:
+        return []
+    async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
+        flags = await asyncio.gather(*(_image_loads(client, c["image"]) for c in cards))
+    return [c for c, ok in zip(cards, flags) if ok][:need]
+
+
 @app.get("/api/public/landing-listings")
-async def public_landing_listings() -> dict:
+async def public_landing_listings(request: Request) -> dict:
+    from app import geo_city
+
     store = _public_store() or hub.store
-    items = await asyncio.to_thread(store.landing_preview_listings)
-    return {"items": items}
+    city = await geo_city.city_for_request(request.headers, _client_ip(request))
+    used = "Brno"
+    items: list[dict[str, Any]] = []
+    if city and city != "Brno":
+        items = await _loadable_cards(store, city, 3)
+        if len(items) >= 3:
+            used = city
+    if len(items) < 3:
+        used = "Brno"
+        items = await _loadable_cards(store, "Brno", 3)
+    label = _CITY_LOCATIVE.get(used)
+    title = f"Pronájmy {label} do 22 000 Kč" if label else f"Pronájmy – {used} do 22 000 Kč"
+    return {"items": items, "city": used, "title": title}
 
 
 def _guest_search_payload(request: Request, *, consume: bool) -> tuple[dict[str, Any], str | None]:

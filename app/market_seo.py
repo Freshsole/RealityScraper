@@ -1011,12 +1011,21 @@ def top_localities_html(store: Store, limit: int = 10) -> str:
     rows = top_localities(store, "pronajem", limit)
     if not rows:
         return ""
-    links = " · ".join(f'<a href="{html.escape(r["path"])}">{html.escape(r["locality"])}</a>' for r in rows)
+    cards = "".join(
+        f'<a class="loc-card" href="{html.escape(r["path"])}">'
+        f'<span class="loc-rank">{i:02d}</span>'
+        f'<span class="loc-name">{html.escape(r["locality"])}</span>'
+        f'<span class="loc-count">{int(r.get("active_count") or 0):,} nabídek</span>'.replace(",", "\u00a0")
+        + '<span class="loc-arrow" aria-hidden="true">→</span></a>'
+        for i, r in enumerate(rows, 1)
+    )
     return (
-        '<section class="market-top" style="padding:32px var(--gutter);background:#f7f9f6">'
+        '<section class="market-top">'
+        '<div class="section-head">'
         '<p class="eyebrow">PŘEHLED TRHU</p>'
-        '<h2 class="display" style="font-size:28px">TOP LOKALITY</h2>'
-        f"<p>{links}</p>"
-        '<p><a href="/hledat">Procházet všechny nabídky →</a></p>'
+        '<h2 class="display">NEJHLEDANĚJŠÍ LOKALITY K PRONÁJMU</h2>'
+        "</div>"
+        f'<div class="loc-grid">{cards}</div>'
+        '<a class="pill pill-lg" href="/hledat">Procházet všechny nabídky</a>'
         "</section>"
     )

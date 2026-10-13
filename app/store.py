@@ -2800,10 +2800,10 @@ class Store:
             )
         return token
 
-    def landing_preview_listings(self) -> list[dict[str, Any]]:
+    def landing_preview_listings(self, city: str = "Brno", count: int = 3) -> list[dict[str, Any]]:
         data = self.catalog(
             {
-                "district": "Brno",
+                "district": city or "Brno",
                 "disposition": "1+kk,1+1,2+kk,2+1,3+kk,3+1",
                 "price_to": 22000,
                 "offer": "pronajem",
@@ -2828,6 +2828,8 @@ class Store:
                 continue
             if area and area < 16:
                 continue
+            if not item.get("image_url"):
+                continue
             cleaned.append(item)
         items = cleaned
         picked: list[dict[str, Any]] = []
@@ -2848,13 +2850,9 @@ class Store:
             hit = next((item for item in items if matches_portal(item, needle)), None)
             if hit:
                 take(hit)
-            if len(picked) >= 3:
-                break
         for item in items:
-            if len(picked) >= 3:
-                break
             take(item)
-        return [self._landing_card(item) for item in picked[:3]]
+        return [self._landing_card(item) for item in picked[:count]]
 
     def _landing_card(self, item: dict[str, Any]) -> dict[str, Any]:
         portal = str(item.get("portal") or "")

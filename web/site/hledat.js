@@ -2,7 +2,6 @@
 (function () {
   'use strict';
   var gate = document.getElementById('gate');
-  var banner = document.getElementById('hl-banner');
   var wrap = document.getElementById('katalog');
   var frame = document.getElementById('hl-frame');
   var form = document.getElementById('hl-form');
@@ -13,7 +12,6 @@
   function show(unlocked, member) {
     gate.hidden = unlocked;
     wrap.hidden = !unlocked;
-    if (banner) banner.hidden = !unlocked || !!member;
     if (unlocked && !frame.getAttribute('src')) {
       frame.setAttribute('src', '/hledat/katalog' + location.search);
     }

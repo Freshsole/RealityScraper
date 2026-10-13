@@ -593,6 +593,15 @@
     );
   }
 
+  const COMMON_DISPOSITIONS = ["1+kk", "1+1", "2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1"];
+
+  function dispositionValues() {
+    return new Set([
+      ...chipValues($("cat-dispositions"), "disposition"),
+      ...chipValues($("cat-dispositions-more"), "disposition"),
+    ]);
+  }
+
   function syncChipGroup(root, attr, values) {
     root?.querySelectorAll(".chip").forEach((chip) => {
       chip.classList.toggle("on", values.has(chip.dataset[attr]));
@@ -611,6 +620,7 @@
 
   function syncFilterUi() {
     syncChipGroup($("cat-dispositions"), "disposition", selected.dispositions);
+    syncChipGroup($("cat-dispositions-more"), "disposition", selected.dispositions);
     syncChipGroup($("cat-amenities"), "flag", selected.amenities);
     syncChipGroup(document.querySelector('[data-filter="offer"]'), "value", selected.offers);
     syncChipGroup(document.querySelector('[data-filter="estate"]'), "value", selected.estates);
@@ -627,7 +637,7 @@
   }
 
   function readFilterUi() {
-    selected.dispositions = chipValues($("cat-dispositions"), "disposition");
+    selected.dispositions = dispositionValues();
     selected.amenities = chipValues($("cat-amenities"), "flag");
     selected.offers = chipValues(document.querySelector('[data-filter="offer"]'), "value");
     selected.estates = chipValues(document.querySelector('[data-filter="estate"]'), "value");
@@ -645,7 +655,13 @@
 
   function clearFilterUi() {
     $("filters-modal")?.querySelectorAll(".chip.on").forEach((chip) => chip.classList.remove("on"));
+    $("cat-dispositions")?.querySelectorAll(".chip.on").forEach((chip) => chip.classList.remove("on"));
+    $("cat-dispositions-more")?.querySelectorAll(".chip.on").forEach((chip) => chip.classList.remove("on"));
+    $("cat-offer")?.querySelectorAll(".chip.on").forEach((chip) => chip.classList.remove("on"));
     document.querySelector('[data-filter="offer"] [data-value="pronajem"]')?.classList.add("on");
+    $("cat-portals")?.querySelectorAll(".chip").forEach((chip) => {
+      chip.classList.toggle("on", (chip.dataset.portal || "") === selected.portal);
+    });
     if ($("cat-monitor")) $("cat-monitor").value = "";
     if ($("cat-sort")) $("cat-sort").value = "newest";
     ["cat-price-from", "cat-price-to", "cat-area-from", "cat-area-to"].forEach((id) => {
@@ -691,9 +707,12 @@
     facetMonitors = facets?.monitors || [];
     const host = $("cat-dispositions");
     const current = selected.dispositions;
-    host.innerHTML = (facets?.dispositions || [])
-      .map((item) => `<button type="button" class="chip${current.has(item) ? " on" : ""}" data-disposition="${escapeHtml(item)}">${escapeHtml(item)}</button>`)
-      .join("");
+    const chip = (item) => `<button type="button" class="chip${current.has(item) ? " on" : ""}" data-disposition="${escapeHtml(item)}">${escapeHtml(item)}</button>`;
+    host.innerHTML = COMMON_DISPOSITIONS.map(chip).join("");
+    const more = $("cat-dispositions-more");
+    if (more) {
+      more.innerHTML = (facets?.dispositions || []).filter((item) => !COMMON_DISPOSITIONS.includes(item)).map(chip).join("");
+    }
     const monitor = $("cat-monitor");
     const previous = selected.monitor;
     if (monitor) {
@@ -2271,10 +2290,27 @@
     $("cat-portals").querySelectorAll(".chip").forEach((chip) => chip.classList.toggle("on", chip === button));
     loadCatalog();
   });
+  $("cat-offer")?.addEventListener("click", (event) => {
+    const button = event.target.closest(".chip");
+    if (!button) return;
+    selected.offers = new Set([button.dataset.value]);
+    syncChipGroup($("cat-offer"), "value", selected.offers);
+    loadCatalog();
+  });
   $("cat-dispositions")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-disposition]");
     if (!button) return;
     button.classList.toggle("on");
+    selected.dispositions = dispositionValues();
+    loadCatalog();
+  });
+  $("cat-dispositions-more")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-disposition]");
+    if (button) button.classList.toggle("on");
+  });
+  $("cat-sort")?.addEventListener("change", () => {
+    selected.sort = $("cat-sort").value || "newest";
+    loadCatalog();
   });
   $("cat-amenities")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-flag]");
@@ -2612,7 +2648,7 @@
     })
     .catch(() => {});
   syncCircleUi();
-  renderViews();
+  renderFacets({});
   syncFilterUi();
 
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {

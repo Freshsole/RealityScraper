@@ -19,6 +19,8 @@
   fetch('/api/public/landing-listings')
     .then(function (r) { return r.json(); })
     .then(function (d) {
+      var heading = document.getElementById('db-title');
+      if (heading && d.title) heading.textContent = d.title;
       var items = (d.items || []).slice(0, 3);
       if (!items.length) {
         results.innerHTML = '<p class="live-empty">Aktuální nabídky najdete v <a href="/hledat">katalogu</a>.</p>';

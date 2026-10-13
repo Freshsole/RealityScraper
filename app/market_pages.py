@@ -771,19 +771,11 @@ def render_faq_md(store: Store) -> str:
 
 
 def render_search(store: Store | None = None, q: str = "") -> str:
-    """Full-screen public catalog: header + guest banner + the app's catalog, behind an e-mail gate."""
+    """Full-screen public catalog: header + the app's catalog, behind an e-mail gate."""
     from app import site_chrome
 
     del store, q  # data is loaded client-side by the guest catalog
-    body = """      <div class="hl-banner" id="hl-banner" hidden>
-        <div class="hl-banner-copy">
-          <strong>Prohlížíte katalog jako host</strong>
-          <span>Hlídání nových bytů a uložené filtry najdete v účtu.</span>
-        </div>
-        <a class="pill pill-lg" href="/registrace">Hlídat nové byty zdarma</a>
-      </div>
-
-      <section class="hl-gate-wrap" id="gate" hidden>
+    body = """      <section class="hl-gate-wrap" id="gate" hidden>
         <div class="pg-card hl-gate" id="hl-gate">
           <p class="eyebrow">KATALOG NABÍDEK</p>
           <h1>Odemkněte celý katalog bytů</h1>
@@ -809,7 +801,7 @@ def render_search(store: Store | None = None, q: str = "") -> str:
         body=body,
         body_class="pg-page hl-full",
         footer=False,
-        scripts='\n    <script src="/static/site/hledat.js?v=2" defer></script>',
+        scripts='\n    <script src="/static/site/hledat.js?v=3" defer></script>',
     )
 
 

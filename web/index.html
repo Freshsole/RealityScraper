@@ -151,19 +151,6 @@
               </div>
               <p id="catalog-count">Načítám…</p>
             </div>
-            <div class="chip-row" id="cat-portals">
-              <button type="button" class="chip on" data-portal="" data-icon="grid">Všechny</button>
-              <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
-              <button type="button" class="chip" data-portal="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Reality.iDNES</button>
-              <button type="button" class="chip" data-portal="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
-              <button type="button" class="chip" data-portal="ceskereality"><img class="chip-logo" src="/static/icons/ceskereality.svg" alt="" />ČeskéReality</button>
-              <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
-              <button type="button" class="chip" data-portal="annonce"><img class="chip-logo" src="/static/icons/annonce.svg" alt="" />Annonce</button>
-              <button type="button" class="chip" data-portal="mmreality"><img class="chip-logo" src="/static/icons/mmreality.svg" alt="" />M&amp;M Reality</button>
-              <button type="button" class="chip" data-portal="ulovdomov"><img class="chip-logo" src="/static/icons/ulovdomov.svg" alt="" />UlovDomov</button>
-              <button type="button" class="chip" data-portal="remax"><img class="chip-logo" src="/static/icons/remax.svg" alt="" />RE/MAX</button>
-              <button type="button" class="chip" data-portal="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Reality.cz</button>
-            </div>
             <div class="chip-row" id="cat-status">
               <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
               <button type="button" class="chip" data-status="saved" data-icon="bookmark">Uložené</button>
@@ -176,6 +163,11 @@
               <button type="button" class="chip" data-hits="notified" data-icon="radar">Zásahy</button>
             </div>
             <div class="catalog-views" id="catalog-views"></div>
+            <div class="chip-row catalog-offer" data-filter="offer" id="cat-offer">
+              <button type="button" class="chip on" data-value="pronajem">Pronájem</button>
+              <button type="button" class="chip" data-value="prodej">Prodej</button>
+              <button type="button" class="chip" data-value="drazba">Dražba</button>
+            </div>
             <div class="catalog-search-wrap locality-picker">
               <span data-icon="search" aria-hidden="true"></span>
               <input id="cat-q" class="catalog-search" placeholder="Město, městská část nebo ulice" autocomplete="off" />
@@ -187,6 +179,20 @@
               <input id="cat-price-to" type="number" placeholder="Cena do" />
               <input id="cat-area-from" type="number" placeholder="m² od" />
               <input id="cat-area-to" type="number" placeholder="m² do" />
+            </div>
+            <div class="catalog-subrow">
+              <div id="cat-dispositions" class="chip-row" aria-label="Dispozice"></div>
+              <label class="catalog-sort">Řazení
+                <select id="cat-sort">
+                  <option value="newest">Nejnovější</option>
+                  <option value="oldest">Nejstarší</option>
+                  <option value="price_asc">Cena vzestupně</option>
+                  <option value="price_desc">Cena sestupně</option>
+                  <option value="area_desc">Největší plocha</option>
+                  <option value="area_asc">Nejmenší plocha</option>
+                  <option value="discount_desc">Největší sleva</option>
+                </select>
+              </label>
             </div>
             <button class="catalog-toggle" id="cat-toggle" type="button" data-icon="filter">Všechny filtry</button>
             <button class="btn" id="cat-search" type="button" data-icon="search">Vyhledat</button>
@@ -886,12 +892,22 @@
         <div class="filters-scroll">
           <p class="kicker">S / Bez u věcí, které má jen jeden portál</p>
           <h2>Všechny filtry</h2>
-          <p class="catalog-label">Typ nabídky</p>
-          <div class="chip-row" data-filter="offer">
-            <button type="button" class="chip on" data-value="pronajem">Pronájem</button>
-            <button type="button" class="chip" data-value="prodej">Prodej</button>
-            <button type="button" class="chip" data-value="drazba">Dražba</button>
+          <p class="catalog-label">Portály</p>
+          <div class="chip-row" id="cat-portals">
+            <button type="button" class="chip on" data-portal="" data-icon="grid">Všechny</button>
+            <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
+            <button type="button" class="chip" data-portal="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Reality.iDNES</button>
+            <button type="button" class="chip" data-portal="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
+            <button type="button" class="chip" data-portal="ceskereality"><img class="chip-logo" src="/static/icons/ceskereality.svg" alt="" />ČeskéReality</button>
+            <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
+            <button type="button" class="chip" data-portal="annonce"><img class="chip-logo" src="/static/icons/annonce.svg" alt="" />Annonce</button>
+            <button type="button" class="chip" data-portal="mmreality"><img class="chip-logo" src="/static/icons/mmreality.svg" alt="" />M&amp;M Reality</button>
+            <button type="button" class="chip" data-portal="ulovdomov"><img class="chip-logo" src="/static/icons/ulovdomov.svg" alt="" />UlovDomov</button>
+            <button type="button" class="chip" data-portal="remax"><img class="chip-logo" src="/static/icons/remax.svg" alt="" />RE/MAX</button>
+            <button type="button" class="chip" data-portal="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Reality.cz</button>
           </div>
+          <p class="catalog-label">Další dispozice</p>
+          <div id="cat-dispositions-more" class="chip-row"></div>
           <p class="catalog-label">Typ nemovitosti</p>
           <div class="chip-row" data-filter="estate">
             <button type="button" class="chip" data-value="byt">Byt</button>
@@ -901,8 +917,6 @@
             <button type="button" class="chip" data-value="komercni">Komerční</button>
             <button type="button" class="chip" data-value="ostatni">Ostatní</button>
           </div>
-          <p class="catalog-label">Dispozice</p>
-          <div id="cat-dispositions" class="chip-row"></div>
           <p class="catalog-label">Praha</p>
           <div class="chip-row" data-filter="district">
             <button type="button" class="chip" data-value="praha-1">Praha 1</button>
@@ -996,19 +1010,10 @@
             </div>
           </div>
           <p class="catalog-hint">S ukáže jen inzeráty, u kterých to víme. Bez je skryje a nechá i nabídky z druhého portálu, kde tahle volba není.</p>
-          <p class="catalog-label">Zdroj a řazení</p>
+          <p class="catalog-label">Zdroj</p>
           <div class="catalog-row">
             <select id="cat-monitor">
               <option value="">Všechny monitory</option>
-            </select>
-            <select id="cat-sort">
-              <option value="newest">Nejnovější</option>
-              <option value="oldest">Nejstarší</option>
-              <option value="price_asc">Cena vzestupně</option>
-              <option value="price_desc">Cena sestupně</option>
-              <option value="area_desc">Největší plocha</option>
-              <option value="area_asc">Nejmenší plocha</option>
-              <option value="discount_desc">Největší sleva</option>
             </select>
           </div>
           <p class="catalog-hint">Vlastnictví, stav, konstrukce a vybavení bytu se doplní až po otevření detailu, nebo u nových zásahů z Bezrealitky. Dispozice, Praha, cena a plocha jdou použít hned.</p>
