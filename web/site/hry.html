@@ -19,12 +19,14 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Hry o nájmech — tipněte si cenu bytu | REALITIFY" />
     <meta name="twitter:description" content="Zábavné hry o cenách nájmů v Praze a ČR. Tipněte nájem bytu a otestujte si znalost realitního trhu." />
-    <link rel="stylesheet" href="/static/site/games.css?v=6" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=20" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;600;700&display=swap" /></noscript>
+    <link rel="stylesheet" href="/static/site/pages.css?v=3" />
   </head>
-  <body class="game-page">
+  <body class="pg-page">
     <header class="navbar">
       <a class="brand" href="/">
         <span class="icon" style="width:20px;height:32.5px"><img src="/static/site/assets/logo.svg" width="20" height="32.5" alt="" /></span>
@@ -42,37 +44,82 @@
         <a class="pill pill-nav" href="/registrace">Vyzkoušet zdarma</a>
       </div>
     </header>
-    <section class="game-hero">
-      <p class="eyebrow">RYCHLOST, KTEROU TRH NEDÁRVUJE</p>
-      <h1 class="display">BYTY MIZÍ. ZKUSTE TO NA VLASTNÍ KŮŽI.</h1>
-      <p class="lead">Dvě minihry z reálných nabídek ve stejné lokalitě. Ukážou, že dobré ceny existují — a že bez minutového hlídání je nestihnete.</p>
-      <div class="game-pills">
-        <span class="game-pill">stejná lokalita</span>
-        <span class="game-pill">10 portálů</span>
-        <span class="game-pill">obnova ~60 s</span>
-      </div>
-    </section>
-    <section class="game-hub">
-      <article class="game-card">
-        <h2>HIGHER / LOWER</h2>
-        <p>Dva byty ze stejné čtvrti. Hádejte, který je levnější. Často je ten hezčí i levnější — a přesně ty mizí první.</p>
-        <a class="pill" href="/hry/vyssi-nizsi">Hrát higher / lower</a>
-      </article>
-      <article class="game-card">
-        <h2>TIPNĚTE NÁJEM</h2>
-        <p>Pět bytů, pět tipů měsíčního nájmu. Skóre se ukládá a žebříček vidíte v administraci.</p>
-        <a class="pill" href="/hry/najem">Hrát tip nájmu</a>
-      </article>
-    </section>
-    <section class="game-band">
-      <div class="game-band-inner">
-        <div>
-          <h2 class="display">DOBRÉ BYTY MIZÍ V ŘÁDU MINUT.</h2>
-          <p>Hlídání přes 10 portálů. Upozornění dřív, než stačíte obnovit Sreality.</p>
+    <main class="pg" id="top">
+      <section class="pg-hero hero-split" data-nav="Hry" data-nav-desc="Minihry z reálných nabídek">
+        <div class="hero-copy">
+          <p class="eyebrow">HRY Z REÁLNÝCH CEN</p>
+          <h1 class="display">Trefíte cenu dřív, než byt zmizí?</h1>
+          <p class="lead">Dvě minihry z reálných nabídek ve stejné lokalitě. Ukážou, že dobré ceny existují — a že bez minutového hlídání je nestihnete.</p>
+          <div class="pg-chips">
+            <span class="pg-chip">stejná lokalita</span>
+            <span class="pg-chip">10 portálů</span>
+            <span class="pg-chip">obnova ~60 s</span>
+          </div>
+          <div class="pg-actions">
+            <a class="pill pill-lg" href="/hry/vyssi-nizsi">Hrát higher / lower</a>
+            <a class="link-row" href="/hry/najem">Tipnout nájem →</a>
+          </div>
+        </div>
+        <div class="mock-card" aria-hidden="true">
+          <div class="mock-top"><span class="mock-badge">TIP NÁJMU</span><span class="mock-time">před 38 sekundami</span></div>
+          <picture><source type="image/avif" srcset="/static/site/assets/hero-apart.avif 1x, /static/site/assets/hero-apart@2x.avif 2x" /><source type="image/webp" srcset="/static/site/assets/hero-apart.webp 1x, /static/site/assets/hero-apart@2x.webp 2x" /><img class="mock-photo" src="/static/site/assets/hero-apart.webp" width="432" height="180" alt="" decoding="async" /></picture>
+          <div class="mock-meta"><strong>Praha 3 – Žižkov</strong><span class="pg-chip">2+kk · 54 m²</span></div>
+          <div class="mock-guess"><span>Kolik stojí měsíc?</span><b>??? Kč</b></div>
+        </div>
+      </section>
+
+      <section class="pg-section" id="hry" data-nav="Vyberte hru" data-nav-desc="Higher / Lower nebo tip nájmu">
+        <div class="pg-head reveal">
+          <p class="eyebrow">VYBERTE HRU</p>
+          <h2 class="display">Dvě hry, jedna zkušenost: trh je rychlý</h2>
+          <p>Každá hra bere skutečné nabídky ze všech sledovaných portálů. Žádné vymyšlené ceny.</p>
+        </div>
+        <div class="game-tiles">
+          <a class="game-tile reveal" href="/hry/vyssi-nizsi">
+            <span class="game-tile-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></span>
+            <h3>Higher / Lower</h3>
+            <p>Dva byty ze stejné čtvrti. Hádejte, který je levnější. Často je ten hezčí i levnější — a přesně ty mizí první.</p>
+            <div class="pg-chips"><span class="pg-chip">2 byty</span><span class="pg-chip">1 klik</span><span class="pg-chip">série bez konce</span></div>
+            <span class="pill pill-lg">Hrát higher / lower</span>
+          </a>
+          <a class="game-tile is-dark reveal" href="/hry/najem">
+            <span class="game-tile-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg></span>
+            <h3>Tipněte nájem</h3>
+            <p>Pět bytů, pět tipů měsíčního nájmu. Čím blíž jste realitě, tím víc bodů. Skóre se ukládá do žebříčku.</p>
+            <div class="pg-chips"><span class="pg-chip">5 bytů</span><span class="pg-chip">body za přesnost</span></div>
+            <span class="pill pill-lg">Hrát tip nájmu</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="pg-section is-pale" id="jak" data-nav="Jak hrát" data-nav-desc="Tři kroky k lepšímu odhadu">
+        <div class="pg-head reveal">
+          <p class="eyebrow">JAK HRÁT</p>
+          <h2 class="display">Tři kroky, jedna minuta</h2>
+        </div>
+        <div class="steps is-3">
+          <article class="step"><h3>Vyberte hru</h3><p>Higher / Lower na rychlý trénink, Tipněte nájem na přesnost.</p></article>
+          <article class="step"><h3>Hádejte z reálných dat</h3><p>Nabídky jsou z jedné lokality a aktuální, takže odhad dává smysl.</p></article>
+          <article class="step"><h3>Zjistěte, jak rychle byty mizí</h3><p>Dobré kousky jsou pryč v řádu minut. Proto existuje hlídání.</p></article>
+        </div>
+      </section>
+
+      <section class="pg-section" id="cisla" data-nav="Čísla" data-nav-desc="Proč na rychlosti záleží">
+        <div class="stat-grid">
+          <article class="stat-card"><p class="stat-label">Sledované portály</p><p class="stat-value">10</p><p class="stat-sub">Sreality, Bezrealitky, iDNES a další v jednom katalogu.</p></article>
+          <article class="stat-card"><p class="stat-label">Obnova nabídek</p><p class="stat-value">~60 <small>s</small></p><p class="stat-sub">Nové inzeráty stahujeme každou minutu.</p></article>
+          <article class="stat-card is-dark"><p class="stat-label">Rychlost je výhoda</p><p class="stat-value">Minuty</p><p class="stat-sub">Tolik času máte na dobrý byt, než zmizí.</p></article>
+        </div>
+      </section>
+
+      <section class="final-cta" data-nav="Začít" data-nav-desc="Hlídejte byty zdarma">
+        <div class="final-copy">
+          <h2 class="display">Dobré byty mizí v řádu minut</h2>
+          <p class="lead">Hlídání přes 10 portálů. Upozornění dřív, než stačíte obnovit Sreality.</p>
         </div>
         <a class="pill pill-lg" href="/registrace">Hlídání zdarma</a>
-      </div>
-    </section>
+      </section>
+    </main>
     <footer class="footer">
       <div class="footer-top">
         <div class="footer-brand">
@@ -123,6 +170,7 @@
         </div>
       </div>
     </footer>
-      <script src="/static/site/nav.js?v=3" defer></script>
-</body>
+    <script src="/static/site/nav.js?v=3" defer></script>
+    <script src="/static/site/pages.js?v=1" defer></script>
+  </body>
 </html>

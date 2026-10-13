@@ -143,3 +143,30 @@
   .pg-card{padding:24px}
 }
 .pg [hidden]{display:none!important}
+
+/* games hub */
+.hero-split{grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);align-items:center;gap:56px}
+.hero-split>*{max-width:none}
+.hero-copy{display:grid;gap:20px;justify-items:start}
+.mock-card{display:flex;flex-direction:column;gap:16px;padding:24px;border-radius:var(--radius-card);background:#fff;border:1px solid var(--line);box-shadow:0 24px 56px #0e0f0c1a;transform:rotate(1.5deg);transition:transform .4s cubic-bezier(.22,1,.36,1)}
+.mock-card:hover{transform:rotate(0)}
+.mock-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.mock-badge{padding:5px 10px;border-radius:999px;background:var(--mint);font-size:11px;font-weight:800;letter-spacing:1px;color:var(--forest)}
+.mock-time{font-size:12px;color:var(--body)}
+.mock-photo{display:block;width:100%;height:180px;object-fit:cover;border-radius:18px;background:var(--surface)}
+.mock-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;color:var(--forest)}
+.mock-guess{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-radius:16px;background:var(--forest);color:var(--mint);font-size:14px}
+.mock-guess b{font-family:var(--font-display);font-size:22px;color:#fff}
+.game-tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.game-tile{display:flex;flex-direction:column;align-items:flex-start;gap:16px;padding:40px;border-radius:var(--radius-card);background:var(--pale);border:1px solid var(--line);color:var(--forest);text-decoration:none;transition:transform .3s cubic-bezier(.22,1,.36,1),box-shadow .3s}
+.game-tile:hover{transform:translateY(-4px);box-shadow:0 24px 56px #0e0f0c1f}
+.game-tile h3{margin:0;font-family:var(--font-display);font-weight:800;font-size:clamp(26px,2.6vw,34px);letter-spacing:-.02em;line-height:1.15}
+.game-tile p{margin:0;max-width:46ch;font-size:16px;line-height:1.6;color:var(--body)}
+.game-tile .pill{margin-top:12px}
+.game-tile-icon{display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;border-radius:18px;background:var(--mint);color:var(--forest)}
+.game-tile.is-dark{background:var(--forest);border-color:var(--forest);color:#fff}
+.game-tile.is-dark p{color:var(--mint)}
+.game-tile.is-dark .game-tile-icon{background:#ffffff1a;color:var(--green)}
+.steps.is-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:1100px){.hero-split{grid-template-columns:1fr}.mock-card{max-width:420px}}
+@media (max-width:860px){.game-tiles,.steps.is-3{grid-template-columns:1fr}.game-tile{padding:28px 24px}.hero-split{gap:32px}}
