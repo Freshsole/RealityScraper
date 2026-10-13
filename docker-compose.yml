@@ -1,0 +1,107 @@
+# Coolify / production: web and scrape worker as separate containers from one image.
+# A runaway worker is capped by its own cgroup limits and cannot starve the web.
+# Both mount the same named volume, so they share the SQLite files (WAL + the
+# flock-based Store._init lock work because both containers run on one host).
+
+x-common-env: &common-env
+  DATA_DIR: /data
+  PYTHONUNBUFFERED: "1"
+  # Pass-through: set these in Coolify (or a local .env); unset = empty.
+  ADMIN_EMAIL:
+  ADMIN_PASSWORD:
+  DISCORD_WEBHOOK_URL:
+  BEZREALITKY_WEBHOOK_URL:
+  SOLD_WEBHOOK_URL:
+  IDNES_WEBHOOK_URL:
+  BAZOS_WEBHOOK_URL:
+  DISCORD_BOT_TOKEN:
+  DISCORD_GUILD_ID:
+  DISCORD_CLIENT_ID:
+  DISCORD_SERVER_INVITE:
+  SEARCH_URL:
+  POLL_INTERVAL_SEC:
+  POLL_PAGES:
+  SCRAPE_CONCURRENCY:
+  PUBLIC_BASE_URL:
+  GOOGLE_MAPS_API_KEY:
+  STRIPE_PUBLISHABLE_KEY:
+  STRIPE_SECRET_KEY:
+  STRIPE_WEBHOOK_SECRET:
+  VAPID_PUBLIC_KEY:
+  VAPID_PRIVATE_KEY:
+  VAPID_MAILTO:
+  SMTP_HOST:
+  SMTP_PORT:
+  SMTP_USER:
+  SMTP_PASSWORD:
+  SMTP_FROM:
+  SMTP_STARTTLS:
+  WHATSAPP_TOKEN:
+  WHATSAPP_PHONE_NUMBER_ID:
+  WHATSAPP_VERIFY_TOKEN:
+  WHATSAPP_TEMPLATE:
+  WHATSAPP_TEMPLATE_LANG:
+  WHATSAPP_BUSINESS_NUMBER:
+  EXTENSION_IDS:
+  UPDATE_FEED:
+  UPDATE_TOKEN:
+  AUTO_UPDATE: "0"
+
+services:
+  web:
+    build: .
+    init: true
+    command:
+      - sh
+      - -c
+      - exec python -m uvicorn app.main:app --host 0.0.0.0 --port "$${PORT}" --timeout-graceful-shutdown 20
+    environment:
+      <<: *common-env
+      SCRAPE_ROLE: web
+      PORT: "8000"
+    expose:
+      - "8000"
+    volumes:
+      - realitify-data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "${WEB_CPUS:-2}"
+          memory: ${WEB_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.container", "healthcheck", "web"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  worker:
+    build: .
+    init: true
+    command: ["python", "-m", "app.scrape_worker"]
+    environment:
+      <<: *common-env
+      SCRAPE_ROLE: worker
+      # No shared CPU with the web anymore; keep a short idle window at boot.
+      WORKER_BOOT_GRACE_SEC: "30"
+    volumes:
+      - realitify-data:/data
+    restart: unless-stopped
+    stop_grace_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "${WORKER_CPUS:-4}"
+          memory: ${WORKER_MEMORY:-6g}
+    healthcheck:
+      # Heartbeat file touched every 15s by the worker's event loop; stale > 90s = unhealthy.
+      test: ["CMD", "python", "-m", "app.container", "healthcheck", "worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  realitify-data:

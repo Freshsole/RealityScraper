@@ -1,0 +1,5 @@
+# Auto-loaded by a plain `docker compose up` (local only; Coolify uses docker-compose.yml alone).
+services:
+  web:
+    ports:
+      - "8000:8000"

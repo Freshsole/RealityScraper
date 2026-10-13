@@ -1,6 +1,6 @@
 """Production process supervisor (no pkg_resources / supervisord).
 
-Mirrors supervisord.conf: uvicorn SCRAPE_ROLE=web + delayed scrape_worker.
+Mirrors supervisord.conf: uvicorn SCRAPE_ROLE=web + scrape_worker (waits for the DB itself).
 Start: `python -m app.run_prod`
 """
 
@@ -16,7 +16,6 @@ from pathlib import Path
 from app import config
 
 ROOT = Path(config.ROOT)
-WORKER_DELAY_S = 20
 
 
 def _env(role: str) -> dict[str, str]:
@@ -71,7 +70,6 @@ def _spawn_worker() -> subprocess.Popen[bytes]:
 
 def main() -> None:
     web = _spawn_web()
-    time.sleep(WORKER_DELAY_S)
     worker = _spawn_worker()
     stopping = False
 

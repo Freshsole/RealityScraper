@@ -37,7 +37,24 @@ Tři režimy v `app/config.py`:
 - worker pid do `.run/scrape_worker.pid`
 - únik: `SCRAPE_ROLE=all make dev` (jeden proces, TTFB stránek skáče na desítky sekund)
 
-### Produkce (Railway)
+### Produkce (Coolify, docker compose)
+
+`docker-compose.yml` + `Dockerfile`: jeden image, dvě služby, každá s jedním procesem a vlastními cgroup limity. Zaseknutý worker tak nemůže vyhladovět web.
+
+| služba | `SCRAPE_ROLE` | příkaz | limity (výchozí) | healthcheck |
+| --- | --- | --- | --- | --- |
+| `web` | `web` | `uvicorn app.main:app` (`PORT` jen tady) | 2 CPU / 2 GB (`WEB_CPUS`, `WEB_MEMORY`) | `GET /health` |
+| `worker` | `worker` | `python -m app.scrape_worker` | 4 CPU / 6 GB (`WORKER_CPUS`, `WORKER_MEMORY`) | heartbeat soubor |
+
+- Oba kontejnery mountují named volume `realitify-data` na `/data` (`DATA_DIR=/data`) a sdílí SQLite soubory. WAL a `flock` v `Store._init` fungují, protože oba kontejnery běží na jednom hostu.
+- Worker při startu čeká na DB (`app.container.wait_for_db`: retry s exponenciálním backoffem do 10 s, timeout 10 min, pak exit a restart policy). Pevný `sleep` už není.
+- Worker heartbeat: event loop každých 15 s touchne `/tmp/scrape_worker.heartbeat`; `python -m app.container healthcheck worker` selže, když je soubor starší než 90 s (zamrzlý loop).
+- SIGTERM: uvicorn dokončí requesty (`--timeout-graceful-shutdown 20`), worker zruší `run()`, flushne metriky a zavře huby. `stop_grace_period` 30 s / 40 s, `init: true`.
+- Lokálně: `docker compose up --build` (`docker-compose.override.yml` publikuje web na `localhost:8000`). Na stroji s menším počtem jader nastav `WORKER_CPUS` / `WEB_CPUS`.
+- Secrets a konfigurace se předávají přes env v Coolify (seznam v `x-common-env`).
+- `supervisord.conf` a `app/run_prod.py` zůstávají jen jako jednokontejnerový fallback (Railway / railpack).
+
+### Produkce (Railway, jeden kontejner)
 
 `supervisord.conf` + `railpack.toml`:
 

@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import traceback
 
 from app import config
+from app import container
 from app import users as user_registry
 from app.monitor import Hub
 
@@ -29,15 +31,18 @@ class ScrapeWorker:
         self._user_tasks: dict[str, list[asyncio.Task[None]]] = {}
         self._rescan_task: asyncio.Task[None] | None = None
         self._watch_task: asyncio.Task[None] | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
     # is CPU-heavy and used to saturate the container during the healthcheck
-    # window, which got deployments rolled back.
-    BOOT_GRACE_SEC = 180
+    # window, which got deployments rolled back. Separate containers do not
+    # share CPU, so docker-compose.yml shortens this via WORKER_BOOT_GRACE_SEC.
+    BOOT_GRACE_SEC = max(0, int(os.getenv("WORKER_BOOT_GRACE_SEC", "180")))
 
     async def run(self) -> None:
         self.running = True
+        self._heartbeat_task = asyncio.create_task(container.heartbeat_loop(), name="worker-heartbeat")
         print(
             f"scrape_worker start concurrency={config.SCRAPE_CONCURRENCY} "
             f"overrides={config.SCRAPE_CONCURRENCY_OVERRIDES or '{}'} "
@@ -76,7 +81,7 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
-            for task in (self._rescan_task, self._watch_task):
+            for task in (self._rescan_task, self._watch_task, self._heartbeat_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -239,13 +244,26 @@ class ScrapeWorker:
 
 async def _amain() -> None:
     worker = ScrapeWorker()
-    await worker.run()
+    run_task = asyncio.ensure_future(worker.run())
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            # Cancel run() so its finally block flushes metrics and closes hubs.
+            loop.add_signal_handler(sig, run_task.cancel)
+        except NotImplementedError:
+            pass
+    try:
+        await run_task
+    except asyncio.CancelledError:
+        print("scrape_worker: shutdown complete", flush=True)
 
 
 def main() -> None:
     from app.scrape_console import install_stdout_tee
 
     install_stdout_tee()
+    # Web owns schema init on a cold volume; do not open the store until it is ready.
+    container.wait_for_db(config.DB_PATH)
     asyncio.run(_amain())
 
 

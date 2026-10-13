@@ -37,7 +37,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8080
 ```
 
-`make dev` spouští dva procesy: uvicorn `SCRAPE_ROLE=web` a `python -m app.scrape_worker`. Scrape tak nedrží GIL HTTP loopu (jinak TTFB stránky skáče na desítky sekund). Jednoprocesový režim: `SCRAPE_ROLE=all make dev`. Na Railway totéž řeší `supervisord` (`railpack.toml`).
+`make dev` spouští dva procesy: uvicorn `SCRAPE_ROLE=web` a `python -m app.scrape_worker`. Scrape tak nedrží GIL HTTP loopu (jinak TTFB stránky skáče na desítky sekund). Jednoprocesový režim: `SCRAPE_ROLE=all make dev`. Na Railway totéž řeší `supervisord` (`railpack.toml`, jeden kontejner); na Coolify běží web a worker jako dva oddělené kontejnery (`docker-compose.yml`, viz [docs/scraping.md](docs/scraping.md#produkce-coolify-docker-compose)).
 
 Dashboard: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 
