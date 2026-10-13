@@ -346,38 +346,14 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
         "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
         "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
     )
-    span = (north - south) + (east - west)
-    anchors = places.anchors_in_bbox(south, north, west, east)
-    if not anchors:
-        # Jen když ve výřezu není žádný centroid: vezmi okolí / nejbližší,
-        # ať zoom do čtvrti nepřijde o locality match.
-        pad_lat = max(0.05, (north - south) * 0.5)
-        pad_lon = max(0.05, (east - west) * 0.5)
-        anchors = places.anchors_in_bbox(south - pad_lat, north + pad_lat, west - pad_lon, east + pad_lon)
-    if not anchors:
-        anchors = places.nearest_anchors((south + north) / 2, (west + east) / 2, limit=6)
+    # What the user sees is what is listed: only offers whose coordinates lie inside the visible
+    # viewport. (Locality text matching used to pull in whole districts, so the list and total
+    # disagreed with the pins on the map.)
     filters["_bbox"] = (south, north, west, east)
-    filters["_bbox_anchors"] = anchors
-    filters["_bbox_span"] = span
-    if anchors:
-        # U těsného zoomu nech district labels (Praha 4…); coarse „Praha“ až u širšího výřezu.
-        if span >= 0.85:
-            labels = places.coarse_anchor_labels(anchors)
-        else:
-            labels = [name for name, _lat, _lon in anchors]
-            # „Praha“ / „Brno“ by přes „Praha %“ vytáhly celý katalog čtvrtí.
-            folded = [places._fold_label(name) for name in labels]
-            if any(item.startswith("praha ") for item in folded):
-                labels = [name for name, key in zip(labels, folded) if key != "praha"]
-            if any(item.startswith("brno") and item != "brno" for item in folded):
-                labels = [name for name, key in zip(labels, folded) if key != "brno"]
-        text_sql, text_params = places.locality_match_sql("listings.locality", labels)
-        # Locality match platí i když má inzerát GPS jinde (centroid dump / špatný approx).
-        where.append(f"(({gps}) OR {text_sql})")
-        params.extend([south, north, west, east, *text_params])
-    else:
-        where.append(gps)
-        params.extend([south, north, west, east])
+    filters["_bbox_anchors"] = []
+    filters["_bbox_span"] = (north - south) + (east - west)
+    where.append(gps)
+    params.extend([south, north, west, east])
 
 
 def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
@@ -5752,7 +5728,12 @@ class Store:
             """
             if filters.get("_bbox") is not None:
                 with self.connect(readonly=True) as conn:
-                    total = int(conn.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", params).fetchone()[0])
+                    total = int(
+                        conn.execute(
+                            f"SELECT COUNT(*) FROM (SELECT 1 FROM listings WHERE {clause} GROUP BY {identity})",
+                            params,
+                        ).fetchone()[0]
+                    )
                     fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
             else:
                 count_sql = f"SELECT COUNT(*) FROM listings WHERE {clause}"
@@ -5838,7 +5819,7 @@ class Store:
         if isinstance(bbox, tuple) and len(bbox) == 4:
             south, north, west, east = bbox
             wide = (north - south) + (east - west) > 1.5
-        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 else 800
+        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 or isinstance(bbox, tuple) else 800
         span = float(filters.get("_bbox_span") or 0)
         cache_hit = False
         cache_key: tuple[Any, ...] | None = None
@@ -6018,7 +5999,10 @@ class Store:
                     LIMIT {int(pin_limit)}
                     """
                     gps_rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
-                    self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
+                    if not isinstance(bbox, tuple):
+                        # Inside a viewport pins stay where the offer is stored, so the pin set
+                        # is exactly the listed set.
+                        self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
                     fetched.extend(gps_rows)
         items = []
         seen: set[str] = set()

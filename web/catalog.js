@@ -188,26 +188,19 @@
     btn.classList.toggle("on", Boolean(on));
   }
 
+  // Exactly the area the user can see: the list, the total and the pins all use it.
   function mapBoundsParams() {
     const skip = Boolean(selectedPlaces.length || circleFilter || selected.monitor);
+    if (skip) return {};
     ensureMap();
     const bounds = catalogMap?.getBounds?.();
-    const fallback = !bounds || !bounds.isValid?.();
-    const latPad = fallback ? 0 : Math.max(0.002, (bounds.getNorth() - bounds.getSouth()) * 0.02);
-    const lonPad = fallback ? 0 : Math.max(0.002, (bounds.getEast() - bounds.getWest()) * 0.02);
-    const out = skip
-      ? {}
-      : fallback
-        ? { ...PRAHA_BOUNDS }
-        : {
-            south: String(bounds.getSouth() - latPad),
-            north: String(bounds.getNorth() + latPad),
-            west: String(bounds.getWest() - lonPad),
-            east: String(bounds.getEast() + lonPad),
-          };
-    if (skip) return {};
-    if (fallback) return { ...PRAHA_BOUNDS };
-    return out;
+    if (!bounds || !bounds.isValid?.()) return { ...PRAHA_BOUNDS };
+    return {
+      south: String(bounds.getSouth()),
+      north: String(bounds.getNorth()),
+      west: String(bounds.getWest()),
+      east: String(bounds.getEast()),
+    };
   }
 
   function filters() {
@@ -1395,15 +1388,15 @@
         const b = catalogMap.getBounds();
         const key = [
           catalogMap.getZoom(),
-          b.getSouth().toFixed(2),
-          b.getNorth().toFixed(2),
-          b.getWest().toFixed(2),
-          b.getEast().toFixed(2),
+          b.getSouth().toFixed(5),
+          b.getNorth().toFixed(5),
+          b.getWest().toFixed(5),
+          b.getEast().toFixed(5),
         ].join("|");
         if (key === lastMapQueryKey) return;
         lastMapQueryKey = key;
         loadCatalog();
-      }, 900);
+      }, 250);
     });
   }
 
@@ -1589,21 +1582,9 @@
     if (keepHover) highlightListing(keepHover);
   }
 
-  // "N nemovitostí", plus "· M na mapě" when some offers have no usable location.
-  function updateCountLabel(force = false) {
+  function updateCountLabel() {
     const el = $("catalog-count");
-    if (!el || (!force && /načítám|selhalo/i.test(el.textContent || ""))) return;
-    const mapped = pinItems.reduce(
-      (sum, pin) => sum + (pin.monitor_id === "__cluster__" ? Number(pin.count || 0) : 1),
-      0,
-    );
-    el.textContent = `${total} nemovitostí`;
-    if (pinItems.length && mapped < total) {
-      el.textContent += ` · ${mapped} na mapě`;
-      el.title = "Zbylé nabídky nemají přesnou polohu, proto nejsou na mapě.";
-    } else {
-      el.removeAttribute("title");
-    }
+    if (el) el.textContent = `${total} nemovitostí`;
   }
 
   function renderMapPins(items) {
@@ -2099,7 +2080,7 @@
     if (!keepCount) {
       const countEl = $("catalog-count");
       if (countEl && /načítám/i.test(countEl.textContent || "")) {
-        updateCountLabel(true);
+        updateCountLabel();
       }
     }
     catalogBusy = false;
@@ -2122,10 +2103,10 @@
       const b = catalogMap.getBounds();
       lastMapQueryKey = [
         catalogMap.getZoom(),
-        b.getSouth().toFixed(2),
-        b.getNorth().toFixed(2),
-        b.getWest().toFixed(2),
-        b.getEast().toFixed(2),
+        b.getSouth().toFixed(5),
+        b.getNorth().toFixed(5),
+        b.getWest().toFixed(5),
+        b.getEast().toFixed(5),
       ].join("|");
     }
     const seq = ++catalogSeq;
@@ -2160,7 +2141,7 @@
         return;
       }
       if (lastItems.length && !append) {
-        updateCountLabel(true);
+        updateCountLabel();
         finishCatalogLoad(seq, { keepCount: true });
         return;
       }
@@ -2180,7 +2161,7 @@
       renderFacets(data.facets);
       if (append) lastItems = uniqueOffers(lastItems.concat(items));
       else lastItems = items;
-      updateCountLabel(true);
+      updateCountLabel();
       const empty = $("catalog-empty");
       empty.hidden = lastItems.length > 0;
       if (!lastItems.length) {

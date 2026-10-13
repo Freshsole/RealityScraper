@@ -121,14 +121,14 @@ class CatalogMapZoomTests(unittest.TestCase):
         return {int(item["id"]) for item in data["items"]}
 
     def test_01_nested_zoom_keeps_district_listings(self):
-        """Zoom do Prahy 4 musí nechat P4 inzeráty (včetně špatného GPS a bez GPS)."""
+        """Zoom do Prahy 4: vidět je jen to, co má souřadnice uvnitř výřezu (co vidíš, to je v seznamu)."""
         wide = self._catalog(WIDE, portal="bazos")
         mid = self._catalog(MID, portal="bazos")
         tight = self._catalog(TIGHT_P4, portal="bazos")
         self.assertGreaterEqual(wide["total"], mid["total"])
         self.assertIn(1, self._ids(tight))
-        self.assertIn(2, self._ids(tight), "P4 s GPS na centru Prahy musí zůstat při zoomu do P4")
-        self.assertIn(3, self._ids(tight), "P4 bez GPS musí zůstat při zoomu do P4")
+        self.assertNotIn(2, self._ids(tight), "GPS mimo výřez se v seznamu objevit nesmí, ani když sedí lokalita")
+        self.assertNotIn(3, self._ids(tight), "bez GPS inzerát na mapě není, tak ani v seznamu výřezu")
         self.assertNotIn(5, self._ids(tight))
         self.assertNotIn(6, self._ids(tight))
 
@@ -143,7 +143,7 @@ class CatalogMapZoomTests(unittest.TestCase):
     def test_03_nation_bbox_still_sees_major_cities(self):
         data = self._catalog(NATION, portal="bazos")
         ids = self._ids(data)
-        self.assertIn(5, ids)
+        self.assertNotIn(5, ids, "bez GPS není na mapě, tedy ani v seznamu")
         self.assertIn(6, ids)
         self.assertIn(1, ids)
 
@@ -218,11 +218,11 @@ class CatalogMapZoomTests(unittest.TestCase):
         self.assertIn("listings.lat BETWEEN", sql)
 
     def test_11_empty_anchor_zone_still_matches_nearby_district_by_locality(self):
-        """I výřez bez přesného anchor bodu uvnitř musí umět P4 podle locality."""
+        """Úzký výřez vrací jen inzeráty s GPS uvnitř, locality text už nic nedotahuje."""
         data = self._catalog(SOUTH_NO_ANCHOR, portal="bazos")
         ids = self._ids(data)
         self.assertIn(1, ids)
-        self.assertIn(3, ids, "P4 bez GPS musí jít přes nearby/padded anchory")
+        self.assertNotIn(3, ids)
         self.assertNotIn(5, ids)
 
     def test_12_repeated_zoom_stress(self):
@@ -240,7 +240,9 @@ class CatalogMapZoomTests(unittest.TestCase):
                     self.assertEqual(ids, last_wide)
                 last_wide = ids
             if box == TIGHT_P4:
-                self.assertTrue({1, 2, 3}.issubset(ids), f"step {i} lost P4 listings: {ids}")
+                self.assertIn(1, ids, f"step {i} lost the P4 listing inside the viewport: {ids}")
+                self.assertNotIn(2, ids, f"step {i} listed an offer outside the viewport")
+                self.assertNotIn(3, ids, f"step {i} listed an offer without coordinates")
 
     def test_13_all_portals_zoom(self):
         data = self._catalog(TIGHT_P4)
@@ -250,7 +252,8 @@ class CatalogMapZoomTests(unittest.TestCase):
 
     def test_14_status_active_default_does_not_wipe_seeded(self):
         data = self._catalog(TIGHT_P4, portal="bazos", status="")
-        self.assertGreaterEqual(data["total"], 3)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(self._ids(data), {1})
 
     def test_15_tight_center_does_not_match_all_praha_via_city_label(self):
         """Zoom na centrum: Praha 1/2 ano, samotné „Praha %“ nesmí vytáhnout P4 bez GPS v centru."""
@@ -330,6 +333,43 @@ class CatalogMapZoomTests(unittest.TestCase):
         )["items"]
         ratio = (len(tight_pins) + 1) / (len(holes) + 1)
         self.assertLess(ratio, 1.35, f"pin count jumped on zoom: wide_cell={len(holes)} tight={len(tight_pins)}")
+
+    def test_17_total_pins_and_list_are_the_same_set(self):
+        from app.sreality import Listing as ListingCls
+
+        for i in range(60):
+            self.store.upsert_catalog_listing(
+                ListingCls(
+                    id=7000 + i,
+                    name=f"same-set-{i}",
+                    price_czk=16000 + i * 11,
+                    price_label=f"{16000 + i * 11} Kč",
+                    disposition="2+kk",
+                    area_m2=40 + i % 20,
+                    locality="Praha 4 140 00",
+                    url=f"https://reality.bazos.cz/inzerat/same-set-{7000 + i}/",
+                    image_url=None,
+                    lat=50.02 + (i % 10) * 0.002,
+                    lon=14.43 + (i // 10) * 0.002,
+                    extras={"offer": "Pronájem", "estate": "Byt"},
+                ),
+                kind="seeded",
+            )
+        box = dict(south="50.015", north="50.045", west="14.425", east="14.455")
+        listed = self.store.catalog({**box, "portal": "bazos", "status": "all", "limit": 120, "offset": 0})
+        pins = self.store.catalog({**box, "portal": "bazos", "status": "all", "pins_only": True, "limit": 50})["items"]
+        self.assertEqual(listed["total"], len(pins), "count in the sidebar must equal the pins on the map")
+        self.assertEqual(
+            {(i["monitor_id"], i["id"]) for i in listed["items"]},
+            {(p["monitor_id"], p["id"]) for p in pins},
+        )
+
+    def test_18_viewport_is_exact_no_padding(self):
+        """An offer 1 m outside the viewport is not listed, one on the edge is."""
+        inside = dict(south="50.0275", north="50.0285", west="14.4445", east="14.4455")
+        outside = dict(south="50.0285", north="50.0295", west="14.4445", east="14.4455")
+        self.assertIn(1, self._ids(self._catalog(inside, portal="bazos")))
+        self.assertNotIn(1, self._ids(self._catalog(outside, portal="bazos")))
 
 
 if __name__ == "__main__":
