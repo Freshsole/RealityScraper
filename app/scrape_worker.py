@@ -32,6 +32,7 @@ class ScrapeWorker:
         self._rescan_task: asyncio.Task[None] | None = None
         self._watch_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self.owner_id: str | None = None
         self._checkpoint_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
@@ -106,24 +107,54 @@ class ScrapeWorker:
                 except Exception:
                     pass
 
+    def _is_catalog_owner(self, user_id: str) -> bool:
+        """True when this user's hub scrapes + maintains the catalog (everyone, unless SHARED_CATALOG)."""
+        if not config.SHARED_CATALOG:
+            return True
+        return self.owner_id is None or user_id == self.owner_id
+
+    def _owner_store(self) -> Any:
+        hub = self.user_hubs.get(self.owner_id or "")
+        return hub.store if hub is not None else None
+
     def _spawn_user(self, user_id: str) -> None:
         if user_id in self.user_hubs:
             return
         user_hub = Hub(store_path=user_registry.user_store_path(user_id), shared=self.hub)
         user_hub.running = True
+        owner = self._is_catalog_owner(user_id)
+        user_hub.catalog_owner = owner
+        user_hub.catalog_owner_store_fn = self._owner_store
         tasks = [
+            # Every user: their own monitors (search URLs, matching, notifications), sold pings, coords.
             asyncio.create_task(user_hub._loop(), name=f"worker-monitor-priority:{user_id}"),
-            asyncio.create_task(user_hub._recent_catalog_loop(), name=f"worker-new-discovery:{user_id}"),
-            asyncio.create_task(user_hub._deep_catalog_loop(), name=f"worker-rolling-deep:{user_id}"),
-            # Own sold/coords/dedupe — web process does not.
             asyncio.create_task(user_hub._sold_loop(), name=f"worker-sold:{user_id}"),
             asyncio.create_task(user_hub.backfill_missing_coords(), name=f"worker-coords:{user_id}"),
-            asyncio.create_task(user_hub._dedupe_loop(), name=f"worker-dedupe:{user_id}"),
-            asyncio.create_task(self._stale_sweep_loop(user_hub), name=f"worker-stale-sweep:{user_id}"),
         ]
+        if owner:
+            # Catalog maintenance runs once, on the owner's store (shared by everybody).
+            tasks += [
+                asyncio.create_task(user_hub._recent_catalog_loop(), name=f"worker-new-discovery:{user_id}"),
+                asyncio.create_task(user_hub._deep_catalog_loop(), name=f"worker-rolling-deep:{user_id}"),
+                asyncio.create_task(user_hub._dedupe_loop(), name=f"worker-dedupe:{user_id}"),
+                asyncio.create_task(self._stale_sweep_loop(user_hub), name=f"worker-stale-sweep:{user_id}"),
+            ]
         self.user_hubs[user_id] = user_hub
         self._user_tasks[user_id] = tasks
-        print(f"scrape_worker: spawned pipelines for user {user_id}", flush=True)
+        print(
+            f"scrape_worker: spawned {'catalog-owner' if owner else 'monitor-only'} pipelines for user {user_id}",
+            flush=True,
+        )
+
+    async def _stop_user(self, user_id: str) -> None:
+        for task in self._user_tasks.pop(user_id, []):
+            task.cancel()
+        user_hub = self.user_hubs.pop(user_id, None)
+        if user_hub is not None:
+            try:
+                await user_hub.close()
+            except Exception:
+                pass
 
     async def _rescan_users(self) -> None:
         try:
@@ -131,13 +162,22 @@ class ScrapeWorker:
         except Exception as exc:
             print(f"scrape_worker: user rescan failed: {exc}", flush=True)
             return
+        try:
+            self.owner_id = await asyncio.to_thread(user_registry.catalog_owner_id, self.hub.store)
+        except Exception:
+            pass
         for user in users:
             user_id = str(user.get("id") or "")
-            if user_id:
-                try:
-                    self._spawn_user(user_id)
-                except Exception as exc:
-                    print(f"scrape_worker: spawn failed for user {user_id}: {exc}", flush=True)
+            if not user_id:
+                continue
+            existing = self.user_hubs.get(user_id)
+            if existing is not None and existing.catalog_owner != self._is_catalog_owner(user_id):
+                # The owner changed (e.g. a different admin): rebuild this user's pipelines.
+                await self._stop_user(user_id)
+            try:
+                self._spawn_user(user_id)
+            except Exception as exc:
+                print(f"scrape_worker: spawn failed for user {user_id}: {exc}", flush=True)
 
     async def _rescan_loop(self) -> None:
         while self.running:
@@ -153,8 +193,9 @@ class ScrapeWorker:
 
     async def _user_tick(self, user_hub: Hub) -> None:
         await self._maybe_scrape_url_request(user_hub)
-        await self._maybe_forced_catalog(user_hub)
-        await user_hub.maybe_run_catalog_sync(force=False)
+        if user_hub.catalog_owner:
+            await self._maybe_forced_catalog(user_hub)
+            await user_hub.maybe_run_catalog_sync(force=False)
         await user_hub._flush_scrape_metrics()
 
     async def _stale_sweep_loop(self, user_hub: Hub) -> None:

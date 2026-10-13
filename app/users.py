@@ -253,6 +253,21 @@ def list_users(store: Store) -> list[dict[str, Any]]:
         return [u for u in (_row_to_user(r) for r in rows) if u]
 
 
+def catalog_owner_id(store: Store) -> str | None:
+    """The user whose store owns the shared catalog: the admin (role or ADMIN_EMAIL), else the oldest user.
+
+    The web process (public/guest catalog, admin panel) and the scrape worker must agree on this.
+    """
+    users = list_users(store)
+    for candidate in users:
+        email = (candidate.get("email") or "").strip().lower()
+        if candidate.get("role") == "admin" or (email and email == config.ADMIN_EMAIL):
+            return str(candidate.get("id"))
+    if users:
+        return str(users[0].get("id"))
+    return None
+
+
 def count_users(store: Store) -> int:
     with store.connect() as conn:
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()

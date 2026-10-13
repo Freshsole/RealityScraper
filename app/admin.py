@@ -1490,9 +1490,20 @@ def _dedupe_counts(store: Store, settings: dict[str, Any]) -> dict[str, int]:
     return stripe_billing.cached_stripe(key, 120, store.duplicate_row_counts)
 
 
+def _scrape_store(store: Store, hub: Any | None) -> Store:
+    """Store holding scrape jobs, the catalog and dedupe state.
+
+    Single-process dev (SCRAPE_ROLE=all) scrapes into the global store. In the split deployment the
+    worker scrapes into each user's private store and the catalog owner (the admin) holds the catalog,
+    which is the admin's store that the admin endpoints pass in.
+    """
+    if config.SCRAPE_ROLE == "all":
+        return getattr(hub, "store", None) or store
+    return store
+
+
 def dedupe_payload(store: Store, hub: Any) -> dict[str, Any]:
-    # Dedupe settings/state are kept in the global store (hub.store), not the admin's private one.
-    store = getattr(hub, "store", None) or store
+    store = _scrape_store(store, hub)
     settings = store.dedupe_settings()
     counts = _dedupe_counts(store, settings)
     running = bool(getattr(hub, "dedupe_running", False))
@@ -1557,7 +1568,7 @@ _CATALOG_STATE_LABELS = {
 
 
 def catalog_progress_payload(store: Store, hub: Any | None = None) -> dict[str, Any]:
-    store = getattr(hub, "store", None) or store  # scrape jobs live in the global store
+    store = _scrape_store(store, hub)
     data = store.catalog_progress()
     running_mem = sorted(getattr(hub, "catalog_running_portals", set()) or [])
     running_set = set(running_mem)
@@ -1645,7 +1656,7 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     # `store` is the admin's private store; scrape jobs, the catalog, ticks and the
     # dedupe settings live in the global store, queues and monitors in every user's.
     admin_store = store
-    store = getattr(hub, "store", None) or store
+    store = _scrape_store(store, hub)
     all_stores = _all_stores(hub) if getattr(hub, "store", None) is not None else [store]
     # Full hub.status() performs catalog/user aggregates needed by the public app.
     # Provoz only needs runtime flags; repeating those aggregates made this page

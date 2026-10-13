@@ -173,8 +173,10 @@ def _as_int(value: Any, default: int) -> int:
         return default
 
 
-def run_tool(store: Store, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
+def run_tool(store: Store, name: str, arguments: dict[str, Any] | None, catalog: Store | None = None) -> dict[str, Any]:
+    """`catalog` = where listings are read from (the shared owner catalog scoped to this user), default `store`."""
     args = arguments if isinstance(arguments, dict) else {}
+    catalog_store = catalog or store
     if name == "get_account":
         bill = stripe_billing.billing_state(store)
         return {
@@ -201,7 +203,7 @@ def run_tool(store: Store, name: str, arguments: dict[str, Any] | None) -> dict[
             "limit": min(max(_as_int(args.get("limit"), 12), 1), 25),
             "offset": max(_as_int(args.get("offset"), 0), 0),
         }
-        data = store.catalog(filters)
+        data = catalog_store.catalog(filters)
         items = [compact_listing(item) for item in (data.get("items") or [])]
         return {"count": len(items), "total": data.get("total") or len(items), "items": items}
     if name == "get_listing":
@@ -211,7 +213,9 @@ def run_tool(store: Store, name: str, arguments: dict[str, Any] | None) -> dict[
             listing_id_n = int(listing_id)
         except (TypeError, ValueError) as exc:
             raise ValueError("Chybí listing_id") from exc
-        item = store.catalog_item(monitor_id, listing_id_n)
+        item = catalog_store.catalog_item(monitor_id, listing_id_n)
+        if not item and catalog_store is not store:
+            item = store.catalog_item(monitor_id, listing_id_n)
         if not item:
             raise KeyError("Inzerát neexistuje")
         return compact_listing(item)
@@ -342,7 +346,7 @@ def tool_text(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def handle_mcp(store: Store, message: dict[str, Any]) -> dict[str, Any] | None:
+def handle_mcp(store: Store, message: dict[str, Any], catalog: Store | None = None) -> dict[str, Any] | None:
     if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
         return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
     method = str(message.get("method") or "")
@@ -380,7 +384,7 @@ def handle_mcp(store: Store, message: dict[str, Any]) -> dict[str, Any] | None:
         name = str(params.get("name") or "")
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
         try:
-            payload = run_tool(store, name, arguments)
+            payload = run_tool(store, name, arguments, catalog)
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,

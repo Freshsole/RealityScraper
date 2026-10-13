@@ -487,6 +487,7 @@ class Store:
         # (used for per-user stores so new users don't inherit the admin's Discord).
         self._seed_webhook_url = config.DISCORD_WEBHOOK_URL if seed_webhook_url is None else seed_webhook_url
         self._facets_cache: dict[str, Any] | None = None
+        self._facets_base: dict[str, Any] = {"at": 0.0, "data": None}
         self._facets_at = 0.0
         self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
         # street-prefix → GPS | None (None = looked up, no usable peer)
@@ -497,9 +498,49 @@ class Store:
         self._init()
         self._refresh_hidden_flag()
         if self._fast_ok:
-            threading.Thread(target=self.ensure_fast_indexes, name="fast-index", daemon=True).start()
+            try:
+                with self.connect(readonly=True) as conn:
+                    big = int(conn.execute("SELECT IFNULL(MAX(rowid), 0) FROM listings").fetchone()[0]) > 20000
+            except sqlite3.Error:
+                big = False
+            if big:
+                # Building the indexes on a large catalog takes a while: do it off the startup path.
+                threading.Thread(target=self.ensure_fast_indexes, name="fast-index", daemon=True).start()
+            else:
+                self.ensure_fast_indexes()
 
     _fast_ok = False
+    _scope_user_path: str | None = None
+    # Per-user tables that a scoped (owner-catalog) read connection takes from the user's DB.
+    SCOPE_USER_TABLES = ("monitors", "monitor_hits", "listing_user", "events")
+
+    def scoped_for(self, user_store: "Store") -> "Store":
+        """A read-only view of this (catalog owner) store with *another user's* per-user state.
+
+        Listing data (listings, listing_links, photos, price history) comes from this store; the
+        tables in SCOPE_USER_TABLES (monitors, hidden/saved/notes, hits) come from `user_store`.
+        Used so the catalog is scraped once and every user only keeps their own state.
+        """
+        import copy
+
+        clone = copy.copy(self)
+        clone._scope_user_path = str(user_store.path)
+        clone._has_hidden_users = user_store._has_hidden_users
+        clone._facets_cache = None
+        return clone
+
+    def _apply_user_scope(self, conn: sqlite3.Connection) -> None:
+        conn.execute("ATTACH DATABASE ? AS usr", (self._scope_user_path,))
+        try:
+            conn.execute("PRAGMA query_only=OFF")
+        except sqlite3.OperationalError:
+            pass
+        for table in self.SCOPE_USER_TABLES:
+            conn.execute(f"CREATE TEMP VIEW {table} AS SELECT * FROM usr.{table}")
+        try:
+            conn.execute("PRAGMA query_only=ON")
+        except sqlite3.OperationalError:
+            pass
 
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         on_loop = threading.current_thread() is threading.main_thread()
@@ -534,6 +575,8 @@ class Store:
             conn = sqlite3.connect(self.path, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=30000")
+        if self._scope_user_path:
+            self._apply_user_scope(conn)
         try:
             from app.perf_diag import wrap_connection
 
@@ -4212,14 +4255,58 @@ class Store:
                 "SELECT * FROM catalog_listings WHERE listing_key = ? OR canonical_key = ? LIMIT 1",
                 (key, key),
             ).fetchone()
-            if not row:
-                return
-            canon = str(row["canonical_key"] or row["listing_key"] or key)
+        if row:
+            self._fanout_gone_row(dict(row), key)
+
+    def sync_gone_from_catalog(self, owner: "Store", *, limit: int = 20000) -> int:
+        """Mark this user's monitor rows gone when the shared catalog (owner store) says they are.
+
+        Consumers no longer scrape the catalog themselves, so their sold detection (-> sold pings)
+        follows the owner's. Returns the number of listings fanned out.
+        """
+        with self.connect(readonly=True) as conn:
+            monitor_ids = [str(r[0]) for r in conn.execute("SELECT id FROM monitors")]
+            rows: list[tuple[str, str]] = []
+            # Per monitor id: uses the (monitor_id, id) primary key instead of scanning the table.
+            for monitor_id in monitor_ids:
+                if monitor_id == CATALOG_MONITOR_ID or len(rows) >= int(limit):
+                    continue
+                rows.extend(
+                    (str(r["listing_key"] or ""), str(r["canonical_key"] or ""))
+                    for r in conn.execute(
+                        "SELECT listing_key, canonical_key FROM listings WHERE monitor_id = ? AND IFNULL(gone, 0) = 0 LIMIT ?",
+                        (monitor_id, int(limit) - len(rows)),
+                    )
+                )
+        keys = list(dict.fromkeys(k for pair in rows for k in pair if k))
+        gone_rows: dict[str, dict[str, Any]] = {}
+        if keys:
+            with owner.connect(readonly=True) as oconn:
+                for i in range(0, len(keys), 400):
+                    chunk = keys[i : i + 400]
+                    marks = ",".join("?" * len(chunk))
+                    for r in oconn.execute(
+                        f"""
+                        SELECT * FROM catalog_listings
+                        WHERE IFNULL(gone, 0) = 1 AND (listing_key IN ({marks}) OR canonical_key IN ({marks}))
+                        """,
+                        chunk + chunk,
+                    ):
+                        gone_rows[str(r["canonical_key"] or r["listing_key"])] = dict(r)
+        n = 0
+        for key, row in gone_rows.items():
+            self._fanout_gone_row(row, key, catalog_row=False)
+            n += 1
+        return n
+
+    def _fanout_gone_row(self, row: dict[str, Any], key: str, *, catalog_row: bool = True) -> None:
+        with self.connect() as conn:
+            canon = str(row.get("canonical_key") or row.get("listing_key") or key)
             link_keys = [
                 item["url_key"]
                 for item in conn.execute("SELECT url_key FROM listing_links WHERE canonical_key = ?", (canon,))
             ]
-            hit_keys = {key, canon, str(row["listing_key"] or ""), *link_keys}
+            hit_keys = {key, canon, str(row.get("listing_key") or ""), *link_keys}
             holders = ",".join("?" * len(hit_keys))
             hits = [
                 item["monitor_id"]
@@ -4229,8 +4316,9 @@ class Store:
                 )
             ]
         listing = _listing_from_catalog_dict(dict(row))
-        self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind="sold")
-        self.mark_gone(CATALOG_MONITOR_ID, listing.id)
+        if catalog_row:
+            self.upsert_seen(CATALOG_MONITOR_ID, listing, notified=False, kind="sold")
+            self.mark_gone(CATALOG_MONITOR_ID, listing.id)
         for monitor_id in hits:
             self.upsert_seen(monitor_id, listing, notified=False, kind="sold")
             self.mark_gone(monitor_id, listing.id)
@@ -5388,6 +5476,11 @@ class Store:
 
         where = ["1=1"]
         params: list[Any] = []
+        if self._scope_user_path:
+            # Shared owner store: only the catalog rows. The owner's own monitor rows (and their
+            # notified/monitor state) belong to the owner, not to the user reading through us.
+            where.append("listings.monitor_id = ?")
+            params.append(CATALOG_MONITOR_ID)
         portal = (filters.get("portal") or "").strip()
         if portal in PORTAL_IDS:
             likes = url_likes(portal) or (f"%{portal}.cz%",)
@@ -6887,38 +6980,44 @@ class Store:
 
     def catalog_facets(self) -> dict[str, Any]:
         now = time.monotonic()
-        if self._facets_cache is not None and now - self._facets_at < config.FACETS_CACHE_SEC:
+        base = self._facets_base  # shared (by reference) with scoped clones
+        if base["data"] is None or now - base["at"] >= config.FACETS_CACHE_SEC:
+            with self.connect(readonly=True) as conn:
+                dispositions = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT disposition FROM listings WHERE disposition IS NOT NULL AND disposition != '' GROUP BY disposition ORDER BY COUNT(*) DESC"
+                    )
+                ]
+                portals = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT portal FROM listing_links WHERE IFNULL(gone, 0) = 0 AND portal != '' ORDER BY portal"
+                    )
+                ]
+                if not portals:
+                    from app.sources import PORTAL_IDS, url_likes
+
+                    for portal_id in PORTAL_IDS:
+                        likes = url_likes(portal_id) or (f"%{portal_id}%",)
+                        if any(
+                            conn.execute("SELECT 1 FROM listings WHERE url LIKE ? LIMIT 1", (like,)).fetchone()
+                            for like in likes
+                        ):
+                            portals.append(portal_id)
+            base["data"] = {"dispositions": dispositions, "portals": portals}
+            base["at"] = now
+        if self._scope_user_path is None and self._facets_cache is not None and now - self._facets_at < config.FACETS_CACHE_SEC:
             return self._facets_cache
         with self.connect(readonly=True) as conn:
-            dispositions = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT disposition FROM listings WHERE disposition IS NOT NULL AND disposition != '' GROUP BY disposition ORDER BY COUNT(*) DESC"
-                )
-            ]
             monitors = [
                 {"id": row["id"], "name": row["name"], "enabled": bool(row["enabled"])}
                 for row in conn.execute("SELECT id, name, enabled FROM monitors ORDER BY name")
             ]
-            portals = [
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT portal FROM listing_links WHERE IFNULL(gone, 0) = 0 AND portal != '' ORDER BY portal"
-                )
-            ]
-            if not portals:
-                from app.sources import PORTAL_IDS, url_likes
-
-                for portal_id in PORTAL_IDS:
-                    likes = url_likes(portal_id) or (f"%{portal_id}%",)
-                    if any(
-                        conn.execute("SELECT 1 FROM listings WHERE url LIKE ? LIMIT 1", (like,)).fetchone()
-                        for like in likes
-                    ):
-                        portals.append(portal_id)
-        payload = {"dispositions": dispositions, "portals": portals, "monitors": monitors}
-        self._facets_cache = payload
-        self._facets_at = now
+        payload = {**base["data"], "monitors": monitors}
+        if self._scope_user_path is None:
+            self._facets_cache = payload
+            self._facets_at = now
         return payload
 
     def catalog_item(
@@ -7559,6 +7658,37 @@ class Store:
                         lookup_urls,
                     )
                 }
+            scoped_notified: set[str] = set()
+            if self._scope_user_path:
+                # Catalog rows come from the shared owner store, so "which of MY monitors hit this
+                # listing" is answered from the user's own monitor_hits / listings (schema `usr`).
+                monitor_rows = []
+                keys = list(dict.fromkeys([*canons, *[str(i.get("listing_key") or "") for i in items]]))
+                keys = [k for k in keys if k]
+                for i in range(0, len(keys), 400):
+                    chunk = keys[i : i + 400]
+                    marks = ",".join("?" * len(chunk))
+                    for r in conn.execute(
+                        f"""
+                        SELECT h.listing_key AS listing_key, h.listing_key AS canonical_key, NULL AS url,
+                               m.id AS id, m.name AS name
+                        FROM monitor_hits h JOIN monitors m ON m.id = h.monitor_id
+                        WHERE h.listing_key IN ({marks})
+                        """,
+                        chunk,
+                    ):
+                        monitor_rows.append(r)
+                    for r in conn.execute(
+                        f"""
+                        SELECT COALESCE(NULLIF(canonical_key, ''), listing_key) AS k, listing_key
+                        FROM usr.listings
+                        WHERE notified = 1 AND monitor_id != ?
+                          AND (canonical_key IN ({marks}) OR listing_key IN ({marks}))
+                        """,
+                        [CATALOG_MONITOR_ID, *chunk, *chunk],
+                    ):
+                        scoped_notified.add(str(r["k"]))
+                        scoped_notified.add(str(r["listing_key"]))
             monitor_sql = """
                 SELECT listings.url, listings.listing_key, listings.canonical_key, monitors.id, monitors.name
                 FROM listings
@@ -7580,7 +7710,8 @@ class Store:
             # No leading "0 OR": it stops SQLite from using one index per OR branch.
             monitor_sql += " (" + (" OR ".join(monitor_conds) if monitor_conds else "0") + ")"
             monitor_sql += " GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), NULLIF(listings.listing_key, ''), listings.url), monitors.id ORDER BY monitors.name"
-            monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall() if monitor_params else []
+            if not self._scope_user_path:
+                monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall() if monitor_params else []
             history = {}
             hist_keys = [(item.get("monitor_id"), item.get("id")) for item in items if item.get("monitor_id") and item.get("id") is not None]
             if hist_keys:
@@ -7639,6 +7770,9 @@ class Store:
                         break
             item["status"] = user.get("status") or ""
             item["note"] = user.get("note") or ""
+            if self._scope_user_path:
+                # `notified` on a shared catalog row belongs to the catalog owner, not this user.
+                item["notified"] = 1 if (identity in scoped_notified or str(item.get("listing_key") or "") in scoped_notified) else 0
             item["monitors"] = (
                 monitors_by_key.get(identity)
                 or monitors_by_url.get(item.get("url") or "")
@@ -7820,6 +7954,8 @@ def _price_series(history: list[dict[str, Any]], item: dict[str, Any]) -> list[d
 def public_listing(row: dict[str, Any]) -> dict[str, Any]:
     item = enrich_maps(row)
     item.pop("_rn", None)
+    for fast_col in ("x_live", "x_pub", "x_apt", "x_rent", "x_sale"):
+        item.pop(fast_col, None)
     identity = listing_identity(item)
     item["canonical_key"] = identity
     item["listing_key"] = identity

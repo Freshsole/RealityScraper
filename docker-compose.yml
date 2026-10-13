@@ -46,6 +46,8 @@ x-common-env: &common-env
   UPDATE_FEED:
   UPDATE_TOKEN:
   AUTO_UPDATE: "0"
+  # 1 (default): the catalog is scraped once by the admin's hub and shared; 0: every user scrapes their own.
+  SHARED_CATALOG:
 
 services:
   web:

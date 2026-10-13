@@ -55,6 +55,13 @@ class Hub:
         self._prune_task: asyncio.Task[None] | None = None
         self.catalog_running = False
         self.catalog_running_portals: set[str] = set()
+        # Worker only: False for a user who consumes the shared catalog instead of scraping it
+        # (see SHARED_CATALOG); `catalog_owner_store_fn` returns the owner's Store.
+        self.catalog_owner = True
+        self.catalog_owner_store_fn: Any = None
+        # Web only: returns the shared catalog (owner) store for a consumer's child hub, else None.
+        self.catalog_reader_fn: Any = None
+        self._owner_sync_at = 0.0
         self._recent_shard_idx = 0
         self._deep_shard_idx = 0
         self.dedupe_running = False
@@ -110,6 +117,23 @@ class Hub:
                 self._user_stores[key] = store
             return store
 
+    def _shared_catalog_store(self, user_id: str) -> Store | None:
+        """The catalog owner's store when this user consumes the shared catalog, else None."""
+        if not config.SHARED_CATALOG:
+            return None
+        now = time.monotonic()
+        cached = getattr(self, "_owner_id_cache", None)
+        if cached is None or now - cached[0] > 60:
+            try:
+                cached = (now, user_registry.catalog_owner_id(self.store))
+            except Exception:
+                cached = (now, None)
+            self._owner_id_cache = cached
+        owner_id = cached[1]
+        if not owner_id or owner_id == "".join(ch for ch in user_id if ch.isalnum() or ch in "-_"):
+            return None
+        return self.store_for(owner_id)
+
     def drop_store_cache(self, user_id: str) -> None:
         key = "".join(ch for ch in (user_id or "") if ch.isalnum() or ch in "-_") or "unknown"
         with self._user_stores_lock:
@@ -123,6 +147,7 @@ class Hub:
             child = self._child_hubs.get(key)
             if child is None:
                 child = Hub(store_path=user_registry.user_store_path(key), shared=self)
+                child.catalog_reader_fn = lambda uid=key: self._shared_catalog_store(uid)
                 self._child_hubs[key] = child
             return child
 
@@ -1969,6 +1994,17 @@ class Hub:
     async def _sold_tick(self) -> None:
         for pending in self.store.pending_sold_pings(limit=10):
             await self._send_sold_ping(pending, pending.get("monitor_name") or "")
+        if not self.catalog_owner:
+            # Consumer of the shared catalog: its own catalog copy is not refreshed here, so sold
+            # detection follows the owner's catalog instead of re-checking "stale" rows.
+            owner = self.catalog_owner_store_fn() if callable(self.catalog_owner_store_fn) else None
+            if owner is not None and owner is not self.store and time.monotonic() - self._owner_sync_at >= 120:
+                self._owner_sync_at = time.monotonic()
+                await self._job_db(self.store.sync_gone_from_catalog, owner)
+            if owner is not None:
+                for pending in self.store.pending_sold_pings(limit=10):
+                    await self._send_sold_ping(pending, pending.get("monitor_name") or "")
+            return
         due = [item for item in self.store.list_monitors() if item.get("enabled") and self._inventory_due(item)]
         if not due:
             return
@@ -2134,7 +2170,8 @@ class Hub:
             if item.get("last_error") and not _is_notify_config_noise(item.get("last_error"))
         ]
         last_checks = [item.get("last_check") for item in monitors if item.get("last_check")]
-        catalog = self.store.catalog_sync_status()
+        reader = self.catalog_reader_fn() if callable(self.catalog_reader_fn) else None
+        catalog = (reader or self.store).catalog_sync_status()
         tracked = self.store.count()
         new_today = self.store.new_today_count()
         recent = self.store.recent_notified(limit=36, twins=False)

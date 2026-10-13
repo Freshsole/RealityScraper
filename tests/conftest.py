@@ -22,4 +22,6 @@ for _var in (
 # DATA_DIR musí být nastavený DŘÍV, než jakýkoliv test naimportuje app.*
 # (app/config.py si DATA_DIR přečte při importu). Jinak testy zapisují
 # do reálného ./data a navzájem se ovlivňují.
+# Never copy the developer's (possibly GB-sized) ./data/monitor.sqlite into the test data dir.
+os.environ.setdefault("REALITIFY_SKIP_LEGACY_MIGRATE", "1")
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="realitify-test-data-"))

@@ -84,6 +84,10 @@ SCRAPE_DEEP_LOOP_SEC = max(1, int(os.getenv("SCRAPE_DEEP_LOOP_SEC", "2")))
 SCRAPE_ROLE = (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower()
 if SCRAPE_ROLE not in {"all", "web", "worker"}:
     SCRAPE_ROLE = "all"
+# The catalog (all portals) is scraped once by the catalog owner (the admin user's hub); other users'
+# hubs only run their own monitors and read the shared catalog. SHARED_CATALOG=0 restores the old
+# behaviour (every user scrapes and stores a private copy of the whole catalog).
+SHARED_CATALOG = (os.getenv("SHARED_CATALOG", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
 SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
 SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))
 # Hard cap across all portals. Per-portal ceilings cannot exceed this in aggregate.
@@ -219,6 +223,8 @@ def _resolve_data_dir() -> Path:
 
 
 def _migrate_legacy_data(dest: Path) -> None:
+    if os.getenv("REALITIFY_SKIP_LEGACY_MIGRATE"):
+        return
     src = ROOT / "data"
     try:
         if not src.is_dir() or src.resolve() == dest.resolve():

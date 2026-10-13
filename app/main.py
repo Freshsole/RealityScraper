@@ -49,7 +49,7 @@ from app import mcp_oauth
 install_stdout_tee()
 from app import extension_score as ext_score
 from app.sreality import ListingGone
-from app.store import _listing_from_catalog_dict, Store
+from app.store import CATALOG_MONITOR_ID, _listing_from_catalog_dict, Store
 
 hub = Hub()
 
@@ -1346,17 +1346,9 @@ def _admin_user_id() -> str | None:
     cached = _admin_id_cache.get("id")
     if cached and now - float(_admin_id_cache.get("at") or 0) < 60:
         return str(cached)
-    user_id: str | None = None
+    user_id: str | None
     try:
-        for candidate in user_registry.list_users(hub.store):
-            email = (candidate.get("email") or "").strip().lower()
-            if candidate.get("role") == "admin" or (email and email == config.ADMIN_EMAIL):
-                user_id = str(candidate.get("id"))
-                break
-        if user_id is None:
-            all_users = user_registry.list_users(hub.store)
-            if all_users:
-                user_id = str(all_users[0].get("id"))
+        user_id = user_registry.catalog_owner_id(hub.store)
     except Exception:
         user_id = None
     _admin_id_cache["id"] = user_id
@@ -1382,6 +1374,33 @@ def _store_for_session(session: str | None) -> tuple[dict[str, Any] | None, Stor
     if user:
         return user, hub.store_for(str(user.get("id")))
     return None, _public_store()
+
+def _catalog_reader(user: dict[str, Any] | None, ustore: Store, payload: dict[str, Any] | None = None) -> Store:
+    """Store to run a catalog read on.
+
+    Logged-in users read the shared catalog of the owner (admin) store with their own hidden/saved/
+    hit state (`Store.scoped_for`). Queries about the user's own monitor hits stay on their store.
+    """
+    if user is None or not config.SHARED_CATALOG:
+        return ustore
+    owner = _public_store()
+    if owner is None or str(owner.path) == str(ustore.path):
+        return ustore
+    p = payload or {}
+    if str(p.get("monitor_id") or "").strip() or str(p.get("hits") or "").strip():
+        return ustore
+    return _shared_catalog_for(ustore) or ustore
+
+
+def _shared_catalog_for(ustore: Store) -> Store | None:
+    """Owner catalog scoped to this user's store (None when the user's own store is the catalog)."""
+    if not config.SHARED_CATALOG:
+        return None
+    owner = _public_store()
+    if owner is None or str(owner.path) == str(ustore.path):
+        return None
+    return owner.scoped_for(ustore)
+
 
 def _catalog_store(session: str | None, guest: str | None) -> tuple[dict[str, Any] | None, Store]:
     """Store for read-only catalog endpoints: the user's own, or the public store for e-mail guests."""
@@ -3199,7 +3218,8 @@ async def catalog(
             facets=facets,
         )
     )
-    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, ustore)
+    reader = _catalog_reader(cuser, ustore, payload)
+    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, reader)
 
 
 @app.get("/api/catalog/pins")
@@ -3273,7 +3293,8 @@ async def catalog_pins(
             pins_only=True,
         )
     )
-    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, ustore)
+    reader = _catalog_reader(cuser, ustore, payload)
+    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, reader)
 
 
 @app.get("/api/catalog/stats")
@@ -3283,7 +3304,8 @@ async def catalog_stats(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
     realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _catalog_store(realitify_session, realitify_guest)
+    cuser, ustore = _catalog_store(realitify_session, realitify_guest)
+    ustore = _catalog_reader(cuser, ustore, {})
     try:
         return await asyncio.to_thread(ustore.catalog_stats, district, offer)
     except ValueError as exc:
@@ -3303,11 +3325,16 @@ async def catalog_item(
     user, ustore = _catalog_store(realitify_session, realitify_guest)
     if user is None:
         enrich = "0"
-    item = await asyncio.to_thread(
-        ustore.catalog_item, monitor_id, id, listing_key, url
-    )
+    # Catalog rows live in the shared owner store; a user's own monitor-hit rows live in theirs.
+    reader = _catalog_reader(user, ustore, {}) if monitor_id in ("", CATALOG_MONITOR_ID) else ustore
+    item = await asyncio.to_thread(reader.catalog_item, monitor_id, id, listing_key, url)
+    if not item and reader is not ustore:
+        reader = ustore
+        item = await asyncio.to_thread(ustore.catalog_item, monitor_id, id, listing_key, url)
     if not item:
         raise HTTPException(404, "Nabídka se nenašla")
+    # Enrichment of a shared catalog row is written once, to the owner store.
+    write_store = _public_store() or ustore if getattr(reader, "_scope_user_path", None) else ustore
     do_enrich = str(enrich or "1").strip().lower() not in {"0", "false", "no"}
     if not do_enrich:
         return item
@@ -3322,9 +3349,9 @@ async def catalog_item(
             await refine_listing_location_async(listing)
 
             def _enrich() -> dict:
-                ustore.save_listing_enrichment(item["monitor_id"], listing)
+                write_store.save_listing_enrichment(item["monitor_id"], listing)
                 return (
-                    ustore.catalog_item(
+                    reader.catalog_item(
                         item["monitor_id"],
                         item["id"],
                         listing_key=item.get("listing_key") or "",
@@ -3337,7 +3364,7 @@ async def catalog_item(
         except ListingGone:
             await hub.hub_for(str(user.get("id"))).notify_sold(ustore.get_monitor(item["monitor_id"]), item["id"])
             item = await asyncio.to_thread(
-                ustore.catalog_item, item["monitor_id"], item["id"], url=source_url
+                reader.catalog_item, item["monitor_id"], item["id"], url=source_url
             ) or item
         except Exception:
             pass
@@ -4170,11 +4197,11 @@ async def mcp_endpoint(request: Request):
     if isinstance(payload, list):
         out = []
         for msg in payload:
-            item = agent_hub.handle_mcp(mcp_store, msg if isinstance(msg, dict) else {})
+            item = agent_hub.handle_mcp(mcp_store, msg if isinstance(msg, dict) else {}, _shared_catalog_for(mcp_store))
             if item is not None:
                 out.append(item)
         return _mcp_http(request, out)
-    result = agent_hub.handle_mcp(mcp_store, payload if isinstance(payload, dict) else {})
+    result = agent_hub.handle_mcp(mcp_store, payload if isinstance(payload, dict) else {}, _shared_catalog_for(mcp_store))
     return _mcp_http(request, result)
 
 
@@ -4182,14 +4209,14 @@ async def mcp_endpoint(request: Request):
 async def agent_search_listings(request: Request) -> dict:
     _, mcp_store = _agent_key(request)
     args = dict(request.query_params)
-    return agent_hub.run_tool(mcp_store, "search_listings", args)
+    return agent_hub.run_tool(mcp_store, "search_listings", args, _shared_catalog_for(mcp_store))
 
 
 @app.get("/api/v1/listings/{monitor_id}/{listing_id}")
 async def agent_get_listing(request: Request, monitor_id: str, listing_id: int) -> dict:
     _, mcp_store = _agent_key(request)
     try:
-        return agent_hub.run_tool(mcp_store, "get_listing", {"monitor_id": monitor_id, "listing_id": listing_id})
+        return agent_hub.run_tool(mcp_store, "get_listing", {"monitor_id": monitor_id, "listing_id": listing_id}, _shared_catalog_for(mcp_store))
     except (KeyError, ValueError) as exc:
         raise HTTPException(404, str(exc)) from exc
 
