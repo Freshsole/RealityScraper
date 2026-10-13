@@ -11,3 +11,11 @@
 @media (max-width:860px){#hry .game-hub{grid-template-columns:1fr;padding-left:0;padding-right:0}#hry .game-card{padding:28px 24px}}
 
 @media (max-width:860px){.urg-item{white-space:normal;font-size:15px}}
+
+/* Embedded InTouch contact form, styled like the rest of the site */
+intouch-form{--it-font:var(--font-ui);--it-font-size:14px;--it-text:var(--forest);--it-muted:var(--body);--it-accent:var(--green);--it-accent-text:var(--forest);--it-gap:20px;--it-label-gap:8px;--it-label-size:14px;--it-label-weight:700;--it-label-color:var(--forest);--it-input-bg:#fff;--it-input-text:var(--ink);--it-input-border:var(--line);--it-input-radius:12px;--it-input-pad-y:14px;--it-input-pad-x:14px;--it-placeholder:#8a918a;--it-focus:var(--green);--it-focus-width:4px;--it-textarea-height:140px;--it-footer-gap:24px;--it-btn-width:auto;--it-btn-radius:999px;--it-btn-pad-y:14px;--it-btn-pad-x:28px;--it-btn-weight:700;--it-error:var(--sold);--it-success:#2f8a00}
+intouch-form::part(input){font-size:14px;min-height:48px}
+intouch-form::part(textarea){min-height:140px}
+intouch-form::part(button){font-size:16px}
+intouch-form::part(required-mark){color:var(--sold)}
+intouch-form::part(message){text-align:left;font-size:14px;font-weight:600}

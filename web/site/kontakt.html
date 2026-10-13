@@ -26,7 +26,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=19" />
+    <link rel="stylesheet" href="/static/site/site.css?v=20" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
   </head>
   <body class="contact-page">
@@ -55,38 +55,10 @@
     </section>
 
     <section class="contact-cols">
-      <form class="form-panel" id="contact-form" action="mailto:podpora@realitify.cz" method="post" enctype="text/plain">
+      <div class="form-panel" id="contact-form">
         <h2>NAPIŠTE NÁM</h2>
-        <div class="fields-stack">
-          <label class="form-field">
-            <span class="field-label">Jméno</span>
-            <input id="name" name="jmeno" type="text" placeholder="Zadejte své jméno a příjmení" required />
-          </label>
-          <label class="form-field">
-            <span class="field-label">E-mailová adresa</span>
-            <input id="email" name="email" type="email" placeholder="jmeno@domena.cz" required />
-          </label>
-          <label class="form-field">
-            <span class="field-label">Předmět</span>
-            <span class="select-wrap">
-              <select id="subject" name="predmet" required>
-                <option value="" selected disabled>Vyberte téma vaší zprávy</option>
-                <option value="Obecný dotaz">Obecný dotaz</option>
-                <option value="Technická podpora">Technická podpora</option>
-                <option value="Předplatné a fakturace">Předplatné a fakturace</option>
-                <option value="Partnerství">Partnerství</option>
-                <option value="Jiné">Jiné</option>
-              </select>
-              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/chevron-select.svg" width="16" height="16" alt="" /></span>
-            </span>
-          </label>
-          <label class="form-field">
-            <span class="field-label">Zpráva</span>
-            <textarea id="msg" name="zprava" placeholder="Jak vám můžeme pomoci?" required></textarea>
-          </label>
-        </div>
-        <button class="pill pill-lg form-submit" type="submit">Odeslat zprávu</button>
-      </form>
+        <intouch-form form-id="Se065ESwlf" headline="" description="" button-text="Odeslat zprávu" success-message="Děkujeme, zpráva je odeslaná. Ozveme se vám co nejdříve."></intouch-form>
+      </div>
 
       <div class="info-panel">
         <h2>KONTAKTNÍ ÚDAJE</h2>
@@ -100,19 +72,11 @@
             </div>
           </article>
           <article class="info-card">
-            <span class="icon-wrap"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/phone.svg" width="22" height="22" alt="" /></span></span>
-            <div>
-              <p class="info-label">Telefon</p>
-              <a class="info-value" href="tel:+420123456789">+420 123 456 789</a>
-              <p class="info-note">Dostupní v pracovní dny</p>
-            </div>
-          </article>
-          <article class="info-card">
             <span class="icon-wrap"><span class="icon" style="width:22px;height:22px"><img src="/static/site/assets/contact-map-pin.svg" width="22" height="22" alt="" /></span></span>
             <div>
               <p class="info-label">Adresa sídla</p>
-              <p class="info-value">Václavské náměstí 1, Praha 1</p>
-              <p class="info-note">110 00, Česká republika</p>
+              <p class="info-value">Umělecká 618/7, Praha 7</p>
+              <p class="info-note">170 00 Holešovice, Česká republika</p>
             </div>
           </article>
           <article class="info-card">
@@ -237,7 +201,8 @@
         </div>
       </div>
     </footer>
-    <script src="/static/site/inquiries.js?v=4"></script>
+    <script src="https://intouch.virtuex.cz/f/embed.js" async></script>
+    <script src="/static/site/contact-form.js?v=1" defer></script>
     <script src="/static/t.js?v=7"></script>
       <script src="/static/site/nav.js?v=3" defer></script>
 </body>
