@@ -32,6 +32,7 @@ class ScrapeWorker:
         self._rescan_task: asyncio.Task[None] | None = None
         self._watch_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._checkpoint_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
@@ -58,6 +59,7 @@ class ScrapeWorker:
         await self._rescan_users()
         self._rescan_task = asyncio.create_task(self._rescan_loop(), name="worker-rescan-users")
         self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
+        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -81,7 +83,7 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
-            for task in (self._rescan_task, self._watch_task, self._heartbeat_task):
+            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -169,6 +171,30 @@ class ScrapeWorker:
             except Exception as exc:
                 print(f"catalog stale sweep error: {exc}", flush=True)
             await asyncio.sleep(3600)
+
+    async def _checkpoint_loop(self) -> None:
+        """Keep the WAL small: with writers and readers always overlapping SQLite rarely resets it,
+        which makes every read slower. Best effort, never blocks the scrape loops."""
+        await asyncio.sleep(120)
+        while self.running:
+            try:
+                stores = [self.hub.store] + [h.store for h in list(self.user_hubs.values())]
+
+                def _run() -> None:
+                    for store in stores:
+                        try:
+                            with store.connect() as conn:
+                                conn.execute("PRAGMA busy_timeout=2000")
+                                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        except Exception:
+                            pass
+
+                await asyncio.to_thread(_run)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"scrape_worker: wal checkpoint error: {exc}", flush=True)
+            await asyncio.sleep(600)
 
     async def _watchdog_loop(self) -> None:
         from app.scrape_timing import watchdog_sample, watchdog_snapshot

@@ -496,6 +496,10 @@ class Store:
         self._has_hidden_users = False
         self._init()
         self._refresh_hidden_flag()
+        if self._fast_ok:
+            threading.Thread(target=self.ensure_fast_indexes, name="fast-index", daemon=True).start()
+
+    _fast_ok = False
 
     def connect(self, readonly: bool = False, *, quick: bool = False) -> sqlite3.Connection:
         on_loop = threading.current_thread() is threading.main_thread()
@@ -515,6 +519,10 @@ class Store:
             conn.execute("PRAGMA busy_timeout=5000")
             try:
                 conn.execute("PRAGMA query_only=ON")
+                # Read tuning: bigger page cache, memory-mapped I/O, temp tables in RAM.
+                conn.execute("PRAGMA cache_size=-16384")
+                conn.execute("PRAGMA mmap_size=268435456")
+                conn.execute("PRAGMA temp_store=MEMORY")
             except sqlite3.OperationalError:
                 pass
         elif on_loop:
@@ -935,6 +943,79 @@ class Store:
             )
             conn.execute("DROP TABLE listings")
             conn.execute("ALTER TABLE listings_v2 RENAME TO listings")
+        self._ensure_fast_columns(conn)
+
+    # Denormalised virtual columns so public catalog queries can be answered from an index
+    # instead of scanning `listings` and parsing the JSON `extras` of every row.
+    FAST_AREA_MIN_M2 = 10.0
+    FAST_AREA_MAX_M2 = 500.0
+    FAST_COLUMNS: tuple[tuple[str, str], ...] = (
+        ("x_live", "IFNULL(gone, 0) = 0"),
+        (
+            "x_pub",
+            "price_czk IS NOT NULL AND price_czk > 0 AND area_m2 IS NOT NULL "
+            "AND area_m2 >= 10.0 AND area_m2 <= 500.0 AND NOT ("
+            "lower(IFNULL(name, '')) LIKE '%krátkodob%' OR lower(IFNULL(name, '')) LIKE '%kratkodob%' "
+            "OR lower(IFNULL(name, '')) LIKE '%airbnb%' OR lower(IFNULL(price_label, '')) LIKE '%/den%' "
+            "OR lower(IFNULL(price_label, '')) LIKE '%za den%')",
+        ),
+        (
+            "x_apt",
+            "CASE WHEN json_valid(extras) THEN (json_extract(extras, '$.estate') IS NULL "
+            "OR json_extract(extras, '$.estate') IN ('Byt', 'Byty', 'Podnájem')) ELSE 1 END",
+        ),
+        (
+            "x_rent",
+            "extras LIKE '%\"offer\": \"Pronájem\"%' OR ((extras IS NULL OR extras IN ('', '{}')) "
+            "AND price_label LIKE '%měsíc%')",
+        ),
+        (
+            "x_sale",
+            "extras LIKE '%\"offer\": \"Prodej\"%' OR ((extras IS NULL OR extras IN ('', '{}')) "
+            "AND price_label NOT LIKE '%měsíc%')",
+        ),
+    )
+
+    def _ensure_fast_columns(self, conn: sqlite3.Connection) -> None:
+        try:
+            have = {row[1] for row in conn.execute("PRAGMA table_xinfo(listings)")}
+            for name, expr in self.FAST_COLUMNS:
+                if name not in have:
+                    conn.execute(
+                        f"ALTER TABLE listings ADD COLUMN {name} INTEGER GENERATED ALWAYS AS ({expr}) VIRTUAL"
+                    )
+            have = {row[1] for row in conn.execute("PRAGMA table_xinfo(listings)")}
+            self._fast_ok = all(name in have for name, _ in self.FAST_COLUMNS)
+        except sqlite3.OperationalError:
+            self._fast_ok = False
+
+    def ensure_fast_indexes(self) -> None:
+        """Build the catalog indexes (idempotent). Slow on a big DB, so call from a background thread."""
+        if not getattr(self, "_fast_ok", False):
+            return
+        try:
+            with self.connect() as conn:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fast_rent ON listings(x_live, x_pub, x_apt, x_rent, price_czk, locality)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fast_sale ON listings(x_live, x_pub, x_apt, x_sale, price_czk, locality)"
+                )
+                # Offer + price + locality for queries without the public quality filter (the app's catalog).
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_fast_rent_price ON listings(x_rent, price_czk, locality)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_fast_sale_price ON listings(x_sale, price_czk, locality)")
+                # Street-prefix coordinate lookups (LIKE 'Street%' is case-insensitive -> NOCASE index).
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fast_locality_nocase ON listings(locality COLLATE NOCASE) "
+                    "WHERE lat IS NOT NULL AND lon IS NOT NULL"
+                )
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_fast_disposition ON listings(disposition)")
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_fast_links_portal ON listing_links(portal) "
+                    "WHERE IFNULL(gone, 0) = 0 AND portal != ''"
+                )
+        except sqlite3.Error as exc:
+            print(f"ensure_fast_indexes failed: {exc}", flush=True)
 
     def _backfill_listing_keys(self, conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_listing_key ON listings(listing_key)")
@@ -5339,11 +5420,11 @@ class Store:
             offset = max(int(filters.get("offset") or 0), 0)
             return {"items": [], "total": 0, "limit": limit, "offset": offset, "facets": self.catalog_facets() if str(filters.get("facets") or "1").strip().lower() not in {"0", "false", "no"} else {}}
         if query and not place_geoms:
-            where.append(
-                "(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ? OR IFNULL(listings.description, '') LIKE ?)"
-            )
+            # The long free-text `description` is deliberately not searched: scanning it for every
+            # row made a plain text search take tens of seconds on a large catalog.
+            where.append("(listings.name LIKE ? OR listings.locality LIKE ? OR listings.disposition LIKE ?)")
             like = f"%{query}%"
-            params.extend([like, like, like, like])
+            params.extend([like, like, like])
         disposition = filters.get("disposition") or []
         if isinstance(disposition, str):
             disposition = [item for item in disposition.split(",") if item]
@@ -5400,7 +5481,23 @@ class Store:
         )
         _tri_state(where, params, short_term, ["IFNULL(listings.extras, '') LIKE ?"], ['%"short_term"%'])
         offers = _csv(filters.get("offer"))
-        if offers:
+        quality_flag = str(filters.get("listing_quality") or filters.get("quality") or "").strip().lower()
+        fast_offer = ""
+        if self._fast_ok:
+            if offers == ["pronajem"]:
+                fast_offer = "x_rent"
+            elif offers == ["prodej"]:
+                fast_offer = "x_sale"
+        fast_quality = bool(
+            fast_offer
+            and quality_flag in {"1", "true", "yes", "apartment", "byt", "byty"}
+            and self.PRICE_AREA_MIN_M2 == self.FAST_AREA_MIN_M2
+            and self.PRICE_AREA_MAX_M2 == self.FAST_AREA_MAX_M2
+            and tuple(self.PRICE_APARTMENT_ESTATES) == ("Byt", "Byty", "Podnájem")
+        )
+        if fast_offer:
+            where.append(f"listings.{fast_offer} = 1")
+        elif offers:
             offer_parts = []
             for offer in offers:
                 if offer == "pronajem":
@@ -5497,7 +5594,15 @@ class Store:
                 where.append("(" + " OR ".join(estate_parts) + ")")
         # Public listing quality filter (area/price/short-term; apartments by default).
         listing_quality = str(filters.get("listing_quality") or filters.get("quality") or "").strip().lower()
-        if listing_quality in {"1", "true", "yes", "apartment", "byt", "byty"}:
+        if listing_quality in {"1", "true", "yes", "apartment", "byt", "byty"} and fast_quality:
+            where.append("listings.x_live = 1 AND listings.x_pub = 1 AND listings.x_apt = 1")
+            if fast_offer == "x_rent":
+                where.append("listings.price_czk >= ? AND listings.price_czk <= ?")
+                params.extend([self.PRICE_RENT_MIN_CZK, self.PRICE_RENT_MAX_CZK])
+            else:
+                where.append("listings.price_czk >= ?")
+                params.append(self.PRICE_SALE_MIN_CZK)
+        elif listing_quality in {"1", "true", "yes", "apartment", "byt", "byty"}:
             where.append("IFNULL(listings.gone, 0) = 0")
             q_sql, q_params = self._listing_quality_sql(
                 ",".join(_csv(filters.get("offer"))),
@@ -7458,18 +7563,22 @@ class Store:
                 SELECT listings.url, listings.listing_key, listings.canonical_key, monitors.id, monitors.name
                 FROM listings
                 JOIN monitors ON monitors.id = listings.monitor_id
-                WHERE 0
+                WHERE
             """
             monitor_params: list[Any] = []
+            monitor_conds: list[str] = []
             if lookup_urls:
                 url_holders = ",".join("?" * len(lookup_urls))
-                monitor_sql += f" OR listings.url IN ({url_holders})"
+                monitor_conds.append(f"listings.url IN ({url_holders})")
                 monitor_params.extend(lookup_urls)
             key_holders = ",".join("?" * len(canons)) if canons else ""
             if canons:
-                monitor_sql += f" OR listings.canonical_key IN ({key_holders}) OR listings.listing_key IN ({key_holders})"
+                monitor_conds.append(f"listings.canonical_key IN ({key_holders})")
+                monitor_conds.append(f"listings.listing_key IN ({key_holders})")
                 monitor_params.extend(canons)
                 monitor_params.extend(canons)
+            # No leading "0 OR": it stops SQLite from using one index per OR branch.
+            monitor_sql += " (" + (" OR ".join(monitor_conds) if monitor_conds else "0") + ")"
             monitor_sql += " GROUP BY COALESCE(NULLIF(listings.canonical_key, ''), NULLIF(listings.listing_key, ''), listings.url), monitors.id ORDER BY monitors.name"
             monitor_rows = conn.execute(monitor_sql, monitor_params).fetchall() if monitor_params else []
             history = {}
