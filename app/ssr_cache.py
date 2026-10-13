@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -16,7 +17,8 @@ from app import config
 log = logging.getLogger("realitify.ssr_cache")
 
 SSR_CACHE_PATH = config.DATA_DIR / "ssr_cache.sqlite"
-REBUILD_INTERVAL_SEC = 15 * 60
+# A full rebuild renders hundreds of market pages (minutes of CPU), so it must be rare.
+REBUILD_INTERVAL_SEC = max(300, int(os.getenv("SSR_REBUILD_INTERVAL_SEC", str(60 * 60)) or 3600))
 
 _lock = threading.Lock()
 _last_rebuild_at: float = 0.0

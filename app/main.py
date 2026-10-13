@@ -108,7 +108,17 @@ async def _background_startup() -> None:
     try:
         from app import ssr_cache
 
-        ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
+        if config.SCRAPE_ROLE == "web":
+            # The split deployment rebuilds in the worker (app.ssr_rebuild); the web only reads the
+            # persisted cache. Build it here once only if the volume has none yet (fresh install).
+            def _first_build() -> None:
+                time.sleep(120)
+                if ssr_cache.get_page("home") is None:
+                    ssr_cache.ensure_fresh(_public_store() or hub.store, reason="empty_cache")
+
+            threading.Thread(target=_first_build, name="ssr-first-build", daemon=True).start()
+        else:
+            ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
     except Exception:
         pass
     print("lifespan: background startup complete", flush=True)
@@ -2296,6 +2306,50 @@ async def status(realitify_session: str | None = Cookie(default=None, alias="rea
     user, store = _user_store(realitify_session)
     child = hub.hub_for(str(user.get("id")))
     return await asyncio.to_thread(child.status)
+
+
+@app.get("/api/admin/stacks")
+async def admin_stacks(
+    seconds: float = 3.0,
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    """Where is the web process spending CPU? Samples every thread's Python stack ~20x/s."""
+    _admin_user(realitify_admin)
+    import collections
+    import sys
+    import threading
+    import traceback
+
+    seconds = min(max(float(seconds), 0.5), 15.0)
+
+    def sample() -> dict[str, Any]:
+        counts: collections.Counter[str] = collections.Counter()
+        names = {t.ident: t.name for t in threading.enumerate()}
+        n = 0
+        end = time.monotonic() + seconds
+        me = threading.get_ident()
+        while time.monotonic() < end:
+            for ident, frame in sys._current_frames().items():
+                if ident == me:
+                    continue
+                stack = traceback.extract_stack(frame)
+                if not stack:
+                    continue
+                top = stack[-1]
+                # Idle threads sit in waits/selects: keep them out of the hot list.
+                if top.name in {"wait", "_worker", "select", "accept", "get", "run_forever", "_run_once"} and top.filename.endswith(
+                    ("threading.py", "queue.py", "selectors.py", "thread.py", "base_events.py")
+                ):
+                    continue
+                key = f"{names.get(ident, ident)} | {top.filename.split('/app/')[-1]}:{top.lineno} {top.name} <- " + " < ".join(
+                    f"{fr.filename.split('/app/')[-1]}:{fr.name}" for fr in reversed(stack[-5:-1])
+                )
+                counts[key] += 1
+            n += 1
+            time.sleep(0.05)
+        return {"samples": n, "top": [{"n": c, "where": k} for k, c in counts.most_common(15)]}
+
+    return await asyncio.to_thread(sample)
 
 
 @app.get("/api/perf/diag")

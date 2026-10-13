@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import sys
 import traceback
 
 from app import config
@@ -34,6 +35,7 @@ class ScrapeWorker:
         self._heartbeat_task: asyncio.Task[None] | None = None
         self.owner_id: str | None = None
         self._checkpoint_task: asyncio.Task[None] | None = None
+        self._ssr_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
@@ -61,6 +63,7 @@ class ScrapeWorker:
         self._rescan_task = asyncio.create_task(self._rescan_loop(), name="worker-rescan-users")
         self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
         self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
+        self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -84,7 +87,7 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
-            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task):
+            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -212,6 +215,25 @@ class ScrapeWorker:
             except Exception as exc:
                 print(f"catalog stale sweep error: {exc}", flush=True)
             await asyncio.sleep(3600)
+
+    async def _ssr_rebuild_loop(self) -> None:
+        """Rebuild the public SSR cache in a separate low-priority process (the web only reads it)."""
+        from app import ssr_cache
+
+        await asyncio.sleep(90)
+        while self.running:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "app.ssr_rebuild", "--if-stale", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+                )
+                out, _ = await proc.communicate()
+                tail = (out or b"").decode("utf-8", "replace").strip().splitlines()[-1:]
+                print(f"scrape_worker: ssr rebuild exit={proc.returncode} {tail[0][:160] if tail else ''}", flush=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"scrape_worker: ssr rebuild error: {exc}", flush=True)
+            await asyncio.sleep(ssr_cache.REBUILD_INTERVAL_SEC)
 
     async def _checkpoint_loop(self) -> None:
         """Keep the WAL small: with writers and readers always overlapping SQLite rarely resets it,
