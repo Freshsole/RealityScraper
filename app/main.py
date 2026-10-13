@@ -111,24 +111,7 @@ async def _background_startup() -> None:
         ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
     except Exception:
         pass
-    threading.Thread(target=_warm_admin_caches, name="admin-cache-warm", daemon=True).start()
     print("lifespan: background startup complete", flush=True)
-
-
-def _warm_admin_caches() -> None:
-    """Keep the heavy admin payload caches warm so the admin pages don't time out on first open."""
-    time.sleep(20)
-    while True:
-        try:
-            admin_id = _admin_user_id()
-            if admin_id:
-                astore = hub.store_for(admin_id)
-                admin_panel.ops_payload_cached(astore, hub)
-                admin_panel.billing_payload(astore, hub)
-                admin_panel.promo_payload(astore, "")
-        except Exception as exc:
-            print(f"admin cache warm failed: {exc}", flush=True)
-        time.sleep(240)
 
 
 def _diag_localhost_health() -> None:
