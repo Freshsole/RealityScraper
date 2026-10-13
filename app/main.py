@@ -2738,7 +2738,8 @@ async def public_catalog(
         )
     )
     payload["listing_quality"] = quality_n
-    result = await _run_catalog_query(payload, store)
+    result = await _run_catalog_query_cached(payload, store)
+    result = dict(result)
     total = int(result.get("total") or 0)
     if district_n and total == 0 and not (result.get("items") or []):
         return {
@@ -3076,6 +3077,48 @@ async def _run_catalog_query(payload: dict[str, Any], store: Store) -> dict[str,
     return result
 
 
+# Guest/public catalog results are identical for every visitor, but a query scans the whole
+# listings table (seconds locally, tens of seconds under scrape load in production). Serve them
+# from a stale-while-revalidate cache and let identical concurrent requests share one query.
+_CATALOG_CACHE: dict[str, dict[str, Any]] = {}
+_CATALOG_FRESH_S = 90.0
+_CATALOG_STALE_S = 3600.0
+_CATALOG_CACHE_MAX = 400
+
+
+async def _refresh_catalog_cache(key: str, payload: dict[str, Any], store: Store) -> dict[str, Any]:
+    data = await _run_catalog_query(payload, store)
+    if len(_CATALOG_CACHE) >= _CATALOG_CACHE_MAX:
+        oldest = sorted(_CATALOG_CACHE.items(), key=lambda kv: kv[1].get("at") or 0)[: _CATALOG_CACHE_MAX // 4]
+        for old_key, _ in oldest:
+            _CATALOG_CACHE.pop(old_key, None)
+    entry = _CATALOG_CACHE.setdefault(key, {"at": 0.0, "data": None, "task": None})
+    entry["at"] = time.time()
+    entry["data"] = data
+    return data
+
+
+async def _run_catalog_query_cached(payload: dict[str, Any], store: Store) -> dict[str, Any]:
+    key = f"{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
+    entry = _CATALOG_CACHE.get(key)
+    now = time.time()
+    if entry and entry.get("data") is not None:
+        age = now - float(entry.get("at") or 0)
+        if age < _CATALOG_FRESH_S:
+            return entry["data"]
+        if age < _CATALOG_STALE_S:
+            task = entry.get("task")
+            if task is None or task.done():
+                entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
+                entry["task"].add_done_callback(lambda t: t.cancelled() or t.exception())
+            return entry["data"]
+    entry = _CATALOG_CACHE.setdefault(key, {"at": 0.0, "data": None, "task": None})
+    task = entry.get("task")
+    if task is None or task.done():
+        task = entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
+    return await asyncio.shield(task)
+
+
 @app.get("/api/catalog")
 async def catalog(
     portal: str = "",
@@ -3116,7 +3159,7 @@ async def catalog(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
     realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _catalog_store(realitify_session, realitify_guest)
+    cuser, ustore = _catalog_store(realitify_session, realitify_guest)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -3156,7 +3199,7 @@ async def catalog(
             facets=facets,
         )
     )
-    return await _run_catalog_query(payload, ustore)
+    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, ustore)
 
 
 @app.get("/api/catalog/pins")
@@ -3194,7 +3237,7 @@ async def catalog_pins(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
     realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _catalog_store(realitify_session, realitify_guest)
+    cuser, ustore = _catalog_store(realitify_session, realitify_guest)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -3230,7 +3273,7 @@ async def catalog_pins(
             pins_only=True,
         )
     )
-    return await _run_catalog_query(payload, ustore)
+    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, ustore)
 
 
 @app.get("/api/catalog/stats")
