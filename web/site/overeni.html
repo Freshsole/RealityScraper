@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="cs">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
+    <title>Ověření e-mailu – Realitify</title>
+    <meta name="description" content="Potvrzení e-mailu v Realitify." />
+    <meta name="robots" content="noindex, nofollow" />
+        <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Realitify" />
+    <meta property="og:title" content="Obnovení hesla — REALITIFY" />
+    <meta property="og:description" content="Obnovení zapomenutého hesla k účtu Realitify." />
+    <meta property="og:url" content="https://realitify.cz/heslo" />
+    <meta property="og:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:locale" content="cs_CZ" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Obnovení hesla — REALITIFY" />
+    <meta name="twitter:description" content="Obnovení zapomenutého hesla k účtu Realitify." />
+    <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/site/site.css?v=25" />
+    <link rel="stylesheet" href="/static/site/auth.css?v=4" />
+  </head>
+  <body class="auth-page">
+    <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
+    <div class="auth-glow auth-glow-2"><img src="/static/site/assets/auth-glow-2.svg" width="500" height="500" alt="" /></div>
+    <div class="auth-stack">
+      <a class="auth-logo" href="/">
+        <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/auth-logo.svg" width="20" height="20" alt="" /></span>
+        REALITIFY
+      </a>
+      <div class="auth-card" id="verify-result">
+        <div class="auth-head">
+          <h1 class="auth-h" id="vr-title">OVĚŘUJI E-MAIL…</h1>
+          <p class="auth-lead" id="vr-lead">Chvilku strpení, potvrzujeme váš odkaz.</p>
+        </div>
+        <a class="auth-btn" id="vr-action" href="/" hidden>Pokračovat</a>
+        <button class="auth-ghost" id="vr-resend" type="button" hidden>Poslat nový odkaz</button>
+      </div>
+    </div>
+    <script src="/static/site/verify.js?v=1"></script>
+    <script src="/static/t.js?v=7"></script>
+  </body>
+</html>

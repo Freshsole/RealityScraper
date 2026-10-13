@@ -244,6 +244,7 @@ def reset_password_with_token(
     if not user:
         raise ValueError("Odkaz pro obnovení hesla je neplatný nebo vypršel")
     user_registry.set_user_password(global_store, user["id"], new_password)
+    user_registry.mark_email_verified(global_store, user["id"])
     user_registry.delete_user_sessions(global_store, user["id"])
     session = user_registry.create_session(global_store, user["id"])
     public = user_registry.public_user(user)

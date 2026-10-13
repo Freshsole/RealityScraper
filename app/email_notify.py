@@ -171,12 +171,13 @@ def send_password_reset(to: str, reset_url: str) -> None:
 
 
 def send_email_verification(to: str, verify_url: str) -> None:
-    subject = "Potvrďte e-mail — Realitify"
+    subject = "Potvrďte svůj e-mail — Realitify"
     body = (
         "Dobrý den,\n\n"
-        "děkujeme za registraci v Realitify. Pro dokončení prosím potvrďte svůj e-mail:\n\n"
+        "děkujeme za registraci v Realitify. Pro dokončení prosím potvrďte svůj e-mail kliknutím na odkaz:\n\n"
         f"{verify_url}\n\n"
-        "Odkaz platí 48 hodin. Pokud jste se neregistrovali vy, e-mail ignorujte.\n\n"
+        "Odkaz platí 48 hodin. Po potvrzení se vrátíte do registrace a nastavíte si hlídání.\n\n"
+        "Pokud jste se neregistrovali vy, e-mail ignorujte.\n\n"
         "Realitify"
     )
     send_message(to, subject, body)

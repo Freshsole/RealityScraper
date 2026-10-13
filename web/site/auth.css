@@ -826,3 +826,10 @@ label .optional {
 .switch.busy i{animation:sw-pulse .8s ease-in-out infinite alternate}
 @keyframes sw-pulse{to{transform:translateX(10px)}}
 @media (prefers-reduced-motion:reduce){.switch.busy i{animation:none}.toggle-row[data-tooltip]::after,.toggle-row[data-tooltip]::before{transition:none}}
+
+/* e-mail verification */
+.verify-status{margin:0;padding:14px 18px;border-radius:14px;background:var(--pale,#f7f9f6);font-size:14px;font-weight:600;color:var(--body,#555b54)}
+.verify-status.is-ok{background:var(--mint,#e2f6d5);color:var(--forest,#163300)}
+.auth-ghost{width:100%;padding:12px;font:inherit;font-size:14px;font-weight:700;color:var(--forest,#163300);background:none;border:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.auth-ghost:disabled{opacity:.5;cursor:default}
+a.auth-btn{display:flex;align-items:center;justify-content:center;text-decoration:none}

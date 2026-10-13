@@ -345,6 +345,7 @@ _PRIVATE_UI_PATHS = {
     "/prihlaseni",
     "/registrace",
     "/heslo",
+    "/overeni",
     "/prehled",
     "/nabidka",
     "/monitory",
@@ -404,6 +405,65 @@ def _client_ip(request: Request) -> str:
 
 async def _auth_db(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(hub.auth_pool, fn, *args)
+
+
+def _site_base(request: Request) -> str:
+    """Public base URL for links in e-mails (config first, else what the request used)."""
+    configured = (config.PUBLIC_BASE_URL or "").rstrip("/")
+    if configured:
+        return configured
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}".rstrip("/")
+
+
+async def _send_verification_email(request: Request, user: dict[str, Any]) -> bool:
+    """Create a token and mail the link. Returns False (and logs the link in dev) when mail is not set up."""
+    from app import email_notify
+
+    token = await _auth_db(user_registry.create_email_verification, hub.store, user["id"])
+    base = _site_base(request)
+    verify_url = f"{base}/overeni?token={token}"
+    local_dev = any(host in base for host in ("localhost", "127.0.0.1"))
+    if not email_notify.configured():
+        if local_dev:
+            print(f"[verify] SMTP není nastavené; ověřovací odkaz pro {user['email']}: {verify_url}", flush=True)
+        else:
+            print("[verify] SMTP není nastavené, ověřovací e-mail nelze odeslat", flush=True)
+        return False
+    try:
+        await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
+        return True
+    except Exception as exc:
+        print(f"[verify] e-mail se nepodařilo odeslat: {exc}", flush=True)
+        if local_dev:
+            print(f"[verify] ověřovací odkaz pro {user['email']}: {verify_url}", flush=True)
+        return False
+
+
+_VERIFY_EXEMPT = ("/api/auth/", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
+
+
+@app.middleware("http")
+async def require_verified_email_for_writes(request: Request, call_next):
+    """Accounts must confirm their e-mail before they can change anything (reads stay open)."""
+    path = request.url.path
+    if (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        and path.startswith("/api/")
+        and not path.startswith(_VERIFY_EXEMPT)
+    ):
+        token = request.cookies.get(user_account.SESSION_COOKIE)
+        if token:
+            user = await asyncio.get_running_loop().run_in_executor(
+                hub.auth_pool, user_account.user_from_session, hub.store, token
+            )
+            if user and not user.get("email_verified") and user.get("role") != "admin":
+                return JSONResponse(
+                    {"detail": "Nejdřív potvrďte svůj e-mail.", "verification_required": True},
+                    status_code=403,
+                )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -805,6 +865,10 @@ def auth_login() -> FileResponse:
 
 def auth_register() -> FileResponse:
     return FileResponse(config.WEB_DIR / "site" / "registrace.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
+
+
+def auth_verify_page() -> FileResponse:
+    return FileResponse(config.WEB_DIR / "site" / "overeni.html", headers={"Cache-Control": _PRIVATE_HTML_CACHE})
 
 
 def auth_forgot() -> FileResponse:
@@ -1220,6 +1284,7 @@ app.add_api_route("/hry/najem", game_rent, methods=["GET"], include_in_schema=Fa
 app.add_api_route("/prihlaseni", auth_login, methods=["GET"], include_in_schema=False)
 app.add_api_route("/registrace", auth_register, methods=["GET"], include_in_schema=False)
 app.add_api_route("/heslo", auth_forgot, methods=["GET"], include_in_schema=False)
+app.add_api_route("/overeni", auth_verify_page, methods=["GET"], include_in_schema=False)
 for _path in ("/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"):
     app.add_api_route(_path, page, methods=["GET"], include_in_schema=False)
 app.add_api_route("/nastaveni/{rest:path}", page, methods=["GET"], include_in_schema=False)
@@ -1414,19 +1479,11 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    response = JSONResponse(user)
+    if not user.get("email_verified"):
+        # Do not make the sign-up wait for SMTP; "send again" reports failures explicitly.
+        asyncio.create_task(_send_verification_email(request, user), name="send-verification")
+    response = JSONResponse({**user, "verification_sent": True})
     _set_session_cookie(response, token)
-    # Odeslat verifikační e-mail (bez něj se registrace nezastaví, jen zalogujeme).
-    try:
-        from app import email_notify
-
-        verify_token = await _auth_db(user_registry.create_email_verification, hub.store, user["id"])
-        base = (config.PUBLIC_BASE_URL or "").rstrip("/")
-        if base:
-            verify_url = f"{base}/overeni?token={verify_token}"
-            await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
-    except Exception as exc:
-        print(f"[register] verifikační e-mail se nepodařilo odeslat: {exc}")
     try:
         site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
     except Exception:
@@ -1482,31 +1539,24 @@ async def auth_reset_check(token: str = "") -> dict:
     return {"ok": True}
 
 
+@app.post("/api/auth/verify/resend")
+async def auth_verify_resend(request: Request, realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    """Send the confirmation e-mail again to the signed-in, still unverified user."""
+    user = _current_user(realitify_session)
+    _rate_limit_or_429(request, "verify_resend", f"{_client_ip(request)}:{user['id']}", 5, 3600)
+    if user.get("email_verified"):
+        return {"ok": True, "already": True}
+    sent = await _send_verification_email(request, user)
+    if not sent:
+        raise HTTPException(503, "E-mail se teď nepodařilo odeslat. Zkuste to prosím za chvíli.")
+    return {"ok": True}
+
+
 @app.get("/api/auth/verify")
 async def auth_verify_email(token: str = "") -> dict:
     user = await _auth_db(user_registry.verify_email_with_token, hub.store, token)
     if not user:
         raise HTTPException(400, "Ověřovací odkaz je neplatný nebo vypršel")
-    return {"ok": True}
-
-
-@app.post("/api/auth/verify/resend")
-async def auth_verify_resend(request: Request, realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    """Znovu odeslat verifikační e-mail přihlášenému (neověřenému) uživateli."""
-    _rate_limit_or_429(request, "verify_resend", "ip", 3, 3600)
-    user = _current_user(realitify_session)
-    if user.get("email_verified"):
-        return {"ok": True, "already": True}
-    try:
-        from app import email_notify
-
-        verify_token = await _auth_db(user_registry.create_email_verification, hub.store, user["id"])
-        base = (config.PUBLIC_BASE_URL or "").rstrip("/")
-        if base:
-            verify_url = f"{base}/overeni?token={verify_token}"
-            await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
-    except Exception as exc:
-        raise HTTPException(502, f"E-mail se nepodařilo odeslat: {exc}") from exc
     return {"ok": True}
 
 

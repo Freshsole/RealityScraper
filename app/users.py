@@ -97,6 +97,15 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)")
+    # Verification is enforced from now on. Everybody who already has an account (the
+    # link used to point at a page that did not exist) is grandfathered in exactly once.
+    done = conn.execute("SELECT value FROM meta WHERE key = 'email_verify_enforced_at'").fetchone()
+    if not done:
+        conn.execute("UPDATE users SET email_verified = 1")
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES ('email_verify_enforced_at', ?)",
+            (_now(),),
+        )
 
 
 # ---------------------------------------------------------------- password --
@@ -431,3 +440,10 @@ def verify_email_with_token(store: Store, token: str) -> dict[str, Any] | None:
         conn.execute("DELETE FROM email_verifications WHERE token_hash = ?", (_hash_reset_token(given),))
         conn.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,))
     return get_user_by_id(store, user_id)
+
+
+def mark_email_verified(store: Store, user_id: str) -> None:
+    """Mark an address as owned (e.g. after a successful password reset link)."""
+    with store.connect() as conn:
+        conn.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,))
+        conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))

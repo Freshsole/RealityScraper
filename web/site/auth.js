@@ -315,8 +315,12 @@ if (loginForm) {
     const email = loginForm.querySelector("#email")?.value.trim() || "";
     const password = loginPw?.value || "";
     try {
-      await postJson("/api/auth/login", { email, password });
+      const account = await postJson("/api/auth/login", { email, password });
       const next = new URLSearchParams(location.search).get("next") || "/prehled";
+      if (account && account.email_verified === false) {
+        location.href = `/registrace?verify=1&next=${encodeURIComponent(next)}`;
+        return;
+      }
       location.href = next.startsWith("/oauth/authorize") || (next.startsWith("/nabidka") && !next.startsWith("//")) ? next : "/prehled";
     } catch (err) {
       toast(err.message || "Přihlášení se nepovedlo");
@@ -753,6 +757,99 @@ if (register) {
     }
   }
 
+  // ---- e-mail verification (panel 3, shown between step 1 and step 2) ----
+  const VERIFY_PANEL = 3;
+  let verifyTimer = 0;
+  let resendCooldown = 0;
+
+  function rememberNext() {
+    try {
+      const next = new URLSearchParams(location.search).get("next");
+      if (next) localStorage.setItem("rf_register_next", next);
+    } catch (_err) {
+      /* storage can be unavailable */
+    }
+  }
+
+  function setVerifyStatus(text, ok) {
+    const el = register.querySelector("#verify-status");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("is-ok", Boolean(ok));
+  }
+
+  async function checkVerified(manual) {
+    let profile = null;
+    try {
+      const res = await fetch("/api/auth/me");
+      profile = res.ok ? await res.json() : null;
+    } catch (_err) {
+      profile = null;
+    }
+    if (profile && profile.email_verified) {
+      clearInterval(verifyTimer);
+      setVerifyStatus("E-mail je potvrzený. Pokračujeme…", true);
+      setTimeout(() => show(1), 700);
+      return true;
+    }
+    if (manual) setVerifyStatus("Potvrzení jsme zatím nezaznamenali. Klikněte na odkaz v e-mailu.", false);
+    return false;
+  }
+
+  function showVerify(email, sent) {
+    const target = register.querySelector("#verify-email");
+    if (target) target.textContent = email || "";
+    setVerifyStatus(
+      sent ? "Čekám na potvrzení…" : "E-mail se teď nepodařilo odeslat. Zkuste „Poslat odkaz znovu“.",
+      false,
+    );
+    show(VERIFY_PANEL);
+    clearInterval(verifyTimer);
+    verifyTimer = setInterval(() => checkVerified(false), 4000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) checkVerified(false);
+    });
+  }
+
+  register.querySelector("#verify-check")?.addEventListener("click", () => checkVerified(true));
+  register.querySelector("#verify-resend")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    if (resendCooldown > 0) return;
+    btn.disabled = true;
+    try {
+      await postJson("/api/auth/verify/resend", {});
+      toast("Odkaz jsme poslali znovu.", "ok");
+      resendCooldown = 45;
+      const tick = setInterval(() => {
+        resendCooldown -= 1;
+        btn.textContent = resendCooldown > 0 ? `Poslat znovu za ${resendCooldown} s` : "Poslat odkaz znovu";
+        if (resendCooldown <= 0) {
+          clearInterval(tick);
+          btn.disabled = false;
+        }
+      }, 1000);
+    } catch (err) {
+      toast(err.message || "Odkaz se nepodařilo poslat.");
+      btn.disabled = false;
+    }
+  });
+
+  // Returning from the e-mail link (?resume=1) or from a login with an unconfirmed account (?verify=1).
+  (async () => {
+    const params = new URLSearchParams(location.search);
+    if (!params.get("resume") && !params.get("verify")) return;
+    let profile = null;
+    try {
+      const res = await fetch("/api/auth/me");
+      profile = res.ok ? await res.json() : null;
+    } catch (_err) {
+      profile = null;
+    }
+    if (!profile) return;
+    if (profile.email_verified) show(1);
+    else showVerify(profile.email, true);
+  })();
+
   register.querySelector("#reg-step1").addEventListener("submit", async (e) => {
     e.preventDefault();
     const pw = register.querySelector("#reg-password");
@@ -767,13 +864,18 @@ if (register) {
     try {
       // Create the account right away so steps 2 and 3 run under the new session.
       const promo = promoFromUrl() || readStoredPromo();
-      await postJson("/api/auth/register", {
+      const created = await postJson("/api/auth/register", {
         name: register.querySelector("#name")?.value.trim() || "",
         email: register.querySelector("#email")?.value.trim() || "",
         password: pw.value,
         promo,
       });
-      show(1);
+      rememberNext();
+      if (created && created.email_verified === false) {
+        showVerify(created.email, created.verification_sent !== false);
+      } else {
+        show(1);
+      }
     } catch (err) {
       toast(err.message || "Registrace se nepovedla");
     } finally {
