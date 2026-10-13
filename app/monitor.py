@@ -1890,6 +1890,13 @@ class Hub:
             complete = True
             if total and upserts < max(1, int(total * 0.92)):
                 complete = False
+            last_error = None if complete else f"Incomplete crawl: upserts={upserts} total={total}"
+            # Bot-protection blokace (403/429 po retriech) - zapiš skutečnou
+            # příčinu prázdného běhu, aby watchdog nehlásil "rozbitý parser?".
+            blocked = getattr(client, "_blocked_status", None)
+            if blocked and f"HTTP {blocked}" not in (last_error or ""):
+                block_msg = f"blokováno bot ochranou (HTTP {blocked})"
+                last_error = f"{last_error}; {block_msg}" if last_error else block_msg
             await self._job_db(
                 self.store.update_scrape_job,
                 job["id"],
@@ -1898,9 +1905,7 @@ class Hub:
                 last_total=total,
                 upserts=upserts,
                 page=page,
-                last_error=None
-                if complete
-                else f"Incomplete crawl: upserts={upserts} total={total}",
+                last_error=last_error,
             )
             return complete
         except Exception as exc:

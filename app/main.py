@@ -907,6 +907,7 @@ async def _watchdog_live_test(portal: str) -> dict:
         import importlib
         client_map = {
             "annonce": ("app.annonce", "AnnonceClient"),
+            "mmreality": ("app.mmreality", "MmrealityClient"),
             "remax": ("app.remax", "RemaxClient"),
             "ulovdomov": ("app.ulovdomov", "UlovdomovClient"),
             "sreality": ("app.sreality", "SrealityClient"),

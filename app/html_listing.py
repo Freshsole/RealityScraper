@@ -413,6 +413,9 @@ class HtmlPortalClient:
             timeout=scrape_timeout(),
             limits=httpx.Limits(max_connections=32, max_keepalive_connections=16),
         )
+        # HTTP status z bot-protection větve fetch_page (403/429 po retriech),
+        # aby job zapsal skutečnou příčinu prázdného běhu místo tichého "done".
+        self._blocked_status: int | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -509,6 +512,9 @@ class HtmlPortalClient:
             if response.status_code in {403, 429}:
                 # Still blocked: return empty instead of raising, so one
                 # protected portal does not break the whole sync run.
+                # But record the block so the job/watchdog reports the real
+                # cause instead of a misleading "0 nabídek" / parser guess.
+                self._blocked_status = response.status_code
                 return [], 0
         response.raise_for_status()
         raw = response.content

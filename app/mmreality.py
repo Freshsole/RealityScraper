@@ -48,14 +48,22 @@ class MmrealityClient(HtmlPortalClient):
 
     # M&M blokuje datacentrové IP (Cloudflare bot protection, HTTP 403) -
     # stejný postup jako u Annonce: browser-like hlavičky + warmup homepage
-    # pro získání cookies.
+    # pro získání cookies. Oprava 2026-10-13: aktualizované UA/client-hinty na
+    # aktuální Chrome (141) a po warmupu Sec-Fetch-Site: same-origin (navigace
+    # ze stránky, ne přímý vstup) - "none" na každém requestu je bot signál.
     EXTRA_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/141.0.0.0 Safari/537.36"
+        ),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "cs-CZ,cs;q=0.9,en;q=0.8",
         "Cache-Control": "max-age=0",
-        "Sec-Ch-Ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "Sec-Ch-Ua": '"Chromium";v="141", "Not_A Brand";v="99", "Google Chrome";v="141"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"macOS"',
+        "Sec-Ch-Ua-Platform-Version": '"14.6.0"',
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
@@ -79,6 +87,10 @@ class MmrealityClient(HtmlPortalClient):
 
             await self._client.get(self.SITE + "/", timeout=15)
             await asyncio.sleep(2)  # pauza jako člověk
+            # Po warmupu jsme "na webu": další navigace vypadá jako klik ze
+            # stránky, ne přímý vstup (Sec-Fetch-Site: none je bot signál).
+            self._client.headers["Sec-Fetch-Site"] = "same-origin"
+            self._client.headers["Referer"] = self.SITE.rstrip("/") + "/"
         except Exception:
             pass
 
