@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "20", "nav": "1", "pages": "3", "navjs": "3", "pagesjs": "1"}
+ASSET_V = {"site": "20", "nav": "1", "pages": "5", "navjs": "3", "pagesjs": "1"}
 
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
@@ -53,7 +53,7 @@ FOOTER_HTML = """<footer class="footer">
             <a href="/#jak-to-funguje">Jak to funguje</a>
             <a href="/#srovnani">Srovnání hlídačů</a>
             <a href="/#cenik">Ceník a tarify</a>
-            <a href="/mcp-docs">MCP pro AI</a>
+            <a href="/mcp-docs-cs">MCP pro AI</a>
           </div>
           <div class="footer-col">
             <h3>Zdroje</h3>

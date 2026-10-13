@@ -323,6 +323,14 @@ def _breadcrumb_items(locality: str, offer: str, disposition: str = "") -> list[
     return items
 
 
+def _related_chips(raw: str) -> str:
+    """Turn the legacy related-links markup into chip rows."""
+    out = raw.replace("<h2>", '<h3 class="rel-h">').replace("</h2>", "</h3>")
+    out = out.replace("<p>", '<div class="pg-chips">').replace("</p>", "</div>")
+    out = out.replace(" · ", "").replace("<a ", '<a class="pg-chip is-link" ')
+    return out
+
+
 def _breadcrumbs_html(items: list[dict[str, str]]) -> str:
     parts = []
     for i, item in enumerate(items):
@@ -705,32 +713,19 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
         if len(filtered) >= 3:
             samples = filtered
 
-    hist = "".join(
-        f"<li>{html.escape(str(h.get('month') or h.get('week_start') or ''))}: "
-        f"{int(h.get('new_count') or 0)} nových"
-        + (
-            f", medián {_fmt_m2(h.get('median_price_per_m2'))}"
-            if h.get("median_price_per_m2")
-            else (f", průměr {_fmt_m2(h.get('avg_price_per_m2'))}" if h.get("avg_price_per_m2") else "")
-        )
-        + "</li>"
-        for h in (report.get("history_90d") or [])
+    from app.market_pages import _stat_card
+
+    chevron = (
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
     )
-    disp_rows = "".join(
-        f"<tr><td>{html.escape(str(r.get('disposition') or ''))}</td>"
-        f"<td>{int(r.get('count') or 0)}</td>"
-        f"<td>{_fmt_czk(r.get('avg_price'))}</td>"
-        f"<td>{_fmt_m2(r.get('median_price_per_m2') or r.get('avg_price_per_m2'))}</td></tr>"
-        for r in (related_report.get("by_disposition") or [])
+    qa_html = "".join(
+        f'<div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false">'
+        f'<span>{html.escape(f["q"])}</span><span class="qa-ico">{chevron}</span></button>'
+        f'<div class="qa-a"><div><p>{html.escape(f["a"])}</p></div></div></div>'
+        for f in faqs
     )
-    h1 = (
-        f"{offer_label(offer).upper()} {disposition.upper()} – {locality.upper()}"
-        if disposition
-        else f"{locality.upper()} – {offer_label(offer).upper()}"
-    )
-    faq_html = "".join(f"<section><h3>{html.escape(f['q'])}</h3><p>{html.escape(f['a'])}</p></section>" for f in faqs)
     narrative_html = "".join(f"<p>{html.escape(p)}</p>" for p in narrative)
-    updated = str(report.get("updated_at") or "")[:19].replace("T", " ")
     updated_label = product_facts.data_updated_label(report.get("updated_at"))
     date_modified = str(report.get("updated_at") or "")[:10] or None
     if not date_modified:
@@ -741,41 +736,99 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     if disposition:
         md_path += f"/{slugify_disposition(disposition)}"
     md_path += ".md"
-    disp_table = ""
-    if not disposition:
-        disp_table = (
-            '<h2>Podle dispozice</h2><table border="1" cellpadding="6" cellspacing="0">'
-            "<thead><tr><th>Dispozice</th><th>Počet</th><th>Průměr</th><th>Medián Kč/m²</th></tr></thead>"
-            f"<tbody>{disp_rows or '<tr><td colspan=\"4\">Bez dat</td></tr>'}</tbody></table>"
+
+    title_h1 = (
+        f"{offer_label(offer).capitalize()} {disposition} – {locality}"
+        if disposition
+        else f"{offer_label(offer).capitalize()} bytů – {locality}"
+    )
+    stats_cards = "".join(
+        [
+            _stat_card("Aktivní nabídky", _fmt_int(report.get("active_count")), "v katalogu právě teď", dark=True),
+            _stat_card("Medián ceny", _fmt_czk(report.get("median_price")), "prostřední nabídka"),
+            _stat_card("Medián Kč/m²", _fmt_m2(report.get("median_price_per_m2")), "po filtru kvality"),
+            _stat_card("Nové za 7 dní", _fmt_int(report.get("new_last_7_days")), "poprvé viděné nabídky"),
+            _stat_card("Průměrná cena", _fmt_czk(report.get("avg_price")), "průměr všech aktivních"),
+            _stat_card("Průměr Kč/m²", _fmt_m2(report.get("avg_price_per_m2")), "doplňkový ukazatel"),
+        ]
+    )
+    listing_rows = "".join(
+        f'<a class="listing-row" href="{html.escape(it["url"])}" rel="noopener noreferrer">'
+        f'<span class="listing-name">{html.escape(it["name"])}</span>'
+        f'<span class="listing-meta">'
+        + "".join(
+            f'<span class="pg-chip">{html.escape(str(b))}</span>'
+            for b in (it.get("disposition"), it.get("portal"), it.get("price"))
+            if b
         )
-    body = f"""
-  {_breadcrumbs_html(crumbs)}
-  <header class="legal-header">
-    <h1 class="display">{html.escape(h1)}</h1>
-    <p>Data z agregovaného katalogu Realitify. {html.escape(updated_label)}</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    {narrative_html}
-    <ul>
-      <li>Aktivní nabídky: <strong>{int(report.get('active_count') or 0)}</strong></li>
-      <li>Nové za 7 dní: <strong>{int(report.get('new_last_7_days') or 0)}</strong></li>
-      <li>Průměrná cena: <strong>{_fmt_czk(report.get('avg_price'))}</strong></li>
-      <li>Medián ceny: <strong>{_fmt_czk(report.get('median_price'))}</strong></li>
-      <li>Medián Kč/m²: <strong>{_fmt_m2(report.get('median_price_per_m2'))}</strong></li>
-      <li>Průměr Kč/m²: <strong>{_fmt_m2(report.get('avg_price_per_m2'))}</strong></li>
-    </ul>
-    <h2>Aktuální nabídky (ukázka)</h2>
-    {_listings_html(samples, empty="Momentálně nejsou k dispozici ukázkové nabídky.")}
-    <h2>Vývoj (až 90 dní)</h2>
-    <ul>{hist or '<li>Bez historie</li>'}</ul>
-    {disp_table}
-    <h2>Časté otázky</h2>
-    {faq_html}
-    {_related_html(store, locality, offer, disposition)}
-    <p><a href="/hledat">Všechny nabídky</a> · <a href="/index">Index nájmů</a> · <a href="/faq">Metodika Kč/m²</a> · <a href="/o-nas">O Realitify</a></p>
-    <p><small>{html.escape(PRICE_METHODOLOGY_CS)}</small></p>
-    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
-  </div>
+        + "</span></a>"
+        for it in samples
+    ) or '<p class="note">Momentálně nejsou k dispozici ukázkové nabídky.</p>'
+    disp_section = ""
+    if not disposition:
+        disp_rows_html = "".join(
+            f"<tr><td>{html.escape(str(r.get('disposition') or ''))}</td>"
+            f"<td data-v=\"{int(r.get('count') or 0)}\">{int(r.get('count') or 0)}</td>"
+            f"<td data-v=\"{r.get('avg_price') or 0}\">{_fmt_czk(r.get('avg_price'))}</td>"
+            f"<td data-v=\"{r.get('median_price_per_m2') or r.get('avg_price_per_m2') or 0}\">"
+            f"{_fmt_m2(r.get('median_price_per_m2') or r.get('avg_price_per_m2'))}</td></tr>"
+            for r in (related_report.get("by_disposition") or [])
+        )
+        disp_section = f"""      <section class="pg-section" id="dispozice" data-nav="Dispozice" data-nav-desc="Ceny podle velikosti bytu">
+        <div class="pg-head reveal"><p class="eyebrow">DISPOZICE</p><h2 class="display">Ceny podle dispozice</h2></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>Dispozice</th><th data-sort>Počet</th><th data-sort>Průměr</th><th data-sort>Medián Kč/m²</th></tr></thead>
+        <tbody>{disp_rows_html or '<tr><td colspan="4">Bez dat</td></tr>'}</tbody></table></div>
+      </section>
+"""
+    hist_rows = "".join(
+        f"<tr><td>{html.escape(str(h.get('month') or h.get('week_start') or ''))}</td>"
+        f"<td>{int(h.get('new_count') or 0)}</td>"
+        f"<td>{_fmt_m2(h.get('median_price_per_m2') or h.get('avg_price_per_m2'))}</td></tr>"
+        for h in (report.get("history_90d") or [])
+    )
+    hist_section = (
+        f"""      <section class="pg-section is-pale" id="vyvoj" data-nav="Vývoj" data-nav-desc="Posledních 90 dní">
+        <div class="pg-head reveal"><p class="eyebrow">VÝVOJ</p><h2 class="display">Vývoj za posledních 90 dní</h2></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>Období</th><th>Nové nabídky</th><th>Medián Kč/m²</th></tr></thead><tbody>{hist_rows}</tbody></table></div>
+      </section>
+"""
+        if hist_rows
+        else ""
+    )
+    related = _related_chips(_related_html(store, locality, offer, disposition))
+    q_param = html.escape(locality)
+    body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="{html.escape(locality)} v číslech">
+        {_breadcrumbs_html(crumbs)}
+        <p class="eyebrow">{html.escape(locality.upper())} · {html.escape(offer_label(offer).upper())}</p>
+        <h1 class="display">{html.escape(title_h1)}</h1>
+        <p class="lead">Data z agregovaného katalogu Realitify. {html.escape(updated_label)}</p>
+        <div class="pg-actions">
+          <a class="pill pill-lg" href="/hledat?q={q_param}">Procházet nabídky</a>
+          <a class="link-row" href="/index">Index nájmů →</a>
+        </div>
+      </section>
+
+      <section class="pg-section" id="cisla" data-nav="Čísla" data-nav-desc="Klíčové ukazatele trhu">
+        <div class="stat-grid">{stats_cards}</div>
+        <div class="pg-card reveal narrative">{narrative_html}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="nabidky" data-nav="Nabídky" data-nav-desc="Ukázka aktuálních nabídek">
+        <div class="pg-head reveal"><p class="eyebrow">AKTUÁLNÍ NABÍDKY</p><h2 class="display">Ukázka nabídek v lokalitě</h2></div>
+        <div class="listing-list">{listing_rows}</div>
+        <div class="pg-actions"><a class="pill pill-lg" href="/hledat?q={q_param}">Všechny nabídky na mapě</a></div>
+      </section>
+
+{disp_section}{hist_section}      <section class="pg-section{'' if hist_section else ' is-pale'}" id="dotazy" data-nav="Dotazy" data-nav-desc="Časté otázky k lokalitě">
+        <div class="pg-head reveal"><p class="eyebrow">ČASTÉ OTÁZKY</p><h2 class="display">Co lidé k lokalitě zajímá</h2></div>
+        <div class="qa-list">{qa_html}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="souvisejici" data-nav="Související" data-nav-desc="Další lokality a dispozice">
+        <div class="pg-head reveal"><p class="eyebrow">SOUVISEJÍCÍ</p><h2 class="display">Další lokality a dispozice</h2></div>
+        {related or '<p class="note">Zatím bez souvisejících stránek.</p>'}
+        <p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />{html.escape(DISCLAIMER_CS)}</p>
+      </section>
 """
     dataset = {
         "@context": "https://schema.org",
@@ -833,34 +886,54 @@ def render_index_month(store: Store, month: str) -> str:
     if not any(int(r.get("new_count") or 0) >= 20 for r in rows):
         raise ValueError("not_enough_data")
     month_label = czech_month_label(month)
+    months = store.list_index_months(completed_only=True)
+    from app.market_pages import _stat_card
+
+    praha_row = next((r for r in rows if r["locality"] == "Praha"), rows[0])
     table = "".join(
-        f"<tr><td>{html.escape(r['locality'])}</td><td>{_fmt_int(r['new_count'])}</td>"
-        f"<td>{_fmt_czk(r.get('median_price'))}</td><td>{_fmt_czk(r.get('avg_price'))}</td>"
-        f"<td>{_fmt_m2(r.get('median_price_per_m2'))}</td>"
-        f"<td>{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
+        f"<tr><td>{html.escape(r['locality'])}</td>"
+        f"<td data-v=\"{r['new_count'] or 0}\">{_fmt_int(r['new_count'])}</td>"
+        f"<td data-v=\"{r.get('median_price') or 0}\">{_fmt_czk(r.get('median_price'))}</td>"
+        f"<td data-v=\"{r.get('avg_price') or 0}\">{_fmt_czk(r.get('avg_price'))}</td>"
+        f"<td data-v=\"{r.get('median_price_per_m2') or 0}\">{_fmt_m2(r.get('median_price_per_m2'))}</td>"
+        f"<td data-v=\"{r.get('avg_price_per_m2') or 0}\">{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
         for r in rows
     )
-    months = store.list_index_months(completed_only=True)
-    nav = " · ".join(
-        f'<a href="/index/{html.escape(m)}">{html.escape(czech_month_label(m))}</a>' for m in months[:12]
+    archive = "".join(
+        f'<a class="pg-chip is-link" href="/index/{html.escape(m)}">{html.escape(czech_month_label(m))}</a>'
+        for m in months[:18]
     )
-    body = f"""
-  <header class="legal-header">
-    <h1 class="display">INDEX NÁJMŮ – {html.escape(month_label.upper())}</h1>
-    <p>Nabídky poprvé zaznamenané v katalogu Realitify v měsíci {html.escape(month_label)}. Trvalá URL pro citace.</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Lokalita</th><th>Nové</th><th>Medián</th><th>Průměr</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
-      <tbody>{table}</tbody>
-    </table>
-    <p><strong>Archiv:</strong> {nav}</p>
-    <p><a href="/index">Aktuální index</a> · <a href="/hledat">Nabídky</a></p>
-    <p><small>{html.escape(PRICE_METHODOLOGY_CS)}</small></p>
-    <p><small>Čísla vycházejí z first_seen v katalogu, ne z oficiální statistiky ČSÚ. {html.escape(DISCLAIMER_CS)}</small></p>
-  </div>
+    cards = "".join(
+        [
+            _stat_card("Nové nabídky v Praze", _fmt_int(praha_row.get("new_count")), month_label, dark=True),
+            _stat_card("Medián nájmu", _fmt_czk(praha_row.get("median_price")), "Praha"),
+            _stat_card("Medián Kč/m²", _fmt_m2(praha_row.get("median_price_per_m2")), "Praha"),
+        ]
+    )
+    body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="Souhrn měsíce">
+        <nav class="crumbs" aria-label="Drobečková navigace"><a href="/index">Index nájmů</a> › <span>{html.escape(month_label)}</span></nav>
+        <p class="eyebrow">ARCHIV INDEXU · {html.escape(month_label.upper())}</p>
+        <h1 class="display">Index nájmů – {html.escape(month_label)}</h1>
+        <p class="lead">Nabídky poprvé zaznamenané v katalogu Realitify v měsíci {html.escape(month_label)}. Trvalá adresa vhodná pro citace.</p>
+        <div class="pg-actions"><a class="pill pill-lg" href="/hledat">Procházet nabídky</a><a class="link-row" href="/index">Aktuální index →</a></div>
+      </section>
+
+      <section class="pg-section" id="prague" data-nav="Praha" data-nav-desc="Klíčová čísla pro Prahu">
+        <div class="stat-grid">{cards}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="mesta" data-nav="Města" data-nav-desc="Všechny sledované lokality">
+        <div class="pg-head reveal"><p class="eyebrow">PODLE LOKALITY</p><h2 class="display">Čísla za {html.escape(month_label)}</h2><p>Řadit můžete kliknutím na záhlaví sloupce.</p></div>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>Lokalita</th><th data-sort>Nové</th><th data-sort>Medián</th><th data-sort>Průměr</th><th data-sort>Medián Kč/m²</th><th data-sort>Průměr Kč/m²</th></tr></thead><tbody>{table}</tbody></table></div>
+      </section>
+
+      <section class="pg-section" id="archiv" data-nav="Archiv" data-nav-desc="Další ukončené měsíce">
+        <div class="pg-head reveal"><p class="eyebrow">ARCHIV</p><h2 class="display">Další měsíce</h2></div>
+        <div class="pg-chips">{archive}</div>
+        <p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />Čísla vycházejí z first_seen v katalogu, ne z oficiální statistiky ČSÚ. {html.escape(DISCLAIMER_CS)}</p>
+      </section>
 """
-    praha = next((r for r in rows if r["locality"] == "Praha"), rows[0])
+    praha = praha_row
     new_count = _fmt_int(praha.get("new_count"))
     med = _fmt_czk(praha.get("median_price"))
     med_m2 = _fmt_m2(praha.get("median_price_per_m2"))

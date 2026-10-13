@@ -98,7 +98,7 @@
         { title: 'Ceník', desc: 'Tarify od 0 Kč', href: '/#cenik' },
         { title: 'Vyzkoušet zdarma', desc: 'Registrace trvá 30 sekund', href: '/registrace' },
         { title: 'Přihlásit se', desc: 'Vstup do vašeho účtu', href: '/prihlaseni' },
-        { title: 'MCP pro AI', desc: 'Napojení Realitify na AI asistenty', href: '/mcp-docs' }
+        { title: 'MCP pro AI', desc: 'Napojení Realitify na AI asistenty', href: '/mcp-docs-cs' }
       ]
     },
     {
