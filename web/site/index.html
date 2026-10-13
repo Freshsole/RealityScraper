@@ -130,7 +130,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=20" />
+    <link rel="stylesheet" href="/static/site/site.css?v=22" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
   </head>
   <body>
@@ -153,59 +153,54 @@
     </header>
 
     <main id="main">
-    <section class="hero">
-      <div class="hero-left">
-        <h1 class="display">Realitify – všechny nabídky bytů a domů z českých realitních portálů na jednom místě.</h1>
-        <p class="hero-copy">Agregujeme aktivní inzeráty ze __PORTALS_LIST__. Právě teď v katalogu: <strong>__ACTIVE_COUNT__</strong> aktivních nabídek. Procházejte trh, porovnávejte ceny a nechte si hlídat nové byty dřív než ostatní.</p>
-        <p class="hero-portals">Zdroje: __PORTALS_LIST__</p>
-        <div class="hero-actions">
-          <a class="pill pill-lg" href="/hledat">Procházet nabídky</a>
-          <a class="link-row" href="/registrace">
-            Začít hlídat zdarma
-            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/arrow-right.svg" width="16" height="16" alt="" /></span>
-          </a>
-        </div>
-        <div class="hero-trust">
-          <span class="icon" style="width:88px;height:36px"><img src="/static/site/assets/avatars.svg" width="88" height="36" alt="" /></span>
-          <p>Agregátor nabídek · <strong>__PORTALS_COUNT__ portálů</strong> · hlídání nových inzerátů 24/7</p>
-        </div>
+    <section class="hero hero-search" data-nav="Hledání" data-nav-desc="Najděte byt podle lokality, ceny a plochy">
+      <div class="hs-copy">
+        <p class="eyebrow">KATALOG Z __PORTALS_COUNT__ PORTÁLŮ</p>
+        <h1 class="display">Najděte byt dřív než ostatní</h1>
+        <p class="hero-copy">Právě teď v katalogu <strong>__ACTIVE_COUNT__</strong> aktivních nabídek ze __PORTALS_LIST__. Zadejte, co hledáte, a my najdeme shody.</p>
       </div>
-      <div class="hero-right">
-        <article class="alert-card">
-          <div class="notif-header">
-            <div>
-              <h2>Realitify • OKAMŽITÉ UPOZORNĚNÍ</h2>
-              <p>před 35 sekundami • z portálu Bezrealitky</p>
-            </div>
-            <span class="badge-mint">AKTIVNÍ</span>
+      <form class="hs-form" id="hs-form" novalidate>
+        <div class="hs-tabs" role="tablist" aria-label="Typ nabídky">
+          <button type="button" class="hs-tab on" role="tab" aria-selected="true" data-offer="pronajem">Pronájem</button>
+          <button type="button" class="hs-tab" role="tab" aria-selected="false" data-offer="prodej">Prodej</button>
+        </div>
+        <div class="hs-row">
+          <div class="hs-field hs-field-wide">
+            <label for="hs-q">Lokalita</label>
+            <input id="hs-q" name="q" type="text" placeholder="Město, čtvrť nebo ulice" autocomplete="off" />
+            <div class="hs-suggest" id="hs-suggest" hidden></div>
           </div>
-          <div class="apart-photo">
-            <picture>
-              <source type="image/avif" srcset="/static/site/assets/hero-apart.avif 1x, /static/site/assets/hero-apart@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/hero-apart.webp 1x, /static/site/assets/hero-apart@2x.webp 2x" />
-              <img src="/static/site/assets/hero-apart.webp" width="432" height="247" alt="Byt v Praze 3" decoding="async" fetchpriority="high" />
-            </picture>
-          </div>
-          <div class="listing-details">
-            <div class="price-row">
-              <strong>16 500 Kč / měsíc</strong>
-              <span class="chip-dark">2+kk • 54 m²</span>
-            </div>
-            <div class="loc-row">
-              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/map-pin.svg" width="16" height="16" alt="" /></span>
-              Praha 3 - Žižkov, ulice Bořivojova
-            </div>
-            <p class="blurb">Nově zrekonstruovaný, zařízený byt ve 3. patře cihlového domu. K nastěhování ihned. Žádaná lokalita s výbornou dostupností...</p>
-          </div>
-          <div class="card-actions">
-            <a class="btn-open" href="/registrace">Otevřít nabídku</a>
-            <span class="btn-save">
-              <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/bookmark.svg" width="16" height="16" alt="" /></span>
-            </span>
-          </div>
-        </article>
+          <div class="hs-field"><label for="hs-price">Cena do (Kč)</label><input id="hs-price" name="price_to" type="number" inputmode="numeric" min="0" step="1000" placeholder="např. 25 000" /></div>
+          <div class="hs-field"><label for="hs-area-from">Plocha od (m²)</label><input id="hs-area-from" name="area_from" type="number" inputmode="numeric" min="0" placeholder="30" /></div>
+          <div class="hs-field"><label for="hs-area-to">Plocha do (m²)</label><input id="hs-area-to" name="area_to" type="number" inputmode="numeric" min="0" placeholder="90" /></div>
+          <button class="pill pill-lg hs-go" type="submit">Hledat</button>
+        </div>
+        <div class="hs-chips" aria-label="Rychlý výběr">
+          <button type="button" class="hs-chip" data-q="Praha">Praha</button>
+          <button type="button" class="hs-chip" data-q="Brno">Brno</button>
+          <button type="button" class="hs-chip" data-q="Ostrava">Ostrava</button>
+          <button type="button" class="hs-chip" data-q="Plzeň">Plzeň</button>
+          <button type="button" class="hs-chip" data-q="Praha 2" data-price="25000" data-from="40">Praha 2 do 25 000 Kč</button>
+        </div>
+      </form>
+      <div class="hero-trust">
+        <span class="icon" style="width:88px;height:36px"><img src="/static/site/assets/avatars.svg" width="88" height="36" alt="" /></span>
+        <p>Zdarma · bez platební karty · neomezené prohlížení katalogu</p>
       </div>
     </section>
+
+    <div class="hs-modal" id="hs-modal" hidden>
+      <div class="hs-modal-card" role="dialog" aria-modal="true" aria-labelledby="hs-modal-title">
+        <button type="button" class="hs-close" id="hs-close" aria-label="Zavřít">×</button>
+        <p class="eyebrow" id="hs-modal-eyebrow">VAŠE VYHLEDÁVÁNÍ</p>
+        <h2 id="hs-modal-title">Vytvořte si účet zdarma</h2>
+        <div class="hs-summary" id="hs-summary"></div>
+        <div class="hs-teaser" id="hs-teaser"></div>
+        <p class="hs-lead">Po registraci vás přesměrujeme rovnou na tyto nabídky s mapou a filtry. Katalog pak můžete používat zdarma a bez omezení.</p>
+        <a class="pill pill-lg" id="hs-register" href="/registrace">Vytvořit účet zdarma</a>
+        <a class="hs-login" id="hs-login" href="/prihlaseni">Už mám účet · Přihlásit se</a>
+      </div>
+    </div>
 
     <div class="urgency">
       <div class="urg-item">
@@ -762,5 +757,6 @@
     <script src="/static/site/site.js?v=8" defer></script>
     <script src="/static/t.js?v=8" defer></script>
       <script src="/static/site/nav.js?v=3" defer></script>
+    <script src="/static/site/hero-search.js?v=2" defer></script>
 </body>
 </html>

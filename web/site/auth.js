@@ -244,7 +244,7 @@ if (loginForm) {
     try {
       await postJson("/api/auth/login", { email, password });
       const next = new URLSearchParams(location.search).get("next") || "/prehled";
-      location.href = next.startsWith("/oauth/authorize") ? next : "/prehled";
+      location.href = next.startsWith("/oauth/authorize") || (next.startsWith("/nabidka") && !next.startsWith("//")) ? next : "/prehled";
     } catch (err) {
       toast(err.message || "Přihlášení se nepovedlo");
     }
@@ -599,7 +599,7 @@ if (register) {
       if (promo) await postJson("/api/billing/promo", { code: promo });
       writeStoredPromo(promo);
       const next = new URLSearchParams(location.search).get("next") || "/nabidka";
-      location.href = next.startsWith("/") ? next : "/nabidka";
+      location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/nabidka";
     } catch (err) {
       toast(err.message || "Dokončení se nepovedlo");
       if (btn) btn.disabled = false;
