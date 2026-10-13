@@ -10,3 +10,4 @@
 #hry .game-card .pill{align-self:flex-start;margin-top:8px}
 @media (max-width:860px){#hry .game-hub{grid-template-columns:1fr;padding-left:0;padding-right:0}#hry .game-card{padding:28px 24px}}
 
+@media (max-width:860px){.urg-item{white-space:normal;font-size:15px}}

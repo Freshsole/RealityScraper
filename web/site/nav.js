@@ -24,18 +24,57 @@
   }
 
   /* ---------- content ---------- */
-  var HOME_SECTIONS = [
-    { id: 'jak-to-funguje', title: 'Jak to funguje', desc: 'Od nastavení hlídání po první upozornění' },
-    { id: 'databaze', title: 'Databáze bytů', desc: 'Nabídky ze všech českých portálů na jednom místě' },
-    { id: 'srovnani', title: 'Srovnání', desc: 'Realitify oproti ručnímu hlídání inzerátů' },
-    { id: 'cenik', title: 'Ceník', desc: 'Tarify od 0 Kč, bez platební karty' },
-    { id: 'hry', title: 'Hry', desc: 'Zkuste trefit cenu dřív, než byt zmizí' },
-    { id: 'faq', title: 'FAQ', desc: 'Odpovědi na nejčastější otázky' }
-  ].filter(function (s) { return document.getElementById(s.id); });
+  /* Sections of the current page feed both the bar (scroll-spy) and the
+   * "Na této stránce" category. Title = data-nav | .eyebrow | h2; only sections
+   * with a short label (data-nav or eyebrow) go to the bar. */
+  var CURATED_HOME = {
+    'jak-to-funguje': ['Jak to funguje', 'Od nastavení hlídání po první upozornění'],
+    'databaze': ['Databáze bytů', 'Nabídky ze všech českých portálů na jednom místě'],
+    'srovnani': ['Srovnání', 'Realitify oproti ručnímu hlídání inzerátů'],
+    'cenik': ['Ceník', 'Tarify od 0 Kč, bez platební karty'],
+    'hry': ['Hry', 'Zkuste trefit cenu dřív, než byt zmizí'],
+    'faq': ['FAQ', 'Odpovědi na nejčastější otázky']
+  };
+
+  function clean(t) { return (t || '').replace(/\s+/g, ' ').trim(); }
+  function titleCase(t) {
+    t = clean(t);
+    return t.length > 4 && t === t.toUpperCase() ? t.charAt(0) + t.slice(1).toLowerCase() : t;
+  }
+  function collectSections() {
+    var root = document.querySelector('main, .page') || document.body;
+    var out = [];
+    [].slice.call(root.querySelectorAll('section')).forEach(function (el, i) {
+      if (el.closest('header, footer, .nx-pill') || el.hidden) return;
+      var cur = isHome && CURATED_HOME[el.id];
+      var nav = el.getAttribute('data-nav');
+      var eyebrow = el.querySelector('.eyebrow');
+      var h2 = el.querySelector('h2');
+      var title = cur ? cur[0] : (nav || (eyebrow && eyebrow.textContent) || (h2 && h2.textContent));
+      title = titleCase(title);
+      if (!title) return;
+      if (!el.id) el.id = 'sec-' + i;
+      var short = cur ? cur[0] : (nav || (eyebrow && eyebrow.textContent) || '');
+      short = titleCase(short.split(' / ')[0].split(' · ')[0]);
+      var desc = cur ? cur[1] : (el.getAttribute('data-nav-desc') || (h2 ? titleCase(h2.textContent) : ''));
+      out.push({ id: el.id, el: el, title: title, short: short, desc: desc === title ? '' : desc });
+    });
+    if (isHome) out = out.filter(function (s) { return CURATED_HOME[s.id]; });
+    return out;
+  }
+  var SECTIONS = collectSections();
+  var BAR_SECTIONS = SECTIONS.filter(function (s) { return s.short; });
+  if (BAR_SECTIONS.length < 2 && SECTIONS.length > 2) {
+    // No eyebrow labels: fall back to the section headings, shortened for the bar.
+    BAR_SECTIONS = SECTIONS.map(function (s) {
+      var t = s.title.length > 24 ? s.title.slice(0, 23).replace(/\s+\S*$/, '') + '…' : s.title;
+      return { id: s.id, el: s.el, title: s.title, short: t, desc: s.desc };
+    });
+  }
 
   var PAGE_LINKS = [
     { title: 'Nabídky', href: '/hledat', path: '/hledat' },
-    { title: 'Trh', href: '/trh', path: '/trh' },
+    { title: 'Index nájmů', href: '/index', path: '/index' },
     { title: 'Vaše úspěchy', href: '/uspechy', path: '/uspechy' },
     { title: 'Ceník', href: '/#cenik', path: null },
     { title: 'O nás', href: '/o-nas', path: '/o-nas' }
@@ -45,9 +84,9 @@
     {
       key: 'browse', title: 'Prohlížejte nabídky', desc: 'Katalog bytů a data trhu', icon: 'search',
       items: [
-        { title: 'Nabídky', desc: 'Aktivní inzeráty z 9 portálů s filtry', href: '/hledat' },
-        { title: 'Trh', desc: 'Ceny a vývoj nájmů v číslech', href: '/trh' },
+        { title: 'Nabídky', desc: 'Aktivní inzeráty z 9 portálů s mapou a filtry', href: '/hledat' },
         { title: 'Index nájmů', desc: 'Denní souhrn cen pronájmů', href: '/index' },
+        { title: 'Ceny nájmů v Praze', desc: 'Medián, Kč/m² a vývoj trhu', href: '/trh/praha/pronajem' },
         { title: 'Pronájem Praha', desc: 'Aktuální nabídky a ceny v Praze', href: '/pronajem-praha' },
         { title: 'Pronájem Brno', desc: 'Aktuální nabídky a ceny v Brně', href: '/pronajem-brno' }
       ]
@@ -74,10 +113,10 @@
     }
   ];
 
-  if (HOME_SECTIONS.length) {
+  if (SECTIONS.length > 1) {
     CATEGORIES.unshift({
-      key: 'page', title: 'Na této stránce', desc: 'Sekce úvodní stránky', icon: 'list',
-      items: HOME_SECTIONS.map(function (s) {
+      key: 'page', title: 'Na této stránce', desc: 'Sekce aktuální stránky', icon: 'list',
+      items: SECTIONS.map(function (s) {
         return { title: s.title, desc: s.desc, href: '#' + s.id, id: s.id };
       })
     });
@@ -95,14 +134,17 @@
   var CHEV = '<svg class="nx-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 
   /* ---------- state ---------- */
-  var barLinks = HOME_SECTIONS.length
-    ? HOME_SECTIONS.map(function (s) { return { title: s.title, href: '#' + s.id, id: s.id }; })
+  var useSections = BAR_SECTIONS.length > 1;
+  var barLinks = useSections
+    ? BAR_SECTIONS.map(function (x) { return { title: x.short, href: '#' + x.id, id: x.id }; })
     : PAGE_LINKS.map(function (l) { return { title: l.title, href: href(l.href), path: l.path }; });
 
-  var secEls = HOME_SECTIONS.map(function (s) { return document.getElementById(s.id); });
+  var secEls = SECTIONS.map(function (x) { return x.el; });
+  var barEls = BAR_SECTIONS.map(function (x) { return x.el; });
+  var currentSec = -1;
   var activeIdx = -1;
   var hovered = null;
-  var cat = HOME_SECTIONS.length ? 'page' : 'browse';
+  var cat = SECTIONS.length > 1 ? 'page' : 'browse';
   var panelCat = cat;
   var megaOpen = false;
   var panelOpen = false;
@@ -110,7 +152,7 @@
   var tx = 0;
   var ready = false;
 
-  if (!HOME_SECTIONS.length) {
+  if (!useSections) {
     barLinks.forEach(function (l, i) { if (l.path && l.path === path) activeIdx = i; });
   }
 
@@ -162,7 +204,7 @@
   var backdrop = header.querySelector('.nx-backdrop');
 
   function itemHtml(it, num) {
-    var cur = it.id && secEls.length && HOME_SECTIONS[activeIdx] && HOME_SECTIONS[activeIdx].id === it.id;
+    var cur = it.id && SECTIONS[currentSec] && SECTIONS[currentSec].id === it.id;
     return '<a class="nx-item' + (cur ? ' is-current' : '') + '" role="menuitem" href="' + esc(href(it.href)) + '"' + (cur ? ' aria-current="true"' : '') + '>' +
       '<span class="nx-item-num">' + String(num).padStart(2, '0') + '</span>' +
       '<span class="nx-item-body"><span class="nx-item-title">' + esc(it.title) + '</span><span class="nx-item-desc">' + esc(it.desc) + '</span></span></a>';
@@ -249,12 +291,19 @@
       header.classList.toggle('is-scrolled', window.scrollY > SCROLL_THRESHOLD);
       if (!secEls.length) return;
       var line = window.innerHeight * 0.4;
-      var found = -1;
+      var cur = -1;
       for (var i = 0; i < secEls.length; i++) {
-        if (secEls[i].getBoundingClientRect().top <= line) found = i;
+        if (secEls[i].getBoundingClientRect().top <= line) cur = i;
       }
-      if (found !== activeIdx) {
-        activeIdx = found;
+      var bar = -1;
+      if (useSections) {
+        for (var j = 0; j < barEls.length; j++) {
+          if (barEls[j].getBoundingClientRect().top <= line) bar = j;
+        }
+      }
+      if (cur !== currentSec || (useSections && bar !== activeIdx)) {
+        currentSec = cur;
+        if (useSections) activeIdx = bar;
         refresh();
         if (megaOpen || panelOpen) { renderMega(); renderPanel(); }
       }

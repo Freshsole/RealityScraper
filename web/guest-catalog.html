@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="cs" data-page="catalog">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
+    <title>Katalog nabídek – Realitify</title>
+    <meta name="theme-color" content="#163300" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Realitify" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
+    <meta name="robots" content="noindex" />
+    <style>
+      body { padding: 0; }
+      .guest-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 48px; padding: 0 20px; background: var(--forest); color: #fff; font-size: 14px; }
+      .guest-bar a { color: var(--forest); background: var(--green); padding: 7px 16px; border-radius: 999px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+      .guest-bar span { color: var(--mint); }
+      #view-catalog { padding: 12px 16px 0; }
+      .catalog-shell { height: calc(100vh - 48px - 24px); }
+      [data-status="saved"], [data-status="hidden"], [data-status="all"], #cat-hits, #catalog-views { display: none !important; }
+      @media (max-width: 900px) { .guest-bar span { display: none; } .guest-bar { justify-content: center; } }
+    </style>
+  </head>
+  <body class="guest">
+    <div class="guest-bar">
+      <span>Prohlížíte katalog jako host. Hlídání nových bytů a uložené filtry najdete v účtu.</span>
+      <a href="/registrace" target="_top">Hlídat nové byty zdarma</a>
+    </div>
+    <div id="view-catalog">
+      <div class="catalog-shell">
+        <div class="catalog-map-wrap">
+          <div id="catalog-map"></div>
+          <div id="catalog-map-loading" hidden>
+            <img id="catalog-load-anim" src="/static/assets/catalog-loading.webp?v=6" alt="" width="140" height="140" decoding="async" />
+          </div>
+          <div class="map-tools">
+            <button type="button" class="map-tool" id="map-circle-btn" data-icon="circle">Kruh</button>
+            <label class="map-radius" id="map-radius-wrap" hidden>
+              <span id="map-radius-label">2 km</span>
+              <input id="map-radius" type="range" min="200" max="15000" step="100" value="2000" />
+            </label>
+            <button type="button" class="map-tool" id="map-circle-clear" hidden data-icon="x">Zrušit</button>
+          </div>
+          <p class="map-draw-hint" id="map-draw-hint" hidden>Klikni do mapy pro střed kruhu</p>
+        </div>
+        <aside class="catalog-side">
+          <div class="catalog-filters">
+            <div class="catalog-head">
+              <div>
+                <p class="kicker">Uložené inzeráty z hlídaných hledání</p>
+                <h2>Nabídka</h2>
+              </div>
+              <p id="catalog-count">Načítám…</p>
+            </div>
+            <div class="chip-row" id="cat-portals">
+              <button type="button" class="chip on" data-portal="" data-icon="grid">Všechny</button>
+              <button type="button" class="chip" data-portal="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
+              <button type="button" class="chip" data-portal="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Reality.iDNES</button>
+              <button type="button" class="chip" data-portal="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
+              <button type="button" class="chip" data-portal="ceskereality"><img class="chip-logo" src="/static/icons/ceskereality.svg" alt="" />ČeskéReality</button>
+              <button type="button" class="chip" data-portal="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
+              <button type="button" class="chip" data-portal="annonce"><img class="chip-logo" src="/static/icons/annonce.svg" alt="" />Annonce</button>
+              <button type="button" class="chip" data-portal="mmreality"><img class="chip-logo" src="/static/icons/mmreality.svg" alt="" />M&amp;M Reality</button>
+              <button type="button" class="chip" data-portal="ulovdomov"><img class="chip-logo" src="/static/icons/ulovdomov.svg" alt="" />UlovDomov</button>
+              <button type="button" class="chip" data-portal="remax"><img class="chip-logo" src="/static/icons/remax.svg" alt="" />RE/MAX</button>
+              <button type="button" class="chip" data-portal="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Reality.cz</button>
+            </div>
+            <div class="chip-row" id="cat-status">
+              <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
+              <button type="button" class="chip" data-status="saved" data-icon="bookmark">Uložené</button>
+              <button type="button" class="chip" data-status="hidden" data-icon="eyeOff">Skryté</button>
+              <button type="button" class="chip" data-status="all" data-icon="listings">Vše</button>
+              <button type="button" class="chip" data-discounted="1" data-icon="percent">Zlevněné</button>
+            </div>
+            <div class="chip-row" id="cat-hits">
+              <button type="button" class="chip" data-hits="today" data-icon="refresh">Dnes</button>
+              <button type="button" class="chip" data-hits="notified" data-icon="radar">Zásahy</button>
+            </div>
+            <div class="catalog-views" id="catalog-views"></div>
+            <div class="catalog-search-wrap locality-picker">
+              <span data-icon="search" aria-hidden="true"></span>
+              <input id="cat-q" class="catalog-search" placeholder="Město, městská část nebo ulice" autocomplete="off" />
+              <div id="cat-place-suggest" class="commute-suggest locality-suggest" hidden></div>
+            </div>
+            <div id="cat-place-chips" class="catalog-place-chips"></div>
+            <div class="catalog-row">
+              <input id="cat-price-from" type="number" placeholder="Cena od" />
+              <input id="cat-price-to" type="number" placeholder="Cena do" />
+              <input id="cat-area-from" type="number" placeholder="m² od" />
+              <input id="cat-area-to" type="number" placeholder="m² do" />
+            </div>
+            <button class="catalog-toggle" id="cat-toggle" type="button" data-icon="filter">Všechny filtry</button>
+            <button class="btn" id="cat-search" type="button" data-icon="search">Vyhledat</button>
+          </div>
+          <div id="catalog-list" class="catalog-list"></div>
+          <p id="catalog-empty" class="empty" hidden>Nic v uložené nabídce neodpovídá filtrům.</p>
+          <button class="btn btn-ghost catalog-load" id="catalog-more" type="button" hidden data-icon="more">Načíst další</button>
+        </aside>
+      </div>
+    </div>
+    <div id="compare-modal" class="catalog-modal" hidden>
+      <div class="catalog-modal-card compare-card">
+        <button class="catalog-close" id="compare-close" type="button" aria-label="Zavřít">×</button>
+        <p class="card-label">Porovnání</p>
+        <h2>Vedle sebe</h2>
+        <div id="compare-grid" class="compare-grid"></div>
+      </div>
+    </div>
+    <footer class="footer">Realitify — osobní hlídání veřejných inzerátů. <span id="footer-version"></span></footer>
+    <div id="app-confirm" class="bill-confirm" hidden>
+      <div class="bill-confirm-card">
+        <h2 id="app-confirm-title">Opravdu?</h2>
+        <p class="set-row-sub" id="app-confirm-text"></p>
+        <div class="set-actions-end">
+          <button type="button" class="btn btn-ghost" id="app-confirm-cancel">Zpět</button>
+          <button type="button" class="btn btn-danger-outline" id="app-confirm-ok">Potvrdit</button>
+        </div>
+      </div>
+    </div>
+    <div id="toasts" class="toasts" aria-live="polite"></div>
+    <div id="filters-modal" class="catalog-modal filters-modal" hidden>
+      <div class="catalog-modal-card filters-card">
+        <button class="catalog-close" id="filters-close" type="button" aria-label="Zavřít">×</button>
+        <div class="filters-scroll">
+          <p class="kicker">S / Bez u věcí, které má jen jeden portál</p>
+          <h2>Všechny filtry</h2>
+          <p class="catalog-label">Typ nabídky</p>
+          <div class="chip-row" data-filter="offer">
+            <button type="button" class="chip on" data-value="pronajem">Pronájem</button>
+            <button type="button" class="chip" data-value="prodej">Prodej</button>
+            <button type="button" class="chip" data-value="drazba">Dražba</button>
+          </div>
+          <p class="catalog-label">Typ nemovitosti</p>
+          <div class="chip-row" data-filter="estate">
+            <button type="button" class="chip" data-value="byt">Byt</button>
+            <button type="button" class="chip" data-value="dum">Dům</button>
+            <button type="button" class="chip" data-value="pozemek">Pozemek</button>
+            <button type="button" class="chip" data-value="projekt">Projekt</button>
+            <button type="button" class="chip" data-value="komercni">Komerční</button>
+            <button type="button" class="chip" data-value="ostatni">Ostatní</button>
+          </div>
+          <p class="catalog-label">Dispozice</p>
+          <div id="cat-dispositions" class="chip-row"></div>
+          <p class="catalog-label">Praha</p>
+          <div class="chip-row" data-filter="district">
+            <button type="button" class="chip" data-value="praha-1">Praha 1</button>
+            <button type="button" class="chip" data-value="praha-2">Praha 2</button>
+            <button type="button" class="chip" data-value="praha-3">Praha 3</button>
+            <button type="button" class="chip" data-value="praha-4">Praha 4</button>
+            <button type="button" class="chip" data-value="praha-5">Praha 5</button>
+            <button type="button" class="chip" data-value="praha-6">Praha 6</button>
+            <button type="button" class="chip" data-value="praha-7">Praha 7</button>
+            <button type="button" class="chip" data-value="praha-8">Praha 8</button>
+            <button type="button" class="chip" data-value="praha-9">Praha 9</button>
+            <button type="button" class="chip" data-value="praha-10">Praha 10</button>
+          </div>
+          <p class="catalog-label">Vlastnictví</p>
+          <div class="chip-row" data-filter="ownership">
+            <button type="button" class="chip" data-value="Osobní">Osobní</button>
+            <button type="button" class="chip" data-value="Družstevní">Družstevní</button>
+            <button type="button" class="chip" data-value="Obecní">Obecní</button>
+            <button type="button" class="chip" data-value="S.r.o.">S.r.o.</button>
+            <button type="button" class="chip" data-value="Podílové">Podílové</button>
+            <button type="button" class="chip" data-value="Jiné">Jiné</button>
+          </div>
+          <p class="catalog-label">Stav objektu</p>
+          <div class="chip-row" data-filter="condition">
+            <button type="button" class="chip" data-value="Novostavba">Novostavba</button>
+            <button type="button" class="chip" data-value="Po rekonstrukci">Po rekonstrukci</button>
+            <button type="button" class="chip" data-value="Velmi dobrý">Velmi dobrý</button>
+            <button type="button" class="chip" data-value="Dobrý">Dobrý</button>
+            <button type="button" class="chip" data-value="Před rekonstrukcí">Před rekonstrukcí</button>
+            <button type="button" class="chip" data-value="V rekonstrukci">V rekonstrukci</button>
+            <button type="button" class="chip" data-value="Ve výstavbě">Ve výstavbě</button>
+            <button type="button" class="chip" data-value="Projekt">Projekt</button>
+            <button type="button" class="chip" data-value="Udržovaný">Udržovaný</button>
+            <button type="button" class="chip" data-value="Špatný">Špatný</button>
+            <button type="button" class="chip" data-value="K demolici">K demolici</button>
+          </div>
+          <p class="catalog-label">Konstrukce</p>
+          <div class="chip-row" data-filter="building">
+            <button type="button" class="chip" data-value="cihlova">Cihlová</button>
+            <button type="button" class="chip" data-value="panelova">Panelová</button>
+            <button type="button" class="chip" data-value="drevena">Dřevěná</button>
+            <button type="button" class="chip" data-value="kamenna">Kamenná</button>
+            <button type="button" class="chip" data-value="skeletova">Skeletová</button>
+            <button type="button" class="chip" data-value="montovana">Montovaná</button>
+            <button type="button" class="chip" data-value="smisena">Smíšená</button>
+            <button type="button" class="chip" data-value="ostatni">Ostatní</button>
+          </div>
+          <p class="catalog-label">Vybavení bytu</p>
+          <div class="chip-row" data-filter="equipped">
+            <button type="button" class="chip" data-value="vybaveny">Vybavený</button>
+            <button type="button" class="chip" data-value="castecne">Částečně</button>
+            <button type="button" class="chip" data-value="nevybaveny">Nevybavený</button>
+          </div>
+          <p class="catalog-label">Příslušenství</p>
+          <div id="cat-amenities" class="chip-row">
+            <button type="button" class="chip" data-flag="balcony">Balkon</button>
+            <button type="button" class="chip" data-flag="loggia">Lodžie</button>
+            <button type="button" class="chip" data-flag="terrace">Terasa</button>
+            <button type="button" class="chip" data-flag="cellar">Sklep</button>
+            <button type="button" class="chip" data-flag="lift">Výtah</button>
+            <button type="button" class="chip" data-flag="parking">Parkování</button>
+            <button type="button" class="chip" data-flag="garage">Garáž</button>
+            <button type="button" class="chip" data-flag="garden">Zahrada</button>
+            <button type="button" class="chip" data-flag="barrier_free">Bezbariérový</button>
+            <button type="button" class="chip" data-flag="phone">Telefon</button>
+            <button type="button" class="chip" data-flag="cable_tv">Kabelová TV</button>
+            <button type="button" class="chip" data-flag="internet">Internet</button>
+            <button type="button" class="chip" data-flag="video">Video</button>
+            <button type="button" class="chip" data-flag="open_house">Den otevřených dveří</button>
+          </div>
+          <p class="catalog-label">Jen na jednom portálu</p>
+          <div class="filter-tri">
+            <p class="catalog-label">Spolubydlení</p>
+            <div class="chip-row chip-tri" data-tri="roommate">
+              <button type="button" class="chip" data-value="s">S</button>
+              <button type="button" class="chip" data-value="bez">Bez</button>
+            </div>
+          </div>
+          <div class="filter-tri">
+            <p class="catalog-label">Mazlíčci</p>
+            <div class="chip-row chip-tri" data-tri="pets">
+              <button type="button" class="chip" data-value="s">S</button>
+              <button type="button" class="chip" data-value="bez">Bez</button>
+            </div>
+          </div>
+          <div class="filter-tri">
+            <p class="catalog-label">Krátkodobý pronájem</p>
+            <div class="chip-row chip-tri" data-tri="short_term">
+              <button type="button" class="chip" data-value="s">S</button>
+              <button type="button" class="chip" data-value="bez">Bez</button>
+            </div>
+          </div>
+          <p class="catalog-hint">S ukáže jen inzeráty, u kterých to víme. Bez je skryje a nechá i nabídky z druhého portálu, kde tahle volba není.</p>
+          <p class="catalog-label">Zdroj a řazení</p>
+          <div class="catalog-row">
+            <select id="cat-monitor">
+              <option value="">Všechny monitory</option>
+            </select>
+            <select id="cat-sort">
+              <option value="newest">Nejnovější</option>
+              <option value="oldest">Nejstarší</option>
+              <option value="price_asc">Cena vzestupně</option>
+              <option value="price_desc">Cena sestupně</option>
+              <option value="area_desc">Největší plocha</option>
+              <option value="area_asc">Nejmenší plocha</option>
+              <option value="discount_desc">Největší sleva</option>
+            </select>
+          </div>
+          <p class="catalog-hint">Vlastnictví, stav, konstrukce a vybavení bytu se doplní až po otevření detailu, nebo u nových zásahů z Bezrealitky. Dispozice, Praha, cena a plocha jdou použít hned.</p>
+        </div>
+        <div class="filters-actions">
+          <button class="btn btn-ghost" id="filters-reset" type="button" data-icon="x">Vymazat</button>
+          <button class="btn" id="filters-apply" type="button" data-icon="check">Použít filtry</button>
+        </div>
+      </div>
+    </div>
+    <div id="catalog-modal" class="catalog-modal" hidden>
+      <div class="catalog-modal-card">
+        <button class="catalog-close" id="catalog-close" type="button" aria-label="Zavřít">×</button>
+        <div id="catalog-detail"></div>
+      </div>
+    </div>
+    <div id="catalog-lightbox" class="catalog-lightbox" hidden>
+      <button class="lightbox-close" id="lightbox-close" type="button" aria-label="Zavřít fotku">×</button>
+      <button class="lightbox-nav prev" id="lightbox-prev" type="button">‹</button>
+      <img id="lightbox-photo" alt="" />
+      <button class="lightbox-nav next" id="lightbox-next" type="button">›</button>
+      <p id="lightbox-count"></p>
+    </div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
+    <script src="/static/map-basemap.js?v=2"></script>
+    <script src="/static/portals.js?v=1"></script>
+    <script src="/static/icons.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>
+    <script>window.dispatchEvent(new Event("catalog-show"));</script>
+      <script>
+      (function () {
+        var k = document.querySelector(".catalog-head .kicker");
+        if (k) k.textContent = "Aktuální nabídky ze všech portálů";
+        var h = document.querySelector(".catalog-head h2");
+        if (h) h.textContent = "Nabídky";
+      })();
+    </script>
+  </body>
+</html>

@@ -131,7 +131,7 @@ def redirect_path_for_thin(store: Store, locality: str, offer: str, disposition:
         if parent_active:
             return f"/trh/{slugify_locality(parent)}/{offer}"
         parent = parent_locality(parent)
-    return "/trh"
+    return "/hledat"
 
 
 def list_disposition_paths(store: Store) -> list[tuple[str, str, str, str]]:
@@ -192,7 +192,7 @@ def seo_paths_from_db(store: Store) -> dict[str, list[str]]:
         months = [f"/index/{m}" for m in store.list_index_months()]
     except Exception:
         months = []
-    return {"hub": ["/trh"], "locality": locality, "disposition": disposition, "index_archive": months}
+    return {"hub": ["/hledat"], "locality": locality, "disposition": disposition, "index_archive": months}
 
 
 _SITEMAP_LOCK = __import__("threading").Lock()
@@ -303,7 +303,7 @@ def top_localities(store: Store, offer: str = "pronajem", limit: int = 10) -> li
 def _breadcrumb_items(locality: str, offer: str, disposition: str = "") -> list[dict[str, str]]:
     items = [
         {"name": "Domů", "url": "https://realitify.cz/"},
-        {"name": "Trh", "url": "https://realitify.cz/trh"},
+        {"name": "Nabídky", "url": "https://realitify.cz/hledat"},
     ]
     chain: list[str] = []
     p = parent_locality(locality)
@@ -602,52 +602,27 @@ def _page_shell(
     og_image: str = "",
     md_href: str = "",
 ) -> str:
-    ld = "\n".join(
-        f'<script type="application/ld+json">{json.dumps(block, ensure_ascii=False)}</script>' for block in json_ld
-    )
-    og = ""
+    from app import site_chrome
+
+    extra = ""
     if og_image:
-        og = f"""
-  <meta property="og:image" content="{html.escape(og_image)}" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:image" content="{html.escape(og_image)}" />"""
-    md_link = ""
-    if md_href:
-        md_link = f'\n  <link rel="alternate" type="text/markdown" href="{html.escape(md_href)}" />'
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>{html.escape(title)}</title>
-  <meta name="description" content="{html.escape(description)}" />
-  <link rel="canonical" href="{html.escape(canonical)}" />{md_link}
-  <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="Realitify" />
-  <meta property="og:title" content="{html.escape(title)}" />
-  <meta property="og:description" content="{html.escape(description)}" />
-  <meta property="og:url" content="{html.escape(canonical)}" />{og}
-  <link rel="stylesheet" href="/static/site/site.css?v=9" />
-  {ld}
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/trh">Trh</a>
-      <a href="/index">Index</a>
-      <a href="/hledat">Hledat</a>
-      <a href="/o-nas">O nás</a>
-    </nav>
-  </header>
-  {body}
-</body>
-</html>"""
+        extra = (
+            f'\n    <meta property="og:image" content="{html.escape(og_image)}" />'
+            '\n    <meta property="og:image:width" content="1200" />'
+            '\n    <meta property="og:image:height" content="630" />'
+            '\n    <meta name="twitter:card" content="summary_large_image" />'
+            f'\n    <meta name="twitter:image" content="{html.escape(og_image)}" />'
+        )
+    return site_chrome.page(
+        title=title,
+        description=description,
+        canonical=canonical,
+        body=body,
+        body_class="legal-page pg-page",
+        markdown_alt=md_href or None,
+        ld=json_ld,
+        extra_head=extra,
+    )
 
 
 def build_title_description(locality: str, offer: str, report: dict[str, Any], disposition: str = "") -> tuple[str, str]:
@@ -797,7 +772,7 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     <h2>Časté otázky</h2>
     {faq_html}
     {_related_html(store, locality, offer, disposition)}
-    <p><a href="/trh">Všechny lokality</a> · <a href="/index">Index nájmů</a> · <a href="/faq">Metodika Kč/m²</a> · <a href="/o-nas">O Realitify</a></p>
+    <p><a href="/hledat">Všechny nabídky</a> · <a href="/index">Index nájmů</a> · <a href="/faq">Metodika Kč/m²</a> · <a href="/o-nas">O Realitify</a></p>
     <p><small>{html.escape(PRICE_METHODOLOGY_CS)}</small></p>
     <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
   </div>
@@ -853,75 +828,6 @@ def render_trh_page_md(store: Store, locality: str, offer: str, disposition: str
     return "\n".join(lines)
 
 
-def render_trh_hub(store: Store) -> str:
-    inv = market_inventory(store)["included"]
-    by_offer: dict[str, list[dict[str, Any]]] = {"pronajem": [], "prodej": []}
-    for row in inv:
-        by_offer.setdefault(row["offer"], []).append(row)
-    sections = []
-    for offer, rows in by_offer.items():
-        cities = sorted([r for r in rows if r["kind"] == "city"], key=lambda r: (-int(r["active_count"]), r["locality"]))
-        neigh = [r for r in rows if r["kind"] == "neighborhood"]
-        city_html = "".join(
-            f'<li><a href="{html.escape(r["path"])}">{html.escape(r["locality"])}</a> ({_fmt_int(r["active_count"])})</li>'
-            for r in cities
-        )
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        for r in neigh:
-            parents = r.get("parents") or ["Praha"]
-            grouped.setdefault(parents[0] if parents else "Praha", []).append(r)
-        neigh_html = []
-        for parent in sorted(grouped.keys(), key=lambda x: (x != "Praha", x)):
-            items = " · ".join(
-                f'<a href="{html.escape(r["path"])}">{html.escape(r["locality"])}</a> ({_fmt_int(r["active_count"])})'
-                for r in sorted(grouped[parent], key=lambda r: -int(r["active_count"]))[:40]
-            )
-            neigh_html.append(f"<h3>{html.escape(parent)}</h3><p>{items}</p>")
-        sections.append(
-            f"<h2>{html.escape(offer_label(offer).capitalize())}</h2>"
-            f"<h3>Města a městské části</h3><ul>{city_html}</ul>" + "".join(neigh_html)
-        )
-    body = f"""
-  <header class="legal-header">
-    <h1 class="display">REALITNÍ TRH – LOKALITY</h1>
-    <p>Přehled lokalit s kvalitními nabídkami bytů v katalogu Realitify
-    (nová stránka od {MIN_ACTIVE_CREATE} nabídek, zrušení pod {MIN_ACTIVE_KEEP}).</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    {''.join(sections)}
-    <p><a href="/index">Index nájmů</a> · <a href="/o-nas">O nás</a></p>
-  </div>
-"""
-    return _page_shell(
-        title="Realitní trh podle lokalit | Realitify",
-        description="Seznam měst, městských částí a čtvrtí s aktivními nabídkami v agregovaném katalogu Realitify.",
-        canonical="https://realitify.cz/trh",
-        body=body,
-        json_ld=[],
-        md_href="https://realitify.cz/trh.md",
-    )
-
-
-def render_trh_hub_md(store: Store) -> str:
-    inv = market_inventory(store)["included"]
-    lines = [
-        "# Realitní trh – lokality",
-        "",
-        product_facts.data_updated_label() + ".",
-        "",
-        f"Nová stránka od {MIN_ACTIVE_CREATE} nabídek, zrušení pod {MIN_ACTIVE_KEEP}.",
-        "",
-    ]
-    for offer in ("pronajem", "prodej"):
-        rows = [r for r in inv if r["offer"] == offer]
-        lines.append(f"## {offer_label(offer).capitalize()}")
-        lines.append("")
-        for r in sorted(rows, key=lambda x: (-int(x["active_count"]), x["locality"]))[:80]:
-            lines.append(f"- [{r['locality']}](https://realitify.cz{r['path']}) ({_fmt_int(r['active_count'])})")
-        lines.append("")
-    return "\n".join(lines)
-
-
 def render_index_month(store: Store, month: str) -> str:
     rows = store.index_month_city_stats(month)
     if not any(int(r.get("new_count") or 0) >= 20 for r in rows):
@@ -949,7 +855,7 @@ def render_index_month(store: Store, month: str) -> str:
       <tbody>{table}</tbody>
     </table>
     <p><strong>Archiv:</strong> {nav}</p>
-    <p><a href="/index">Aktuální index</a> · <a href="/trh">Trh</a></p>
+    <p><a href="/index">Aktuální index</a> · <a href="/hledat">Nabídky</a></p>
     <p><small>{html.escape(PRICE_METHODOLOGY_CS)}</small></p>
     <p><small>Čísla vycházejí z first_seen v katalogu, ne z oficiální statistiky ČSÚ. {html.escape(DISCLAIMER_CS)}</small></p>
   </div>
@@ -1038,6 +944,6 @@ def top_localities_html(store: Store, limit: int = 10) -> str:
         '<p class="eyebrow">PŘEHLED TRHU</p>'
         '<h2 class="display" style="font-size:28px">TOP LOKALITY</h2>'
         f"<p>{links}</p>"
-        '<p><a href="/trh">Všechny lokality na trhu →</a></p>'
+        '<p><a href="/hledat">Procházet všechny nabídky →</a></p>'
         "</section>"
     )

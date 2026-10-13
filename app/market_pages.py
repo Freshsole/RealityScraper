@@ -341,45 +341,57 @@ def render_prehled(store: Store, locality: str, offer: str, disposition: str = "
     return market_seo.render_trh_page(store, locality, offer, disposition)
 
 
+def _stat_card(label: str, value: str, sub: str, *, unit: str = "", width: float | None = None, dark: bool = False) -> str:
+    bar = (
+        f'<div class="stat-bar"><i data-w="{max(0.06, min(1.0, width)):.2f}"></i></div>'
+        if width is not None
+        else ""
+    )
+    unit_html = f" <small>{html.escape(unit)}</small>" if unit else ""
+    cls = "stat-card is-dark" if dark else "stat-card"
+    return (
+        f'<article class="{cls}"><p class="stat-label">{html.escape(label)}</p>'
+        f'<p class="stat-value">{html.escape(value)}{unit_html}</p>'
+        f'<p class="stat-sub">{html.escape(sub)}</p>{bar}</article>'
+    )
+
+
+def _cite_row(text: str) -> str:
+    return (
+        f'<div class="cite-row"><p>{html.escape(text)}</p>'
+        f'<button type="button" class="copy-btn" data-copy="{html.escape(text, quote=True)}">Kopírovat</button></div>'
+    )
+
+
 def render_index(store: Store) -> str:
+    import json
+
+    from app import site_chrome
+
     praha = store.catalog_stats("Praha", "pronajem")
     brno = store.catalog_stats("Brno", "pronajem")
     ostrava = store.catalog_stats("Ostrava", "pronajem")
     today = date.today().isoformat()
     today_cs = product_facts.format_date_cs(date.today())
     current_month = date.today().strftime("%Y-%m")
-    import json
-
     try:
         months = store.list_index_months(completed_only=True)
     except Exception:
         months = []
-    archive = " · ".join(f'<a href="/index/{html.escape(m)}">{html.escape(m)}</a>' for m in months[:18])
     try:
         current_rows = store.index_month_city_stats(current_month, allow_incomplete=True)
     except Exception:
         current_rows = []
-    current_table = "".join(
-        f"<tr><td>{html.escape(r['locality'])}</td><td>{_fmt_int(r['new_count'])}</td>"
-        f"<td>{_fmt_czk(r.get('median_price'))}</td>"
-        f"<td>{_fmt_m2(r.get('median_price_per_m2'))}</td>"
-        f"<td>{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
-        for r in current_rows
-    )
     med_m2 = _fmt_m2(praha.get("median_price_per_m2"))
     updated_label = product_facts.data_updated_label(date.today())
-    cite_praha = (
-        f"K {today_cs} je medián pronájmu bytů v Praze {_fmt_czk(praha.get('median_price'))} "
-        f"({_fmt_m2(praha.get('median_price_per_m2'))}; {_fmt_int(praha.get('active_count'))} nabídek)."
-    )
-    cite_brno = (
-        f"K {today_cs} je medián pronájmu bytů v Brně {_fmt_czk(brno.get('median_price'))} "
-        f"({_fmt_m2(brno.get('median_price_per_m2'))}; {_fmt_int(brno.get('active_count'))} nabídek)."
-    )
-    cite_ostrava = (
-        f"K {today_cs} je medián pronájmu bytů v Ostravě {_fmt_czk(ostrava.get('median_price'))} "
-        f"({_fmt_m2(ostrava.get('median_price_per_m2'))}; {_fmt_int(ostrava.get('active_count'))} nabídek)."
-    )
+
+    def cite(city_gen: str, st: dict[str, Any]) -> str:
+        return (
+            f"K {today_cs} je medián pronájmu bytů v {city_gen} {_fmt_czk(st.get('median_price'))} "
+            f"({_fmt_m2(st.get('median_price_per_m2'))}; {_fmt_int(st.get('active_count'))} nabídek)."
+        )
+
+    cite_praha, cite_brno, cite_ostrava = cite("Praze", praha), cite("Brně", brno), cite("Ostravě", ostrava)
     dataset = {
         "@context": "https://schema.org",
         "@type": "Dataset",
@@ -394,61 +406,102 @@ def render_index(store: Store) -> str:
             "https://realitify.cz/index.csv", name="Realitify rent index CSV"
         ),
     }
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>Realitify index nájmů – {today_cs}</title>
-  <meta name="description" content="{html.escape(cite_praha)}" />
-  <link rel="canonical" href="https://realitify.cz/index" />
-  <link rel="alternate" type="text/markdown" href="https://realitify.cz/index.md" />
-  <link rel="stylesheet" href="/static/site/site.css?v=9" />
-  <script type="application/ld+json">{json.dumps(dataset, ensure_ascii=False)}</script>
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/trh">Trh</a>
-      <a href="/index">Index</a>
-      <a href="/o-nas">O nás</a>
-    </nav>
-  </header>
-  <header class="legal-header">
-    <h1 class="display">REALITIFY INDEX NÁJMŮ</h1>
-    <p>Souhrn aktivních nabídek pronájmu. {html.escape(updated_label)}. Zdroj: katalog Realitify.</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    <p>{html.escape(cite_praha)}</p>
-    <p>{html.escape(cite_brno)}</p>
-    <p>{html.escape(cite_ostrava)}</p>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Lokalita</th><th>Aktivní</th><th>Medián</th><th>Průměr</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
-      <tbody>
-        <tr><td>Praha</td><td>{praha.get('active_count')}</td><td>{_fmt_czk(praha.get('median_price'))}</td><td>{_fmt_czk(praha.get('avg_price'))}</td><td>{_fmt_m2(praha.get('median_price_per_m2'))}</td><td>{_fmt_m2(praha.get('avg_price_per_m2'))}</td></tr>
-        <tr><td>Brno</td><td>{brno.get('active_count')}</td><td>{_fmt_czk(brno.get('median_price'))}</td><td>{_fmt_czk(brno.get('avg_price'))}</td><td>{_fmt_m2(brno.get('median_price_per_m2'))}</td><td>{_fmt_m2(brno.get('avg_price_per_m2'))}</td></tr>
-        <tr><td>Ostrava</td><td>{ostrava.get('active_count')}</td><td>{_fmt_czk(ostrava.get('median_price'))}</td><td>{_fmt_czk(ostrava.get('avg_price'))}</td><td>{_fmt_m2(ostrava.get('median_price_per_m2'))}</td><td>{_fmt_m2(ostrava.get('avg_price_per_m2'))}</td></tr>
-      </tbody>
-    </table>
-    <h2>Aktuální měsíc ({html.escape(current_month)}) – {html.escape(updated_label)}</h2>
-    <p>Neukončený měsíc nemá trvalou archivní URL; čísla se mění. Po skončení měsíce vznikne /index/{html.escape(current_month)}.</p>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <thead><tr><th>Lokalita</th><th>Nové</th><th>Medián</th><th>Medián Kč/m²</th><th>Průměr Kč/m²</th></tr></thead>
-      <tbody>{current_table or '<tr><td colspan="5">Bez dat</td></tr>'}</tbody>
-    </table>
-    <h2>Měsíční archiv (ukončené měsíce)</h2>
-    <p>Trvalé URL pro citace: {archive or 'zatím bez archivních měsíců'}.</p>
-    <h2>Metodika výpočtu Kč/m²</h2>
-    <p>{html.escape(PRICE_METHODOLOGY_CS)}</p>
-    <p><a href="/index.csv">Stáhnout CSV</a> · <a href="/trh/praha/pronajem">Detail Praha</a> · <a href="/trh">Trh</a> · <a href="/faq">FAQ</a></p>
-    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
-  </div>
-</body>
-</html>"""
+
+    cities = [("Praha", praha), ("Brno", brno), ("Ostrava", ostrava)]
+    top_m2 = max([float(st.get("median_price_per_m2") or 0) for _, st in cities] + [1.0])
+    cards = "".join(
+        _stat_card(
+            name,
+            _fmt_czk(st.get("median_price")),
+            f"{_fmt_m2(st.get('median_price_per_m2'))} · {_fmt_int(st.get('active_count'))} aktivních nabídek",
+            unit="medián / měsíc",
+            width=float(st.get("median_price_per_m2") or 0) / top_m2,
+            dark=(i == 0),
+        )
+        for i, (name, st) in enumerate(cities)
+    )
+    rows = "".join(
+        f"<tr><td>{html.escape(str(r['locality']))}</td>"
+        f"<td data-v=\"{r.get('new_count') or 0}\">{_fmt_int(r['new_count'])}</td>"
+        f"<td data-v=\"{r.get('median_price') or 0}\">{_fmt_czk(r.get('median_price'))}</td>"
+        f"<td data-v=\"{r.get('median_price_per_m2') or 0}\">{_fmt_m2(r.get('median_price_per_m2'))}</td>"
+        f"<td data-v=\"{r.get('avg_price_per_m2') or 0}\">{_fmt_m2(r.get('avg_price_per_m2'))}</td></tr>"
+        for r in current_rows
+    )
+    table = (
+        '<div class="table-wrap"><table class="data-table"><thead><tr>'
+        '<th>Lokalita</th><th data-sort>Nové nabídky</th><th data-sort>Medián</th>'
+        '<th data-sort>Medián Kč/m²</th><th data-sort>Průměr Kč/m²</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table></div>"
+        if rows
+        else '<div class="table-wrap"><p class="table-empty">Pro tento měsíc zatím nemáme dost dat.</p></div>'
+    )
+    archive = "".join(
+        f'<a class="pg-chip is-link" href="/index/{html.escape(m)}">{html.escape(m)}</a>' for m in months[:24]
+    ) or '<span class="note">Zatím bez ukončených měsíců.</span>'
+
+    body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="Souhrn nájmů k dnešnímu dni">
+        <p class="eyebrow">INDEX NÁJMŮ · {html.escape(updated_label.upper())}</p>
+        <h1 class="display">Kolik dnes stojí pronájem bytu v Česku?</h1>
+        <p class="lead">{html.escape(cite_praha)} Čísla počítáme z aktivních nabídek ze všech sledovaných portálů, bez duplicit.</p>
+        <div class="pg-actions">
+          <a class="pill pill-lg" href="/hledat">Procházet nabídky</a>
+          <a class="link-row" href="/index.csv">Stáhnout CSV →</a>
+        </div>
+      </section>
+
+      <section class="pg-section" id="mesta" data-nav="Města" data-nav-desc="Medián nájmu v největších městech">
+        <div class="pg-head reveal">
+          <p class="eyebrow">NEJVĚTŠÍ MĚSTA</p>
+          <h2 class="display">Medián nájmu podle města</h2>
+          <p>Aktuální nabídky bytů k pronájmu. Medián je odolnější vůči extrémům než průměr.</p>
+        </div>
+        <div class="stat-grid">{cards}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="mesic" data-nav="Tento měsíc" data-nav-desc="Nové nabídky a ceny v aktuálním měsíci">
+        <div class="pg-head reveal">
+          <p class="eyebrow">{html.escape(current_month)}</p>
+          <h2 class="display">Aktuální měsíc podle lokality</h2>
+          <p>Neukončený měsíc nemá trvalou archivní adresu, čísla se průběžně mění. Po skončení měsíce vznikne /index/{html.escape(current_month)}. Řadit můžete kliknutím na záhlaví sloupce.</p>
+        </div>
+        {table}
+      </section>
+
+      <section class="pg-section" id="archiv" data-nav="Archiv" data-nav-desc="Trvalé odkazy na ukončené měsíce">
+        <div class="pg-head reveal">
+          <p class="eyebrow">ARCHIV</p>
+          <h2 class="display">Ukončené měsíce</h2>
+          <p>Trvalé adresy vhodné pro citace a reportáže.</p>
+        </div>
+        <div class="pg-chips">{archive}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="metodika" data-nav="Metodika" data-nav-desc="Jak počítáme Kč/m² a jak citovat">
+        <div class="split">
+          <div class="pg-card cite-card reveal">
+            <h3 style="margin:0">Citace pro média</h3>
+            {_cite_row(cite_praha)}
+            {_cite_row(cite_brno)}
+            {_cite_row(cite_ostrava)}
+          </div>
+          <div class="pg-head reveal">
+            <p class="eyebrow">METODIKA</p>
+            <h2 class="display">Jak počítáme Kč/m²</h2>
+            <p>{html.escape(PRICE_METHODOLOGY_CS)}</p>
+            <p class="note">{html.escape(DISCLAIMER_CS)}</p>
+          </div>
+        </div>
+      </section>
+{site_chrome.cta_band("Hlídejte nové byty dřív než ostatní", "Upozornění na nové nabídky podle vašich filtrů. Registrace trvá 30 sekund a nepotřebujete platební kartu.")}"""
+    return site_chrome.page(
+        title=f"Realitify index nájmů – průběžně k {today_cs}",
+        description=cite_praha,
+        canonical="https://realitify.cz/index",
+        body=body,
+        markdown_alt="https://realitify.cz/index.md",
+        ld=[dataset],
+    )
 
 
 def render_index_md(store: Store) -> str:
@@ -585,7 +638,7 @@ def _faq_items(store: Store) -> list[dict[str, str]]:
             "a": PRICE_METHODOLOGY_CS,
         },
         {
-            "q": "Kdy vznikne a zanikne stránka /trh?",
+            "q": "Kdy vznikne a zanikne lokalitní stránka?",
             "a": (
                 f"Nová lokalitní stránka vznikne při ≥ {MIN_ACTIVE_CREATE} kvalitních nabídkách bytů. "
                 f"Existující stránka se zruší (přesměrování 301 na nadřazenou lokalitu) až když počet "
@@ -596,11 +649,52 @@ def _faq_items(store: Store) -> list[dict[str, str]]:
             "q": "Souvisí Realitify se společností Realtify nebo PriceHubble?",
             "a": DISCLAIMER_CS,
         },
+        {
+            "q": "Které portály Realitify sleduje?",
+            "a": f"Agregujeme inzeráty ze {portals}. Duplicity mezi portály sjednocujeme, takže stejný byt uvidíte jen jednou.",
+        },
+        {
+            "q": "Jak často se nabídky aktualizují?",
+            "a": (
+                "Nejnovější nabídky stahujeme zhruba každých 60 sekund. Úplné synchronizace katalogu "
+                "běží průběžně na pozadí a zrušené inzeráty označujeme jako neaktivní."
+            ),
+        },
+        {
+            "q": "Musím se registrovat, abych viděl nabídky?",
+            "a": (
+                "Ne. Celý katalog s mapou a filtry otevřete na stránce Nabídky po zadání e-mailu. "
+                "Účet potřebujete až pro hlídání nových bytů a notifikace."
+            ),
+        },
     ]
 
 
+_FAQ_CATS = [
+    ("all", "Vše"),
+    ("obecne", "O Realitify"),
+    ("ceny", "Ceny a trh"),
+    ("hlidani", "Hlídání a tarify"),
+    ("metodika", "Metodika"),
+]
+_FAQ_CAT_BY_Q = {
+    "Co je Realitify?": "obecne",
+    "Jak rychle sehnat byt v Praze?": "ceny",
+    "Jak být první u nové nabídky?": "hlidani",
+    "Kolik stojí pronájem 2+kk v Praze?": "ceny",
+    "Jaké jsou tarify?": "hlidani",
+    "Jak poznat předraženou nabídku?": "ceny",
+    "Jak Realitify počítá cenu za m²?": "metodika",
+    "Kdy vznikne a zanikne lokalitní stránka?": "metodika",
+    "Souvisí Realitify se společností Realtify nebo PriceHubble?": "obecne",
+    "Které portály Realitify sleduje?": "obecne",
+    "Jak často se nabídky aktualizují?": "obecne",
+    "Musím se registrovat, abych viděl nabídky?": "hlidani",
+}
+
+
 def render_faq(store: Store) -> str:
-    import json
+    from app import site_chrome
 
     faqs = _faq_items(store)
     updated = product_facts.data_updated_label(date.today())
@@ -608,39 +702,62 @@ def render_faq(store: Store) -> str:
         "@context": "https://schema.org",
         "@type": "FAQPage",
         "mainEntity": [
-            {
-                "@type": "Question",
-                "name": f["q"],
-                "acceptedAnswer": {"@type": "Answer", "text": f["a"]},
-            }
+            {"@type": "Question", "name": f["q"], "acceptedAnswer": {"@type": "Answer", "text": f["a"]}}
             for f in faqs
         ],
         "dateModified": date.today().isoformat(),
     }
-    body = "".join(
-        f"<section><h2>{html.escape(f['q'])}</h2><p>{html.escape(f['a'])}</p></section>" for f in faqs
+    chevron = (
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
     )
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>FAQ – Realitify</title>
-  <meta name="description" content="Co je Realitify, tarify, medián Kč/m² a metodika. {html.escape(updated)}." />
-  <link rel="canonical" href="https://realitify.cz/faq" />
-  <link rel="alternate" type="text/markdown" href="https://realitify.cz/faq.md" />
-  <link rel="stylesheet" href="/static/site/site.css?v=8" />
-  <script type="application/ld+json">{json.dumps(faq_ld, ensure_ascii=False)}</script>
-</head>
-<body class="legal-page">
-  <header class="navbar"><a class="brand" href="/">REALITIFY</a></header>
-  <header class="legal-header"><h1 class="display">FAQ</h1><p>{html.escape(updated)}</p></header>
-  <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">{body}</div>
-</body>
-</html>"""
+    qa = "".join(
+        f'<div class="qa" id="q{i + 1}" data-cat="{_FAQ_CAT_BY_Q.get(f["q"], "obecne")}">'
+        f'<button type="button" class="qa-q" aria-expanded="false"><span>{html.escape(f["q"])}</span>'
+        f'<span class="qa-ico">{chevron}</span></button>'
+        f'<div class="qa-a"><div><p>{html.escape(f["a"])}</p></div></div></div>'
+        for i, f in enumerate(faqs)
+    )
+    cats = "".join(
+        f'<button type="button" class="faq-cat{" is-on" if key == "all" else ""}" data-cat="{key}">{html.escape(label)}</button>'
+        for key, label in _FAQ_CATS
+    )
+    search_icon = (
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+    )
+    body = f"""      <section class="pg-hero" data-nav="Dotazy" data-nav-desc="Hledejte v odpovědích">
+        <p class="eyebrow">ČASTÉ DOTAZY · {html.escape(updated.upper())}</p>
+        <h1 class="display">Odpovědi na to, co se nás lidé ptají</h1>
+        <p class="lead">Co je Realitify, kolik stojí, jak počítáme ceny a jak rychle dostanete upozornění. Najdete tu {len(faqs)} odpovědí.</p>
+      </section>
+
+      <section class="pg-section" id="otazky" data-nav="Otázky" data-nav-desc="Rozbalte odpověď nebo vyhledejte">
+        <div class="faq-layout">
+          <div>
+            <div class="faq-tools">
+              <label class="faq-search">{search_icon}<input id="faq-q" type="search" placeholder="Hledat v otázkách a odpovědích…" autocomplete="off" aria-label="Hledat v otázkách" /></label>
+              <div class="faq-cats" role="tablist" aria-label="Kategorie">{cats}</div>
+            </div>
+            <div class="qa-list">{qa}</div>
+            <p class="faq-empty" id="faq-empty" hidden>Nic jsme nenašli. Zkuste jiné slovo, nebo nám napište.</p>
+          </div>
+          <aside class="faq-aside">
+            <h3>Nenašli jste odpověď?</h3>
+            <p>Napište nám, odpovíme obvykle do jednoho pracovního dne.</p>
+            <a class="pill pill-lg" href="/kontakt">Napsat nám</a>
+          </aside>
+        </div>
+      </section>
+{site_chrome.cta_band("Vyzkoušejte hlídání zdarma", "Nastavte filtr, zapněte upozornění a buďte u nových bytů první.")}"""
+    return site_chrome.page(
+        title="FAQ – Realitify",
+        description=f"Co je Realitify, tarify, medián Kč/m² a metodika. {updated}.",
+        canonical="https://realitify.cz/faq",
+        body=body,
+        markdown_alt="https://realitify.cz/faq.md",
+        ld=[faq_ld],
+    )
 
 
 def render_faq_md(store: Store) -> str:
@@ -653,128 +770,174 @@ def render_faq_md(store: Store) -> str:
     return "\n".join(lines)
 
 
-def render_search(store: Store, q: str = "") -> str:
-    query = (q or "").strip()[:120]
-    items = (
-        _sample_listing_items(store, q=query, offer="pronajem", limit=20)
-        if query
-        else _sample_listing_items(store, offer="pronajem", limit=20)
+def render_search(store: Store | None = None, q: str = "") -> str:
+    """Public catalog entry: email gate, then the app's catalog in a frame."""
+    from app import site_chrome
+
+    del store, q  # data is loaded client-side by the guest catalog
+    body = """      <section class="pg-hero hl-hero" data-nav="Nabídky" data-nav-desc="Katalog bytů s mapou a filtry">
+        <p class="eyebrow">KATALOG NABÍDEK</p>
+        <h1 class="display">Všechny nabídky bytů na jednom místě</h1>
+        <p class="lead">Mapa, filtry, historie cen a odkazy na originální inzeráty ze všech sledovaných portálů. Stačí zadat e-mail a katalog je váš.</p>
+      </section>
+
+      <section class="pg-section" id="gate" data-nav="Přístup" hidden>
+        <div class="pg-card hl-gate reveal" id="hl-gate">
+          <h2>Odemkněte celý katalog</h2>
+          <p>Zadejte e-mail a hned uvidíte všechny aktuální nabídky na mapě i v seznamu. Bez hesla a bez platební karty.</p>
+          <form class="hl-form" id="hl-form" novalidate>
+            <input type="email" id="hl-email" name="email" placeholder="vas@email.cz" autocomplete="email" required aria-label="E-mail" />
+            <button class="pill" type="submit">Zobrazit nabídky</button>
+          </form>
+          <p class="hl-msg" id="hl-msg" role="alert"></p>
+          <ul class="hl-bullets"><li>Mapa a filtry</li><li>9 portálů</li><li>Aktualizace každou minutu</li></ul>
+          <p class="note">Odesláním souhlasíte se zpracováním e-mailu dle <a href="/ochrana-soukromi" style="text-decoration:underline">zásad ochrany soukromí</a>. Můžeme vám jednou za čas poslat tipy k hlídání bytů, odhlásit se můžete kdykoli.</p>
+        </div>
+      </section>
+
+      <section class="hl-frame-wrap" id="katalog" data-nav="Katalog" data-nav-desc="Mapa a seznam nabídek" hidden>
+        <iframe class="hl-frame" id="hl-frame" title="Katalog nabídek Realitify" loading="lazy" allow="geolocation"></iframe>
+      </section>
+"""
+    return site_chrome.page(
+        title="Nabídky bytů a domů – katalog Realitify",
+        description="Katalog nabídek bytů a domů z českých realitních portálů na jednom místě. Mapa, filtry a ceny.",
+        canonical="https://realitify.cz/hledat",
+        body=body,
+        scripts='\n    <script src="/static/site/hledat.js?v=1" defer></script>',
     )
-    listings = _listings_html(items, empty="Žádné nabídky pro tento dotaz.")
-    title_q = html.escape(query) if query else "aktuální nabídky"
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>Hledat nabídky – Realitify</title>
-  <meta name="description" content="Veřejné vyhledávání v agregovaném katalogu Realitify." />
-  <meta name="robots" content="noindex, follow" />
-  <link rel="canonical" href="https://realitify.cz/hledat" />
-  <link rel="stylesheet" href="/static/site/site.css?v=8" />
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/trh/praha/pronajem">Praha</a>
-      <a href="/index">Index</a>
-      <a href="/o-nas">O nás</a>
-    </nav>
-  </header>
-  <header class="legal-header">
-    <h1 class="display">HLEDAT NABÍDKY</h1>
-    <p>Realitify agreguje nabídky bytů a domů z českých realitních portálů. Výsledky: {title_q}.</p>
-  </header>
-  <div class="legal-body" style="max-width:900px;margin:0 auto;padding:1rem">
-    <form method="get" action="/hledat" style="margin-bottom:1.5rem;display:flex;gap:8px;flex-wrap:wrap">
-      <label for="q" style="flex:1;min-width:220px">
-        <span class="field-label">Lokalita, dispozice nebo text</span>
-        <input id="q" name="q" type="search" value="{html.escape(query)}" placeholder="např. Praha 5 2+kk" style="width:100%;padding:10px;border:1px solid #d0d4cd;border-radius:8px" />
-      </label>
-      <button class="pill" type="submit" style="align-self:flex-end;padding:10px 20px">Hledat</button>
-    </form>
-    <h2>Výsledky</h2>
-    {listings}
-    <p><a href="/trh/praha/pronajem">Přehled trhu Praha</a> · <a href="/o-nas">O Realitify</a></p>
-    <p><small>{html.escape(DISCLAIMER_CS)}</small></p>
-  </div>
-</body>
-</html>"""
+
+
+_ICON = {
+    "layers": '<path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/>',
+    "bell": '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+    "chart": '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+    "map": '<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Z"/><path d="M9 4v14M15 6v14"/>',
+    "shield": '<path d="M12 3 4 6v6c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/>',
+    "bolt": '<path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/>',
+}
+
+
+def _icon(name: str) -> str:
+    return (
+        '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" '
+        f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{_ICON[name]}</svg>'
+    )
+
+
+def _feature(icon: str, title: str, text: str) -> str:
+    return (
+        f'<article class="feature-card"><span class="feature-icon">{_icon(icon)}</span>'
+        f"<h3>{html.escape(title)}</h3><p>{html.escape(text)}</p></article>"
+    )
+
+
+def _step(title: str, text: str) -> str:
+    return f'<article class="step"><h3>{html.escape(title)}</h3><p>{html.escape(text)}</p></article>'
 
 
 def render_about_cs(store: Store | None = None) -> str:
+    from app import site_chrome
+
     portals = public_portals_sentence()
     facts = product_facts.get_facts()
     op = facts.get("operator") or {}
     contact = facts.get("contact") or {}
     product = facts.get("product") or {}
     plans = facts.get("plans") or {}
-    stats_line = ""
+    active = praha_median = m2 = None
     if store is not None:
         try:
             praha = store.catalog_stats("Praha", "pronajem")
-            today_cs = product_facts.format_date_cs(date.today())
-            stats_line = (
-                f"<p>K {html.escape(today_cs)} je medián pronájmu bytů v Praze "
-                f"{html.escape(_fmt_czk(praha.get('median_price')))} "
-                f"({html.escape(_fmt_m2(praha.get('median_price_per_m2')))}; "
-                f"{html.escape(_fmt_int(praha.get('active_count')))} nabídek).</p>"
-            )
+            active, praha_median, m2 = praha.get("active_count"), praha.get("median_price"), praha.get("median_price_per_m2")
         except Exception:
-            stats_line = ""
+            pass
     updated = product_facts.data_updated_label(date.today())
-    return f"""<!doctype html>
-<html lang="cs">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>O nás – Realitify</title>
-  <meta name="description" content="{html.escape(product_facts.one_liner_cs())} Provozuje {html.escape(str(op.get('name')))} ({html.escape(str(op.get('legal_form')))}), IČO {html.escape(str(op.get('ico')))}." />
-  <link rel="canonical" href="https://realitify.cz/o-nas" />
-  <link rel="alternate" type="text/markdown" href="https://realitify.cz/o-nas.md" />
-  <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
-  <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
-  <link rel="alternate" hreflang="x-default" href="https://realitify.cz/o-nas" />
-  <link rel="stylesheet" href="/static/site/site.css?v=8" />
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/trh">Trh</a>
-      <a href="/hledat">Hledat</a>
-      <a href="/faq">FAQ</a>
-      <a href="/about">English</a>
-    </nav>
-  </header>
-  <header class="legal-header">
-    <h1 class="display">O NÁS</h1>
-    <p>{html.escape(product_facts.one_liner_cs())}</p>
-    <p>{html.escape(updated)}</p>
-  </header>
-  <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
-    <h2>Co je Realitify</h2>
-    <p>{html.escape(product_facts.one_liner_cs())} Stahuje a sjednocuje inzeráty z {html.escape(portals)}, odstraňuje duplicity a umožňuje prohlížet trh, porovnávat ceny a hlídat nové nabídky.</p>
-    {stats_line}
-    <h2>Kdo provozuje službu</h2>
-    <p>Provozovatel: <strong>{html.escape(str(op.get('name')))}</strong>, podnikající fyzická osoba ({html.escape(str(op.get('legal_form')))}), IČO <strong>{html.escape(str(op.get('ico')))}</strong>, sídlo <strong>{html.escape(str(op.get('address')))}</strong>. Kontakt: <a href="mailto:{html.escape(str(contact.get('support')))}">{html.escape(str(contact.get('support')))}</a>.</p>
-    <h2>Od kdy</h2>
-    <p>Služba Realitify je v provozu od roku {html.escape(str(product.get('since_year')))}.</p>
-    <h2>Tarify</h2>
-    <p>Prohlížení katalogu je zdarma. Start {html.escape(str((plans.get('start') or {}).get('price_czk')))} Kč/měsíc, PRO {html.escape(str((plans.get('pro') or {}).get('price_czk')))} Kč/měsíc. Detail: <a href="/#cenik">ceník</a>.</p>
-    <h2>Jak funguje agregace</h2>
-    <p>Scrapery průběžně procházejí veřejné výpisy portálů, ukládají aktivní inzeráty do katalogu a aktualizují first_seen / last_seen. Veřejné stránky (/trh/…, /index, /hledat) a MCP server čtou z tohoto katalogu. Placené hlídání posílá notifikace při nových shodách s nastavenými filtry.</p>
-    <p>{html.escape(DISCLAIMER_CS)}</p>
-  </div>
-</body>
-</html>"""
+    portal_count = len(PUBLIC_PORTAL_LABELS)
+    since = str(product.get("since_year") or "")
+    support = html.escape(str(contact.get("support") or ""))
+    stats = "".join(
+        [
+            _stat_card("Sledovaných portálů", str(portal_count), "Sreality, Bezrealitky, iDNES a další"),
+            _stat_card("Aktivních nabídek v Praze", _fmt_int(active) if active is not None else "—", "Aktualizujeme každou minutu"),
+            _stat_card("Medián nájmu v Praze", _fmt_czk(praha_median), _fmt_m2(m2), dark=True),
+            _stat_card("V provozu od", since or "—", "Nezávislý agregátor nabídek"),
+        ]
+    )
+    pro, start = plans.get("pro") or {}, plans.get("start") or {}
+    body = f"""      <section class="pg-hero" data-nav="O nás" data-nav-desc="Kdo jsme a co děláme">
+        <p class="eyebrow">O REALITIFY</p>
+        <h1 class="display">Hlídáme český trh s byty za vás</h1>
+        <p class="lead">{html.escape(product_facts.one_liner_cs())} Sjednocujeme inzeráty z {html.escape(portals)} a hlásíme nové shody dřív než ostatní.</p>
+        <div class="pg-actions">
+          <a class="pill pill-lg" href="/hledat">Procházet nabídky</a>
+          <a class="link-row" href="/kontakt">Kontaktujte nás →</a>
+        </div>
+      </section>
+
+      <section class="pg-section" id="cisla" data-nav="Čísla" data-nav-desc="Realitify v číslech">
+        <div class="stat-grid is-4">{stats}</div>
+      </section>
+
+      <section class="pg-section is-pale" id="co-delame" data-nav="Co děláme" data-nav-desc="Tři věci, na kterých stavíme">
+        <div class="pg-head reveal">
+          <p class="eyebrow">CO DĚLÁME</p>
+          <h2 class="display">Jedno místo místo deseti záložek</h2>
+          <p>Realitní portály jsou roztříštěné. Realitify je spojuje do jednoho katalogu a hlídá ho za vás.</p>
+        </div>
+        <div class="feature-grid">
+          {_feature("layers", "Jeden katalog", "Inzeráty z devíti portálů bez duplicit, s mapou, filtry a historií cen.")}
+          {_feature("bolt", "Rychlost", "Nové nabídky stahujeme každou minutu. Dobré byty mizí v řádu minut, my vás upozorníme první.")}
+          {_feature("chart", "Data o trhu", "Medián nájmů, Kč/m² a vývoj cen podle lokality. Index nájmů je veřejný a citovatelný.")}
+        </div>
+      </section>
+
+      <section class="pg-section" id="jak" data-nav="Jak funguje" data-nav-desc="Od scraperu k upozornění">
+        <div class="pg-head reveal">
+          <p class="eyebrow">JAK FUNGUJE AGREGACE</p>
+          <h2 class="display">Od inzerátu k upozornění za minutu</h2>
+          <p>Veřejné stránky a MCP server čtou ze stejného katalogu, který průběžně plní naše scrapery.</p>
+        </div>
+        <div class="steps">
+          {_step("Sběr", "Scrapery průběžně procházejí veřejné výpisy portálů a ukládají aktivní inzeráty.")}
+          {_step("Sjednocení", "Odstraňujeme duplicity, doplňujeme polohu a sjednocujeme dispozice a ceny.")}
+          {_step("Shoda s filtrem", "Každý nový záznam porovnáme s vašimi hlídacími psy podle lokality, ceny a dispozice.")}
+          {_step("Upozornění", "Pošleme e-mail, push nebo zprávu na Discord. Kdo je první, vyhrává.")}
+        </div>
+      </section>
+
+      <section class="pg-section is-pale" id="provozovatel" data-nav="Provozovatel" data-nav-desc="Kdo službu provozuje">
+        <div class="split">
+          <div class="pg-head reveal">
+            <p class="eyebrow">PROVOZOVATEL</p>
+            <h2 class="display">Za Realitify stojí konkrétní člověk</h2>
+            <p>Službu provozuje podnikající fyzická osoba. Najdete nás na kontaktu níže, rádi odpovíme na cokoli.</p>
+            <p class="note">{html.escape(DISCLAIMER_CS)}</p>
+          </div>
+          <div class="pg-card reveal">
+            <dl class="fact-list">
+              <div><dt>Provozovatel</dt><dd>{html.escape(str(op.get('name')))}</dd></div>
+              <div><dt>Právní forma</dt><dd>{html.escape(str(op.get('legal_form')))}</dd></div>
+              <div><dt>IČO</dt><dd>{html.escape(str(op.get('ico')))}</dd></div>
+              <div><dt>Sídlo</dt><dd>{html.escape(str(op.get('address')))}</dd></div>
+              <div><dt>Kontakt</dt><dd><a href="mailto:{support}">{support}</a></dd></div>
+              <div><dt>Tarify</dt><dd>od {html.escape(str(start.get('price_czk')))} Kč/měsíc · PRO {html.escape(str(pro.get('price_czk')))} Kč</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+{site_chrome.cta_band("Začněte hlídat byty ještě dnes", "Prohlížení katalogu je zdarma. Hlídání nových nabídek si vyzkoušíte bez platební karty.")}"""
+    return site_chrome.page(
+        title="O nás – Realitify",
+        description=f"{product_facts.one_liner_cs()} Provozuje {op.get('name')} ({op.get('legal_form')}), IČO {op.get('ico')}.",
+        canonical="https://realitify.cz/o-nas",
+        body=body,
+        alternates=[
+            ("cs", "https://realitify.cz/o-nas"),
+            ("en", "https://realitify.cz/about"),
+            ("x-default", "https://realitify.cz/o-nas"),
+        ],
+    )
 
 
 def render_about_cs_md(store: Store | None = None) -> str:
@@ -818,54 +981,81 @@ def render_about_cs_md(store: Store | None = None) -> str:
 
 
 def render_about_en() -> str:
+    from app import site_chrome
+
     portals = product_facts.portals_sentence(lang="en")
     facts = product_facts.get_facts()
     op = facts.get("operator") or {}
     contact = facts.get("contact") or {}
     product = facts.get("product") or {}
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
-  <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-  <title>About – Realitify</title>
-  <meta name="description" content="{html.escape(product_facts.one_liner_en())} Operated by {html.escape(str(op.get('name')))}, Company ID {html.escape(str(op.get('ico')))}." />
-  <link rel="canonical" href="https://realitify.cz/about" />
-  <link rel="alternate" hreflang="en" href="https://realitify.cz/about" />
-  <link rel="alternate" hreflang="cs" href="https://realitify.cz/o-nas" />
-  <link rel="alternate" hreflang="x-default" href="https://realitify.cz/o-nas" />
-  <link rel="stylesheet" href="/static/site/site.css?v=8" />
-</head>
-<body class="legal-page">
-  <header class="navbar">
-    <a class="brand" href="/">REALITIFY</a>
-    <nav class="menu">
-      <a href="/trh">Market</a>
-      <a href="/hledat">Search</a>
-      <a href="/faq">FAQ</a>
-      <a href="/o-nas">Česky</a>
-    </nav>
-  </header>
-  <header class="legal-header">
-    <h1 class="display">ABOUT</h1>
-    <p>{html.escape(product_facts.one_liner_en())}</p>
-  </header>
-  <div class="legal-body" style="max-width:800px;margin:0 auto;padding:1rem">
-    <h2>What Realitify is</h2>
-    <p>{html.escape(product_facts.one_liner_en())} It collects and deduplicates ads from {html.escape(portals)}.</p>
-    <h2>Operator</h2>
-    <p>Operator: <strong>{html.escape(str(op.get('name')))}</strong>, sole trader ({html.escape(str(op.get('legal_form')))}), Company ID (IČO) <strong>{html.escape(str(op.get('ico')))}</strong>, registered office <strong>{html.escape(str(op.get('address')))}</strong>, Czech Republic. Contact: <a href="mailto:{html.escape(str(contact.get('support')))}">{html.escape(str(contact.get('support')))}</a>.</p>
-    <h2>Since when</h2>
-    <p>Realitify has been operating since {html.escape(str(product.get('since_year')))}.</p>
-    <h2>How aggregation works</h2>
-    <p>Scrapers continuously read public portal listings into a catalog (first_seen / last_seen). Public pages and the MCP server read from that catalog. Paid watches send alerts when new listings match a filter.</p>
-    <p>{html.escape(DISCLAIMER_EN)}</p>
-  </div>
-</body>
-</html>"""
+    support = html.escape(str(contact.get("support") or ""))
+    body = f"""      <section class="pg-hero" data-nav="About" data-nav-desc="Who we are">
+        <p class="eyebrow">ABOUT REALITIFY</p>
+        <h1 class="display">We watch the Czech property market for you</h1>
+        <p class="lead">{html.escape(product_facts.one_liner_en())} It collects and deduplicates ads from {html.escape(portals)}.</p>
+        <div class="pg-actions">
+          <a class="pill pill-lg" href="/hledat">Browse listings</a>
+          <a class="link-row" href="/o-nas">Česky →</a>
+        </div>
+      </section>
+
+      <section class="pg-section is-pale" id="what" data-nav="What we do" data-nav-desc="Three things we build on">
+        <div class="pg-head reveal">
+          <p class="eyebrow">WHAT WE DO</p>
+          <h2 class="display">One catalog instead of ten tabs</h2>
+        </div>
+        <div class="feature-grid">
+          {_feature("layers", "One catalog", "Listings from nine portals without duplicates, with a map, filters and price history.")}
+          {_feature("bolt", "Speed", "New listings are fetched every minute. Good flats disappear within minutes, we alert you first.")}
+          {_feature("chart", "Market data", "Median rents, price per m² and trends by location. The rent index is public and citable.")}
+        </div>
+      </section>
+
+      <section class="pg-section" id="how" data-nav="How it works" data-nav-desc="From scraper to alert">
+        <div class="pg-head reveal">
+          <p class="eyebrow">HOW AGGREGATION WORKS</p>
+          <h2 class="display">From a listing to an alert within a minute</h2>
+        </div>
+        <div class="steps">
+          {_step("Collect", "Scrapers continuously read public portal listings into a catalog (first_seen / last_seen).")}
+          {_step("Unify", "We remove duplicates, add coordinates and normalise layouts and prices.")}
+          {_step("Match", "Each new record is compared with your watches by location, price and layout.")}
+          {_step("Alert", "You get an email, push or Discord message. Public pages and MCP read from the same catalog.")}
+        </div>
+      </section>
+
+      <section class="pg-section is-pale" id="operator" data-nav="Operator" data-nav-desc="Who runs the service">
+        <div class="split">
+          <div class="pg-head reveal">
+            <p class="eyebrow">OPERATOR</p>
+            <h2 class="display">A real person runs Realitify</h2>
+            <p>Realitify has been operating since {html.escape(str(product.get('since_year')))}.</p>
+            <p class="note">{html.escape(DISCLAIMER_EN)}</p>
+          </div>
+          <div class="pg-card reveal">
+            <dl class="fact-list">
+              <div><dt>Operator</dt><dd>{html.escape(str(op.get('name')))}</dd></div>
+              <div><dt>Legal form</dt><dd>sole trader ({html.escape(str(op.get('legal_form')))})</dd></div>
+              <div><dt>Company ID (IČO)</dt><dd>{html.escape(str(op.get('ico')))}</dd></div>
+              <div><dt>Registered office</dt><dd>{html.escape(str(op.get('address')))}, Czech Republic</dd></div>
+              <div><dt>Contact</dt><dd><a href="mailto:{support}">{support}</a></dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+{site_chrome.cta_band("Start watching flats today", "Browsing the catalog is free. Try new-listing alerts without a credit card.", "Try for free")}"""
+    return site_chrome.page(
+        title="About – Realitify",
+        description=f"{product_facts.one_liner_en()} Operated by {op.get('name')}, Company ID {op.get('ico')}.",
+        canonical="https://realitify.cz/about",
+        body=body,
+        lang="en",
+        alternates=[
+            ("en", "https://realitify.cz/about"),
+            ("cs", "https://realitify.cz/o-nas"),
+            ("x-default", "https://realitify.cz/o-nas"),
+        ],
+    )
 
 
 def render_home_md(store: Store | None = None) -> str:

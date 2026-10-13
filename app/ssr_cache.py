@@ -241,8 +241,6 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
         core: list[tuple[str, str, str, str]] = [
             ("home", json.dumps(home_payload, ensure_ascii=False), data_as_of, data_as_of),
             ("home:md", market_pages.render_home_md(store), data_as_of, data_as_of),
-            ("trh_hub:html", market_seo.render_trh_hub(store), data_as_of, data_as_of),
-            ("trh_hub:md", market_seo.render_trh_hub_md(store), data_as_of, data_as_of),
             ("llms", market_pages.llms_txt(store), data_as_of, data_as_of),
             ("llms_full", market_pages.llms_full_txt(store), data_as_of, data_as_of),
             ("index:html", market_pages.render_index(store), data_as_of, data_as_of),
@@ -280,7 +278,7 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
                 md = market_seo.render_trh_page_md(store, loc, offer)
             except ValueError:
                 path = row.get("path") or f"/trh/{loc}/{offer}"
-                redirects[path] = market_seo.redirect_path_for_thin(store, loc, offer) or "/trh"
+                redirects[path] = market_seo.redirect_path_for_thin(store, loc, offer) or "/hledat"
                 continue
             except Exception as exc:
                 log.error("ssr_cache trh page failed %s/%s: %s", loc, offer, exc)

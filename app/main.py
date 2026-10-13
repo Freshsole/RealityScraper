@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import Body, Cookie, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from app import config
@@ -33,6 +34,7 @@ from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
 from app import billing as stripe_billing
 from app import account as user_account
+from app import guest as guest_access
 from app import users as user_registry
 from app import admin as admin_panel
 from app import cms as stories_cms
@@ -253,6 +255,22 @@ def public_error(exc: BaseException, fallback: str = "Něco se nepovedlo. Zkuste
     return fallback
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_with_404_page(request: Request, exc: StarletteHTTPException):
+    path = request.url.path
+    if (
+        exc.status_code == 404
+        and "text/html" in request.headers.get("accept", "")
+        and not path.startswith(("/api/", "/static/"))
+    ):
+        from app import site_chrome
+
+        return HTMLResponse(site_chrome.not_found_page(), status_code=404, headers={"Cache-Control": "no-store"})
+    from fastapi.exception_handlers import http_exception_handler
+
+    return await http_exception_handler(request, exc)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Záchranná síť: neošetřená výjimka nikdy nesmí ukázat technický detail."""
@@ -357,7 +375,6 @@ _PUBLIC_UI_PATHS = {
     "/o-nas",
     "/about",
     "/hledat",
-    "/trh",
     "/index",
     "/faq",
 }
@@ -620,12 +637,10 @@ async def market_faq() -> Response:
     return _ssr_response("faq:html", media_type="text/html; charset=utf-8", cache_control="public, max-age=1800")
 
 
-async def market_search(q: str = "") -> HTMLResponse:
+async def market_search() -> HTMLResponse:
     from app import market_pages
 
-    store = _public_store() or hub.store
-    html = await asyncio.to_thread(market_pages.render_search, store, q)
-    return HTMLResponse(html, headers={"Cache-Control": "public, max-age=300"})
+    return HTMLResponse(market_pages.render_search(), headers={"Cache-Control": "public, max-age=300"})
 
 
 def about_cs() -> Response:
@@ -665,7 +680,7 @@ def mcp_docs_md_route() -> Response:
 
 
 async def trh_hub_md_route() -> Response:
-    return _ssr_response("trh_hub:md", media_type="text/markdown; charset=utf-8", cache_control="public, max-age=1800")
+    return RedirectResponse("/hledat", status_code=301)
 
 
 async def trh_page_md_route(locality: str, offer: str, disposition: str = "") -> Response:
@@ -687,7 +702,8 @@ async def trh_page_md_route(locality: str, offer: str, disposition: str = "") ->
 
 
 async def market_trh_hub() -> Response:
-    return _ssr_response("trh_hub:html", media_type="text/html; charset=utf-8", cache_control="public, max-age=1800")
+    """The /trh hub was removed; keep old links and bookmarks working."""
+    return RedirectResponse("/hledat", status_code=301)
 
 
 async def market_trh(
@@ -710,7 +726,7 @@ async def market_trh(
     path = f"/trh/{market_pages.slugify_locality(loc)}/{offer}"
     if disp:
         path += f"/{market_seo.slugify_disposition(disp)}"
-    target = redirects.get(path) or "/trh"
+    target = redirects.get(path) or "/hledat"
     return RedirectResponse(target, status_code=301)
 
 
@@ -728,7 +744,7 @@ async def market_trh_og(locality: str, offer: str, disposition: str = "") -> Res
         if disp:
             path += f"/{market_seo.slugify_disposition(disp)}"
         target = redirects.get(path)
-        if not target or target == "/trh":
+        if not target or target == "/hledat":
             raise HTTPException(404, "Not enough data")
         return RedirectResponse(f"{target}/og.png", status_code=301)
     png = await asyncio.to_thread(market_seo.render_og_png, loc, offer, report, disp)
@@ -811,7 +827,7 @@ def admin_page() -> FileResponse:
 SEO_PAGES = [
     ("/", "daily", "1.0"),
     ("/index", "daily", "0.9"),
-    ("/trh", "daily", "0.9"),
+    ("/hledat", "daily", "0.9"),
     ("/faq", "weekly", "0.8"),
     ("/o-nas", "monthly", "0.7"),
     ("/about", "monthly", "0.6"),
@@ -1301,6 +1317,73 @@ def _store_for_session(session: str | None) -> tuple[dict[str, Any] | None, Stor
     if user:
         return user, hub.store_for(str(user.get("id")))
     return None, _public_store()
+
+def _catalog_store(session: str | None, guest: str | None) -> tuple[dict[str, Any] | None, Store]:
+    """Store for read-only catalog endpoints: the user's own, or the public store for e-mail guests."""
+    user = user_account.user_from_session(hub.store, session)
+    if user:
+        return user, hub.store_for(str(user.get("id")))
+    if guest_access.verify_token(guest):
+        return None, _public_store() or hub.store
+    raise HTTPException(401, "Nejste přihlášeni")
+
+@app.post("/api/guest/access")
+async def guest_access_grant(request: Request, payload: dict[str, Any] = Body(...)) -> JSONResponse:
+    email = str(payload.get("email") or "").strip()
+    if not guest_access.valid_email(email):
+        raise HTTPException(400, "Zadejte platný e-mail")
+    _rate_limit_or_429(request, "guest", "access", 12, 3600.0)
+    await asyncio.to_thread(
+        guest_access.add_lead,
+        email,
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        guest_access.COOKIE,
+        guest_access.issue_token(email),
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+        max_age=guest_access.MAX_AGE_S,
+        path="/",
+    )
+    return response
+
+
+@app.get("/api/guest/status")
+async def guest_status(
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
+) -> JSONResponse:
+    user = user_account.user_from_session(hub.store, realitify_session)
+    unlocked = bool(user) or guest_access.verify_token(realitify_guest)
+    return JSONResponse({"unlocked": unlocked, "member": bool(user)}, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/guest-leads")
+async def admin_guest_leads(
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    _admin_user(realitify_admin)
+    rows = await asyncio.to_thread(guest_access.list_leads)
+    return {"count": len(rows), "items": rows}
+
+
+async def guest_catalog_page(
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
+) -> Response:
+    user = user_account.user_from_session(hub.store, realitify_session)
+    if not user and not guest_access.verify_token(realitify_guest):
+        return RedirectResponse("/hledat", status_code=302)
+    html = (config.WEB_DIR / "guest-catalog.html").read_text(encoding="utf-8")
+    html = html.replace("__ASSET_VERSION__", _asset_version())
+    return HTMLResponse(html, headers={"Cache-Control": "private, no-store"})
+
+
+app.add_api_route("/hledat/katalog", guest_catalog_page, methods=["GET"], include_in_schema=False)
 
 
 @app.post("/api/t")
@@ -2898,8 +2981,9 @@ async def catalog(
     include_pins: str = "0",
     facets: str = "1",
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _user_store(realitify_session)
+    _, ustore = _catalog_store(realitify_session, realitify_guest)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -2975,8 +3059,9 @@ async def catalog_pins(
     west: str = "",
     east: str = "",
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _user_store(realitify_session)
+    _, ustore = _catalog_store(realitify_session, realitify_guest)
     payload = await place_geo.attach_geoms(
         _catalog_filters(
             portal=portal,
@@ -3020,8 +3105,9 @@ async def catalog_stats(
     district: str = "",
     offer: str = "",
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    _, ustore = _user_store(realitify_session)
+    _, ustore = _catalog_store(realitify_session, realitify_guest)
     try:
         return await asyncio.to_thread(ustore.catalog_stats, district, offer)
     except ValueError as exc:
@@ -3036,8 +3122,11 @@ async def catalog_item(
     url: str = "",
     enrich: str = "1",
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+    realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
 ) -> dict:
-    user, ustore = _user_store(realitify_session)
+    user, ustore = _catalog_store(realitify_session, realitify_guest)
+    if user is None:
+        enrich = "0"
     item = await asyncio.to_thread(
         ustore.catalog_item, monitor_id, id, listing_key, url
     )

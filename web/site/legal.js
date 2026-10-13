@@ -1,5 +1,5 @@
 (() => {
-  const links = [...document.querySelectorAll(".legal-toc a")];
+  const links = [...document.querySelectorAll(".legal-toc a[href^=\"#\"]")];
   const sections = links
     .map((link) => document.querySelector(link.getAttribute("href")))
     .filter(Boolean);
