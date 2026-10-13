@@ -137,10 +137,10 @@ button {
   margin: 0;
   font-family: var(--font-display);
   font-weight:800;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   text-transform: uppercase;
   color: var(--ink);
-  line-height: 1.05;
+  line-height: 1.15;
 }
 
 .lead {
@@ -232,7 +232,7 @@ button {
 
 /* Hub + shared hero */
 .game-hero {
-  padding: 72px var(--gutter) 40px;
+  padding: 56px var(--gutter) 32px;
   display: grid;
   gap: 24px;
   max-width: var(--page);
@@ -240,9 +240,9 @@ button {
 }
 
 .game-hero .display {
-  font-size: clamp(48px, 7vw, 90px);
-  line-height: 1.05;
-  max-width: 14ch;
+  font-size: clamp(34px, 4.4vw, 56px);
+  line-height: 1.18;
+  max-width: 20ch;
 }
 
 .game-pills {
@@ -284,7 +284,7 @@ button {
 
 .game-card h2 {
   font-family: var(--font-display);
-  font-size: clamp(32px, 4vw, 48px);
+  font-size: clamp(24px, 2.4vw, 30px);
   line-height: 1.05;
   text-transform: uppercase;
   margin: 0;
@@ -319,7 +319,7 @@ button {
 
 .game-band .display {
   color: #fff;
-  font-size: clamp(36px, 5vw, 59px);
+  font-size: clamp(28px, 3.4vw, 44px);
   line-height: 1.05;
 }
 
@@ -334,16 +334,6 @@ button {
   width: auto;
 }
 
-.footer {
-  padding: 28px var(--gutter) 40px;
-}
-
-.footer-bot {
-  max-width: var(--page);
-  margin: 0 auto;
-  color: var(--gray-2);
-  font-size: 13px;
-}
 
 /* Higher / lower — Wise converter layout */
 .game-play {
@@ -363,9 +353,9 @@ button {
 }
 
 .game-copy .display {
-  font-size: clamp(52px, 6.4vw, 90px);
-  line-height: 1.05;
-  max-width: 11ch;
+  font-size: clamp(34px, 4.2vw, 56px);
+  line-height: 1.18;
+  max-width: 16ch;
 }
 
 .game-scoreline {
@@ -575,17 +565,17 @@ button {
 .rent-card .loc {
   font-weight: 700;
   color: var(--ink);
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .rent-card .spec,
 .rent-card .portal {
   color: var(--gray);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .rent-card label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--gray-2);
   display: grid;
   gap: 4px;
@@ -639,7 +629,7 @@ button {
 }
 
 .game-result .display {
-  font-size: 40px;
+  font-size: 32px;
   line-height: 1.05;
 }
 
@@ -659,8 +649,8 @@ button {
 
   .game-copy .display,
   .game-hero .display {
-    font-size: 48px;
-    line-height: 1.05;
+    font-size: 34px;
+    line-height: 1.18;
     max-width: none;
   }
 
@@ -718,3 +708,24 @@ button {
     width: 100%;
   }
 }
+
+.game-result[hidden] { display: none; }
+
+/* Footer (same as site.css) */
+.footer{display:flex;flex-direction:column;gap:64px;padding:80px var(--gutter) 40px;background:var(--ink)}
+.footer-top{display:flex;justify-content:space-between;align-items:flex-start;gap:40px}
+.footer-brand{width:360px;display:flex;flex-direction:column;gap:20px}
+.footer-mark{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-size:22px;letter-spacing:-1px;color:#fff;font-weight:800;}
+.bell-box{width:32px;height:32px;border-radius:8px;background:var(--forest);display:flex;align-items:center;justify-content:center}
+.alert-green{color:var(--green)}
+.footer-brand p{margin:0;font-size:14px;line-height:1.6;color:#c5cdc7}
+.footer-cols{display:flex;gap:64px}
+.footer-col{display:flex;flex-direction:column;gap:16px}
+.footer-col h3{margin:0;font-size:14px;font-weight:700;color:#fff}
+.footer-col a{font-size:13px;color:#c5cdc7}
+.footer-col a:hover{color:#fff}
+.footer-bot{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-top:32px;border-top:1px solid var(--footer-rule)}
+.footer-bot p{margin:0;font-size:12px;color:#c5cdc7}
+.soc{display:flex;gap:16px}
+.footer-col a.is-current{color:var(--green);font-weight:600}
+@media (max-width:860px){.footer-top,.footer-bot{flex-direction:column;align-items:flex-start}.footer-cols{flex-wrap:wrap;gap:32px}.footer-brand{width:100%}}
