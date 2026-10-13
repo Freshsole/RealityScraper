@@ -1589,8 +1589,26 @@
     if (keepHover) highlightListing(keepHover);
   }
 
+  // "N nemovitostí", plus "· M na mapě" when some offers have no usable location.
+  function updateCountLabel(force = false) {
+    const el = $("catalog-count");
+    if (!el || (!force && /načítám|selhalo/i.test(el.textContent || ""))) return;
+    const mapped = pinItems.reduce(
+      (sum, pin) => sum + (pin.monitor_id === "__cluster__" ? Number(pin.count || 0) : 1),
+      0,
+    );
+    el.textContent = `${total} nemovitostí`;
+    if (pinItems.length && mapped < total) {
+      el.textContent += ` · ${mapped} na mapě`;
+      el.title = "Zbylé nabídky nemají přesnou polohu, proto nejsou na mapě.";
+    } else {
+      el.removeAttribute("title");
+    }
+  }
+
   function renderMapPins(items) {
     pinItems = items || [];
+    updateCountLabel();
     ensureMap();
     if (!catalogMap || !catalogLayer) return;
     drawPinLayer();
@@ -2081,7 +2099,7 @@
     if (!keepCount) {
       const countEl = $("catalog-count");
       if (countEl && /načítám/i.test(countEl.textContent || "")) {
-        countEl.textContent = `${total} nemovitostí`;
+        updateCountLabel(true);
       }
     }
     catalogBusy = false;
@@ -2142,7 +2160,7 @@
         return;
       }
       if (lastItems.length && !append) {
-        $("catalog-count").textContent = `${total} nemovitostí`;
+        updateCountLabel(true);
         finishCatalogLoad(seq, { keepCount: true });
         return;
       }
@@ -2162,7 +2180,7 @@
       renderFacets(data.facets);
       if (append) lastItems = uniqueOffers(lastItems.concat(items));
       else lastItems = items;
-      $("catalog-count").textContent = `${total} nemovitostí`;
+      updateCountLabel(true);
       const empty = $("catalog-empty");
       empty.hidden = lastItems.length > 0;
       if (!lastItems.length) {
