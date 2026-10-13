@@ -82,3 +82,5 @@
   .nx-pill,.nx-pill:before,.nx-track,.nx-menu.is-ready .nx-highlight,.nx-chev,.navbar.nx.is-mega .nx-mega,.nx-panel{transition:none!important;animation:none!important}
 }
 [id]{scroll-margin-top:96px}
+.nx-pill .brand{font-size:17.6px;gap:6px}
+.nx-pill .brand .icon{width:16px!important;height:26px!important}
