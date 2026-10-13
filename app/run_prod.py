@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from app import config
+from app import config, container
 
 ROOT = Path(config.ROOT)
 
@@ -70,6 +70,7 @@ def _spawn_worker() -> subprocess.Popen[bytes]:
 
 def main() -> None:
     web = _spawn_web()
+    container.wait_for_web()
     worker = _spawn_worker()
     stopping = False
 

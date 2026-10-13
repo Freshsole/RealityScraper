@@ -5,7 +5,8 @@
 - heartbeat_loop / healthcheck: worker liveness via a file touched from the
   asyncio loop, so a blocked or wedged loop stops the heartbeat.
 
-CLI (Docker HEALTHCHECK): python -m app.container healthcheck web|worker
+CLI: python -m app.container healthcheck web|worker (Docker HEALTHCHECK)
+     python -m app.container wait-web (single-container fallback)
 """
 
 from __future__ import annotations
@@ -113,7 +114,27 @@ def web_healthy() -> bool:
         return False
 
 
+def wait_for_web(
+    *,
+    timeout_s: float = 300.0,
+    first_delay_s: float = 0.5,
+    max_delay_s: float = 5.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Single-container fallback: hold the worker back until the web answers /health."""
+    start = time.monotonic()
+    delay = first_delay_s
+    while not web_healthy():
+        if time.monotonic() - start >= timeout_s:
+            return False
+        sleep(delay)
+        delay = min(delay * 2, max_delay_s)
+    return True
+
+
 def main(argv: list[str]) -> int:
+    if argv == ["wait-web"]:
+        return 0 if wait_for_web() else 1
     if len(argv) == 2 and argv[0] == "healthcheck" and argv[1] in {"web", "worker"}:
         ok = web_healthy() if argv[1] == "web" else worker_healthy()
         return 0 if ok else 1
