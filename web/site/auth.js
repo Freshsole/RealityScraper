@@ -348,6 +348,7 @@ if (register) {
   const errorEl = register.querySelector("#pref-error");
   let suggestTimer = 0;
   let suggestItems = [];
+  let refinedNext = "";
 
   function showError(message) {
     if (!errorEl) return;
@@ -440,10 +441,128 @@ if (register) {
       offer,
       localities: prefs.localities.map((item) => ({ id: item.id, label: item.label })),
       sizes: [...prefs.sizes],
-      price_from: parseAmount(register.querySelector("#price-min")?.value),
+      price_from: null,
       price_to: parseAmount(register.querySelector("#price-max")?.value),
-      area_from: parseAmount(register.querySelector("#area")?.value),
+      area_from: parseAmount(register.querySelector("#area-min")?.value),
+      area_to: parseAmount(register.querySelector("#area-max")?.value),
     };
+  }
+
+  // Typical floor area for a maximum rent / purchase price. Used to prefill the
+  // area range when the visitor gave a price but no area.
+  const AREA_BY_RENT = [
+    [12000, 20, 40],
+    [16000, 25, 45],
+    [20000, 30, 55],
+    [25000, 40, 65],
+    [32000, 50, 80],
+    [45000, 65, 110],
+    [Infinity, 80, 150],
+  ];
+  const AREA_BY_SALE = [
+    [3500000, 20, 45],
+    [5000000, 30, 60],
+    [7000000, 45, 80],
+    [10000000, 60, 110],
+    [15000000, 80, 150],
+    [Infinity, 100, 250],
+  ];
+  // Rough floor-area range per layout, used to preselect layouts for an area range.
+  const AREA_BY_SIZE = {
+    "1+kk": [20, 38],
+    "1+1": [28, 45],
+    "2+kk": [38, 62],
+    "2+1": [45, 70],
+    "3+kk": [60, 90],
+    "3+1": [65, 100],
+    "4+kk": [85, 125],
+    "4+1": [90, 130],
+  };
+
+  function areaForPrice(price, offer) {
+    const table = offer === "prodej" ? AREA_BY_SALE : AREA_BY_RENT;
+    const row = table.find(([limit]) => price <= limit) || table[table.length - 1];
+    return { from: row[1], to: row[2] };
+  }
+
+  function sizesForArea(from, to) {
+    const lo = from || 0;
+    const hi = to || Infinity;
+    const keys = Object.keys(AREA_BY_SIZE);
+    // Layouts whose typical size sits inside the range; fall back to any overlap.
+    const inside = keys.filter((key) => {
+      const mid = (AREA_BY_SIZE[key][0] + AREA_BY_SIZE[key][1]) / 2;
+      return mid >= lo && mid <= hi;
+    });
+    const overlap = keys.filter((key) => AREA_BY_SIZE[key][0] <= hi && AREA_BY_SIZE[key][1] >= lo);
+    const pick = inside.length ? inside : overlap;
+    return pick.length ? pick : ["2+kk", "3+kk"];
+  }
+
+  function setAmountFields(saved) {
+    const price = register.querySelector("#price-max");
+    const areaMin = register.querySelector("#area-min");
+    const areaMax = register.querySelector("#area-max");
+    if (price) price.value = (saved.price_to || 22000).toLocaleString("cs-CZ");
+    if (areaMin) areaMin.value = saved.area_from ? String(saved.area_from) : "45";
+    if (areaMax) areaMax.value = saved.area_to ? String(saved.area_to) : "";
+  }
+
+  // Search the visitor entered on the homepage (?next=/nabidka?q=...&price_to=...).
+  function searchFromNext() {
+    const next = new URLSearchParams(location.search).get("next") || "";
+    if (!next.startsWith("/nabidka")) return null;
+    const query = new URLSearchParams(next.split("?")[1] || "");
+    const num = (key) => {
+      const value = Number(String(query.get(key) || "").replace(/\s/g, ""));
+      return Number.isFinite(value) && value > 0 ? value : null;
+    };
+    const found = {
+      offer: query.get("offer") === "prodej" ? "prodej" : "pronajem",
+      q: (query.get("q") || "").trim(),
+      price_to: num("price_to"),
+      area_from: num("area_from"),
+      area_to: num("area_to"),
+    };
+    return found.q || found.price_to || found.area_from || found.area_to ? found : null;
+  }
+
+  async function localityForQuery(q) {
+    const districts = prefs.catalog?.sources?.bezrealitky?.catalog?.districts || [];
+    const wanted = q.toLowerCase();
+    const exact = districts.find(([, label]) => String(label).toLowerCase() === wanted);
+    if (exact) return { id: exact[0], label: exact[1] };
+    try {
+      const data = await fetch(`/api/filters/locality?q=${encodeURIComponent(q)}`).then((res) => res.json());
+      const item = (data.items || [])[0];
+      if (item && item.id) return { id: item.id, label: item.label, sreality: item.sreality };
+    } catch (_err) {
+      /* fall through to Praha */
+    }
+    const praha = districts.find(([, label]) => label === "Praha");
+    return praha ? { id: praha[0], label: praha[1] } : null;
+  }
+
+  async function applySearchFromNext(search) {
+    const area = search.area_from || search.area_to
+      ? { from: search.area_from, to: search.area_to }
+      : search.price_to
+        ? areaForPrice(search.price_to, search.offer)
+        : { from: null, to: null };
+    prefs.offer = search.offer;
+    register.querySelectorAll("#offer-seg button").forEach((btn) => {
+      btn.classList.toggle("on", btn.dataset.offer === prefs.offer);
+    });
+    const place = await localityForQuery(search.q || "Praha");
+    prefs.localities = place ? [place] : [];
+    prefs.sizes = new Set(sizesForArea(area.from, area.to));
+    setAmountFields({
+      price_to: search.price_to || (search.offer === "prodej" ? 6000000 : 22000),
+      area_from: area.from,
+      area_to: area.to,
+    });
+    renderLocalities();
+    renderSizes();
   }
 
   function applyPrefs(saved) {
@@ -454,15 +573,7 @@ if (register) {
     });
     prefs.localities = Array.isArray(saved.localities) ? saved.localities : [];
     prefs.sizes = new Set(saved.sizes || ["2+kk", "3+kk"]);
-    if (register.querySelector("#price-min")) {
-      register.querySelector("#price-min").value = saved.price_from ? String(saved.price_from) : "";
-    }
-    if (register.querySelector("#price-max")) {
-      register.querySelector("#price-max").value = saved.price_to ? String(saved.price_to) : "22000";
-    }
-    if (register.querySelector("#area")) {
-      register.querySelector("#area").value = saved.area_from ? String(saved.area_from) : "45";
-    }
+    setAmountFields(saved);
     renderLocalities();
     renderSizes();
   }
@@ -496,6 +607,7 @@ if (register) {
       price_from: payload.price_from,
       price_to: payload.price_to,
       area_from: payload.area_from,
+      area_to: payload.area_to,
       flags: ["includeImports", "includeShortTerm"],
       roommate: [""],
       currency: "CZK",
@@ -517,6 +629,7 @@ if (register) {
           price_from: payload.price_from,
           price_to: payload.price_to,
           area_from: payload.area_from,
+          area_to: payload.area_to,
           sort: "nejnovejsi",
         },
         portals: "all",
@@ -538,6 +651,15 @@ if (register) {
       portals: "all",
       enabled: true,
     });
+    if (searchFromNext()) {
+      // Land on the catalog with what was confirmed in this step, not the raw homepage search.
+      const params = new URLSearchParams({ offer: payload.offer });
+      if (labels[0]) params.set("q", labels[0]);
+      if (payload.price_to) params.set("price_to", String(payload.price_to));
+      if (payload.area_from) params.set("area_from", String(payload.area_from));
+      if (payload.area_to) params.set("area_to", String(payload.area_to));
+      refinedNext = `/nabidka?${params.toString()}`;
+    }
     return true;
   }
 
@@ -546,7 +668,10 @@ if (register) {
     prefs.catalog = await catalogRes.json();
     const settings = await settingsRes.json().catch(() => ({}));
     renderSizes();
-    if (settings.watch_prefs && (settings.watch_prefs.localities || []).length) {
+    const fromSearch = searchFromNext();
+    if (fromSearch) {
+      await applySearchFromNext(fromSearch);
+    } else if (settings.watch_prefs && (settings.watch_prefs.localities || []).length) {
       applyPrefs(settings.watch_prefs);
     } else {
       const praha = (prefs.catalog?.sources?.bezrealitky?.catalog?.districts || []).find(([, label]) => label === "Praha");
@@ -598,7 +723,7 @@ if (register) {
       // The account already exists (created in step 1); just store the promo code.
       if (promo) await postJson("/api/billing/promo", { code: promo });
       writeStoredPromo(promo);
-      const next = new URLSearchParams(location.search).get("next") || "/nabidka";
+      const next = refinedNext || new URLSearchParams(location.search).get("next") || "/nabidka";
       location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/nabidka";
     } catch (err) {
       toast(err.message || "Dokončení se nepovedlo");

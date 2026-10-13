@@ -133,19 +133,19 @@
             <label>Dispozice bytu</label>
             <div id="size-chips" class="chips"></div>
           </div>
+          <div class="field">
+            <label for="price-max">Maximální cena (Kč)</label>
+            <div class="field-input"><input id="price-max" type="text" inputmode="numeric" value="22 000" /></div>
+          </div>
           <div class="price-row">
             <div class="field">
-              <label for="price-min">Minimální cena (Kč)</label>
-              <div class="field-input"><input id="price-min" type="text" inputmode="numeric" placeholder="Bez omezení" /></div>
+              <label for="area-min">Minimální plocha (m²)</label>
+              <div class="field-input"><input id="area-min" type="text" inputmode="numeric" value="45" /></div>
             </div>
             <div class="field">
-              <label for="price-max">Maximální cena (Kč)</label>
-              <div class="field-input"><input id="price-max" type="text" inputmode="numeric" value="22 000" /></div>
+              <label for="area-max">Maximální plocha (m²)</label>
+              <div class="field-input"><input id="area-max" type="text" inputmode="numeric" placeholder="Bez omezení" /></div>
             </div>
-          </div>
-          <div class="field">
-            <label for="area">Minimální plocha (m²)</label>
-            <div class="field-input"><input id="area" type="text" inputmode="numeric" value="45" /></div>
           </div>
           <p id="pref-error" class="pref-error" hidden></p>
         </div>
@@ -221,7 +221,7 @@
       <p class="auth-hint">Notifikace běží nepřetržitě na pozadí 24/7.</p>
       </div>
     </div>
-    <script src="/static/site/auth.js?v=3"></script>
+    <script src="/static/site/auth.js?v=6"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>
