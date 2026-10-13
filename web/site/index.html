@@ -130,8 +130,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=22" />
+    <link rel="stylesheet" href="/static/site/site.css?v=25" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=9" />
   </head>
   <body>
     <header class="navbar">
@@ -205,88 +206,27 @@
     <div class="urgency">
       <div class="urg-item">
         <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/trending-up.svg" width="20" height="20" alt="" /></span>
-        <span><strong id="urg-new-today">3 247 </strong>bytů přidáno dnes</span>
+        <span><strong id="urg-new-today">–</strong>bytů přidáno dnes</span>
       </div>
       <span class="urg-div" aria-hidden="true"><img src="/static/site/assets/line.svg" width="24" height="2" alt="" /></span>
       <div class="urg-item">
         <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/clock.svg" width="20" height="20" alt="" /></span>
-        <span><strong>4,2 dne </strong>je průměrná doba bytu na trhu</span>
+        <span><strong>__ACTIVE_COUNT__ </strong>aktivních nabídek v katalogu</span>
       </div>
       <span class="urg-div" aria-hidden="true"><img src="/static/site/assets/line.svg" width="24" height="2" alt="" /></span>
       <div class="urg-item">
         <span class="icon" style="width:20px;height:20px"><img src="/static/site/assets/alert-triangle.svg" width="20" height="20" alt="" /></span>
-        <span><strong>89 % </strong>nejlepších nabídek zmizí do 48 hodin</span>
+        <span><strong>__PORTALS_COUNT__ portálů </strong>kontrolujeme každou minutu</span>
       </div>
     </div>
 
-    <section class="sold-section">
+    <section class="sold-section" id="rychlost" hidden>
       <div class="section-head">
-        <p class="eyebrow">PŘÍKLADY Z TRHU</p>
+        <p class="eyebrow">SKUTEČNÉ PŘÍKLADY Z TRHU</p>
         <h2 class="display">TYTO BYTY BYLY PRYČ ZA PÁR HODIN</h2>
-        <p class="lead" style="max-width:720px">Bez automatického hlídání byste je nikdy neviděli.</p>
+        <p class="lead" style="max-width:720px">Pronájmy z našeho katalogu, které zmizely krátce po zveřejnění. Bez automatického hlídání byste je nestihli.</p>
       </div>
-      <div class="sold-cards" id="sold-cards">
-        <article class="sold-card">
-          <div class="sold-img">
-            <picture>
-              <source type="image/avif" srcset="/static/site/assets/sold-1.avif 1x, /static/site/assets/sold-1@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/sold-1.webp 1x, /static/site/assets/sold-1@2x.webp 2x" />
-              <img src="/static/site/assets/sold-1.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
-            </picture>
-            <span class="sold-badge">PRONAJATO ZA 3 h</span>
-          </div>
-          <div class="sold-meta">
-            <div class="sold-top"><span>Praha 3 – Žižkov</span><span>18 500 Kč/měs.</span></div>
-            <p class="spec">2+kk • 58 m²</p>
-            <p class="when">Přidáno 12. 8. 2026 v 09:14 · Pronajato 12. 8. 2026 v 12:31</p>
-          </div>
-        </article>
-        <article class="sold-card">
-          <div class="sold-img">
-            <picture>
-              <source type="image/avif" srcset="/static/site/assets/sold-2.avif 1x, /static/site/assets/sold-2@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/sold-2.webp 1x, /static/site/assets/sold-2@2x.webp 2x" />
-              <img src="/static/site/assets/sold-2.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
-            </picture>
-            <span class="sold-badge">PRONAJATO ZA 45 min</span>
-          </div>
-          <div class="sold-meta">
-            <div class="sold-top"><span>Brno – Královo Pole</span><span>14 200 Kč/měs.</span></div>
-            <p class="spec">3+1 • 74 m²</p>
-            <p class="when">Přidáno 12. 8. 2026 v 10:05 · Pronajato 12. 8. 2026 v 10:50</p>
-          </div>
-        </article>
-        <article class="sold-card">
-          <div class="sold-img">
-            <picture>
-              <source type="image/avif" srcset="/static/site/assets/sold-3.avif 1x, /static/site/assets/sold-3@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/sold-3.webp 1x, /static/site/assets/sold-3@2x.webp 2x" />
-              <img src="/static/site/assets/sold-3.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
-            </picture>
-            <span class="sold-badge">PRONAJATO ZA 6 h</span>
-          </div>
-          <div class="sold-meta">
-            <div class="sold-top"><span>Praha 5 – Smíchov</span><span>22 000 Kč/měs.</span></div>
-            <p class="spec">1+kk • 32 m²</p>
-            <p class="when">Přidáno 12. 8. 2026 v 08:22 · Pronajato 12. 8. 2026 v 14:15</p>
-          </div>
-        </article>
-        <article class="sold-card">
-          <div class="sold-img">
-            <picture>
-              <source type="image/avif" srcset="/static/site/assets/sold-4.avif 1x, /static/site/assets/sold-4@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/sold-4.webp 1x, /static/site/assets/sold-4@2x.webp 2x" />
-              <img src="/static/site/assets/sold-4.webp" width="301" height="220" alt="" decoding="async" loading="lazy" />
-            </picture>
-            <span class="sold-badge">PRONAJATO ZA 1,5 h</span>
-          </div>
-          <div class="sold-meta">
-            <div class="sold-top"><span>Plzeň – centrum</span><span>12 500 Kč/měs.</span></div>
-            <p class="spec">2+1 • 65 m²</p>
-            <p class="when">Přidáno 12. 8. 2026 v 11:40 · Pronajato 12. 8. 2026 v 13:10</p>
-          </div>
-        </article>
-      </div>
+      <div class="sold-cards" id="sold-cards"></div>
       <div class="cta-row">
         <a class="pill pill-lg" href="/registrace">Nechci přijít o další</a>
         <p>Aktivujte si hlídání a buďte u toho jako první.</p>
@@ -358,82 +298,20 @@
           <span class="icon" style="width:52px;height:12px"><img src="/static/site/assets/browser-dots.svg" width="52" height="12" alt="" /></span>
           <div class="url-bar">
             <span class="icon" style="width:12px;height:12px"><img src="/static/site/assets/lock.svg" width="12" height="12" alt="" /></span>
-            realitify.cz/databaze-vsech-bytu
+            realitify.cz/hledat
           </div>
         </div>
-        <div class="filter-row">
-          <div class="filter-field">
-            <label>Město / Lokalita</label>
-            <div class="select-mock">
-              Brno - město
-              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
-            </div>
-          </div>
-          <div class="filter-field">
-            <label>Dispozice</label>
-            <div class="select-mock">
-              2+kk, 3+kk
-              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
-            </div>
-          </div>
-          <div class="filter-field">
-            <label>Maximální cena</label>
-            <div class="select-mock">
-              22 000 Kč / měsíc
-              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/chevron-down.svg" width="14" height="14" alt="" /></span>
-            </div>
-          </div>
-          <div class="filter-search">
-            <span class="ghost">Spacer</span>
-            <a class="search-btn" href="/nabidka">
-              <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/search.svg" width="14" height="14" alt="" /></span>
-              Vyhledat
-            </a>
-          </div>
+        <div class="live-head">
+          <div><p class="live-kicker">NEJNOVĚJŠÍ V KATALOGU</p><strong>Pronájmy v Brně do 22 000 Kč</strong></div>
+          <a class="search-btn" href="/hledat?q=Brno&amp;price_to=22000">
+            <span class="icon" style="width:14px;height:14px"><img src="/static/site/assets/search.svg" width="14" height="14" alt="" /></span>
+            Zobrazit všechny
+          </a>
         </div>
-        <div class="results">
-          <article class="mock-card">
-            <div class="thumb"><picture>
-              <source type="image/avif" srcset="/static/site/assets/db-1.avif 1x, /static/site/assets/db-1@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/db-1.webp 1x, /static/site/assets/db-1@2x.webp 2x" />
-              <img src="/static/site/assets/db-1.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
-            </picture></div>
-            <div class="mock-body">
-              <div class="mock-top"><span class="source">Bezrealitky</span><strong>15 900 Kč</strong></div>
-              <div>
-                <h3>Světlý byt 2+kk po rekonstrukci</h3>
-                <p>Brno, Královo Pole • 48 m²</p>
-              </div>
-            </div>
-          </article>
-          <article class="mock-card">
-            <div class="thumb"><picture>
-              <source type="image/avif" srcset="/static/site/assets/db-2.avif 1x, /static/site/assets/db-2@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/db-2.webp 1x, /static/site/assets/db-2@2x.webp 2x" />
-              <img src="/static/site/assets/db-2.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
-            </picture></div>
-            <div class="mock-body">
-              <div class="mock-top"><span class="source">Sreality</span><strong>20 500 Kč</strong></div>
-              <div>
-                <h3>Moderní 3+kk s balkónem</h3>
-                <p>Brno, Bystrc • 72 m²</p>
-              </div>
-            </div>
-          </article>
-          <article class="mock-card">
-            <div class="thumb"><picture>
-              <source type="image/avif" srcset="/static/site/assets/db-3.avif 1x, /static/site/assets/db-3@2x.avif 2x" />
-              <source type="image/webp" srcset="/static/site/assets/db-3.webp 1x, /static/site/assets/db-3@2x.webp 2x" />
-              <img src="/static/site/assets/db-3.webp" width="378" height="165" alt="" decoding="async" loading="lazy" />
-            </picture></div>
-            <div class="mock-body">
-              <div class="mock-top"><span class="source">Reality.cz</span><strong>12 000 Kč</strong></div>
-              <div>
-                <h3>Útulné 1+kk v centru města</h3>
-                <p>Brno, Staré Brno • 31 m²</p>
-              </div>
-            </div>
-          </article>
+        <div class="results" id="db-results" aria-live="polite">
+          <article class="mock-card is-skeleton" aria-hidden="true"><div class="thumb"></div><div class="mock-body"><div class="sk-line"></div><div class="sk-line short"></div></div></article>
+          <article class="mock-card is-skeleton" aria-hidden="true"><div class="thumb"></div><div class="mock-body"><div class="sk-line"></div><div class="sk-line short"></div></div></article>
+          <article class="mock-card is-skeleton" aria-hidden="true"><div class="thumb"></div><div class="mock-body"><div class="sk-line"></div><div class="sk-line short"></div></div></article>
         </div>
       </div>
     </section>
@@ -643,50 +521,7 @@
         <p class="eyebrow">MÁTE OTÁZKY?</p>
         <h2 class="display">ČASTO KLADENÉ DOTAZY</h2>
       </div>
-      <div class="faq-list">
-        <div class="faq-item open">
-          <button class="faq-q" type="button">
-            <span>Jak rychle dostanu notifikaci o novém bytu?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">U tarifu Start odesíláme upozornění do 60 sekund od zveřejnění inzerátu. PRO má prioritu a stihne to do 30 sekund. Tarif Zdarma hlídá do 5 minut na 4 hlavních portálech.</p>
-        </div>
-        <div class="faq-item">
-          <button class="faq-q" type="button">
-            <span>Které české portály systém aktuálně hlídá?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">Aktuálně agregujeme Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, RE/MAX a Reality.cz. UlovDomov je dočasně vynechán. Každých ~60 sekund bereme nejnovější nabídky.</p>
-        </div>
-        <div class="faq-item">
-          <button class="faq-q" type="button">
-            <span>Můžu předplatné kdykoliv zrušit?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">Ano, předplatné je zcela bez závazků. Můžete ho kdykoliv zrušit v nastavení svého profilu jedním kliknutím. Žádné skryté poplatky.</p>
-        </div>
-        <div class="faq-item">
-          <button class="faq-q" type="button">
-            <span>Je prohlížení sjednocené databáze opravdu zdarma?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">Ano. Prohlížení a ruční vyhledávání všech aktivních inzerátů v ČR je pro všechny uživatele zcela zdarma. Platíte pouze za automatické real-time hlídání a rychlé notifikace.</p>
-        </div>
-        <div class="faq-item">
-          <button class="faq-q" type="button">
-            <span>V čem se Realitify liší od klasického hlídacího psa na Sreality?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">Sreality vám hlídají pouze své vlastní stránky. Realitify agreguje více portálů najednou, filtruje duplicity a doručuje notifikace okamžitě, zatímco standardní hlídací psi mívají zpoždění 15 minut až několik hodin.</p>
-        </div>
-        <div class="faq-item">
-          <button class="faq-q" type="button">
-            <span>Souvisí Realitify se společností Realtify nebo PriceHubble?</span>
-            <span class="icon chev" style="width:18px;height:18px"><img src="/static/site/assets/chevron-faq.svg" width="18" height="18" alt="" /></span>
-          </button>
-          <p class="faq-a">Realitify (realitify.cz) nesouvisí se společností Realtify ani PriceHubble.</p>
-        </div>
-      </div>
+      <div class="qa-list"><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Jak rychle dostanu notifikaci o novém bytu?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>U tarifu Start odesíláme upozornění do 60 sekund od zveřejnění inzerátu. PRO má prioritu a stihne to do 30 sekund. Tarif Zdarma hlídá do 5 minut na 4 hlavních portálech.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Které české portály systém aktuálně hlídá?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Aktuálně agregujeme Sreality, Reality.iDNES, Bazoš, ČeskéReality, Bezrealitky, Annonce, M&amp;M Reality, RE/MAX a Reality.cz. UlovDomov je dočasně vynechán. Každých ~60 sekund bereme nejnovější nabídky.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Můžu předplatné kdykoliv zrušit?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano, předplatné je zcela bez závazků. Můžete ho kdykoliv zrušit v nastavení svého profilu jedním kliknutím. Žádné skryté poplatky.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Je prohlížení sjednocené databáze opravdu zdarma?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano. Prohlížení a ruční vyhledávání všech aktivních inzerátů v ČR je pro všechny uživatele zcela zdarma. Platíte pouze za automatické real-time hlídání a rychlé notifikace.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>V čem se Realitify liší od klasického hlídacího psa na Sreality?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Sreality vám hlídají pouze své vlastní stránky. Realitify agreguje více portálů najednou, filtruje duplicity a doručuje notifikace okamžitě, zatímco standardní hlídací psi mívají zpoždění 15 minut až několik hodin.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Souvisí Realitify se společností Realtify nebo PriceHubble?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Realitify (realitify.cz) nesouvisí se společností Realtify ani PriceHubble.</p></div></div></div></div>
     </section>
 
     <section class="final-cta">
@@ -754,9 +589,11 @@
         </div>
       </div>
     </footer>
-    <script src="/static/site/site.js?v=8" defer></script>
+    <script src="/static/site/site.js?v=9" defer></script>
     <script src="/static/t.js?v=8" defer></script>
       <script src="/static/site/nav.js?v=3" defer></script>
+    <script src="/static/site/pages.js?v=2" defer></script>
     <script src="/static/site/hero-search.js?v=2" defer></script>
+    <script src="/static/site/home-live.js?v=1" defer></script>
 </body>
 </html>

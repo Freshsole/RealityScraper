@@ -26,8 +26,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=22" />
-    <link rel="stylesheet" href="/static/site/auth.css?v=2" />
+    <link rel="stylesheet" href="/static/site/site.css?v=25" />
+    <link rel="stylesheet" href="/static/site/auth.css?v=3" />
   </head>
   <body class="auth-page">
     <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
@@ -176,28 +176,28 @@
               <strong>E-mailová upozornění</strong>
               <p>Okamžitý e-mail s odkazem na detail nabídky.</p>
             </div>
-            <button class="switch on" data-toggle type="button" aria-label="E-mail"><i></i></button>
+            <button class="switch on" data-toggle data-kind="email" type="button" aria-label="E-mail"><i></i></button>
           </div>
           <div class="toggle-row">
             <div class="toggle-copy">
               <strong>Push notifikace v prohlížeči</strong>
               <p>Rychlé upozornění na ploše vašeho počítače.</p>
             </div>
-            <button class="switch" data-toggle type="button" aria-label="Push"><i></i></button>
+            <button class="switch" data-toggle data-kind="push" type="button" aria-label="Push notifikace v prohlížeči"><i></i></button>
           </div>
-          <div class="toggle-row">
+          <div class="toggle-row is-locked" data-tooltip="Po zaplacení PRO verze se vám SMS notifikace zpřístupní.">
             <div class="toggle-copy">
               <strong>SMS notifikace <span class="tag-pro">PRO VERZE</span></strong>
               <p>Bleskové zprávy přímo na váš mobilní telefon. V PRO 10 SMS / měsíc + Discord.</p>
             </div>
-            <button class="switch" data-toggle type="button" aria-label="SMS"><i></i></button>
+            <button class="switch" data-toggle data-locked type="button" aria-disabled="true" aria-label="SMS notifikace, dostupné v PRO verzi" title="Po zaplacení PRO verze se vám SMS notifikace zpřístupní."><i></i></button>
           </div>
           <div class="toggle-row">
             <div class="toggle-copy">
               <strong>Denní shrnutí e-mailem</strong>
               <p>Přehledný souhrn všech nových bytů jednou denně.</p>
             </div>
-            <button class="switch on" data-toggle type="button" aria-label="Shrnutí"><i></i></button>
+            <button class="switch on" data-toggle data-kind="digest" type="button" aria-label="Denní shrnutí"><i></i></button>
           </div>
         </div>
         <div class="freq">
@@ -221,7 +221,7 @@
       <p class="auth-hint">Notifikace běží nepřetržitě na pozadí 24/7.</p>
       </div>
     </div>
-    <script src="/static/site/auth.js?v=6"></script>
+    <script src="/static/site/auth.js?v=8"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>

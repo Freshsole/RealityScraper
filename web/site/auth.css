@@ -813,3 +813,16 @@ label .optional {
     width: auto;
   }
 }
+
+/* Locked (PRO) toggle + tooltip, busy state for the push toggle */
+.toggle-row{position:relative}
+.toggle-row.is-locked .switch{opacity:.45;cursor:not-allowed}
+.toggle-row.is-locked .toggle-copy strong,.toggle-row.is-locked .toggle-copy p{opacity:.75}
+.toggle-row[data-tooltip]::after{content:attr(data-tooltip);position:absolute;right:0;bottom:calc(100% + 6px);z-index:10;width:max-content;max-width:min(280px,100%);padding:10px 14px;border-radius:12px;background:var(--forest);color:#fff;font-size:13px;font-weight:500;line-height:1.4;box-shadow:0 12px 28px rgba(14,15,12,.25);opacity:0;transform:translateY(4px);pointer-events:none;transition:opacity .15s ease,transform .15s ease}
+.toggle-row[data-tooltip]::before{content:"";position:absolute;right:16px;bottom:calc(100% + 1px);z-index:10;border:6px solid transparent;border-top-color:var(--forest);border-bottom:0;opacity:0;transition:opacity .15s ease}
+.toggle-row[data-tooltip]:hover::after,.toggle-row[data-tooltip]:focus-within::after{opacity:1;transform:none}
+.toggle-row[data-tooltip]:hover::before,.toggle-row[data-tooltip]:focus-within::before{opacity:1}
+.switch.busy{opacity:.6;pointer-events:none}
+.switch.busy i{animation:sw-pulse .8s ease-in-out infinite alternate}
+@keyframes sw-pulse{to{transform:translateX(10px)}}
+@media (prefers-reduced-motion:reduce){.switch.busy i{animation:none}.toggle-row[data-tooltip]::after,.toggle-row[data-tooltip]::before{transition:none}}

@@ -42,8 +42,81 @@ function bindStrength(input) {
   apply();
 }
 
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+}
+
+function urlBase64ToUint8Array(base64) {
+  const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob((base64 + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...raw].map((ch) => ch.charCodeAt(0)));
+}
+
+// Asks the browser for notification permission (must run inside a click) and
+// registers this device for Web Push. Needs the session created in step 1.
+async function enablePush() {
+  if (!pushSupported()) throw new Error("Tento prohlížeč push notifikace nepodporuje.");
+  if (location.protocol !== "https:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    throw new Error("Push notifikace fungují jen na zabezpečeném spojení (HTTPS).");
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    throw new Error("Oznámení jsou v prohlížeči zablokovaná. Povolte je v nastavení webu a zkuste to znovu.");
+  }
+  const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  await navigator.serviceWorker.ready;
+  const vapid = await fetch("/api/push/vapid").then((res) => res.json());
+  if (!vapid.publicKey) throw new Error("Push se teď nepodařilo zapnout. Zkuste to později v nastavení.");
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapid.publicKey),
+    });
+  }
+  const response = await fetch("/api/push/subscribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(subscription.toJSON()),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Odběr se nepodařilo uložit.");
+}
+
 function bindToggles(root) {
   root.querySelectorAll("[data-toggle]").forEach((el) => {
+    if (el.hasAttribute("data-locked")) {
+      // PRO-only option: stays off, the row shows a tooltip explaining why.
+      el.addEventListener("click", (event) => {
+        event.preventDefault();
+        toast(el.closest("[data-tooltip]")?.dataset.tooltip || "Dostupné v PRO verzi.");
+      });
+      return;
+    }
+    if (el.dataset.kind === "push") {
+      el.addEventListener("click", async () => {
+        if (el.classList.contains("on")) {
+          el.classList.remove("on");
+          return;
+        }
+        el.classList.add("busy");
+        try {
+          await enablePush();
+          el.classList.add("on");
+        } catch (err) {
+          el.classList.remove("on");
+          // Browser-level failures (e.g. the push service refusing) arrive as English DOMExceptions.
+          toast(
+            err instanceof DOMException
+              ? "Prohlížeč registraci push notifikací odmítl. Zkuste to později v nastavení účtu nebo v jiném prohlížeči."
+              : err.message || "Push notifikace se nepodařilo zapnout.",
+          );
+        } finally {
+          el.classList.remove("busy");
+        }
+      });
+      return;
+    }
     el.addEventListener("click", () => el.classList.toggle("on"));
   });
 }
@@ -715,6 +788,25 @@ if (register) {
     }
   });
   register.querySelector("#skip-prefs").addEventListener("click", () => show(2));
+  async function saveNotifyChoices() {
+    const on = (kind) => Boolean(register.querySelector(`[data-kind="${kind}"]`)?.classList.contains("on"));
+    try {
+      const current = await fetch("/api/settings").then((res) => res.json()).catch(() => ({}));
+      const freq = register.querySelector(".freq-row button.on")?.textContent.trim() || "Okamžitě";
+      await postJson("/api/settings", {
+        notify: {
+          ...(current.notify || {}),
+          email: on("email"),
+          push: on("push"),
+          ntDigest: on("digest"),
+          instant: freq === "Okamžitě",
+        },
+      });
+    } catch (_err) {
+      // Preferences can be changed later in the settings; never block finishing the sign-up.
+    }
+  }
+
   register.querySelector("#finish-reg").addEventListener("click", async () => {
     const promo = register.querySelector("#reg-promo")?.value.trim() || "";
     const btn = register.querySelector("#finish-reg");
@@ -723,6 +815,7 @@ if (register) {
       // The account already exists (created in step 1); just store the promo code.
       if (promo) await postJson("/api/billing/promo", { code: promo });
       writeStoredPromo(promo);
+      await saveNotifyChoices();
       const next = refinedNext || new URLSearchParams(location.search).get("next") || "/nabidka";
       location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/nabidka";
     } catch (err) {

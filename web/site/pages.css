@@ -98,7 +98,7 @@
 .qa-a{display:grid;grid-template-rows:0fr;transition:grid-template-rows .4s cubic-bezier(.22,1,.36,1)}
 .qa.is-open .qa-a{grid-template-rows:1fr}
 .qa-a>div{overflow:hidden;min-height:0}
-.qa-a p{margin:0;padding:0 24px 24px;font-size:15px;line-height:1.7;color:var(--body);max-width:68ch}
+.qa-a p{margin:0;padding:0 24px 24px;font-size:15px;line-height:1.7;color:var(--body);max-width:none}
 .qa mark{background:#9fe87055;color:inherit;border-radius:4px;padding:0 2px}
 .faq-empty{padding:40px;text-align:center;color:var(--body);background:var(--pale);border-radius:20px}
 .faq-aside{position:sticky;top:104px;display:flex;flex-direction:column;gap:16px;padding:32px;border-radius:var(--radius-card);background:var(--forest);color:#fff}

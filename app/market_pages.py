@@ -910,16 +910,14 @@ def render_about_cs(store: Store | None = None) -> str:
         <div class="split">
           <div class="pg-head reveal">
             <p class="eyebrow">PROVOZOVATEL</p>
-            <h2 class="display">Za Realitify stojí kreativní studio Virtuex</h2>
-            <p>Službu vytváří a provozuje kreativní studio <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a> pod vedením Jiřího Kolba. Právně ji provozuje podnikající fyzická osoba, kontakt najdete níže a rádi odpovíme na cokoli.</p>
+            <h2 class="display">Za Realitify stojí Virtuex.cz</h2>
+            <p>Realitify vytváří a provozuje <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a>, které řídí OSVČ {html.escape(str(op.get('name')))}. Najdete nás na kontaktu níže a rádi odpovíme na cokoli.</p>
             <p class="note">{html.escape(DISCLAIMER_CS)}</p>
           </div>
           <div class="pg-card reveal">
             <dl class="fact-list">
-              <div><dt>Kreativní studio</dt><dd><a href="https://www.virtuex.cz" rel="noopener">Virtuex.cz</a></dd></div>
-              <div><dt>Vedení studia</dt><dd>Jiří Kolb</dd></div>
-              <div><dt>Provozovatel</dt><dd>{html.escape(str(op.get('name')))}</dd></div>
-              <div><dt>Právní forma</dt><dd>{html.escape(str(op.get('legal_form')))}</dd></div>
+              <div><dt>Za službou stojí</dt><dd><a href="https://www.virtuex.cz" rel="noopener">Virtuex.cz</a></dd></div>
+              <div><dt>Řídí</dt><dd>OSVČ {html.escape(str(op.get('name')))}</dd></div>
               <div><dt>IČO</dt><dd>{html.escape(str(op.get('ico')))}</dd></div>
               <div><dt>Sídlo</dt><dd>{html.escape(str(op.get('address')))}</dd></div>
               <div><dt>Kontakt</dt><dd><a href="mailto:{support}">{support}</a></dd></div>
@@ -955,7 +953,7 @@ def render_about_cs_md(store: Store | None = None) -> str:
         "",
         product_facts.one_liner_cs(),
         "",
-        f"Kreativní studio Virtuex.cz (https://www.virtuex.cz) pod vedením Jiřího Kolba. Provozovatel: {op.get('name')}, {op.get('legal_form')}, IČO {op.get('ico')}, {op.get('address')}. Kontakt: {contact.get('support')}.",
+        f"Za službou stojí Virtuex.cz (https://www.virtuex.cz), které řídí OSVČ Jiří Kolb. Provozovatel: {op.get('name')}, {op.get('legal_form')}, IČO {op.get('ico')}, {op.get('address')}. Kontakt: {contact.get('support')}.",
         "",
         f"V provozu od roku {product.get('since_year')}.",
         "",
@@ -1030,16 +1028,14 @@ def render_about_en() -> str:
         <div class="split">
           <div class="pg-head reveal">
             <p class="eyebrow">OPERATOR</p>
-            <h2 class="display">Realitify is built by the creative studio Virtuex</h2>
-            <p>Realitify is created and run by the creative studio <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a>, led by Jiří Kolb. It has been operating since {html.escape(str(product.get('since_year')))}.</p>
+            <h2 class="display">Realitify is built by Virtuex.cz</h2>
+            <p>Realitify is created and run by <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a>, managed by sole trader {html.escape(str(op.get('name')))}. It has been operating since {html.escape(str(product.get('since_year')))}.</p>
             <p class="note">{html.escape(DISCLAIMER_EN)}</p>
           </div>
           <div class="pg-card reveal">
             <dl class="fact-list">
-              <div><dt>Creative studio</dt><dd><a href="https://www.virtuex.cz" rel="noopener">Virtuex.cz</a></dd></div>
-              <div><dt>Studio lead</dt><dd>Jiří Kolb</dd></div>
-              <div><dt>Operator</dt><dd>{html.escape(str(op.get('name')))}</dd></div>
-              <div><dt>Legal form</dt><dd>sole trader ({html.escape(str(op.get('legal_form')))})</dd></div>
+              <div><dt>Built by</dt><dd><a href="https://www.virtuex.cz" rel="noopener">Virtuex.cz</a></dd></div>
+              <div><dt>Managed by</dt><dd>{html.escape(str(op.get('name')))} (sole trader)</dd></div>
               <div><dt>Company ID (IČO)</dt><dd>{html.escape(str(op.get('ico')))}</dd></div>
               <div><dt>Registered office</dt><dd>{html.escape(str(op.get('address')))}, Czech Republic</dd></div>
               <div><dt>Contact</dt><dd><a href="mailto:{support}">{support}</a></dd></div>

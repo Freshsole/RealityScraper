@@ -2,7 +2,7 @@ document.querySelectorAll(".faq-section .faq-item").forEach((e,s)=>{const a=e.qu
             <source type="image/avif" srcset="${t}.avif 1x, ${t}@2x.avif 2x" />
             <source type="image/webp" srcset="${t}.webp 1x, ${t}@2x.webp 2x" />
             <img src="${t}.webp" width="${s}" height="${a}" alt="${escapeHtml(n)}" loading="lazy" decoding="async" />
-          </picture>`}function soldImageHtml(e,s){const a=String(e||"/static/site/assets/sold-1.webp"),n=a.match(/\/static\/site\/assets\/(sold-\d+)/);return n?pictureHtml(n[1],301,220,s):`<img src="${escapeHtml(a)}" width="301" height="220" alt="${escapeHtml(s)}" loading="lazy" decoding="async" />`}async function renderGoneFast(){const e=document.getElementById("sold-cards");if(e)try{const n=(await(await fetch("/api/public/gone-fast")).json().catch(()=>({}))).items||[];if(!n.length)return;e.innerHTML=n.map(t=>`<article class="sold-card">
+          </picture>`}function soldImageHtml(e,s){if(!e)return'<div class="sold-noimg" aria-hidden="true"></div>';const a=String(e),n=a.match(/\/static\/site\/assets\/(sold-\d+)/);return n?pictureHtml(n[1],301,220,s):`<img src="${escapeHtml(a)}" width="301" height="220" alt="${escapeHtml(s)}" loading="lazy" decoding="async" />`}async function renderGoneFast(){const e=document.getElementById("sold-cards");if(e)try{const n=(await(await fetch("/api/public/gone-fast")).json().catch(()=>({}))).items||[];if(!n.length)return;e.closest(".sold-section")?.removeAttribute("hidden");e.innerHTML=n.map(t=>`<article class="sold-card">
           <div class="sold-img">
             ${soldImageHtml(t.image,t.locality||"")}
             <span class="sold-badge">${escapeHtml(t.badge||"PRONAJATO")}</span>
