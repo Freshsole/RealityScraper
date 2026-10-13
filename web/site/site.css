@@ -101,3 +101,14 @@ a.mock-card:hover{transform:translateY(-3px)}
 @media (prefers-reduced-motion:reduce){.hs-illu-pin,.hs-illu-lens{animation:none}}
 .hero.hero-search{overflow-x:clip}
 @media (max-width:860px){.hs-illu{left:50%;right:auto;width:190%;max-width:none;transform:translateX(-50%);bottom:calc(100% - 34px)}.hs-stage{margin-top:64px}}
+
+/* hero illustration v2: bigger gap above, ring/sparkle motion */
+.hs-stage{margin-top:210px}
+.hs-illu{bottom:calc(100% - 54px)}
+.hs-illu-spark{animation:hs-twinkle 3.6s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+.hs-illu-spark:nth-of-type(2n){animation-delay:1.2s}
+.hs-illu-route{animation:hs-dash 14s linear infinite}
+@keyframes hs-twinkle{0%,100%{opacity:.35;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}
+@keyframes hs-dash{to{stroke-dashoffset:-110}}
+@media (max-width:860px){.hs-stage{margin-top:150px}.hs-illu{bottom:calc(100% - 34px)}}
+@media (prefers-reduced-motion:reduce){.hs-illu-spark,.hs-illu-route{animation:none}}
