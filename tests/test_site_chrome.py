@@ -8,7 +8,7 @@ from app import site_chrome
 SITE = Path(__file__).resolve().parent.parent / "web" / "site"
 HEADER_RE = re.compile(r'<header class="navbar[^"]*">.*?</header>', re.S)
 FOOTER_RE = re.compile(r'<footer class="footer">.*?</footer>', re.S)
-AUTH_PAGES = {"prihlaseni.html", "registrace.html", "heslo.html"}
+AUTH_PAGES = {"prihlaseni.html", "registrace.html", "heslo.html", "overeni.html"}
 
 
 class SiteChromeTests(unittest.TestCase):
