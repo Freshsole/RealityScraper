@@ -2,6 +2,7 @@
 (function () {
   'use strict';
   var gate = document.getElementById('gate');
+  var banner = document.getElementById('hl-banner');
   var wrap = document.getElementById('katalog');
   var frame = document.getElementById('hl-frame');
   var form = document.getElementById('hl-form');
@@ -9,19 +10,19 @@
   var msg = document.getElementById('hl-msg');
   if (!gate || !wrap || !frame || !form) return;
 
-  function show(unlocked) {
+  function show(unlocked, member) {
     gate.hidden = unlocked;
     wrap.hidden = !unlocked;
+    if (banner) banner.hidden = !unlocked || !!member;
     if (unlocked && !frame.getAttribute('src')) {
       frame.setAttribute('src', '/hledat/katalog' + location.search);
     }
-    if (unlocked) setTimeout(function () { wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
   }
 
   fetch('/api/guest/status', { credentials: 'same-origin' })
     .then(function (r) { return r.json(); })
-    .then(function (d) { gate.hidden = !!d.unlocked; wrap.hidden = !d.unlocked; if (d.unlocked) frame.setAttribute('src', '/hledat/katalog' + location.search); })
-    .catch(function () { gate.hidden = false; });
+    .then(function (d) { show(!!d.unlocked, !!d.member); })
+    .catch(function () { show(false); });
 
   form.addEventListener('submit', function (e) {
     e.preventDefault();

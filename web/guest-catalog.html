@@ -20,20 +20,12 @@
     <meta name="robots" content="noindex" />
     <style>
       body { padding: 0; }
-      .guest-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 48px; padding: 0 20px; background: var(--forest); color: #fff; font-size: 14px; }
-      .guest-bar a { color: var(--forest); background: var(--green); padding: 7px 16px; border-radius: 999px; font-weight: 700; text-decoration: none; white-space: nowrap; }
-      .guest-bar span { color: var(--mint); }
       #view-catalog { padding: 12px 16px 0; }
-      .catalog-shell { height: calc(100vh - 48px - 24px); }
+      .catalog-shell { height: calc(100vh - 24px); }
       [data-status="saved"], [data-status="hidden"], [data-status="all"], #cat-hits, #catalog-views { display: none !important; }
-      @media (max-width: 900px) { .guest-bar span { display: none; } .guest-bar { justify-content: center; } }
     </style>
   </head>
   <body class="guest">
-    <div class="guest-bar">
-      <span>Prohlížíte katalog jako host. Hlídání nových bytů a uložené filtry najdete v účtu.</span>
-      <a href="/registrace" target="_top">Hlídat nové byty zdarma</a>
-    </div>
     <div id="view-catalog">
       <div class="catalog-shell">
         <div class="catalog-map-wrap">

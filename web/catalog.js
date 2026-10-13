@@ -336,7 +336,7 @@
     if (kicker) {
       if (selected.hits === "today") kicker.textContent = "Zásahy z dneška · můžeš vybrat monitor a přidat další filtry";
       else if (selected.hits === "notified") kicker.textContent = "Všechny zásahy z monitorů · můžeš filtrovat dál";
-      else kicker.textContent = "Uložené inzeráty z hlídaných hledání";
+      else kicker.textContent = document.body.classList.contains("guest") ? "Aktuální nabídky ze všech portálů" : "Uložené inzeráty z hlídaných hledání";
     }
   }
 

@@ -771,20 +771,23 @@ def render_faq_md(store: Store) -> str:
 
 
 def render_search(store: Store | None = None, q: str = "") -> str:
-    """Public catalog entry: email gate, then the app's catalog in a frame."""
+    """Full-screen public catalog: header + guest banner + the app's catalog, behind an e-mail gate."""
     from app import site_chrome
 
     del store, q  # data is loaded client-side by the guest catalog
-    body = """      <section class="pg-hero hl-hero" data-nav="Nabídky" data-nav-desc="Katalog bytů s mapou a filtry">
-        <p class="eyebrow">KATALOG NABÍDEK</p>
-        <h1 class="display">Všechny nabídky bytů na jednom místě</h1>
-        <p class="lead">Mapa, filtry, historie cen a odkazy na originální inzeráty ze všech sledovaných portálů. Stačí zadat e-mail a katalog je váš.</p>
-      </section>
+    body = """      <div class="hl-banner" id="hl-banner" hidden>
+        <div class="hl-banner-copy">
+          <strong>Prohlížíte katalog jako host</strong>
+          <span>Hlídání nových bytů a uložené filtry najdete v účtu.</span>
+        </div>
+        <a class="pill pill-lg" href="/registrace">Hlídat nové byty zdarma</a>
+      </div>
 
-      <section class="pg-section" id="gate" data-nav="Přístup" hidden>
-        <div class="pg-card hl-gate reveal" id="hl-gate">
-          <h2>Odemkněte celý katalog</h2>
-          <p>Zadejte e-mail a hned uvidíte všechny aktuální nabídky na mapě i v seznamu. Bez hesla a bez platební karty.</p>
+      <section class="hl-gate-wrap" id="gate" hidden>
+        <div class="pg-card hl-gate" id="hl-gate">
+          <p class="eyebrow">KATALOG NABÍDEK</p>
+          <h1>Odemkněte celý katalog bytů</h1>
+          <p>Mapa, filtry a nabídky ze všech sledovaných portálů. Zadejte e-mail a katalog je váš. Bez hesla a bez platební karty.</p>
           <form class="hl-form" id="hl-form" novalidate>
             <input type="email" id="hl-email" name="email" placeholder="vas@email.cz" autocomplete="email" required aria-label="E-mail" />
             <button class="pill" type="submit">Zobrazit nabídky</button>
@@ -795,8 +798,8 @@ def render_search(store: Store | None = None, q: str = "") -> str:
         </div>
       </section>
 
-      <section class="hl-frame-wrap" id="katalog" data-nav="Katalog" data-nav-desc="Mapa a seznam nabídek" hidden>
-        <iframe class="hl-frame" id="hl-frame" title="Katalog nabídek Realitify" loading="lazy" allow="geolocation"></iframe>
+      <section class="hl-frame-full" id="katalog" hidden>
+        <iframe id="hl-frame" title="Katalog nabídek Realitify" allow="geolocation"></iframe>
       </section>
 """
     return site_chrome.page(
@@ -804,7 +807,9 @@ def render_search(store: Store | None = None, q: str = "") -> str:
         description="Katalog nabídek bytů a domů z českých realitních portálů na jednom místě. Mapa, filtry a ceny.",
         canonical="https://realitify.cz/hledat",
         body=body,
-        scripts='\n    <script src="/static/site/hledat.js?v=1" defer></script>',
+        body_class="pg-page hl-full",
+        footer=False,
+        scripts='\n    <script src="/static/site/hledat.js?v=2" defer></script>',
     )
 
 

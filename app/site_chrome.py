@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "25", "nav": "1", "pages": "9", "navjs": "3", "pagesjs": "1"}
+ASSET_V = {"site": "25", "nav": "1", "pages": "10", "navjs": "3", "pagesjs": "1"}
 
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
@@ -104,6 +104,7 @@ def page(
     ld: Iterable[dict[str, Any]] = (),
     extra_head: str = "",
     scripts: str = "",
+    footer: bool = True,
 ) -> str:
     """Full HTML document wrapped in the shared header/footer."""
     robots_meta = f'\n    <meta name="robots" content="{html.escape(robots)}" />' if robots else ""
@@ -145,7 +146,7 @@ def page(
     <main class="pg" id="top">
 {body}
     </main>
-    {FOOTER_HTML}
+    {FOOTER_HTML if footer else ''}
     <script src="/static/site/nav.js?v={ASSET_V['navjs']}" defer></script>
     <script src="/static/site/pages.js?v={ASSET_V['pagesjs']}" defer></script>{scripts}
   </body>
