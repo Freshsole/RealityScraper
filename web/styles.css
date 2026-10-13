@@ -52,9 +52,9 @@ a { color: var(--forest); }
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 22px;
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: -1px;
   line-height: 1;
   color: var(--forest);
@@ -2449,11 +2449,11 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .set-head { margin-bottom: 40px; }
 .set-head h1 {
   margin: 0;
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 36px;
   line-height: 1.1;
   letter-spacing: -1px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 .set-head p { margin: 12px 0 0; font-size: 14px; color: #555b54; }
@@ -2478,10 +2478,10 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 }
 .set-card h2, .set-card .form-card h2 {
   margin: 0;
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 20px;
   letter-spacing: -0.5px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 .set-copy { margin: 0; font-size: 14px; color: #555b54; line-height: 1.5; }
@@ -2573,10 +2573,10 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .watch-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .watch-card-head h3 {
   margin: 0;
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 20px;
   letter-spacing: -0.5px;
-  font-weight: 400;
+  font-weight:800;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2647,9 +2647,8 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   align-items: center;
   gap: 12px;
   cursor: pointer;
-  font-family: "Archivo Black", Inter, sans-serif;
-  color: var(--forest);
-}
+  font-family:Manrope,Inter,sans-serif;
+  color: var(--forest);font-weight:800;}
 .watch-create span { display: flex; align-items: center; gap: 8px; font-size: 18px; }
 .watch-create img { width: 18px; height: 18px; }
 .watch-create small { font-family: Inter, sans-serif; font-size: 13px; color: #555b54; font-weight: 400; }
@@ -2845,9 +2844,9 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 }
 .set-plan-price p { margin: 0; }
 .set-plan-price strong {
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 32px;
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: -0.5px;
 }
 .set-plan-price span {
@@ -2899,10 +2898,10 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 .bill-tier-pro .bill-tier-name { color: var(--green); }
 .bill-tier-price {
   margin: 0;
-  font-family: "Archivo Black", Inter, sans-serif;
+  font-family:Manrope,Inter,sans-serif;
   font-size: 32px;
   line-height: 1;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 .bill-tier-pro .bill-tier-price { color: #fff; }

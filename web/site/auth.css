@@ -57,8 +57,7 @@
   font-size: 22px;
   letter-spacing: -1px;
   color: var(--forest);
-  white-space: nowrap;
-}
+  white-space: nowrap;font-weight:800;}
 
 .auth-logo .sub {
   font-size: 14px;
@@ -90,8 +89,7 @@
   font-size: 32px;
   line-height: 1.1;
   letter-spacing: -1px;
-  color: var(--forest);
-}
+  color: var(--forest);font-weight:800;}
 
 .auth-lead {
   margin: 0;

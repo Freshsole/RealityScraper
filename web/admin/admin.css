@@ -10,7 +10,7 @@
   --sold: #cf2929;
   --track: #eef2ec;
   --radius: 24px;
-  --font-display: "Archivo Black", sans-serif;
+  --font-display: Manrope, Inter, sans-serif;
   --font-ui: Inter, Helvetica, Arial, sans-serif;
   --side: 280px;
 }
@@ -139,8 +139,7 @@ img {
   font-family: var(--font-display);
   font-size: 22px;
   letter-spacing: -1px;
-  color: var(--forest);
-}
+  color: var(--forest);font-weight:800;}
 
 .ad-tag {
   background: var(--forest);
@@ -309,8 +308,7 @@ img {
   font-size: 36px;
   line-height: 1.1;
   letter-spacing: -1px;
-  text-transform: uppercase;
-}
+  text-transform: uppercase;font-weight:800;}
 
 .ad-lead {
   margin: 8px 0 24px;
@@ -388,7 +386,7 @@ img {
 .ad-kpi strong {
   font-family: var(--font-display);
   font-size: 24px;
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: 0;
   color: var(--forest);
 }
@@ -424,7 +422,7 @@ img {
 .ad-sec {
   font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: -0.5px;
   text-transform: uppercase;
   margin: 0 0 16px;
@@ -977,7 +975,7 @@ img {
 .ad-donut-label strong {
   font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 
@@ -1093,8 +1091,7 @@ img {
 .ad-login h1 {
   font-family: var(--font-display);
   font-size: 28px;
-  margin: 0 0 8px;
-}
+  margin: 0 0 8px;font-weight:800;}
 
 .ad-login p {
   margin: 0 0 20px;
@@ -1501,8 +1498,7 @@ img {
   min-height: 36px;
   font-family: var(--font-display);
   font-size: 14px;
-  letter-spacing: 0;
-}
+  letter-spacing: 0;font-weight:800;}
 
 .ad-utbl-head .num,
 .ad-utbl-row .num,
@@ -2176,7 +2172,7 @@ img {
   margin: 0;
   font-family: var(--font-display);
   font-size: 14px;
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--forest);
@@ -2601,7 +2597,7 @@ img {
 .ad-mini strong {
   font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 
@@ -3092,7 +3088,7 @@ img {
 .ad-dist strong {
   font-family: var(--font-display);
   font-size: 20px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 
@@ -3183,7 +3179,7 @@ img {
   gap: 4px;
   font-family: var(--font-display);
   font-size: 16px;
-  font-weight: 400;
+  font-weight:800;
   color: var(--forest);
 }
 
@@ -3412,7 +3408,7 @@ img {
 .ad-src-card strong {
   font-family: var(--font-display);
   font-size: 28px;
-  font-weight: 400;
+  font-weight:800;
 }
 
 .ad-promo-form {
@@ -3543,7 +3539,7 @@ img {
 .cms-kpi strong {
   font-family: var(--font-display);
   font-size: 28px;
-  font-weight: 400;
+  font-weight:800;
 }
 
 .cms-kpi span {
@@ -4460,7 +4456,7 @@ img {
   font-size: 36px;
   line-height: 1.1;
   letter-spacing: -1px;
-  font-weight: 400;
+  font-weight:800;
 }
 
 .cms-plede {
@@ -4503,7 +4499,7 @@ img {
 .cms-pstats strong {
   font-family: var(--font-display);
   font-size: 24px;
-  font-weight: 400;
+  font-weight:800;
 }
 
 .cms-pdiv {
@@ -4525,7 +4521,7 @@ img {
   margin: 0;
   font-family: var(--font-display);
   font-size: 24px;
-  font-weight: 400;
+  font-weight:800;
 }
 
 .cms-pbody p {
@@ -4554,8 +4550,7 @@ img {
 .cms-papt-title {
   margin: 0 0 16px;
   font-family: var(--font-display);
-  font-size: 18px;
-}
+  font-size: 18px;font-weight:800;}
 
 .cms-papt-grid {
   display: flex;

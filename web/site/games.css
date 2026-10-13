@@ -18,7 +18,7 @@
   --gutter: max(var(--pad), calc((100% - var(--page)) / 2));
   --radius-card: 24px;
   --radius-pill: 9999px;
-  --font-display: "Archivo Black", "Arial Black", Impact, sans-serif;
+  --font-display: Manrope, Inter, sans-serif;
   --font-ui: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
   --shadow-card: 0 18px 50px rgba(14, 15, 12, 0.08);
 }
@@ -136,11 +136,11 @@ button {
 .display {
   margin: 0;
   font-family: var(--font-display);
-  font-weight: 400;
+  font-weight:800;
   letter-spacing: -0.03em;
   text-transform: uppercase;
   color: var(--ink);
-  line-height: 0.86;
+  line-height: 1.05;
 }
 
 .lead {
@@ -174,8 +174,7 @@ button {
   letter-spacing: -1px;
   text-transform: uppercase;
   color: var(--forest);
-  white-space: nowrap;
-}
+  white-space: nowrap;font-weight:800;}
 
 .menu {
   display: flex;
@@ -242,7 +241,7 @@ button {
 
 .game-hero .display {
   font-size: clamp(48px, 7vw, 90px);
-  line-height: 0.85;
+  line-height: 1.05;
   max-width: 14ch;
 }
 
@@ -286,11 +285,10 @@ button {
 .game-card h2 {
   font-family: var(--font-display);
   font-size: clamp(32px, 4vw, 48px);
-  line-height: 0.88;
+  line-height: 1.05;
   text-transform: uppercase;
   margin: 0;
-  color: var(--ink);
-}
+  color: var(--ink);font-weight:800;}
 
 .game-card p {
   margin: 0;
@@ -322,7 +320,7 @@ button {
 .game-band .display {
   color: #fff;
   font-size: clamp(36px, 5vw, 59px);
-  line-height: 0.86;
+  line-height: 1.05;
 }
 
 .game-band p {
@@ -366,7 +364,7 @@ button {
 
 .game-copy .display {
   font-size: clamp(52px, 6.4vw, 90px);
-  line-height: 0.85;
+  line-height: 1.05;
   max-width: 11ch;
 }
 
@@ -642,7 +640,7 @@ button {
 
 .game-result .display {
   font-size: 40px;
-  line-height: 0.85;
+  line-height: 1.05;
 }
 
 @media (max-width: 1200px) {
@@ -662,7 +660,7 @@ button {
   .game-copy .display,
   .game-hero .display {
     font-size: 48px;
-    line-height: 0.88;
+    line-height: 1.05;
     max-width: none;
   }
 
