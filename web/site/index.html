@@ -130,9 +130,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=25" />
+    <link rel="stylesheet" href="/static/site/site.css?v=27" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=10" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=11" />
   </head>
   <body>
     <header class="navbar">
@@ -160,6 +160,8 @@
         <h1 class="display">Najděte byt dřív než ostatní</h1>
         <p class="hero-copy">Právě teď v katalogu <strong>__ACTIVE_COUNT__</strong> aktivních nabídek ze __PORTALS_LIST__. Zadejte, co hledáte, a my najdeme shody.</p>
       </div>
+      <div class="hs-stage">
+        <svg class="hs-illu" viewBox="0 0 1080 170" preserveAspectRatio="xMidYMax meet" role="img" aria-label="Ilustrace města s lupou a špendlíkem na mapě" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="hs-win-d" width="16" height="18" patternUnits="userSpaceOnUse"><rect x="4" y="4" width="8" height="9" rx="2" fill="#163300" opacity=".28"/></pattern><pattern id="hs-win-l" width="16" height="18" patternUnits="userSpaceOnUse"><rect x="4" y="4" width="8" height="9" rx="2" fill="#e2f6d5" opacity=".7"/></pattern></defs><rect x="24" y="78" width="74" height="92" rx="10" fill="#e2f6d5"/><rect x="30" y="88" width="62" height="82" fill="url(#hs-win-d)"/><rect x="106" y="46" width="92" height="124" rx="10" fill="#9fe870"/><rect x="112" y="56" width="80" height="114" fill="url(#hs-win-d)"/><rect x="206" y="92" width="62" height="78" rx="10" fill="#163300"/><rect x="212" y="102" width="50" height="68" fill="url(#hs-win-l)"/><rect x="276" y="60" width="84" height="110" rx="10" fill="#e2f6d5"/><rect x="282" y="70" width="72" height="100" fill="url(#hs-win-d)"/><rect x="462" y="22" width="96" height="148" rx="10" fill="#163300"/><rect x="468" y="32" width="84" height="138" fill="url(#hs-win-l)"/><rect x="566" y="70" width="72" height="100" rx="10" fill="#9fe870"/><rect x="572" y="80" width="60" height="90" fill="url(#hs-win-d)"/><rect x="646" y="50" width="88" height="120" rx="10" fill="#e2f6d5"/><rect x="652" y="60" width="76" height="110" fill="url(#hs-win-d)"/><rect x="742" y="84" width="66" height="86" rx="10" fill="#163300"/><rect x="748" y="94" width="54" height="76" fill="url(#hs-win-l)"/><rect x="816" y="40" width="96" height="130" rx="10" fill="#9fe870"/><rect x="822" y="50" width="84" height="120" fill="url(#hs-win-d)"/><rect x="1000" y="74" width="70" height="96" rx="10" fill="#e2f6d5"/><rect x="1006" y="84" width="58" height="86" fill="url(#hs-win-d)"/><rect x="508" y="2" width="4" height="22" rx="2" fill="#163300"/><circle cx="510" cy="4" r="5" fill="#9fe870"/><path d="M372 104 L412 72 L452 104 Z" fill="#163300"/><rect x="380" y="104" width="64" height="70" rx="6" fill="#fff" stroke="#163300" stroke-width="4"/><rect x="402" y="124" width="20" height="50" rx="4" fill="#9fe870"/><rect x="388" y="112" width="14" height="14" rx="3" fill="#e2f6d5"/><rect x="363" y="128" width="6" height="30" rx="3" fill="#163300"/><circle cx="366" cy="128" r="16" fill="#9fe870"/><rect x="463" y="146" width="6" height="30" rx="3" fill="#163300"/><circle cx="466" cy="146" r="14" fill="#9fe870"/><rect x="897" y="120" width="6" height="30" rx="3" fill="#163300"/><circle cx="900" cy="120" r="18" fill="#9fe870"/><rect x="975" y="138" width="6" height="30" rx="3" fill="#163300"/><circle cx="978" cy="138" r="15" fill="#9fe870"/><g class="hs-illu-pin"><path d="M610 34c-17 0-30 13-30 29 0 22 30 50 30 50s30-28 30-50c0-16-13-29-30-29z" fill="#163300"/><circle cx="610" cy="62" r="11" fill="#9fe870"/></g><g class="hs-illu-lens"><circle cx="924" cy="74" r="38" fill="#fff" fill-opacity=".55" stroke="#163300" stroke-width="10"/><path d="M952 102 L990 140" stroke="#163300" stroke-width="14" stroke-linecap="round"/><path d="M904 62 a24 24 0 0 1 22 -12" stroke="#9fe870" stroke-width="6" stroke-linecap="round" fill="none"/></g></svg>
       <form class="hs-form" id="hs-form" novalidate>
         <div class="hs-tabs" role="tablist" aria-label="Typ nabídky">
           <button type="button" class="hs-tab on" role="tab" aria-selected="true" data-offer="pronajem">Pronájem</button>
@@ -184,6 +186,7 @@
           <button type="button" class="hs-chip" data-q="Praha 2" data-price="25000" data-from="40">Praha 2 do 25 000 Kč</button>
         </div>
       </form>
+      </div>
       <div class="hero-trust">
         <span class="icon" style="width:88px;height:36px"><img src="/static/site/assets/avatars.svg" width="88" height="36" alt="" /></span>
         <p>Zdarma · bez platební karty · neomezené prohlížení katalogu</p>

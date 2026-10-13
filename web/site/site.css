@@ -88,3 +88,16 @@ a.mock-card:hover{transform:translateY(-3px);box-shadow:0 20px 44px #0e0f0c1a}
 .live-head>div{min-width:0}
 a.mock-card,.results a.mock-card{transform:none;rotate:0deg}
 a.mock-card:hover{transform:translateY(-3px)}
+
+/* Homepage hero illustration: a skyline peeking out from behind the search card */
+.hs-stage{position:relative;width:100%;max-width:1080px;margin-top:84px}
+.hs-illu{position:absolute;left:0;right:0;bottom:calc(100% - 52px);width:100%;height:auto;z-index:0;pointer-events:none}
+.hs-stage .hs-form{position:relative;z-index:1;max-width:none}
+.hs-illu-pin{animation:hs-bob 3.2s ease-in-out infinite;transform-box:fill-box;transform-origin:center bottom}
+.hs-illu-lens{animation:hs-tilt 5s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes hs-bob{50%{transform:translateY(-8px)}}
+@keyframes hs-tilt{50%{transform:rotate(-5deg) translateY(-3px)}}
+@media (max-width:860px){.hs-stage{margin-top:44px}.hs-illu{bottom:calc(100% - 26px)}}
+@media (prefers-reduced-motion:reduce){.hs-illu-pin,.hs-illu-lens{animation:none}}
+.hero.hero-search{overflow-x:clip}
+@media (max-width:860px){.hs-illu{left:50%;right:auto;width:190%;max-width:none;transform:translateX(-50%);bottom:calc(100% - 34px)}.hs-stage{margin-top:64px}}

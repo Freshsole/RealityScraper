@@ -147,7 +147,7 @@
 /* games hub */
 .hero-split{grid-template-columns:minmax(0,1.25fr) minmax(0,.75fr);align-items:center;gap:56px}
 .hero-split>*{max-width:none}
-.hero-copy{display:grid;gap:20px;justify-items:start}
+.hero-split .hero-copy{display:grid;gap:20px;justify-items:start}
 .mock-card{display:flex;flex-direction:column;gap:16px;padding:24px;border-radius:var(--radius-card);background:#fff;border:1px solid var(--line);box-shadow:0 24px 56px #0e0f0c1a;transform:rotate(1.5deg);transition:transform .4s cubic-bezier(.22,1,.36,1)}
 .mock-card:hover{transform:rotate(0)}
 .mock-top{display:flex;align-items:center;justify-content:space-between;gap:12px}

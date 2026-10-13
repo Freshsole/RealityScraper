@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "25", "nav": "1", "pages": "10", "navjs": "3", "pagesjs": "1"}
+ASSET_V = {"site": "27", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1"}
 
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
