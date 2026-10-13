@@ -6,6 +6,7 @@ import hmac
 import json
 import re
 import secrets
+import threading
 import time
 from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
@@ -434,56 +435,136 @@ def _monitor_view(item: dict[str, Any], email: str, hits: int | None = None) -> 
     }
 
 
-def overview_payload(store: Store, hub: Any) -> dict[str, Any]:
+def _user_stores(store: Store, store_for: Any) -> list[tuple[dict[str, Any], Store]]:
+    """(user row, that user's private store) for every registered user."""
+    out: list[tuple[dict[str, Any], Store]] = []
+    if store_for is None:
+        return out
+    for row in user_registry.list_users(store):
+        uid = str(row.get("id") or "")
+        if not uid:
+            continue
+        try:
+            out.append((row, store_for(uid)))
+        except Exception:
+            continue
+    return out
+
+
+def _in_window(value: str | None, since: str, until: str | None = None) -> bool:
+    text = value or ""
+    return bool(text) and text >= since and (until is None or text < until)
+
+
+def _kind_count(ustore: Store, kind: str, since: str, until: str | None = None) -> int:
     from app import analytics as stats
 
-    stats.backfill(store)
+    try:
+        stats.ensure_schema(ustore)
+        return stats.count_kind(ustore, kind, since, until)
+    except Exception:
+        return 0
+
+
+def _safe(fn: Any, default: Any = 0) -> Any:
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def _sum_events(ustores: list[tuple[dict[str, Any], Store]], since: str | None = None, until: str | None = None) -> int:
+    return sum(_safe(lambda s=s: _count_events(s, since=since, until=until)) for _, s in ustores)
+
+
+def _admin_last_seen(gstore: Store, user: dict[str, Any]) -> str | None:
+    """Last real activity of a user: newest of login (session) and tracked presence."""
+    uid = str(user.get("id") or "")
+    email = (user.get("email") or "").strip().lower()
+    best = user.get("created_at") or None
+    try:
+        with gstore.connect() as conn:
+            row = conn.execute("SELECT MAX(created_at) FROM sessions WHERE user_id = ?", (uid,)).fetchone()
+            if row and row[0] and (not best or row[0] > best):
+                best = row[0]
+            if email:
+                row = conn.execute(
+                    "SELECT MAX(last_seen) FROM analytics_presence WHERE lower(email) = ?", (email,)
+                ).fetchone()
+                if row and row[0] and (not best or row[0] > best):
+                    best = row[0]
+    except Exception:
+        pass
+    return best
+
+
+def overview_payload(store: Store, hub: Any) -> dict[str, Any]:
+    """Platform-wide overview.
+
+    Site analytics (visits, geo, devices, live) live in the global store; signups come from the
+    user registry; monitors / notifications live in each user's private store and are summed.
+    """
+    from app import analytics as stats
+
+    del store  # the admin's private store holds none of the platform-wide data
+    gstore = hub.store
+    stats.ensure_schema(gstore)
+    ustores = _user_stores(gstore, hub.store_for)
     today = stats._day_start(0)
     yday = stats._day_start(1)
     d7 = stats._since(7)
     d30 = stats._since(30)
     prev7 = stats._since(14)
     prev30 = stats._since(60)
-    active_today = stats.unique_visitors(store, today)
-    active_yday = stats.unique_visitors(store, yday, today)
-    active_7 = stats.unique_visitors(store, d7)
-    active_7_prev = stats.unique_visitors(store, prev7, d7)
-    active_30 = stats.unique_visitors(store, d30)
-    active_30_prev = stats.unique_visitors(store, prev30, d30)
-    views_today = stats.count_kind(store, stats.KIND_PAGE, today)
-    views_yday = stats.count_kind(store, stats.KIND_PAGE, yday, today)
-    sign_today = stats.count_kind(store, stats.KIND_SIGNUP, today)
-    sign_yday = stats.count_kind(store, stats.KIND_SIGNUP, yday, today)
-    sign_30 = stats.count_kind(store, stats.KIND_SIGNUP, d30)
-    sign_30_prev = stats.count_kind(store, stats.KIND_SIGNUP, prev30, d30)
-    monitors_30 = stats.count_kind(store, stats.KIND_MONITOR, d30)
-    monitors_prev = stats.count_kind(store, stats.KIND_MONITOR, prev30, d30)
-    sent_30 = _count_events(store, since=d30)
-    sent_prev = _count_events(store, since=prev30, until=d30)
-    fail_30 = stats.count_kind(store, stats.KIND_NOTIFY_FAIL, d30)
-    fail_prev = stats.count_kind(store, stats.KIND_NOTIFY_FAIL, prev30, d30)
-    disc_30 = stats.count_kind(store, stats.KIND_DISCORD, d30)
-    got = sent_30
-    base = max(active_30, 1)
-    regs = max(sign_30, 1) if sign_30 or disc_30 or got else 0
+    active_today = stats.unique_visitors(gstore, today)
+    active_yday = stats.unique_visitors(gstore, yday, today)
+    active_7 = stats.unique_visitors(gstore, d7)
+    active_7_prev = stats.unique_visitors(gstore, prev7, d7)
+    active_30 = stats.unique_visitors(gstore, d30)
+    active_30_prev = stats.unique_visitors(gstore, prev30, d30)
+    views_today = stats.count_kind(gstore, stats.KIND_PAGE, today)
+    views_yday = stats.count_kind(gstore, stats.KIND_PAGE, yday, today)
+
+    created = [str(row.get("created_at") or "") for row, _ in ustores]
+    sign_today = sum(_in_window(c, today) for c in created)
+    sign_yday = sum(_in_window(c, yday, today) for c in created)
+    sign_30 = sum(_in_window(c, d30) for c in created)
+    sign_30_prev = sum(_in_window(c, prev30, d30) for c in created)
+
+    monitor_rows = [(row, _safe(lambda s=s: s.list_monitors(), [])) for row, s in ustores]
+    mon_created = [str(m.get("created_at") or "") for _, ms in monitor_rows for m in ms]
+    monitors_30 = sum(_in_window(c, d30) for c in mon_created)
+    monitors_prev = sum(_in_window(c, prev30, d30) for c in mon_created)
+
+    sent_30 = _sum_events(ustores, d30)
+    sent_prev = _sum_events(ustores, prev30, d30)
+    fail_30 = sum(_kind_count(s, stats.KIND_NOTIFY_FAIL, d30) for _, s in ustores)
+    fail_prev = sum(_kind_count(s, stats.KIND_NOTIFY_FAIL, prev30, d30) for _, s in ustores)
+
+    # Funnel: visitors -> registered (30d) -> share of that cohort that reached each next step.
+    cohort = [(row, s) for row, s in ustores if _in_window(str(row.get("created_at") or ""), d30)]
 
     def _pct(n: int, den: int) -> int:
         if den <= 0:
-            return 100 if n else 0
+            return 0
         return min(100, round(n / den * 100))
 
+    cohort_mon = sum(1 for _, s in cohort if _safe(lambda s=s: len(s.list_monitors())))
+    cohort_disc = sum(1 for _, s in cohort if _safe(lambda s=s: user_account.discord_status(s).get("linked"), False))
+    cohort_note = sum(1 for _, s in cohort if _safe(lambda s=s: _count_events(s)) > 0)
     flow_visit = 100 if active_30 else 0
-    flow_reg = _pct(sign_30, base) if active_30 else (100 if sign_30 else 0)
-    flow_mon = _pct(monitors_30, base) if active_30 else (100 if monitors_30 else 0)
-    flow_disc = _pct(disc_30, regs) if regs else (100 if disc_30 else 0)
-    flow_note = _pct(1 if got else 0, regs) if regs else (100 if got else 0)
-    countries = stats.breakdown(store, "country_name", d30)
+    flow_reg = _pct(sign_30, active_30) if active_30 else (100 if sign_30 else 0)
+    flow_mon = _pct(cohort_mon, len(cohort))
+    flow_disc = _pct(cohort_disc, len(cohort))
+    flow_note = _pct(cohort_note, len(cohort))
+
+    countries = stats.breakdown(gstore, "country_name", d30)
     c_total = sum(n for _, n in countries) or 1
-    cities = stats.breakdown(store, "city", d30)
+    cities = stats.breakdown(gstore, "city", d30)
     city_total = sum(n for _, n in cities) or 1
-    devices = stats.device_share(store, d30)
-    traffic_views = stats.pageviews_by_day(store, 30)
-    traffic_sign = stats.signups_by_day(store, 30)
+    devices = stats.device_share(gstore, d30)
+    traffic_views = stats.pageviews_by_day(gstore, 30)
+    traffic_sign = _signups_by_day(created, 30)
     name_to_code = {name: code for code, name in stats.COUNTRY_NAMES.items()}
     country_rows = []
     rest_n = 0
@@ -497,13 +578,14 @@ def overview_payload(store: Store, hub: Any) -> dict[str, Any]:
     if rest_n:
         country_rows.append({"name": "Ostatní", "share": round(rest_n / c_total * 100), "n": rest_n, "code": ""})
     city_rows = []
-    with store.connect() as conn:
+    with gstore.connect() as conn:
         for name, n in cities[:5]:
             row = conn.execute(
                 "SELECT country FROM analytics_events WHERE city = ? AND IFNULL(country,'') != '' LIMIT 1",
                 (name,),
             ).fetchone()
             city_rows.append({"name": name, "country": (row["country"] if row else "—") or "—", "n": n, "share": round(n / city_total * 100)})
+
     def kpi(label: str, value: int, cur: int, prev: int) -> dict[str, Any]:
         item = live(stats.fmt_int(value))
         item["delta"] = stats.delta_pct(cur, prev)
@@ -539,8 +621,14 @@ def overview_payload(store: Store, hub: Any) -> dict[str, Any]:
         "countries": {"source": LIVE, "note": "", "rows": country_rows},
         "devices": {"source": LIVE, "note": "", **devices},
         "cities": {"source": LIVE, "note": "", "rows": city_rows},
-        "live": stats.live_visitors(store),
+        "live": stats.live_visitors(gstore),
     }
+
+
+def _signups_by_day(created: list[str], days: int = 30) -> list[int]:
+    by_day: Counter[str] = Counter(c[:10] for c in created if c)
+    today = datetime.now(timezone.utc).date()
+    return [by_day.get((today - timedelta(days=i)).isoformat(), 0) for i in range(days, -1, -1)]
 
 
 def users_payload(store: Store, store_for=None) -> dict[str, Any]:
@@ -597,10 +685,7 @@ def users_payload(store: Store, store_for=None) -> dict[str, Any]:
                     ).fetchone()[0] or 0)
             except Exception:
                 pass
-            try:
-                last_at = _last_activity(ustore, row.get("created_at"))
-            except Exception:
-                pass
+            last_at = _admin_last_seen(store, row)
             try:
                 blocked = _blocked(ustore)
             except Exception:
@@ -634,7 +719,7 @@ def users_payload(store: Store, store_for=None) -> dict[str, Any]:
     }
 
 
-def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dict[str, Any]:
+def user_detail_payload(store: Store, user: dict[str, Any] | None = None, gstore: Store | None = None) -> dict[str, Any]:
     account = user_account.public_account(store)
     data = user_account.account_record(store)
     email = ((user or {}).get("email") or account.get("email") or "").strip()
@@ -657,10 +742,10 @@ def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dic
     if registered_at:
         timeline.append({"title": "Registrace", "at": fmt_dt(registered_at)})
     for item in monitors:
-        name = item.get("name") or "monitor"
-        timeline.append({"title": f"Vytvořil monitor {name}", "at": fmt_dt(item.get("created_at"))})
+        mon_name = item.get("name") or "monitor"
+        timeline.append({"title": f"Vytvořil monitor {mon_name}", "at": fmt_dt(item.get("created_at"))})
         if not item.get("enabled"):
-            timeline.append({"title": f"Pozastavil monitor {name}", "at": fmt_dt(item.get("updated_at") or item.get("created_at"))})
+            timeline.append({"title": f"Pozastavil monitor {mon_name}", "at": fmt_dt(item.get("updated_at") or item.get("created_at"))})
     if disc.get("linked"):
         timeline.append({"title": "Propojil Discord", "at": fmt_dt(data.get("discord_linked_at"))})
     timeline.sort(key=lambda row: row.get("at") or "", reverse=True)
@@ -672,7 +757,7 @@ def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dic
             "registered": fmt_date(registered_at),
             "status": "Zablokovaný" if _blocked(store) else "Aktivní",
             "blocked": _blocked(store),
-            "activity": relative_long(_last_activity(store, registered_at)),
+            "activity": relative_long(_admin_last_seen(gstore, user) if gstore is not None and user else _last_activity(store, registered_at)),
             "watch_limit": limit if limit is not None else "neomezeně",
             "phone": account.get("phone") or "—",
             "role": (user or {}).get("role") or user_account.account_role(store),
@@ -680,7 +765,7 @@ def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dic
             "plan_label": billing.get("label") or "Zdarma",
             "comp": bool(billing.get("comp")),
         },
-        "monitors": [_monitor_view(item, email) for item in monitors],
+        "monitors": [{**_monitor_view(item, email), "user_id": str((user or {}).get("id") or "local")} for item in monitors],
         "discord": {
             "linked": bool(disc.get("linked")),
             "channel": "Ano" if disc.get("linked") else "Ne",
@@ -735,10 +820,30 @@ def user_detail_payload(store: Store, user: dict[str, Any] | None = None) -> dic
     }
 
 
-def monitors_payload(store: Store) -> dict[str, Any]:
-    account = user_account.public_account(store)
-    email = account.get("email") or "—"
-    monitors = store.list_monitors()
+def monitors_payload(store: Store, gstore: Store | None = None, store_for: Any = None) -> dict[str, Any]:
+    """All monitors of all users (each lives in its owner's private store)."""
+    ustores = _user_stores(gstore, store_for) if gstore is not None else []
+    if not ustores:
+        account = user_account.public_account(store)
+        ustores = [({"id": "local", "email": account.get("email") or "—"}, store)]
+    monitors: list[dict[str, Any]] = []
+    owner: dict[str, tuple[str, str]] = {}
+    hit_map: dict[str, int] = {}
+    watched_keys: set[str] = set()
+    for urow, ustore in ustores:
+        uid = str(urow.get("id") or "")
+        uemail = (urow.get("email") or "—")
+        for item in _safe(lambda s=ustore: s.list_monitors(), []):
+            key = f"{uid}:{item.get('id')}"
+            item = {**item, "_key": key}
+            owner[key] = (uid, uemail)
+            monitors.append(item)
+        with ustore.connect() as conn:
+            for row in conn.execute(
+                "SELECT monitor_id, COUNT(*) FROM events WHERE kind IN ('new','changed') GROUP BY monitor_id"
+            ):
+                hit_map[f"{uid}:{row[0]}"] = int(row[1])
+            watched_keys |= _watched_keys(conn, store)
     enabled_n = sum(1 for item in monitors if item.get("enabled"))
     paused_n = len(monitors) - enabled_n
     now = datetime.now(timezone.utc)
@@ -757,36 +862,8 @@ def monitors_payload(store: Store) -> dict[str, Any]:
     created_30 = sum(1 for item in monitors if _created(item) >= since_30)
     created_prev30 = sum(1 for item in monitors if since_60 <= _created(item) < since_30)
     existed_30 = sum(1 for item in monitors if _created(item) and _created(item) < since_30)
-    hit_map: dict[str, int] = {}
-    watched_total = 0
+    watched_total = len(watched_keys)
     with store.connect() as conn:
-        for row in conn.execute(
-            "SELECT monitor_id, COUNT(*) FROM events WHERE kind IN ('new','changed') GROUP BY monitor_id"
-        ):
-            hit_map[str(row[0])] = int(row[1])
-        watched_total = int(
-            conn.execute(
-                """
-                SELECT COUNT(*) FROM (
-                    SELECT h.listing_key AS watched_key
-                    FROM monitor_hits h
-                    JOIN monitors m ON m.id = h.monitor_id
-                    WHERE m.enabled = 1
-                      AND EXISTS (
-                          SELECT 1 FROM catalog_listings c
-                          WHERE IFNULL(c.gone, 0) = 0
-                            AND (c.listing_key = h.listing_key OR c.canonical_key = h.listing_key)
-                      )
-                    UNION
-                    SELECT COALESCE(NULLIF(l.canonical_key, ''), NULLIF(l.listing_key, ''), l.url)
-                    FROM listings l
-                    JOIN monitors m ON m.id = l.monitor_id
-                    WHERE m.enabled = 1 AND IFNULL(l.gone, 0) = 0
-                )
-                """
-            ).fetchone()[0]
-            or 0
-        )
         price_counts = conn.execute(
             """
             SELECT
@@ -817,8 +894,10 @@ def monitors_payload(store: Store) -> dict[str, Any]:
     disp_counts: Counter[str] = Counter()
     views = []
     for item in monitors:
-        hits = hit_map.get(str(item.get("id")), int(item.get("tracked") or 0))
+        uid, email = owner[item["_key"]]
+        hits = hit_map.get(item["_key"], int(item.get("tracked") or 0))
         view = _monitor_view(item, email, hits)
+        view["user_id"] = uid
         views.append(view)
         loc_counts[view["locality"]] += 1
         offer_counts[view["offer"]] += 1
@@ -871,6 +950,43 @@ def monitors_payload(store: Store) -> dict[str, Any]:
         "total": len(views),
         "watched_total": watched_total,
     }
+
+
+def _watched_keys(conn: Any, catalog_store: Store) -> set[str]:
+    """Unique properties watched by enabled monitors in one user's store (still active in the catalog)."""
+    hit_keys = [
+        str(r[0])
+        for r in conn.execute(
+            """
+            SELECT DISTINCT h.listing_key
+            FROM monitor_hits h JOIN monitors m ON m.id = h.monitor_id
+            WHERE m.enabled = 1 AND IFNULL(h.listing_key, '') != ''
+            """
+        )
+    ]
+    keys: set[str] = set()
+    with catalog_store.connect() as cconn:
+        for i in range(0, len(hit_keys), 400):
+            chunk = hit_keys[i : i + 400]
+            marks = ",".join("?" * len(chunk))
+            for r in cconn.execute(
+                f"""
+                SELECT COALESCE(NULLIF(canonical_key, ''), listing_key) FROM catalog_listings
+                WHERE IFNULL(gone, 0) = 0 AND (listing_key IN ({marks}) OR canonical_key IN ({marks}))
+                """,
+                chunk + chunk,
+            ):
+                keys.add(str(r[0]))
+    for r in conn.execute(
+        """
+        SELECT COALESCE(NULLIF(l.canonical_key, ''), NULLIF(l.listing_key, ''), l.url)
+        FROM listings l JOIN monitors m ON m.id = l.monitor_id
+        WHERE m.enabled = 1 AND IFNULL(l.gone, 0) = 0
+        """
+    ):
+        if r[0]:
+            keys.add(str(r[0]))
+    return keys
 
 
 def _spc(n: Any) -> str:
@@ -986,30 +1102,34 @@ def _notify_logs(store: Store, email: str) -> list[dict[str, Any]]:
     return logs[:250]
 
 
-def notifications_payload(store: Store) -> dict[str, Any]:
+def notifications_payload(store: Store, gstore: Store | None = None, store_for: Any = None) -> dict[str, Any]:
+    """Notifications of all users (each user's events/pings live in their private store)."""
     from app import analytics as stats
 
-    stats.backfill(store)
+    ustores = _user_stores(gstore, store_for) if gstore is not None else []
+    if not ustores:
+        ustores = [({"id": "local", "email": user_account.public_account(store).get("email") or ""}, store)]
     today = stats._day_start(0)
     yday = stats._day_start(1)
     d7 = stats._since(7)
     d14 = stats._since(14)
     d30 = stats._since(30)
     d60 = stats._since(60)
-    sent_today = _count_events(store, since=today)
-    sent_yday = _count_events(store, since=yday, until=today)
-    sent_7 = _count_events(store, since=d7)
-    sent_7_prev = _count_events(store, since=d14, until=d7)
-    sent_30 = _count_events(store, since=d30)
-    sent_prev30 = _count_events(store, since=d60, until=d30)
-    fail_30 = stats.count_kind(store, stats.KIND_NOTIFY_FAIL, d30)
-    fail_prev = stats.count_kind(store, stats.KIND_NOTIFY_FAIL, d60, d30)
-    disc_sent, disc_fail = _ping_stats(store, d30)
+    sent_today = _sum_events(ustores, today)
+    sent_yday = _sum_events(ustores, yday, today)
+    sent_7 = _sum_events(ustores, d7)
+    sent_7_prev = _sum_events(ustores, d14, d7)
+    sent_30 = _sum_events(ustores, d30)
+    sent_prev30 = _sum_events(ustores, d60, d30)
+    fail_30 = sum(_kind_count(s, stats.KIND_NOTIFY_FAIL, d30) for _, s in ustores)
+    fail_prev = sum(_kind_count(s, stats.KIND_NOTIFY_FAIL, d60, d30) for _, s in ustores)
+    disc_sent = disc_fail = 0
+    for _, s in ustores:
+        ds, df = _safe(lambda s=s: _ping_stats(s, d30), (0, 0))
+        disc_sent += ds
+        disc_fail += df
     fail_30 = fail_30 + disc_fail
-    fail_prev = fail_prev
-    account = user_account.public_account(store)
-    email = account.get("email") or ""
-    n_users = 1 if email else 0
+    n_users = sum(1 for _, s in ustores if _safe(lambda s=s: len(s.list_monitors())))
     total_30 = sent_30 + fail_30
     rate = round(sent_30 / total_30 * 100, 1) if total_30 else 0
     prev_total = sent_prev30 + fail_prev
@@ -1022,7 +1142,6 @@ def notifications_payload(store: Store) -> dict[str, Any]:
     fail_delta = _kpi_delta(fail_30, fail_prev)
     if fail_delta.get("delta_tone") == "down":
         fail_delta["delta_tone"] = "bad"
-    disc = user_account.discord_status(store)
     wa = wa_notify.status(store)
     mail_on = bool(config.SMTP_HOST)
     mail_sent = sent_30 if mail_on else 0
@@ -1037,7 +1156,28 @@ def notifications_payload(store: Store) -> dict[str, Any]:
         total = sent + failed
         return round(sent / total * 100, 1) if total else 0
 
-    logs = _notify_logs(store, email)
+    logs: list[dict[str, Any]] = []
+    for urow, ustore in ustores:
+        logs.extend(_safe(lambda s=ustore, e=(urow.get("email") or ""): _notify_logs(s, e), []))
+    logs = [row for row in logs if row.get("kind_key") != "bulk"]
+    for item in broadcasts:
+        if isinstance(item, dict):
+            logs.append(
+                {
+                    "at": fmt_dt(item.get("at")),
+                    "at_iso": item.get("at") or "",
+                    "user": "ALL",
+                    "monitor": "—",
+                    "channel": item.get("channel") or "E-mail",
+                    "kind": "Hromadná",
+                    "kind_key": "bulk",
+                    "status": "Doručeno" if int(item.get("delivered") or 0) else ("Naplánováno" if not item.get("immediate", True) else "Selhalo"),
+                    "ok": int(item.get("delivered") or 0) > 0,
+                    "error": (item.get("error") or "—")[:90],
+                }
+            )
+    logs.sort(key=lambda row: row.get("at_iso") or "", reverse=True)
+    logs = logs[:250]
     return {
         "kpis": [
             {"label": "Odesláno dnes", **live(_spc(sent_today)), **_kpi_delta(sent_today, sent_yday)},
@@ -1281,7 +1421,20 @@ def _api_series() -> list[int]:
     return out
 
 
-def _err_series(store: Store) -> tuple[list[float], float]:
+def _all_stores(hub: Any) -> list[Store]:
+    """Global store plus every registered user's private store (queues/monitors live per user)."""
+    stores = [hub.store]
+    try:
+        for row in user_registry.list_users(hub.store):
+            uid = str(row.get("id") or "")
+            if uid:
+                stores.append(hub.store_for(uid))
+    except Exception:
+        pass
+    return stores
+
+
+def _err_series(store: Store, user_stores: list[Store] | None = None) -> tuple[list[float], float]:
     from app import analytics as stats
 
     start = stats._since(30)
@@ -1294,17 +1447,22 @@ def _err_series(store: Store) -> tuple[list[float], float]:
             ):
                 fail_days[str(row[0])] += int(row[1])
             for row in conn.execute(
-                "SELECT substr(COALESCE(processed_at, created_at), 1, 10) d, COUNT(*) n FROM ping_queue WHERE status IN ('failed','error') AND COALESCE(processed_at, created_at) >= ? GROUP BY d",
-                (start,),
-            ):
-                fail_days[str(row[0])] += int(row[1])
-            for row in conn.execute(
                 "SELECT substr(COALESCE(finished_at, started_at), 1, 10) d, COUNT(*) n FROM scrape_jobs WHERE last_error IS NOT NULL AND last_error != '' AND COALESCE(finished_at, started_at) >= ? GROUP BY d",
                 (start,),
             ):
                 fail_days[str(row[0])] += int(row[1])
     except Exception:
         pass
+    for ustore in user_stores or [store]:
+        try:
+            with ustore.connect() as conn:
+                for row in conn.execute(
+                    "SELECT substr(COALESCE(processed_at, created_at), 1, 10) d, COUNT(*) n FROM ping_queue WHERE status IN ('failed','error') AND COALESCE(processed_at, created_at) >= ? GROUP BY d",
+                    (start,),
+                ):
+                    fail_days[str(row[0])] += int(row[1])
+        except Exception:
+            pass
     points = []
     today = datetime.now(timezone.utc).date()
     for i in range(29, -1, -1):
@@ -1326,9 +1484,17 @@ def _next_in(last_iso: str | None, interval_sec: int) -> str:
     return f"za {_dur(delta)}"
 
 
+def _dedupe_counts(store: Store, settings: dict[str, Any]) -> dict[str, int]:
+    """duplicate_row_counts() GROUP BYs the whole catalog; reuse it for 2 min unless a run/scan finished."""
+    key = f"dedupe_counts:{id(store)}:{settings.get('last_run') or ''}:{settings.get('last_scan') or ''}"
+    return stripe_billing.cached_stripe(key, 120, store.duplicate_row_counts)
+
+
 def dedupe_payload(store: Store, hub: Any) -> dict[str, Any]:
+    # Dedupe settings/state are kept in the global store (hub.store), not the admin's private one.
+    store = getattr(hub, "store", None) or store
     settings = store.dedupe_settings()
-    counts = store.duplicate_row_counts()
+    counts = _dedupe_counts(store, settings)
     running = bool(getattr(hub, "dedupe_running", False))
     scanning = bool(getattr(hub, "dedupe_scanning", False))
     hour = int(settings.get("hour") or 3)
@@ -1391,6 +1557,7 @@ _CATALOG_STATE_LABELS = {
 
 
 def catalog_progress_payload(store: Store, hub: Any | None = None) -> dict[str, Any]:
+    store = getattr(hub, "store", None) or store  # scrape jobs live in the global store
     data = store.catalog_progress()
     running_mem = sorted(getattr(hub, "catalog_running_portals", set()) or [])
     running_set = set(running_mem)
@@ -1469,7 +1636,17 @@ def catalog_progress_payload(store: Store, hub: Any | None = None) -> dict[str, 
     return data
 
 
+def ops_payload_cached(store: Store, hub: Any, ttl: float = 20.0) -> dict[str, Any]:
+    """GET /api/admin/ops: polling is answered from a short-lived cache that refreshes in the background."""
+    return stripe_billing.cached_stripe("admin_ops", ttl, lambda: ops_payload(store, hub), max_stale=300)
+
+
 def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
+    # `store` is the admin's private store; scrape jobs, the catalog, ticks and the
+    # dedupe settings live in the global store, queues and monitors in every user's.
+    admin_store = store
+    store = getattr(hub, "store", None) or store
+    all_stores = _all_stores(hub) if getattr(hub, "store", None) is not None else [store]
     # Full hub.status() performs catalog/user aggregates needed by the public app.
     # Provoz only needs runtime flags; repeating those aggregates made this page
     # wait behind scraper writes and remain stuck on “Načítám…”.
@@ -1480,8 +1657,8 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     }
     jobs = store.list_scrape_jobs()
     catalog = store.catalog_sync_status()
-    disc = user_account.discord_status(store)
-    wa = wa_notify.status(store)
+    disc = user_account.discord_status(admin_store)
+    wa = wa_notify.status(admin_store)
     t0 = time.perf_counter()
     db_ok = False
     try:
@@ -1498,10 +1675,19 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     scraper_ok = bool(status.get("running"))
     secs_list = [s for s in (_job_secs(item) for item in live_jobs) if s is not None]
     ping_ms = 0
-    with store.connect() as conn:
-        ping_row = conn.execute(
-            "SELECT created_at, processed_at FROM ping_queue WHERE processed_at IS NOT NULL ORDER BY processed_at DESC LIMIT 8"
-        ).fetchall()
+    ping_row = []
+    for ustore in all_stores:
+        try:
+            with ustore.connect() as conn:
+                ping_row.extend(
+                    conn.execute(
+                        "SELECT created_at, processed_at FROM ping_queue WHERE processed_at IS NOT NULL ORDER BY processed_at DESC LIMIT 8"
+                    ).fetchall()
+                )
+        except Exception:
+            continue
+    ping_row.sort(key=lambda row: row["processed_at"] or "", reverse=True)
+    ping_row = ping_row[:8]
     ping_durs = []
     for row in ping_row:
         a = _parse_iso(row["created_at"])
@@ -1531,14 +1717,21 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             last_job = item
     portals: dict[str, dict[str, Any]] = {}
     with store.connect() as conn:
+        # `gone` is NOT NULL, so `gone = 0` can use the covering (gone, portal) index; the
+        # latest sighting comes from a per-portal index seek instead of a MAX() over every row.
         for row in conn.execute(
-            "SELECT IFNULL(portal,'neznámý') AS portal, COUNT(*) n, MAX(last_seen) seen FROM catalog_listings WHERE IFNULL(gone,0)=0 GROUP BY portal"
-        ):
+            "SELECT portal, COUNT(*) n FROM catalog_listings WHERE gone = 0 GROUP BY portal"
+        ).fetchall():
             name = str(row["portal"] or "neznámý")
+            seen = (
+                conn.execute("SELECT MAX(last_seen) FROM catalog_listings WHERE portal = ?", (row["portal"],)).fetchone()[0]
+                if row["portal"]
+                else None
+            )
             portals[name] = {
                 "name": PORTAL_LABELS.get(name, name.title() if name != "sreality" else "Sreality"),
                 "n": int(row["n"]),
-                "seen": row["seen"],
+                "seen": seen,
             }
     for item in live_jobs:
         portal = str(item.get("portal") or "")
@@ -1581,30 +1774,35 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
                     "message": f"{portal}: běh dokončen, {item.get('upserts') or 0} aktualizací",
                 }
             )
-    with store.connect() as conn:
-        for row in conn.execute(
-            "SELECT processed_at, created_at, error, status FROM ping_queue WHERE status IN ('failed','error') ORDER BY COALESCE(processed_at, created_at) DESC LIMIT 40"
-        ):
-            logs.append(
-                {
-                    "at": fmt_dt(row["processed_at"] or row["created_at"]),
-                    "at_iso": row["processed_at"] or row["created_at"] or "",
-                    "level": "Error",
-                    "service": "Discord",
-                    "message": (row["error"] or "Webhook selhal")[:180],
-                }
-            )
-    for item in store.list_monitors():
-        if item.get("last_error"):
-            logs.append(
-                {
-                    "at": fmt_dt(item.get("last_check")),
-                    "at_iso": item.get("last_check") or "",
-                    "level": "Warning",
-                    "service": "Scraper",
-                    "message": f"{item.get('name')}: {item.get('last_error')}"[:180],
-                }
-            )
+    for ustore in all_stores:
+        try:
+            with ustore.connect() as conn:
+                for row in conn.execute(
+                    "SELECT processed_at, created_at, error, status FROM ping_queue WHERE status IN ('failed','error') ORDER BY COALESCE(processed_at, created_at) DESC LIMIT 40"
+                ):
+                    logs.append(
+                        {
+                            "at": fmt_dt(row["processed_at"] or row["created_at"]),
+                            "at_iso": row["processed_at"] or row["created_at"] or "",
+                            "level": "Error",
+                            "service": "Discord",
+                            "message": (row["error"] or "Webhook selhal")[:180],
+                        }
+                    )
+            monitors = ustore.list_monitors()
+        except Exception:
+            continue
+        for item in monitors:
+            if item.get("last_error"):
+                logs.append(
+                    {
+                        "at": fmt_dt(item.get("last_check")),
+                        "at_iso": item.get("last_check") or "",
+                        "level": "Warning",
+                        "service": "Scraper",
+                        "message": f"{item.get('name')}: {item.get('last_error')}"[:180],
+                    }
+                )
     logs.sort(key=lambda row: row.get("at_iso") or "", reverse=True)
     seen_msg: set[str] = set()
     unique_logs = []
@@ -1762,14 +1960,14 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
             }
         )
     api_points = _api_series()
-    err_points, err_now = _err_series(store)
+    err_points, err_now = _err_series(store, all_stores)
     return {
         "services": services,
         "api_series": {"source": LIVE, "note": "", "points": api_points, "labels": ["00:00", "08:00", "16:00", "24:00"]},
         "err_series": {"source": LIVE, "note": "", "points": err_points, "now": f"{err_now}%", "labels": ["Před 30 dny", "Před 15 dny", "Dnes"]},
         "scraper": {
             "runs_today": live(_spc(len(started_today))),
-            "new_today": live(_spc(store.new_today_count())),
+            "new_today": live(_spc(_count_sql(store, "SELECT COUNT(*) FROM catalog_listings WHERE first_seen >= ?", (since_day,)))),
             "updated": live(_spc(sum(int(item.get("upserts") or 0) for item in started_today))),
             "expired": live(
                 _spc(
@@ -1823,8 +2021,35 @@ def ops_payload(store: Store, hub: Any) -> dict[str, Any]:
     }
 
 
-def billing_payload(store: Store) -> dict[str, Any]:
-    finance = stripe_billing.admin_finance(store)
+_REGISTRY_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
+_REGISTRY_LOCK = threading.Lock()
+
+
+def _registry_plans(hub: Any) -> dict[str, Any]:
+    """Registered users and their plan (from each user's own store); cached 2 min."""
+    with _REGISTRY_LOCK:
+        if _REGISTRY_CACHE["data"] is not None and time.time() - float(_REGISTRY_CACHE["at"]) < 120:
+            return _REGISTRY_CACHE["data"]
+        plans: Counter[str] = Counter()
+        rows = user_registry.list_users(hub.store)
+        total = 0
+        for row in rows:
+            uid = str(row.get("id") or "")
+            if not uid:
+                continue
+            total += 1
+            try:
+                plans[str(stripe_billing.billing_state(hub.store_for(uid)).get("plan") or "free")] += 1
+            except Exception:
+                plans["free"] += 1
+        data = {"total": total, "plans": dict(plans)}
+        _REGISTRY_CACHE.update(at=time.time(), data=data)
+        return data
+
+
+def billing_payload(store: Store, hub: Any | None = None) -> dict[str, Any]:
+    registry = _registry_plans(hub) if hub is not None else None
+    finance = stripe_billing.admin_finance(store, registry)
     return {
         "configured": finance.get("configured"),
         "error": finance.get("error") or "",
@@ -2004,8 +2229,19 @@ def promo_payload(store: Store, month: str = "") -> dict[str, Any]:
         paid_n = len(all_inv) or int(stripe_row.get("used") or 0)
         regs = max(len({inv.get("customer") for inv in all_inv if inv.get("customer")}), paid_n)
         due_cents = int(round(sum(int(inv.get("amount") or 0) for inv in all_inv) * cut / 100))
-        paid_out = int(person.get("paid_cents") or 0)
-        debt = max(0, due_cents - paid_out)
+        # Outstanding = commission on invoices from months not yet marked as paid out.
+        settled_months = {k for k, v in (payouts_map.get(code) or {}).items() if v}
+        debt = int(
+            round(
+                sum(
+                    int(inv.get("amount") or 0)
+                    for inv in all_inv
+                    if datetime.fromtimestamp(int(inv.get("at") or 0), tz=timezone.utc).strftime("%Y-%m") not in settled_months
+                )
+                * cut
+                / 100
+            )
+        )
         influencers.append(
             {
                 "name": person.get("name") or code,
@@ -2013,7 +2249,7 @@ def promo_payload(store: Store, month: str = "") -> dict[str, Any]:
                 "cut": cut,
                 "regs": regs,
                 "paid": paid_n,
-                "debt": f"{due_cents // 100:,}".replace(",", " ") + " Kč" if due_cents else "0 Kč",
+                "debt": f"{debt // 100:,}".replace(",", " ") + " Kč" if debt else "0 Kč",
             }
         )
         m_paid = len(month_inv)
@@ -2067,7 +2303,8 @@ def promo_payload(store: Store, month: str = "") -> dict[str, Any]:
     attributed = promo_regs + inf_regs
     organic = max(0, (signups or visitors) - attributed)
     organic_prev = max(0, (signups_prev or visitors_prev) - (prev_promo + prev_inf))
-    direct_paid = max(0, len([inv for inv in invoices if int(inv.get("at") or 0) >= d30 and not inv.get("keys")]) )
+    direct_paid = len([inv for inv in invoices if int(inv.get("at") or 0) >= d30 and not inv.get("keys")])
+    direct_prev = len([inv for inv in invoices if d60 <= int(inv.get("at") or 0) < d30 and not inv.get("keys")])
     def delta(now_n: int, prev_n: int) -> str:
         if prev_n <= 0:
             return "+100 %" if now_n else "0 %"
@@ -2079,7 +2316,7 @@ def promo_payload(store: Store, month: str = "") -> dict[str, Any]:
         {"label": "Organické", "delta": delta(organic, organic_prev), "n": organic, "sub": f"Registrace + {organic} předplatných" if organic else "Bez přiřazeného kódu"},
         {"label": "Promo kódy", "delta": delta(promo_regs, prev_promo), "n": promo_regs, "sub": f"Registrace + {promo_paid} předplatných"},
         {"label": "Influenceři", "delta": delta(inf_regs, prev_inf), "n": inf_regs, "sub": f"Registrace + {inf_paid} předplatných"},
-        {"label": "Přímý odkaz", "delta": delta(direct_paid, 0), "n": direct_paid, "sub": f"Platby bez slevového kódu"},
+        {"label": "Přímý odkaz", "delta": delta(direct_paid, direct_prev), "n": direct_paid, "sub": f"Platby bez slevového kódu"},
     ]
     return {
         "configured": bool(config.STRIPE_SECRET_KEY),
@@ -2144,7 +2381,7 @@ def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str,
     gstore = global_store if global_store is not None else store
     if action == "block":
         _set_json_meta(store, "admin_user_blocked", True)
-        _audit(store, f"zablokoval účet {user_account.public_account(store).get('email')}", actor)
+        _audit(store, f"zablokoval účet {((user_registry.get_user_by_id(gstore, user_id) or {}).get('email') if user_id else '') or user_account.public_account(store).get('email')}", actor)
         return {"ok": True}
     if action == "unblock":
         _set_json_meta(store, "admin_user_blocked", False)
@@ -2173,8 +2410,12 @@ def apply_action(store: Store, action: str, payload: dict[str, Any], actor: str,
     if action == "set_plan":
         plan_id = str(payload.get("plan") or "").strip()
         charge = bool(payload.get("charge"))
-        account = user_account.public_account(store)
-        result = stripe_billing.admin_set_plan(store, plan_id, charge, account.get("email") or "")
+        email = ""
+        if user_id:
+            email = ((user_registry.get_user_by_id(gstore, user_id) or {}).get("email") or "").strip()
+        if not email:
+            email = user_account.public_account(store).get("email") or ""
+        result = stripe_billing.admin_set_plan(store, plan_id, charge, email)
         mode = "se stržením platby" if charge else "bez platby"
         _audit(store, f"nastavil tarif {stripe_billing.PLANS.get(plan_id, {}).get('label', plan_id)} ({mode})", actor)
         return result

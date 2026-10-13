@@ -5,6 +5,7 @@ from typing import Any
 import calendar
 import json
 import re
+import threading
 import time
 
 import stripe
@@ -874,36 +875,101 @@ def _kind_from_invoice(inv: Any) -> str:
 
 
 _MONTHS_CS = ["Led", "Úno", "Bře", "Dub", "Kvě", "Čer", "Čvc", "Srp", "Zář", "Říj", "Lis", "Pro"]
-_FINANCE_CACHE: dict[str, Any] = {}
-_FINANCE_AT = 0.0
 
 
-def admin_finance(store: Store) -> dict[str, Any]:
-    global _FINANCE_CACHE, _FINANCE_AT
-    if _FINANCE_CACHE and time.time() - _FINANCE_AT < 60:
-        return _FINANCE_CACHE
-    empty = _empty_finance(store)
+_SWR_LOCK = threading.Lock()
+_SWR_CACHE: dict[str, tuple[float, Any]] = {}
+_SWR_BUSY: set[str] = set()
+_SWR_KEY_LOCKS: dict[str, threading.Lock] = {}
+
+
+def invalidate_cache(*prefixes: str) -> None:
+    """Drop cached Stripe aggregates (all of them when no prefix is given)."""
+    with _SWR_LOCK:
+        for key in [k for k in _SWR_CACHE if not prefixes or k.startswith(prefixes)]:
+            _SWR_CACHE.pop(key, None)
+
+
+def cached_stripe(key: str, ttl: float, loader: Any, max_stale: float = 1800) -> Any:
+    """Stale-while-revalidate cache for slow Stripe listings.
+
+    A fresh entry is returned as is; a stale one is returned immediately while a
+    background thread refreshes it, so the admin never waits on a full Stripe
+    pagination after the first call. Failures are never cached: a stale value is
+    kept, otherwise the loader's exception propagates to the caller.
+    """
+    now = time.time()
+    with _SWR_LOCK:
+        entry = _SWR_CACHE.get(key)
+        key_lock = _SWR_KEY_LOCKS.setdefault(key, threading.Lock())
+        if entry and now - entry[0] < ttl:
+            return entry[1]
+        if entry and now - entry[0] > max_stale:
+            entry = None  # too old to show even while refreshing: recompute synchronously
+        if entry and key not in _SWR_BUSY:
+            _SWR_BUSY.add(key)
+            refresh = True
+        else:
+            refresh = False
+
+    def _run() -> Any:
+        value = loader()
+        with _SWR_LOCK:
+            _SWR_CACHE[key] = (time.time(), value)
+        return value
+
+    if entry:
+        if refresh:
+            def _bg() -> None:
+                try:
+                    _run()
+                except Exception:
+                    pass
+                finally:
+                    with _SWR_LOCK:
+                        _SWR_BUSY.discard(key)
+
+            threading.Thread(target=_bg, name=f"stripe-swr-{key}", daemon=True).start()
+        return entry[1]
+    with key_lock:  # cold start: concurrent callers wait for one computation
+        with _SWR_LOCK:
+            entry = _SWR_CACHE.get(key)
+        if entry and time.time() - entry[0] < ttl:
+            return entry[1]
+        return _run()
+
+
+def admin_finance(store: Store, registry: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Finance KPIs; ``registry`` = {"total": n, "plans": {plan: n}} of registered users."""
     if not config.STRIPE_SECRET_KEY:
-        _FINANCE_CACHE, _FINANCE_AT = empty, time.time()
-        return empty
-    try:
+        return _empty_finance(store, registry)
+
+    def _load() -> dict[str, Any]:
         _configure()
-        data = _stripe_finance(store)
+        return _stripe_finance(store, registry)
+
+    try:
+        return cached_stripe("finance", 60, _load)
     except Exception:
-        data = empty
+        data = _empty_finance(store, registry)
         data["error"] = "Stripe API teď neodpovědělo."
-    _FINANCE_CACHE, _FINANCE_AT = data, time.time()
-    return data
+        return data
 
 
-def _empty_finance(store: Store) -> dict[str, Any]:
+def _empty_finance(store: Store, registry: dict[str, Any] | None = None) -> dict[str, Any]:
     from app import account as user_account
 
-    local_user = 1 if user_account.public_account(store).get("email") else 0
-    local_plan = billing_state(store).get("plan") or "free"
     counts = {"free": 0, "start": 0, "pro": 0, "individual": 0}
-    if local_user:
-        counts[local_plan if local_plan in counts else "free"] = local_user
+    if registry:
+        local_user = int(registry.get("total") or 0)
+        for key, n in (registry.get("plans") or {}).items():
+            counts[key if key in counts else "free"] += int(n or 0)
+        counts["free"] += max(0, local_user - sum(counts.values()))
+    else:
+        local_user = 1 if user_account.public_account(store).get("email") else 0
+        local_plan = billing_state(store).get("plan") or "free"
+        if local_user:
+            counts[local_plan if local_plan in counts else "free"] = local_user
     now = datetime.now()
     labels = []
     for i in range(11, -1, -1):
@@ -957,7 +1023,7 @@ def _empty_finance(store: Store) -> dict[str, Any]:
     }
 
 
-def _stripe_finance(store: Store) -> dict[str, Any]:
+def _stripe_finance(store: Store, registry: dict[str, Any] | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     prev_start = (month_start - timedelta(days=1)).replace(day=1)
@@ -1036,8 +1102,13 @@ def _stripe_finance(store: Store) -> dict[str, Any]:
     customer_n = len(customers)
     from app import account as user_account
 
-    local = 1 if user_account.public_account(store).get("email") else 0
-    users_total = max(customer_n, local, sum(plan_n.values()))
+    if registry:
+        # Registered users are the denominator; Stripe customers also include guests/test checkouts.
+        local = int(registry.get("total") or 0)
+        users_total = max(local, sum(plan_n.values()))
+    else:
+        local = 1 if user_account.public_account(store).get("email") else 0
+        users_total = max(customer_n, local, sum(plan_n.values()))
     free_n = max(0, users_total - plan_n["trial"] - plan_n["start"] - plan_n["pro"] - plan_n["individual"])
     plan_n["free"] = free_n
     month_paid = 0
@@ -1534,11 +1605,15 @@ def _fmt_day(ts: int | None) -> str:
 def list_promotion_codes() -> list[dict[str, Any]]:
     if not config.STRIPE_SECRET_KEY:
         return []
-    _configure()
     try:
-        items = _stripe_pages(stripe.PromotionCode.list, expand=["data.promotion.coupon"])
+        return cached_stripe("promo_codes", 90, _load_promotion_codes)
     except Exception:
         return []
+
+
+def _load_promotion_codes() -> list[dict[str, Any]]:
+    _configure()
+    items = _stripe_pages(stripe.PromotionCode.list, expand=["data.promotion.coupon"])
     rows = []
     for item in items:
         promo = _sget(item, "promotion") or {}
@@ -1747,6 +1822,7 @@ def create_promotion_code(
     except Exception:
         promo_data.pop("restrictions", None)
         promo = stripe.PromotionCode.create(**promo_data)
+    invalidate_cache("promo_codes")
     return {"id": promo.id, "code": code}
 
 
@@ -1759,18 +1835,23 @@ def set_promotion_active(code: str, on: bool) -> dict[str, Any]:
     if not found.data:
         raise ValueError("Kód ve Stripe není")
     stripe.PromotionCode.modify(found.data[0].id, active=bool(on))
+    invalidate_cache("promo_codes")
     return {"ok": True, "code": code, "on": bool(on)}
 
 
 def promo_invoice_stats() -> list[dict[str, Any]]:
     if not config.STRIPE_SECRET_KEY:
         return []
-    _configure()
-    year_ago = int((datetime.now(timezone.utc) - timedelta(days=400)).timestamp())
     try:
-        invoices = _stripe_pages(stripe.Invoice.list, created={"gte": year_ago}, status="paid")
+        return cached_stripe("promo_invoices", 90, _load_promo_invoice_stats)
     except Exception:
         return []
+
+
+def _load_promo_invoice_stats() -> list[dict[str, Any]]:
+    _configure()
+    year_ago = int((datetime.now(timezone.utc) - timedelta(days=400)).timestamp())
+    invoices = _stripe_pages(stripe.Invoice.list, created={"gte": year_ago}, status="paid")
     rows = []
     for inv in invoices:
         rows.append(

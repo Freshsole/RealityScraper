@@ -67,12 +67,14 @@
     return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}<path d="${fill}" fill="#9fe870" fill-opacity="0.15"/><path d="${d}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
   };
 
+  // Axis maximum that is a multiple of 4, so the 5 y-axis ticks are always distinct integers.
   const niceMax = (n) => {
     const v = Math.max(1, Number(n) || 0);
-    const mag = 10 ** Math.floor(Math.log10(v));
-    const norm = v / mag;
-    const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
-    return nice * mag;
+    for (let mag = 1; ; mag *= 10) {
+      for (const step of [4, 8, 12, 20]) {
+        if (step * mag >= v) return step * mag;
+      }
+    }
   };
 
   const dayAgoLabel = (ago) => {
@@ -167,7 +169,7 @@
 
   async function api(path, opts) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 90000);
     let response;
     try {
       response = await fetch(path, {
@@ -912,7 +914,7 @@
         <span><span class="ad-status${row.enabled ? "" : " warn"}">${esc(row.status)}</span></span>
         <span class="muted">${esc(row.created)}</span>
         <span class="num">${esc(row.hits)}</span>
-        <a class="ad-detail" href="/nabidka?monitor_id=${esc(row.id)}">Detail →</a>
+        <a class="ad-detail" href="/admin/uzivatele/${esc(row.user_id || "local")}">Detail →</a>
       </div>`;
     main.innerHTML = `
       <header class="ad-pagehead">

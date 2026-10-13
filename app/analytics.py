@@ -487,7 +487,7 @@ def _since(days: int) -> str:
 
 def _day_start(days_ago: int = 0) -> str:
     local = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_ago)
-    return local.astimezone().isoformat()
+    return local.astimezone().astimezone(timezone.utc).isoformat()
 
 
 def unique_visitors(store: Store, since: str, until: str | None = None, *, kind: str = KIND_PAGE) -> int:
@@ -546,7 +546,7 @@ def pageviews_by_day(store: Store, days: int = 30) -> list[int]:
         ).fetchall()
     by_day = {str(row["day"])[:10]: int(row["n"]) for row in rows}
     out: list[int] = []
-    today = datetime.now().date()
+    today = datetime.now(timezone.utc).date()
     for i in range(days, -1, -1):
         key = (today - timedelta(days=i)).isoformat()
         out.append(by_day.get(key, 0))
@@ -567,7 +567,7 @@ def signups_by_day(store: Store, days: int = 30) -> list[int]:
         ).fetchall()
     by_day = {str(row["day"])[:10]: int(row["n"]) for row in rows}
     out: list[int] = []
-    today = datetime.now().date()
+    today = datetime.now(timezone.utc).date()
     for i in range(days, -1, -1):
         key = (today - timedelta(days=i)).isoformat()
         out.append(by_day.get(key, 0))
@@ -608,7 +608,7 @@ def fmt_int(n: int) -> str:
 
 def delta_pct(current: int, previous: int) -> str:
     if previous <= 0:
-        return "+100%" if current else "0%"
+        return "nové" if current else "0%"
     change = (current - previous) / previous * 100
     sign = "+" if change >= 0 else ""
-    return f"{sign}{change:.1f}%"
+    return f"{sign}{change:.0f}%"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import re
 import secrets
 import unicodedata
@@ -329,14 +330,28 @@ def apply_payload(article: dict[str, Any], payload: dict[str, Any], articles: li
     return out
 
 
-def list_articles(store: Store) -> dict[str, Any]:
+_VIEWS_CACHE: dict[int, tuple[float, dict[str, int]]] = {}
+
+
+def _story_views(store: Store) -> dict[str, int]:
+    """Story view counts GROUP BY the whole analytics table; reuse for 60 s."""
+    cached = _VIEWS_CACHE.get(id(store))
+    if cached and time.time() - cached[0] < 60:
+        return cached[1]
+    counts = site_stats.story_view_counts(store)
+    _VIEWS_CACHE[id(store)] = (time.time(), counts)
+    return counts
+
+
+def list_articles(store: Store, analytics_store: Store | None = None) -> dict[str, Any]:
+    """Articles live in ``store``; page-view analytics are recorded in the global ``analytics_store``."""
     articles = _read(store)
     if _publish_due(articles):
         _write(store, articles)
     published = [a for a in articles if a["status"] == "published"]
     drafts = [a for a in articles if a["status"] == "draft"]
     scheduled = [a for a in articles if a["status"] == "scheduled"]
-    real_views = site_stats.story_view_counts(store)
+    real_views = _story_views(analytics_store or store)
     ordered = []
     for item in sorted(articles, key=lambda a: a.get("updated_at") or "", reverse=True):
         row = dict(item)
