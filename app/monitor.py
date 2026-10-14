@@ -1849,6 +1849,8 @@ class Hub:
             needed: int | None = None
             pending_write: asyncio.Task[None] | None = None
             rate_retries = 0
+            err_retries = 0
+            rows_seen = 0
             while page <= 800:
                 window = max(1, min(8, engine.limiter_for(portal).limit))
                 pages = list(range(page, min(page + window, (needed or 800) + 1)))
@@ -1885,12 +1887,19 @@ class Hub:
                             last_total=total,
                         )
                         return False
+                    # Timeouts / 5xx are usually transient: retry the window before failing the shard.
+                    err_retries += 1
+                    if err_retries <= 2:
+                        await asyncio.sleep(2.0 * err_retries)
+                        continue
                     raise RuntimeError(err)
                 rate_retries = 0
+                err_retries = 0
                 empty_streak = 0
                 chunk: list[Listing] = []
                 for result in results:
                     total = result.total or total
+                    rows_seen += len(result.listings)
                     if not result.listings:
                         empty_streak += 1
                         continue
@@ -1936,9 +1945,11 @@ class Hub:
             if pending_write is not None:
                 await pending_write
             complete = True
-            if total and upserts < max(1, int(total * config.CATALOG_COMPLETE_RATIO)):
+            # Portals count duplicate rows in `total` (Sreality repeats ~20 % of adverts across pages),
+            # so compare the rows actually served, not unique upserts.
+            if total and max(rows_seen, upserts) < max(1, int(total * config.CATALOG_COMPLETE_RATIO)):
                 complete = False
-            last_error = None if complete else f"Incomplete crawl: upserts={upserts} total={total}"
+            last_error = None if complete else f"Incomplete crawl: rows={rows_seen} upserts={upserts} total={total}"
             # Bot-protection blokace (403/429 po retriech) - zapiš skutečnou
             # příčinu prázdného běhu, aby watchdog nehlásil "rozbitý parser?".
             blocked = getattr(client, "_blocked_status", None)
