@@ -251,17 +251,20 @@ class BazosClient:
         if page <= 1:
             self.search_url = str(response.url).split("#")[0]
 
-        def _parse(blob: bytes) -> tuple[list[Listing], int]:
-            text = blob.decode("utf-8", "replace")
-            listings = self._parse_list(extract_listing_html(text))
-            parsed_total = self._parse_total(text)
-            total = parsed_total or (len(listings) if page == 1 else 0)
-            return listings, total
+        from app import parse_pool
 
         parse_started = time.monotonic()
-        listings, total = await asyncio.to_thread(_parse, raw)
+        listings, total = await parse_pool.call(self._parse_blob, raw, page)
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         await self._attach_coords(listings)
+        return listings, total
+
+    def _parse_blob(self, blob: bytes, page: int) -> tuple[list[Listing], int]:
+        """Decode + parse one result page. Pure (no I/O), so it can run in a parse process."""
+        text = blob.decode("utf-8", "replace")
+        listings = self._parse_list(extract_listing_html(text))
+        parsed_total = self._parse_total(text)
+        total = parsed_total or (len(listings) if page == 1 else 0)
         return listings, total
 
     async def fetch_catalog(self, gate: asyncio.Semaphore | None = None) -> tuple[list[Listing], int]:
@@ -348,14 +351,16 @@ class BazosClient:
         response.raise_for_status()
         raw = response.content
 
-        def _parse(blob: bytes) -> Listing:
-            html = blob.decode("utf-8", "replace")
-            folded = html.casefold()
-            if "inzerát byl stažen" in folded or "inzerát neexistuje" in folded or "stránka nenalezena" in folded:
-                raise ListingGone(listing.url)
-            return self._parse_detail(listing, extract_listing_html(html))
+        from app import parse_pool
 
-        return await asyncio.to_thread(_parse, raw)
+        return await parse_pool.call(self._parse_detail_blob, raw, listing)
+
+    def _parse_detail_blob(self, blob: bytes, listing: Listing) -> Listing:
+        html = blob.decode("utf-8", "replace")
+        folded = html.casefold()
+        if "inzerát byl stažen" in folded or "inzerát neexistuje" in folded or "stránka nenalezena" in folded:
+            raise ListingGone(listing.url)
+        return self._parse_detail(listing, extract_listing_html(html))
 
     def _parse_total(self, html: str) -> int:
         raw = (html or "").replace("\xa0", " ")

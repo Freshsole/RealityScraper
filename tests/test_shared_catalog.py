@@ -313,7 +313,7 @@ class WorkerRolesTests(unittest.TestCase):
         async def run() -> dict[str, list[str]]:
             worker.owner_id = owner_id
             for uid in user_ids:
-                worker._spawn_user(uid)
+                await worker._spawn_user(uid)
             await asyncio.sleep(0.05)
             return {uid: sorted(hub.calls) for uid, hub in worker.user_hubs.items()}
 

@@ -235,11 +235,10 @@ class SrealityClient:
         from app.scrape_timing import note, note_httpx
 
         note_httpx(response)
+        from app import parse_pool
+
         parse_started = time.monotonic()
-        payload = await asyncio.to_thread(json.loads, response.content)
-        listings, total = await asyncio.to_thread(
-            parse_search_payload, payload.get("pageProps") or payload, self.search_url
-        )
+        listings, total = await parse_pool.call(parse_next_data_blob, response.content, self.search_url)
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         return listings, total
 
@@ -254,17 +253,10 @@ class SrealityClient:
         note_httpx(response)
         raw = response.content
 
-        def _parse(blob: bytes) -> tuple[list[Listing], int, str | None]:
-            html = blob.decode("utf-8", "replace")
-            data = _next_data_json(html)
-            listings, total = parse_search_payload(
-                data.get("props", {}).get("pageProps", {}), self.search_url
-            )
-            build_id = data.get("buildId")
-            return listings, total, str(build_id) if build_id else None
+        from app import parse_pool
 
         parse_started = time.monotonic()
-        listings, total, build_id = await asyncio.to_thread(_parse, raw)
+        listings, total, build_id = await parse_pool.call(parse_html_blob, raw, self.search_url)
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         if build_id:
             self._set_build_id(build_id)
@@ -354,8 +346,9 @@ class SrealityClient:
         if response.status_code == 404:
             raise ListingGone(listing.url)
         response.raise_for_status()
-        payload = await asyncio.to_thread(json.loads, response.content)
-        listing = await asyncio.to_thread(apply_detail, listing, payload)
+        from app import parse_pool
+
+        listing = await parse_pool.call(apply_detail_blob, response.content, listing)
         from app.places import refine_listing_location_async
 
         return await refine_listing_location_async(listing)
@@ -680,6 +673,25 @@ def format_cz_date(value: str | None) -> str:
         return f"{parsed.day}. {parsed.month}. {parsed.year}"
     except ValueError:
         return value
+
+
+def parse_next_data_blob(blob: bytes, search_url: str = "") -> tuple[list[Listing], int]:
+    """JSON body of a /_next/data search page -> (listings, total). Module level so it runs in a parse process."""
+    payload = json.loads(blob)
+    return parse_search_payload(payload.get("pageProps") or payload, search_url)
+
+
+def parse_html_blob(blob: bytes, search_url: str = "") -> tuple[list[Listing], int, str | None]:
+    """Search page HTML -> (listings, total, Next.js build id)."""
+    html = blob.decode("utf-8", "replace")
+    data = _next_data_json(html)
+    listings, total = parse_search_payload(data.get("props", {}).get("pageProps", {}), search_url)
+    build_id = data.get("buildId")
+    return listings, total, str(build_id) if build_id else None
+
+
+def apply_detail_blob(blob: bytes, listing: Listing) -> Listing:
+    return apply_detail(listing, json.loads(blob))
 
 
 def parse_search_payload(page_props: dict[str, Any], search_url: str = "") -> tuple[list[Listing], int]:

@@ -521,17 +521,20 @@ class HtmlPortalClient:
         if page <= 1:
             self.search_url = str(response.url).split("#")[0]
 
-        def _parse(blob: bytes) -> tuple[list[Listing], int]:
-            text = blob.decode("utf-8", "replace")
-            html = text if self.FULL_LIST_HTML else extract_listing_html(text)
-            listings = self._parse_list(html)
-            parsed_total = self._parse_total(html)
-            total = parsed_total or (len(listings) if page == 1 else 0)
-            return listings, total
+        from app import parse_pool
 
         parse_started = time.monotonic()
-        listings, total = await asyncio.to_thread(_parse, raw)
+        listings, total = await parse_pool.call(self._parse_blob, raw, page)
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
+        return listings, total
+
+    def _parse_blob(self, blob: bytes, page: int) -> tuple[list[Listing], int]:
+        """Decode + parse one result page. Pure (no I/O, no state), so it can run in a parse process."""
+        text = blob.decode("utf-8", "replace")
+        html = text if self.FULL_LIST_HTML else extract_listing_html(text)
+        listings = self._parse_list(html)
+        parsed_total = self._parse_total(html)
+        total = parsed_total or (len(listings) if page == 1 else 0)
         return listings, total
 
     async def fetch_pages(self, pages: int, newest: bool = True) -> tuple[list[Listing], int]:
@@ -581,10 +584,12 @@ class HtmlPortalClient:
         if status not in {404, 410}:
             response.raise_for_status()
 
-        def _parse(blob: bytes) -> Listing:
-            text = blob.decode("utf-8", "replace")
-            if self._is_gone(text, status):
-                raise ListingGone(listing.url)
-            return self._parse_detail(listing, extract_listing_html(text))
+        from app import parse_pool
 
-        return await asyncio.to_thread(_parse, raw)
+        return await parse_pool.call(self._parse_detail_blob, raw, listing, status)
+
+    def _parse_detail_blob(self, blob: bytes, listing: Listing, status: int) -> Listing:
+        text = blob.decode("utf-8", "replace")
+        if self._is_gone(text, status):
+            raise ListingGone(listing.url)
+        return self._parse_detail(listing, extract_listing_html(text))

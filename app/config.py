@@ -87,6 +87,10 @@ if SCRAPE_ROLE not in {"all", "web", "worker"}:
 # The catalog (all portals) is scraped once by the catalog owner (the admin user's hub); other users'
 # hubs only run their own monitors and read the shared catalog. SHARED_CATALOG=0 restores the old
 # behaviour (every user scrapes and stores a private copy of the whole catalog).
+# Parse scraped HTML/JSON in worker processes instead of GIL-bound threads (see app/parse_pool.py).
+# Default: 3 processes in the scrape worker, 0 (threads) everywhere else.
+SCRAPE_PARSE_PROCS = max(0, int(os.getenv("SCRAPE_PARSE_PROCS", "3" if SCRAPE_ROLE == "worker" else "0") or 0))
+SCRAPE_PARSE_TIMEOUT_SEC = max(5.0, float(os.getenv("SCRAPE_PARSE_TIMEOUT_SEC", "60") or 60))
 SHARED_CATALOG = (os.getenv("SHARED_CATALOG", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
 SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
 SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))

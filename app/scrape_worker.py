@@ -36,6 +36,7 @@ class ScrapeWorker:
         self.owner_id: str | None = None
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._ssr_task: asyncio.Task[None] | None = None
+        self._stall_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
@@ -64,6 +65,7 @@ class ScrapeWorker:
         self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
         self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
         self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
+        self._stall_task = asyncio.create_task(self._stall_dump_loop(), name="worker-stall-dump")
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -87,7 +89,13 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
-            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task):
+            try:
+                from app import parse_pool
+
+                parse_pool.close()
+            except Exception:
+                pass
+            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -120,10 +128,14 @@ class ScrapeWorker:
         hub = self.user_hubs.get(self.owner_id or "")
         return hub.store if hub is not None else None
 
-    def _spawn_user(self, user_id: str) -> None:
+    async def _spawn_user(self, user_id: str) -> None:
         if user_id in self.user_hubs:
             return
-        user_hub = Hub(store_path=user_registry.user_store_path(user_id), shared=self.hub)
+        # Building a Hub opens + migrates the user's SQLite store (seconds for a big one): never on the loop.
+        user_hub = await asyncio.to_thread(Hub, store_path=user_registry.user_store_path(user_id), shared=self.hub)
+        if user_id in self.user_hubs:  # spawned concurrently meanwhile
+            await user_hub.close()
+            return
         user_hub.running = True
         owner = self._is_catalog_owner(user_id)
         user_hub.catalog_owner = owner
@@ -169,18 +181,25 @@ class ScrapeWorker:
             self.owner_id = await asyncio.to_thread(user_registry.catalog_owner_id, self.hub.store)
         except Exception:
             pass
-        for user in users:
-            user_id = str(user.get("id") or "")
-            if not user_id:
-                continue
+        gate = asyncio.Semaphore(3)  # a few stores open in parallel; each open can take seconds
+
+        async def ensure(user_id: str) -> None:
             existing = self.user_hubs.get(user_id)
             if existing is not None and existing.catalog_owner != self._is_catalog_owner(user_id):
                 # The owner changed (e.g. a different admin): rebuild this user's pipelines.
                 await self._stop_user(user_id)
             try:
-                self._spawn_user(user_id)
+                async with gate:
+                    await self._spawn_user(user_id)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
                 print(f"scrape_worker: spawn failed for user {user_id}: {exc}", flush=True)
+
+        ids = [str(user.get("id") or "") for user in users]
+        # The owner first: it carries the catalog pipelines every consumer depends on.
+        ids.sort(key=lambda uid: uid != self.owner_id)
+        await asyncio.gather(*(ensure(uid) for uid in ids if uid))
 
     async def _rescan_loop(self) -> None:
         while self.running:
@@ -234,6 +253,31 @@ class ScrapeWorker:
             except Exception as exc:
                 print(f"scrape_worker: ssr rebuild error: {exc}", flush=True)
             await asyncio.sleep(ssr_cache.REBUILD_INTERVAL_SEC)
+
+    async def _stall_dump_loop(self) -> None:
+        """If the event loop is blocked for WORKER_STALL_DUMP_SEC, dump every thread's Python stack.
+
+        faulthandler's watchdog is a C thread that needs no GIL, so it works exactly when a regex or
+        JSON call is hogging the interpreter. The loop re-arms it every 0.5 s; a stall lets it fire.
+        Output goes to stderr (the container log).
+        """
+        import faulthandler
+
+        timeout = float(os.getenv("WORKER_STALL_DUMP_SEC", "2.0") or 0)
+        if timeout <= 0:
+            return
+        from app import parse_pool
+
+        ticks = 0
+        try:
+            while self.running:
+                faulthandler.dump_traceback_later(timeout, repeat=False, file=sys.stderr)
+                await asyncio.sleep(0.5)
+                ticks += 1
+                if ticks % 120 == 0 and parse_pool.procs():
+                    print(f"scrape_worker: parse_pool procs={parse_pool.procs()} {parse_pool.stats}", flush=True)
+        finally:
+            faulthandler.cancel_dump_traceback_later()
 
     async def _checkpoint_loop(self) -> None:
         """Keep the WAL small: with writers and readers always overlapping SQLite rarely resets it,

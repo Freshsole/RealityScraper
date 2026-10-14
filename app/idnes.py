@@ -202,23 +202,26 @@ class IdnesClient:
             self._remember_search_url(str(response.url))
         raw = response.content
 
-        def _decode_and_parse() -> tuple[list[Listing], int]:
-            text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
-            body = text
-            if page > 1:
-                try:
-                    payload = json.loads(text)
-                    body = (payload.get("snippets") or {}).get("snippet-s-result-articles") or text
-                except Exception:
-                    body = text
-            listings = self._parse_list(self._results_html(body))
-            total = self._parse_total(text) or self._parse_total(body) or (len(listings) if page == 1 else 0)
-            return listings, total
+        from app import parse_pool
 
         parse_started = time.monotonic()
-        listings, total = await asyncio.to_thread(_decode_and_parse)
+        listings, total = await parse_pool.call(self._parse_blob, bytes(raw) if isinstance(raw, (bytearray, memoryview)) else raw, page)
         note(parse_ms=(time.monotonic() - parse_started) * 1000.0)
         await self._attach_coords(listings)
+        return listings, total
+
+    def _parse_blob(self, raw: bytes | str, page: int) -> tuple[list[Listing], int]:
+        """Decode + parse one result page. Pure (no I/O), so it can run in a parse process."""
+        text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+        body = text
+        if page > 1:
+            try:
+                payload = json.loads(text)
+                body = (payload.get("snippets") or {}).get("snippet-s-result-articles") or text
+            except Exception:
+                body = text
+        listings = self._parse_list(self._results_html(body))
+        total = self._parse_total(text) or self._parse_total(body) or (len(listings) if page == 1 else 0)
         return listings, total
 
     async def fetch_pages(self, pages: int, newest: bool = True) -> tuple[list[Listing], int]:
@@ -268,22 +271,24 @@ class IdnesClient:
         response.raise_for_status()
         raw = response.content
 
-        def _parse(blob: bytes) -> Listing:
-            html = blob.decode("utf-8", "replace")
-            folded = html.casefold()
-            missing = "listing_id" not in html and "listing_lat" not in html
-            if missing and (
-                "inzerát byl stažen" in folded
-                or "inzerát neexistuje" in folded
-                or "stránka nenalezena" in folded
-            ):
-                raise ListingGone(listing.url)
-            return self._parse_detail(listing, extract_listing_html(html))
+        from app import parse_pool
 
-        listing = await asyncio.to_thread(_parse, raw)
+        listing = await parse_pool.call(self._parse_detail_blob, raw, listing)
         from app.places import refine_listing_location_async
 
         return await refine_listing_location_async(listing)
+
+    def _parse_detail_blob(self, blob: bytes, listing: Listing) -> Listing:
+        html = blob.decode("utf-8", "replace")
+        folded = html.casefold()
+        missing = "listing_id" not in html and "listing_lat" not in html
+        if missing and (
+            "inzerát byl stažen" in folded
+            or "inzerát neexistuje" in folded
+            or "stránka nenalezena" in folded
+        ):
+            raise ListingGone(listing.url)
+        return self._parse_detail(listing, extract_listing_html(html))
 
     def _remember_search_url(self, final_url: str) -> None:
         split = urlsplit(final_url)
