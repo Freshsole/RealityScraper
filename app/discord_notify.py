@@ -98,6 +98,20 @@ def format_listed_duration(row: dict[str, Any], ended_at: datetime | None = None
     return " ".join(parts) or "méně než minutu", started, ended_label
 
 
+async def send_simple(webhook_url: str, content: str) -> None:
+    """Pošle prostou textovou zprávu na Discord webhook. Neposílá nic, když je webhook prázdný."""
+    webhook_url = (webhook_url or "").strip()
+    if not webhook_url:
+        return
+    webhook_url = _require_webhook(webhook_url)
+    text = (content or "").strip()[:1900]
+    if not text:
+        return
+    client = _http()
+    response = await client.post(webhook_url, json={"content": text})
+    _raise_for_discord(response, webhook_url)
+
+
 async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "") -> None:
     if not webhook_url:
         raise RuntimeError("SOLD_WEBHOOK_URL is empty")

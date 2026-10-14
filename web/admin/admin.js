@@ -2713,6 +2713,44 @@
     `;
   }
 
+  async function pageLeads() {
+    const data = await api("/api/admin/guest-leads");
+    const items = data.items || [];
+    const fmtTs = (ts) => {
+      if (!ts) return "";
+      const d = new Date(Number(ts) * 1000);
+      return d.toLocaleString("cs-CZ", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    };
+    const row = (item) => `<div class="ad-utbl-row">
+        <span><strong>${esc(item.email || "")}</strong></span>
+        <span>${esc(item.source || "")}</span>
+        <span class="muted">${esc(fmtTs(item.ts))}</span>
+      </div>`;
+    main.innerHTML = `
+      <header class="ad-pagehead">
+        <h1 class="ad-h">Leady</h1>
+        <p class="ad-lead">E-maily sebrané e-mailovou bránou na /hledat. Každý nový lead jde i na Discord webhook.</p>
+      </header>
+      <section class="ad-nsec">
+        <div class="ad-scrape-kpis">
+          <article class="ad-mini"><div class="lbl">Celkem leadů</div><strong>${esc(fmtN(data.count || 0))}</strong></article>
+        </div>
+      </section>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">Poslední leady</h2>
+        <article class="ad-card">
+          <div class="ad-utbl-wrap">
+            <div class="ad-utbl">
+              <div class="ad-utbl-head"><span>E-mail</span><span>Zdroj</span><span>Kdy</span></div>
+              <div>${items.map(row).join("") || ""}</div>
+              <div class="ad-utbl-empty" ${items.length ? "hidden" : ""}>Zatím žádné leady.</div>
+            </div>
+          </div>
+        </article>
+      </section>
+    `;
+  }
+
   const cmsPages =
     typeof window.AdCms === "function"
       ? window.AdCms({ api, esc, ico, $, main, fmtN, getMe: () => me })
@@ -2726,6 +2764,7 @@
     notifikace: pageNotify,
     provoz: pageOps,
     hry: pageGames,
+    leady: pageLeads,
     fakturace: pageBilling,
     promo: pagePromo,
     ...cmsPages,
@@ -2765,6 +2804,7 @@
     main.classList.toggle("ad-notify", route === "notifikace");
     main.classList.toggle("ad-ops", route === "provoz");
     main.classList.toggle("ad-games", route === "hry");
+    main.classList.toggle("ad-leady", route === "leady");
     main.classList.toggle("ad-bill", route === "fakturace");
     main.classList.toggle("ad-promo", route === "promo");
     const cms = String(route).startsWith("cms");

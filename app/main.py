@@ -1421,18 +1421,36 @@ def _catalog_store(session: str | None, guest: str | None) -> tuple[dict[str, An
         return None, _public_store() or hub.store
     raise HTTPException(401, "Nejste přihlášeni")
 
+def _fire_discord_ping(webhook_url: str, content: str) -> None:
+    """Odešle Discord zprávu na pozadí — nikdy neblokuje request ani nevyhazuje výjimku ven."""
+    from app import discord_notify
+
+    async def _runner() -> None:
+        try:
+            await discord_notify.send_simple(webhook_url, content)
+        except Exception as exc:
+            print(f"[discord-ping] selhalo: {exc}")
+
+    asyncio.create_task(_runner())
+
+
 @app.post("/api/guest/access")
 async def guest_access_grant(request: Request, payload: dict[str, Any] = Body(...)) -> JSONResponse:
     email = str(payload.get("email") or "").strip()
     if not guest_access.valid_email(email):
         raise HTTPException(400, "Zadejte platný e-mail")
     _rate_limit_or_429(request, "guest", "access", 12, 3600.0)
+    email_norm = email.strip().lower()
+    existing = await asyncio.to_thread(guest_access.list_leads, 10000)
+    is_new = email_norm not in {str(r.get("email") or "").strip().lower() for r in existing}
     await asyncio.to_thread(
         guest_access.add_lead,
         email,
         ip=_client_ip(request),
         user_agent=request.headers.get("user-agent", ""),
     )
+    if is_new and config.DISCORD_LEADS_WEBHOOK_URL:
+        _fire_discord_ping(config.DISCORD_LEADS_WEBHOOK_URL, f"📧 Nový lead: {email_norm} (zdroj: /hledat)")
     response = JSONResponse({"ok": True})
     response.set_cookie(
         guest_access.COOKIE,
@@ -1517,6 +1535,11 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
         site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
     except Exception:
         pass
+    if config.DISCORD_SIGNUPS_WEBHOOK_URL:
+        _name = str(user.get("name") or "").strip()
+        _mail = str(user.get("email") or "").strip()
+        _who = f"{_name} <{_mail}>" if _name else _mail
+        _fire_discord_ping(config.DISCORD_SIGNUPS_WEBHOOK_URL, f"👤 Nová registrace: {_who}")
     return response
 
 
