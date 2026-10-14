@@ -15,7 +15,7 @@ from app import email_notify as mail_notify
 from app import users as user_registry
 from app.discord_notify import send_digest, send_listing, send_sold, send_text
 from app.sreality import Listing, ListingGone, format_price, is_recently_created, listing_from_dict
-from app.sources import PORTAL_LABELS, client_for, source_name
+from app.sources import PORTAL_LABELS, client_for, portal_of, source_name
 from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_shards
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
@@ -532,13 +532,22 @@ class Hub:
                 if not any(self._monitor_due(item) for item in bucket["monitors"]):
                     continue
                 async def bounded_check(current=bucket):
+                    job_started = time.monotonic()
+                    job_url = str(current["job"].get("search_url") or "")
                     try:
-                        return await asyncio.wait_for(
+                        outcome = await asyncio.wait_for(
                             self.check_live_job(current["job"], current["monitors"]),
                             timeout=float(config.SCRAPE_MONITOR_DEADLINE_SEC) + 30.0,
                         )
+                        took = time.monotonic() - job_started
+                        if took > 30.0:
+                            print(f"monitor slow job portal={portal_of(job_url)} sec={took:.0f} url={job_url[:90]}", flush=True)
+                        return outcome
                     except asyncio.TimeoutError:
-                        message = "Monitor search timeout; další cyklus ho zkusí znovu."
+                        message = (
+                            f"Monitor search timeout portal={portal_of(job_url)} "
+                            f"waited={time.monotonic() - job_started:.0f}s url={job_url[:90]}; další cyklus ho zkusí znovu."
+                        )
                         print(message, flush=True)
                         for item in current["monitors"]:
                             await self._job_db(
