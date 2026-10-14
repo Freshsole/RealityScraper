@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -50,8 +51,8 @@ DISPOSITION = {
     "fivePlusKk": "5+kk", "fivePlusOne": "5+1", "sixAndMore": "6+", "atypical": "atyp",
 }
 # Max rows per find request the API accepts (500 works, 1000 -> HTTP 500). Each response also carries
-# a ~250 KB `markers` block, so bigger pages are cheaper per row; 200 = whole rent market in 16 pages (<= SCRAPE_DEEP_PAGES=20).
-FIND_PAGE_SIZE = 200
+# a ~250 KB `markers` block. Measured live: perPage 20 = 0.9 s, 50 = 1.1 s, 200 = 2.3-7 s per request, so 50 keeps monitor polls fast (newest rows come first) and the full market is 63 pages.
+FIND_PAGE_SIZE = int(os.getenv("ULOVDOMOV_PAGE_SIZE", "50"))
 
 
 def _title_of(value: Any) -> str:

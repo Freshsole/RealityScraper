@@ -276,3 +276,6 @@ WEB_DIR = resource_root() / "web"
 CATALOG_STALE_GRACE_SEC = max(0, int(os.getenv("CATALOG_STALE_GRACE_SEC", str(3 * 3600))))
 # A shard counts as fully crawled at this share of the portal-reported total.
 CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float(os.getenv("CATALOG_COMPLETE_RATIO", "0.985"))))
+
+# How long one monitor tick waits for live polls before reporting; slower ones continue in the background.
+SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float(os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC", "20")))

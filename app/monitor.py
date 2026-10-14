@@ -64,6 +64,7 @@ class Hub:
         self._owner_sync_at = 0.0
         self._recent_shard_idx = 0
         self._discovery_ticks = 0
+        self._live_inflight: dict[str, asyncio.Task] = {}
         self._deep_windows: dict[str, int] = {}
         self._deep_shard_idx = 0
         self.dedupe_running = False
@@ -372,6 +373,8 @@ class Hub:
 
     async def stop(self) -> None:
         self.running = False
+        for live in list(self._live_inflight.values()):
+            live.cancel()
         tasks = [
             task
             for task in (
@@ -527,10 +530,13 @@ class Hub:
                 for job in jobs:
                     bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
                     bucket["monitors"].append(monitor)
-            pending = []
-            for bucket in groups.values():
+            pending: list[asyncio.Task] = []
+            for job_id, bucket in groups.items():
                 if not any(self._monitor_due(item) for item in bucket["monitors"]):
                     continue
+                running = self._live_inflight.get(job_id)
+                if running is not None and not running.done():
+                    continue  # previous poll of this search is still running; do not pile up
                 async def bounded_check(current=bucket):
                     job_started = time.monotonic()
                     job_url = str(current["job"].get("search_url") or "")
@@ -562,15 +568,22 @@ class Hub:
                             "errors": [message],
                         }
 
-                pending.append(bounded_check())
-            raw_results = await asyncio.gather(*pending, return_exceptions=True)
+                task = asyncio.create_task(bounded_check(), name=f"monitor-live:{job_id}")
+                self._live_inflight[job_id] = task
+                task.add_done_callback(lambda _t, key=job_id: self._live_inflight.pop(key, None))
+                pending.append(task)
             results = []
-            for result in raw_results:
-                if isinstance(result, BaseException):
-                    self.last_error = f"monitor-priority: {result}"
-                    results.append({"ok": False, "error": str(result)})
-                else:
-                    results.append(result)
+            if pending:
+                # One slow portal (e.g. UlovDomov at ~4 s/request) must not hold back the others:
+                # report what finished within the wait, the rest keeps running and is skipped next tick.
+                done, _still = await asyncio.wait(pending, timeout=float(config.SCRAPE_MONITOR_TICK_WAIT_SEC))
+                for task in done:
+                    exc = task.exception()
+                    if exc is not None:
+                        self.last_error = f"monitor-priority: {exc}"
+                        results.append({"ok": False, "error": str(exc)})
+                    else:
+                        results.append(task.result())
             return {"ok": True, "results": results}
         finally:
             self.checking = False
