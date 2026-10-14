@@ -13,7 +13,12 @@ from app.sreality import Listing, format_price
 
 GRAPHQL_URL = "https://api.bezrealitky.cz/graphql/"
 SITE = "https://www.bezrealitky.cz"
-PAGE_SIZE = 15
+# listAdverts silently clamps `limit` to 100 (limit: 500 returns 100 rows); the old 15 made a full
+# Czech rent crawl 140 requests and, with SCRAPE_DEEP_PAGES=20, reached only 300 of ~2100 rows.
+PAGE_SIZE = 100
+# OSM relation of Czechia. Without a region/polygon the API also returns ~half of the market from Germany
+# (EUR, Stuttgart, Hamburg ...): 4229 rent / 2338 sale nationwide vs 2105 / 974 inside Czechia.
+CZ_REGION_OSM = "R51684"
 
 HEADERS = {
     "User-Agent": (
@@ -103,7 +108,7 @@ INT_KEYS = (
     ("locationRadius", "locationRadius"),
     ("neighborhood", "locationRadius"),
 )
-LIST_FIELDS = """
+_FIELDS_TMPL = """
       id
       uri
       estateType
@@ -121,7 +126,7 @@ LIST_FIELDS = """
       address(locale: CS)
       gps { lat lng }
       mainImage { url(filter: RECORD_MAIN) }
-      publicImages(limit: 50) { url(filter: RECORD_MAIN) }
+      publicImages(limit: __IMG__) { url(filter: RECORD_MAIN) }
       balcony
       loggia
       cellar
@@ -137,8 +142,12 @@ LIST_FIELDS = """
       frontGarden
 """
 
+# List rows carry 12 photos (a 100-row page is then ~100 KB instead of ~260 KB); detail fetch loads all 50.
+LIST_FIELDS = _FIELDS_TMPL.replace("__IMG__", "12")
+_DETAIL_BASE = _FIELDS_TMPL.replace("__IMG__", "50")
+
 DETAIL_FIELDS = (
-    LIST_FIELDS
+    _DETAIL_BASE
     + """
       description
       floor
@@ -243,6 +252,8 @@ class BezrealitkyClient:
         estates = [item for item in query.get("estateType", ["BYT"]) if item in ESTATES]
         disps = [item for item in query.get("disposition", []) if item in DISPOSITIONS]
         regions = [item for item in query.get("regionOsmIds", []) if OSM_RE.match(item)]
+        if not regions and not query.get("boundaryPoints") and not query.get("id") and not query.get("ids"):
+            regions = [CZ_REGION_OSM]
         ownership = [item for item in query.get("ownership", []) if item in OWNERSHIP]
         conditions = [item for item in query.get("condition", []) if item in CONDITIONS]
         constructions = [item for item in query.get("construction", []) if item in CONSTRUCTIONS]

@@ -53,6 +53,7 @@ class ScrapeMetrics:
     def __init__(self) -> None:
         self.concurrency_current: int = 0
         self.tick_deferred_pages: int = 0
+        self.early_stops: int = 0
         self.tick_duration_ms: float = 0.0
         self._portals: dict[str, _PortalWindow] = defaultdict(_PortalWindow)
         self._all = _PortalWindow()
@@ -94,6 +95,7 @@ class ScrapeMetrics:
             "fetch_fail": self._all.fetch_fail,
             "concurrency_current": self.concurrency_current,
             "tick_deferred_pages": self.tick_deferred_pages,
+            "early_stops": self.early_stops,
             "tick_duration_ms": self.tick_duration_ms,
             "error_rate_5m": round(self._all.error_rate_5m(), 4),
             "limit": None,
@@ -237,6 +239,7 @@ class ShardFetchResult:
     deferred_pages: list[int]
     error: str | None = None
     portal: str = ""
+    next_window: int | None = None
 
 
 FetchPageFn = Callable[[int], Awaitable[tuple[list[Any], int]]]
@@ -374,6 +377,19 @@ class ScrapeEngine:
                 fetch_ms=0.0,
             )
 
+        from app import portal_pacing
+
+        if portal_pacing.cooldown_remaining(portal) > 0:
+            # Blocked (429 + Retry-After): sending more only prolongs the ban.
+            self.metrics.record("fail", portal=portal)
+            return PageResult(
+                page=page,
+                listings=[],
+                total=0,
+                error=f"429 portal-cooldown {int(portal_pacing.cooldown_remaining(portal))}s",
+                status_code=429,
+            )
+
         limiter = self.limiter_for(portal)
         use_global = self.registry is not None and self.pipeline != "catalog_sync"
         global_lim = self.registry.global_limiter if use_global else None
@@ -482,9 +498,22 @@ class ScrapeEngine:
         prioritize_first: bool = True,
         portal: str = "",
         search_url: str = "",
+        known_fn: Callable[[Any], bool] | None = None,
+        window_start: int | None = None,
     ) -> ShardFetchResult:
-        """Fetch pages 1..max_pages (plus deferred) until deadline; leftover → deferred queue."""
-        pending = list(range(1, max(1, max_pages) + 1))
+        """Fetch pages 1..max_pages (plus deferred) until deadline; leftover → deferred queue.
+
+        `known_fn` enables early stop: when page 1 (newest first) holds only listings
+        we already store unchanged, deeper pages cannot contain anything new.
+        """
+        window_next: int | None = None
+        if window_start is not None and max_pages > 1:
+            # Rolling window: page 1 (newest) every time, plus max_pages-1 pages starting at window_start.
+            start = max(2, int(window_start))
+            pending = [1, *range(start, start + max_pages - 1)]
+            window_next = start + max_pages - 1
+        else:
+            pending = list(range(1, max(1, max_pages) + 1))
         for page in self._take_deferred(shard_key):
             if page not in pending:
                 pending.append(page)
@@ -547,7 +576,13 @@ class ScrapeEngine:
                 page_size = max(len(first.listings), 1)
                 if total:
                     needed = (int(total) + page_size - 1) // page_size
-                    pending = [p for p in pending if p <= min(needed, max_pages)]
+                    limit_page = needed if window_next is not None else min(needed, max_pages)
+                    pending = [p for p in pending if p <= limit_page]
+                    if window_next is not None and window_next > needed:
+                        window_next = 2
+                if known_fn is not None and first.listings and all(known_fn(i) for i in first.listings):
+                    self.metrics.early_stops += 1
+                    pending = []
 
         while pending:
             if time.monotonic() >= deadline_monotonic:
@@ -595,6 +630,7 @@ class ScrapeEngine:
             deferred_pages=deferred,
             error=last_error,
             portal=portal,
+            next_window=window_next,
         )
 
     async def fetch_shards(
@@ -604,6 +640,8 @@ class ScrapeEngine:
         client_factory: Callable[[str], Any],
         max_pages: int,
         deadline_sec: float,
+        known_fn: Callable[[Any], bool] | None = None,
+        windows: dict[str, int] | None = None,
     ) -> list[ShardFetchResult]:
         started = time.monotonic()
         deadline = started + deadline_sec
@@ -637,7 +675,11 @@ class ScrapeEngine:
                 deadline_monotonic=deadline,
                 portal=portal,
                 search_url=url,
+                known_fn=known_fn,
+                window_start=(windows.get(shard.get("shard_key") or url, 2) if windows is not None else None),
             )
+            if windows is not None and result.next_window is not None and not result.error:
+                windows[shard.get("shard_key") or url] = result.next_window
             result.search_url = url
             result.portal = portal
             return result

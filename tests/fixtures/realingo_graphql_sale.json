@@ -1,0 +1,88 @@
+{
+ "data": {
+  "searchOffer": {
+   "total": 29512,
+   "lockedOffersCount": 596,
+   "items": [
+    {
+     "id": "24746546",
+     "url": "/prodej/byt-2+kk-znojmo/24746546",
+     "purpose": "SELL",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T20:00:35.567Z",
+     "category": "FLAT2_KK",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 7302400,
+      "canonical": 7302400,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 61
+     },
+     "photos": {
+      "main": "offer/erq/erqdb2z2pt-1778x1000xb0b0b0"
+     },
+     "location": {
+      "address": "Znojmo",
+      "latitude": 48.8554987108,
+      "longitude": 16.0487965909
+     }
+    },
+    {
+     "id": "24746545",
+     "url": "/prodej/byt-2+kk-el-krasnohorske-decin-decin-ii-nove-mesto/24746545",
+     "purpose": "SELL",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T20:00:34.998Z",
+     "category": "FLAT2_KK",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 2490000,
+      "canonical": 2490000,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 48
+     },
+     "photos": {
+      "main": "offer/pux/puxy12wjxz-1491x1000xf0d0d0"
+     },
+     "location": {
+      "address": "El. Krásnohorské, Děčín - Děčín II-Nové Město",
+      "latitude": 50.7812321731,
+      "longitude": 14.2225231935
+     }
+    },
+    {
+     "id": "24746544",
+     "url": "/prodej/byt-3+kk-cimicka-praha-8-kobylisy/24746544",
+     "purpose": "SELL",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T20:00:30.607Z",
+     "category": "FLAT3_KK",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 8750000,
+      "canonical": 8750000,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 59
+     },
+     "photos": {
+      "main": "offer/utj/utjxrkmpzd-1499x1000xb09090"
+     },
+     "location": {
+      "address": "Čimická, Praha 8 - Kobylisy",
+      "latitude": 50.12412234,
+      "longitude": 14.4499072
+     }
+    }
+   ]
+  }
+ }
+}

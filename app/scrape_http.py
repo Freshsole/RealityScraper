@@ -98,13 +98,19 @@ async def request_with_log(
     portal: str = "",
     **kwargs: Any,
 ) -> httpx.Response:
+    from app import portal_pacing
+
     attempts = max(1, int(config.SCRAPE_HTTP_RETRIES))
     last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
+        # 429 cooldown (Retry-After) + min spacing between requests to the same portal.
+        portal_pacing.check_cooldown(portal, url)
+        await portal_pacing.wait_turn(portal)
         log_attempt(portal=portal, attempt=attempt, attempts=attempts, phase="start", url=url)
         started = time.monotonic()
         try:
             response = await bounded_request(client, method, url, **kwargs)
+            portal_pacing.note_response(portal, response)
             log_attempt(
                 portal=portal,
                 attempt=attempt,

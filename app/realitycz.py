@@ -9,19 +9,20 @@ The bare /{offer}/byty/ URL is only a catalogue homepage, not results.
 from __future__ import annotations
 
 import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
+from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, hash_id, parse_price
 from app.portal_urls import realitycz_url
 from app.sreality import Listing
 
 SITE = realitycz_url.site
-# Listing card blocks: <div class="xvypis ..."> ... </div>
-CARD_RE = re.compile(
-    r'<div class="xvypis[^"]*"[^>]{0,200}>(.{0,12000}?)</div>\s*(?=<div class="xvypis|<div class="cll|$)',
-    re.S | re.I,
-)
+# Listing cards: <div class="xvypis vypismd ... gpsx50.06 gpsy14.39" id="id...">
+CARD_START_RE = re.compile(r'<div class="xvypis[^"]*"[^>]{0,200}>', re.I)
+GPS_RE = re.compile(r"gpsx(-?\d+\.\d+)\s+gpsy(-?\d+\.\d+)")
+TOTAL_RE = re.compile(r'<span class="bld fsbg">\s*([\d\.\s\xa0]+?)\s*</span>\s*(?:&nbsp;|\s)*nabíd', re.I)
 # EVC code links: DMQ-003730/?c=..., BTU-N05169/?strana=2&c=...
-EVC_RE = re.compile(r'href="([A-Z]{2,4}-[A-Z0-9]{3,8})/\?[^"]{0,300}"', re.I)
+# (agency prefix is 3 alphanumerics: BNB-, B51-, 862-, 668-, ...)
+EVC_RE = re.compile(r'href="([A-Z0-9]{2,4}-[A-Z0-9]{3,8})/\?[^"]{0,300}"', re.I)
 TITLE_RE = re.compile(
     r'<p class="vypisnaz"[^>]{0,120}>\s*<a[^>]{0,400}>(.{1,400}?)</a>',
     re.S | re.I,
@@ -40,11 +41,27 @@ IMG_ABS_RE = re.compile(r'(?:src|data-src)="(https://[^"]{1,400}\.(?:jpg|jpeg|we
 
 class RealityczClient(HtmlPortalClient):
     SITE = SITE
-    PAGE_PARAM = "strana"
-    # Site-side pagination via URL params does not advance the result set
-    # (JS-driven); one page carries ~25 offers.
+    # reality.cz ignores ?strana=N / ?sort=N (that is why pages 2..n were copies
+    # of page 1). Real paging is ``?g=K`` = K-th "Dalších 25 nabídek" page
+    # (page N -> g=N-1; the cursor tail ``-2-291_A_B`` is optional). Page 1 has
+    # 2 random "makléři doporučují" ads + 23 organic offers, later pages 25.
+    PAGE_PARAM = "g"
     PAGE_SIZE = 25
     FULL_LIST_HTML = True
+
+    def _page_url(self, page: int, newest: bool = True) -> str:
+        split = urlsplit(self.search_url or "")
+        query = [(k, v) for k, v in parse_qsl(split.query, keep_blank_values=True) if k not in {"g", "strana"}]
+        if page > 1:
+            query.append(("g", str(page - 1)))
+        return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), ""))
+
+    def _parse_total(self, html: str) -> int:
+        m = TOTAL_RE.search((html or "")[:200_000])
+        if not m:
+            return 0
+        digits = re.sub(r"\D", "", m.group(1))
+        return int(digits) if digits else 0
 
     def _context(self) -> str:
         path = (self.search_url or "").lower()
@@ -57,7 +74,13 @@ class RealityczClient(HtmlPortalClient):
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
-        blocks = CARD_RE.findall(text)
+        starts = [m.start() for m in CARD_START_RE.finditer(text)]
+        ends = [m.start() for m in CARD_START_RE.finditer(text)][1:] + [len(text)]
+        blocks = []
+        for a, b in zip(starts, ends):
+            block = text[a:b]
+            cut = block.find('<div class="strankovani')
+            blocks.append(block[:cut] if cut >= 0 else block[:12_000])
         if not blocks:
             # Fallback: scan whole page for EVC links (older markup).
             blocks = [text]
@@ -87,11 +110,16 @@ class RealityczClient(HtmlPortalClient):
         img_m = IMG_RE.search(html) or IMG_ABS_RE.search(html)
         if img_m:
             img = abs_url(img_m.group(1), SITE)
+        lat = lon = None
+        gps = GPS_RE.search(html[:400])
+        if gps and float(gps.group(1)) and float(gps.group(2)):
+            lat, lon = float(gps.group(1)), float(gps.group(2))
         name = title
         if desc and desc not in title:
             name = f"{title} - {desc}"
         return listing_from_card(
-            listing_id=numeric_id(evc, url),
+            # digits-only ids collide across agencies (DMQ-003736 vs BNB-003736)
+            listing_id=hash_id(evc),
             name=name or evc,
             url=url,
             price_czk=price_czk,
@@ -100,4 +128,6 @@ class RealityczClient(HtmlPortalClient):
             image_url=img,
             photos=[img] if img else [],
             offer=offer,
+            lat=lat,
+            lon=lon,
         )

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit, urlunsplit
 
-from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price
+from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_price, with_page
 from app.portal_urls import ceskereality_url
 from app.sreality import Listing
 
@@ -23,6 +24,10 @@ ID_RE = re.compile(r"[-/](\d{5,12})(?:[-/.]|$)")
 IMG_ID_RE = re.compile(r"img-cache\.ceskereality\.cz/nemovitosti/[^/]{1,80}/(\d{5,12})/", re.I)
 TITLE_RE = re.compile(r"<h2[^>]{0,120}>(.{0,500}?)</h2>", re.S | re.I)
 ALT_RE = re.compile(r'alt="([^"]{1,400})"')
+# Header: "Právě teď můžete vybírat ze 4 931 bytů k pronájmu" / "z 9 857 bytů na prodej".
+TOTAL_RE = re.compile(r"vybírat\s+ze?\s+(\d(?:[\d\s]{0,9}\d)?)\s+[^\W\d]+", re.I)
+TOTAL_META_RE = re.compile(r"Máme tady\s+(\d(?:[\d\s]{0,9}\d)?)\s+[^\W\d]+", re.I)
+SORT_SEGMENTS = {"nejnovejsi", "nejlevnejsi", "nejdrazsi", "nejaktualnejsi", "nejmensi", "nejvetsi"}
 PRICE_BOX_RE = re.compile(r"(?:i-estate__price|price)[^>]{0,120}>(.{0,400}?)</", re.S | re.I)
 
 
@@ -32,6 +37,24 @@ class CeskerealityClient(HtmlPortalClient):
     PAGE_SIZE = 20
     # Listing cards are spread across a large page; don't truncate.
     FULL_LIST_HTML = True
+
+    def _page_url(self, page: int, newest: bool = True) -> str:
+        """``/pronajem/byty/[kraj/]nejnovejsi/?strana=N`` (the default order puts promoted old ads first)."""
+        split = urlsplit(self.search_url)
+        parts = [p for p in split.path.split("/") if p]
+        if newest and not any(p in SORT_SEGMENTS for p in parts):
+            parts.append("nejnovejsi")
+        path = "/" + "/".join(parts) + "/" if parts else "/"
+        url = urlunsplit((split.scheme, split.netloc, path, split.query, ""))
+        return with_page(url, page, self.PAGE_PARAM)
+
+    def _parse_total(self, html: str) -> int:
+        # The generic parser returned the on-page card count (20) -> fetch_all stopped after page 1.
+        match = TOTAL_RE.search(html or "") or TOTAL_META_RE.search(html or "")
+        if not match:
+            return 0
+        digits = re.sub(r"\D", "", match.group(1))
+        return int(digits) if digits else 0
 
     def _context(self) -> str:
         path = (self.search_url or "").lower()

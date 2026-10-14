@@ -5,9 +5,11 @@ Redesign 2026: the site is a Vue SSR app. Listing cards are server-rendered as
 ``data-realty-id`` / ``data-realty-name`` / ``data-realty-price`` attributes
 (``data-realty-name`` looks like "Pronájem, Byt 2+kk, 35 m², Praha, Mirotická").
 
-Search URLs are path-based now: ``/nemovitosti/pronajem/`` (or ``/prodej/``),
-paginated with ``?page=N`` (12 cards per page). The old ``typ-nabidky`` query
-params are ignored by the site.
+Search URLs are path-based now: ``/nemovitosti/pronajem/byty/`` (or ``/prodej/byty/``;
+without ``/byty/`` the list mixes in houses, garages, land, offices...),
+paginated with ``?page=N`` (11 cards per page, newest first; pages past the end
+render empty). The real result count is in the SSR state
+(``"metadata":{"count":N``). The old ``typ-nabidky`` query params are ignored.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ SITE = mmreality_url.site
 HREF_RE = re.compile(r'href="((?:https://www\.mmreality\.cz)?/nemovitosti/(\d{4,12})/?)"', re.I)
 NAME_RE = re.compile(r'data-realty-name="([^"]{1,300})"')
 PRICE_RE = re.compile(r'data-realty-price="([^"]{1,80})"')
+TOTAL_RE = re.compile(r'(?:"|&quot;)metadata(?:"|&quot;):\{(?:"|&quot;)count(?:"|&quot;):(\d{1,7})')
 IMG_RE = re.compile(
     r'(?:src|data-src)="(https://cdn\.mmreality\.cz/[^"]{1,300}\.(?:jpg|jpeg|webp)[^"]{0,200})"',
     re.I,
@@ -41,7 +44,7 @@ IMG_RE = re.compile(
 class MmrealityClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "page"
-    PAGE_SIZE = 12
+    PAGE_SIZE = 11
     # Listing cards start ~300KB into the 480KB page; the shared 180KB list
     # truncation would cut them off.
     FULL_LIST_HTML = True
@@ -98,6 +101,10 @@ class MmrealityClient(HtmlPortalClient):
         await self._warmup()
         return await super().fetch_page(page, **kwargs)
 
+    def _parse_total(self, html: str) -> int:
+        match = TOTAL_RE.search(html or "")
+        return int(match.group(1)) if match else 0
+
     def _context(self) -> str:
         raw = (self.search_url or "").lower()
         return "prodej" if "/prodej" in raw else "pronajem"
@@ -116,7 +123,10 @@ class MmrealityClient(HtmlPortalClient):
             name_m = NAME_RE.search(window)
             raw_name = clean(name_m.group(1)) if name_m else ""
             parts = [part.strip() for part in raw_name.split(",") if part.strip()]
-            locality = parts[-2] if len(parts) >= 3 else (parts[-1] if parts else "")
+            # "Pronájem, Byt 2+kk, 35 m², Praha, Mirotická": city follows the area part; street is optional.
+            area_idx = next((i for i, part in enumerate(parts) if "m²" in part or "m2" in part), -1)
+            rest = parts[area_idx + 1 :] if area_idx >= 0 else parts[2:]
+            locality = rest[0] if rest else (parts[-1] if parts else "")
             price_m = PRICE_RE.search(window)
             price_czk, price_label = parse_price(price_m.group(1) if price_m else "")
             img_m = IMG_RE.search(window)

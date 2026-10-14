@@ -265,7 +265,11 @@ class IdnesClient:
         return listings, total
 
     async def fetch_detail(self, listing: Listing) -> Listing:
-        response = await self._client.get(listing.url, headers={"Accept": "text/html"})
+        from app.scrape_http import request_with_log
+
+        response = await request_with_log(
+            self._client, "GET", listing.url, portal="idnes", headers={"Accept": "text/html"}
+        )
         if response.status_code == 404:
             raise ListingGone(listing.url)
         response.raise_for_status()

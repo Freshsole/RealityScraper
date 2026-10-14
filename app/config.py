@@ -80,7 +80,7 @@ SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
 POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
 POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))
 SCRAPE_MONITOR_LOOP_SEC = max(2, int(os.getenv("SCRAPE_MONITOR_LOOP_SEC", "5")))
-SCRAPE_DISCOVERY_LOOP_SEC = max(10, int(os.getenv("SCRAPE_DISCOVERY_LOOP_SEC", "60")))
+SCRAPE_DISCOVERY_LOOP_SEC = max(10, int(os.getenv("SCRAPE_DISCOVERY_LOOP_SEC", "30")))
 SCRAPE_DEEP_LOOP_SEC = max(1, int(os.getenv("SCRAPE_DEEP_LOOP_SEC", "2")))
 # all = single-process local; web/worker = supervisord split (Railway).
 SCRAPE_ROLE = (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower()
@@ -101,6 +101,9 @@ SCRAPE_GLOBAL_CONCURRENCY = max(
     SCRAPE_CONCURRENCY,
     min(128, int(os.getenv("SCRAPE_GLOBAL_CONCURRENCY", str(SCRAPE_CONCURRENCY + 8)))),
 )
+SCRAPE_FAST_TOUCH = os.getenv("SCRAPE_FAST_TOUCH", "1") != "0"
+SCRAPE_DISCOVERY_EARLY_STOP = os.getenv("SCRAPE_DISCOVERY_EARLY_STOP", "1") != "0"
+SCRAPE_DISCOVERY_FULL_EVERY = max(1, int(os.getenv("SCRAPE_DISCOVERY_FULL_EVERY", "10")))
 SCRAPE_RECENT_PAGES = max(1, min(10, int(os.getenv("SCRAPE_RECENT_PAGES", "4"))))
 SCRAPE_DISCOVERY_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DISCOVERY_DEADLINE_SEC", "50")))
 SCRAPE_MONITOR_DEADLINE_SEC = max(20, int(os.getenv("SCRAPE_MONITOR_DEADLINE_SEC", "55")))
@@ -108,7 +111,7 @@ SCRAPE_FULL_MARKET_DEADLINE_SEC = max(30, int(os.getenv("SCRAPE_FULL_MARKET_DEAD
 SCRAPE_FULL_MARKET_URLS = max(10, int(os.getenv("SCRAPE_FULL_MARKET_URLS", "80")))
 # Rolling deep list crawl: cover ~all Sreality shards over time (not just newest 2k).
 SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int(os.getenv("SCRAPE_DEEP_SHARDS_PER_TICK", "10"))))
-SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "20"))))
+SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "25"))))
 SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40")))
 SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
 # 1 = refresh also writes listings/events/photos (legacy). 0 = catalog_listings + listing_links only.
@@ -127,6 +130,8 @@ _DEFAULT_CONCURRENCY_OVERRIDES = {
     "realitycz": 1,
     "ulovdomov": 1,
     "mmreality": 2,
+    # idnes answers 429 + Retry-After: 3600 after ~2500 req / 20 min per IP.
+    "idnes": 2,
 }
 _raw_scrape_overrides = (os.getenv("SCRAPE_CONCURRENCY_OVERRIDES", "") or "").strip()
 try:
@@ -265,3 +270,9 @@ except OSError:
     _data_is_mount = False
 PERSISTENT_STORAGE = (not ON_RAILWAY) or bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()) or _data_is_mount
 WEB_DIR = resource_root() / "web"
+
+# Stale sweep only marks `gone` rows unseen for this long, so listings that a (partial) crawl
+# missed but rolling-deep / discovery saw recently are not flagged sold.
+CATALOG_STALE_GRACE_SEC = max(0, int(os.getenv("CATALOG_STALE_GRACE_SEC", str(3 * 3600))))
+# A shard counts as fully crawled at this share of the portal-reported total.
+CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float(os.getenv("CATALOG_COMPLETE_RATIO", "0.985"))))

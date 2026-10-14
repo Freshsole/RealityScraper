@@ -85,8 +85,8 @@ class ExtraPortalTests(unittest.TestCase):
         self.assertTrue(annonce_url.build_url({"offers": ["pronajem"]}).endswith("/byty-k-pronajmu.html"))
         self.assertIn("/nemovitosti/pronajem/", mmreality_url.build_url({"offers": ["pronajem"]}))
         self.assertTrue(ulovdomov_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty"))
-        self.assertIn("sale=2", remax_url.build_url({"offers": ["pronajem"]}))
-        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/hlavni-mesto-Praha/"))
+        self.assertTrue(remax_url.build_url({"offers": ["pronajem"]}).endswith("/reality/byty/pronajem/"))
+        self.assertTrue(realitycz_url.build_url({"offers": ["pronajem"]}).endswith("/pronajem/byty/Ceska-republika/"))
         self.assertEqual(ceskereality_url.parse_url("https://www.ceskereality.cz/prodej/byty/")["offers"], ["prodej"])
         self.assertEqual(annonce_url.parse_url("https://www.annonce.cz/byty-na-prodej.html")["offers"], ["prodej"])
         self.assertEqual(remax_url.parse_url("https://www.remax-czech.cz/reality/byty/?sale=1")["offers"], ["prodej"])
@@ -153,10 +153,10 @@ class ExtraPortalTests(unittest.TestCase):
 
     def test_mmreality_url_builder(self):
         self.assertTrue(
-            mmreality_url.build_url({"offers": ["pronajem"]}).endswith("/nemovitosti/pronajem/")
+            mmreality_url.build_url({"offers": ["pronajem"]}).endswith("/nemovitosti/pronajem/byty/")
         )
         self.assertTrue(
-            mmreality_url.build_url({"offers": ["prodej"]}).endswith("/nemovitosti/prodej/")
+            mmreality_url.build_url({"offers": ["prodej"]}).endswith("/nemovitosti/prodej/byty/")
         )
         self.assertEqual(
             mmreality_url.parse_url("https://www.mmreality.cz/nemovitosti/pronajem/")["offers"],

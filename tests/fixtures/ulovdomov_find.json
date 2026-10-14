@@ -1,0 +1,750 @@
+{
+ "rent": {
+  "success": true,
+  "extraData": {
+   "total": 3132,
+   "totalPages": 627,
+   "perPage": 5,
+   "currentPage": 1
+  },
+  "data": {
+   "offers": [
+    {
+     "id": 5682954,
+     "title": "Pronájem bytu 2+1 55 m2",
+     "area": 55,
+     "description": "Nabízíme Vám k pronájmu byt 2 + 1 s lodžií, v osobním vlastnictví, o celkové výměře 55 m2.\nBytová jednotka se nachází ve",
+     "disposition": "twoPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.55309,
+      "lng": 13.77374
+     },
+     "photos": [
+      {
+       "id": 24076478,
+       "path": "https://photo.ulovdomov.cz/8u/U1sjLAO44x24076478",
+       "alt": "Pronájem bytu 2+1 55 m2"
+      },
+      {
+       "id": 24076479,
+       "path": "https://photo.ulovdomov.cz/9i/iIq4tMUFDs24076479",
+       "alt": "Pronájem bytu 2+1 55 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 11500,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perMonth",
+     "published": "2026-10-14T22:11:04",
+     "seo": "pronajem-bilina-teplicke-predmesti-sidliste-u-noveho-nadrazi-2-1",
+     "street": {
+      "id": 2413,
+      "title": "Sídliště U Nového nádraží"
+     },
+     "village": {
+      "id": 111,
+      "title": "Bílina"
+     },
+     "villagePart": {
+      "id": 410,
+      "title": "Teplické Předměstí"
+     },
+     "address": {
+      "village": "bilina",
+      "villagePart": "teplicke-predmesti",
+      "street": "sidliste-u-noveho-nadrazi"
+     },
+     "convenience": [
+      "loggia",
+      "garden"
+     ],
+     "houseConvenience": [
+      "parking"
+     ],
+     "floorLevel": 2,
+     "availableFrom": "2026-10-14",
+     "priceNote": null,
+     "offerType": "rent",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682954",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-bilina-teplicke-predmesti-sidliste-u-noveho-nadrazi-2-1/5682954"
+    },
+    {
+     "id": 5682952,
+     "title": "Pronájem bytu 2+kk 51 m2",
+     "area": 51,
+     "description": "Dostupný od 1.12.2026. Nabízíme k dlouhodobému pronájmu moderní byt 2+kk v atraktivní Rezidenci Hagibor v Praze 10, ulic",
+     "disposition": "twoPlusKk",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.07923,
+      "lng": 14.48321
+     },
+     "photos": [
+      {
+       "id": 24076435,
+       "path": "https://photo.ulovdomov.cz/5g/GgJqX2Yxd824076435",
+       "alt": "Pronájem bytu 2+kk 51 m2"
+      },
+      {
+       "id": 24076436,
+       "path": "https://photo.ulovdomov.cz/6b/b8oZ9wUFKg24076436",
+       "alt": "Pronájem bytu 2+kk 51 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 30000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perMonth",
+     "published": "2026-10-14T21:31:02",
+     "seo": "pronajem-praha-strasnice-ramonova-2-kk",
+     "street": {
+      "id": 105050,
+      "title": "Ramonova"
+     },
+     "village": {
+      "id": 6253,
+      "title": "Praha"
+     },
+     "villagePart": {
+      "id": 15090,
+      "title": "Strašnice"
+     },
+     "address": {
+      "village": "praha",
+      "villagePart": "strasnice",
+      "street": "ramonova"
+     },
+     "convenience": [
+      "balcony",
+      "garden",
+      "lift"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 2,
+     "availableFrom": "2026-12-01",
+     "priceNote": ", 7054 Kč služby včetně energií",
+     "offerType": "rent",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682952",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-praha-strasnice-ramonova-2-kk/5682952"
+    },
+    {
+     "id": 5682951,
+     "title": "Pronájem bytu 3+1 84 m2",
+     "area": 84,
+     "description": "Nabízíme Vám k pronájmu prostorný a světlý byt o dispozici 3+1 se zahradou!\nByt se nachází ve 3.NP bez výtahu a celková ",
+     "disposition": "threePlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 49.58578,
+      "lng": 18.03249
+     },
+     "photos": [
+      {
+       "id": 24076411,
+       "path": "https://photo.ulovdomov.cz/1x/XwB1XtMjCr24076411",
+       "alt": "Pronájem bytu 3+1 84 m2"
+      },
+      {
+       "id": 24076412,
+       "path": "https://photo.ulovdomov.cz/2l/lqJxaLDfb724076412",
+       "alt": "Pronájem bytu 3+1 84 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 16000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perMonth",
+     "published": "2026-10-14T21:23:31",
+     "seo": "pronajem-novy-jicin-zilina-na-vysluni-3-1",
+     "street": {
+      "id": 52792,
+      "title": "Na Výsluní"
+     },
+     "village": {
+      "id": 3312,
+      "title": "Nový Jičín"
+     },
+     "villagePart": {
+      "id": 8260,
+      "title": "Žilina"
+     },
+     "address": {
+      "village": "novy-jicin",
+      "villagePart": "zilina",
+      "street": "na-vysluni"
+     },
+     "convenience": [
+      "balcony",
+      "garden"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 3,
+     "availableFrom": "2026-10-14",
+     "priceNote": "+ zálohy na energie a služby",
+     "offerType": "rent",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682951",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-novy-jicin-zilina-na-vysluni-3-1/5682951"
+    },
+    {
+     "id": 5682949,
+     "title": "Pronájem bytu 2+1 53 m2",
+     "area": 53,
+     "description": "Nabízíme Vám pronájem zrekonstruovaného bytu 2+1 s balkónem na Praze 9 - Hloubětín, v klidné ulici Sadská. Zrekonstruova",
+     "disposition": "twoPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.10784,
+      "lng": 14.53391
+     },
+     "photos": [
+      {
+       "id": 24076294,
+       "path": "https://photo.ulovdomov.cz/4e/eyprbT5k4U24076294",
+       "alt": "Pronájem bytu 2+1 53 m2"
+      },
+      {
+       "id": 24076295,
+       "path": "https://photo.ulovdomov.cz/5a/AKpimq6Mbz24076295",
+       "alt": "Pronájem bytu 2+1 53 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 20000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perMonth",
+     "published": "2026-10-14T20:51:35",
+     "seo": "pronajem-praha-hloubetin-sadska-2-1",
+     "street": {
+      "id": 94085,
+      "title": "Sadská"
+     },
+     "village": {
+      "id": 6253,
+      "title": "Praha"
+     },
+     "villagePart": {
+      "id": 15120,
+      "title": "Hloubětín"
+     },
+     "address": {
+      "village": "praha",
+      "villagePart": "hloubetin",
+      "street": "sadska"
+     },
+     "convenience": [
+      "balcony",
+      "garden"
+     ],
+     "houseConvenience": [],
+     "floorLevel": 2,
+     "availableFrom": "2026-11-01",
+     "priceNote": "+ poplatky za služby a energie (cca 5700-6000Kč/3 os./měs.), kauce 25000 Kč, provize RK 20000 Kč",
+     "offerType": "rent",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682949",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-praha-hloubetin-sadska-2-1/5682949"
+    },
+    {
+     "id": 5682946,
+     "title": "Pronájem bytu 2+1 58 m2",
+     "area": 58,
+     "description": "Exkluzivní nabídka podnájmu prostorného slunného bytu , která nabízí dokonalou kombinaci městského života a klidného záz",
+     "disposition": "twoPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 49.45395,
+      "lng": 17.45812
+     },
+     "photos": [
+      {
+       "id": 24076217,
+       "path": "https://photo.ulovdomov.cz/7t/ToIwJtmbiO24076217",
+       "alt": "Pronájem bytu 2+1 58 m2"
+      },
+      {
+       "id": 24076218,
+       "path": "https://photo.ulovdomov.cz/8t/TOmiuXXsLE24076218",
+       "alt": "Pronájem bytu 2+1 58 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 16000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perMonth",
+     "published": "2026-10-14T20:29:20",
+     "seo": "pronajem-prerov-prerov-i-mesto-travnik-2-1",
+     "street": {
+      "id": 67086,
+      "title": "Trávník"
+     },
+     "village": {
+      "id": 4028,
+      "title": "Přerov"
+     },
+     "villagePart": {
+      "id": 9947,
+      "title": "Přerov I-Město"
+     },
+     "address": {
+      "village": "prerov",
+      "villagePart": "prerov-i-mesto",
+      "street": "travnik"
+     },
+     "convenience": [
+      "balcony",
+      "garden",
+      "lift"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 2,
+     "availableFrom": "2026-10-14",
+     "priceNote": "vratná jistota, náklady na bydlení 5 300 Kč, poplatek za podnájem",
+     "offerType": "rent",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682946",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/pronajem-prerov-prerov-i-mesto-travnik-2-1/5682946"
+    }
+   ],
+   "markers": [
+    {
+     "geoCoordinates": {
+      "lat": 50.55309,
+      "lng": 13.77374
+     },
+     "offerIds": [
+      5682954
+     ]
+    },
+    {
+     "geoCoordinates": {
+      "lat": 50.07923,
+      "lng": 14.48321
+     },
+     "offerIds": [
+      5682952,
+      5633247
+     ]
+    }
+   ]
+  }
+ },
+ "sale": {
+  "success": true,
+  "extraData": {
+   "total": 2361,
+   "totalPages": 473,
+   "perPage": 5,
+   "currentPage": 1
+  },
+  "data": {
+   "offers": [
+    {
+     "id": 5682953,
+     "title": "Prodej bytu 2+1 56 m2",
+     "area": 56,
+     "description": "Nabízíme Vám k prodeji byt 2 + 1 s lodžií, v osobním vlastnictví, o celkové výměře 56 m2.\nBytová jednotka se nachází ve ",
+     "disposition": "twoPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.56069,
+      "lng": 13.7788
+     },
+     "photos": [
+      {
+       "id": 24076448,
+       "path": "https://photo.ulovdomov.cz/8i/ie5u6i7dPq24076448",
+       "alt": "Prodej bytu 2+1 56 m2"
+      },
+      {
+       "id": 24076449,
+       "path": "https://photo.ulovdomov.cz/9p/pIwlUmn2MN24076449",
+       "alt": "Prodej bytu 2+1 56 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 1159900,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perRealEstate",
+     "published": "2026-10-14T21:57:44",
+     "seo": "prodej-bilina-teplicke-predmesti-m-svabinskeho-2-1",
+     "street": {
+      "id": 2436,
+      "title": "M. Švabinského"
+     },
+     "village": {
+      "id": 111,
+      "title": "Bílina"
+     },
+     "villagePart": {
+      "id": 410,
+      "title": "Teplické Předměstí"
+     },
+     "address": {
+      "village": "bilina",
+      "villagePart": "teplicke-predmesti",
+      "street": "m-svabinskeho"
+     },
+     "convenience": [
+      "loggia",
+      "garden"
+     ],
+     "houseConvenience": [
+      "parking"
+     ],
+     "floorLevel": 4,
+     "availableFrom": "2026-10-14",
+     "priceNote": "nehradí se daň z nabytí, poplatek katastru za vklad kupní smlouvy 2.000,- Kč",
+     "offerType": "sale",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682953",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/prodej-bilina-teplicke-predmesti-m-svabinskeho-2-1/5682953"
+    },
+    {
+     "id": 5672006,
+     "title": "Prodej bytu 2+1 63 m2",
+     "area": 63,
+     "description": "Byt je přímo od majitele, neplatíte provizi. Právní servis, smlouvy, úschova financí, vše je  zajištěno včetně převodu n",
+     "disposition": "twoPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 49.92992,
+      "lng": 17.88647
+     },
+     "photos": [
+      {
+       "id": 23660467,
+       "path": "https://photo.ulovdomov.cz/7z/z5isApn1C223660467",
+       "alt": "Prodej bytu 2+1 63 m2"
+      },
+      {
+       "id": 23992185,
+       "path": "https://photo.ulovdomov.cz/5t/TvzzQ60eav23992185",
+       "alt": "Prodej bytu 2+1 63 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 3990000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perRealEstate",
+     "published": "2026-07-27T16:37:25",
+     "seo": "prodej-opava-predmesti-nerudova-2-1",
+     "street": {
+      "id": 56174,
+      "title": "Nerudova"
+     },
+     "village": {
+      "id": 3489,
+      "title": "Opava"
+     },
+     "villagePart": {
+      "id": 8651,
+      "title": "Předměstí"
+     },
+     "address": {
+      "village": "opava",
+      "villagePart": "predmesti",
+      "street": "nerudova"
+     },
+     "convenience": [
+      "balcony",
+      "loggia",
+      "garden",
+      "lift"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 8,
+     "availableFrom": "2026-08-01",
+     "priceNote": "od majitele, bez provize, právní servis zajištěn",
+     "offerType": "sale",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5672006",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/prodej-opava-predmesti-nerudova-2-1/5672006"
+    },
+    {
+     "id": 5682947,
+     "title": "Prodej bytu 1+kk 31 m2",
+     "area": 31,
+     "description": "Ve výhradním zastoupení majitele Vám nabízíme prodej bytu 1+kk s obytnou plochou 27,2 m², situovaný v 1.NP cihlového dom",
+     "disposition": "onePlusKk",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.05831,
+      "lng": 14.28249
+     },
+     "photos": [
+      {
+       "id": 24076231,
+       "path": "https://photo.ulovdomov.cz/1z/z1rYuL5G2L24076231",
+       "alt": "Prodej bytu 1+kk 31 m2"
+      },
+      {
+       "id": 24076232,
+       "path": "https://photo.ulovdomov.cz/2d/DqmSsjrBfL24076232",
+       "alt": "Prodej bytu 1+kk 31 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 6090000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perRealEstate",
+     "published": "2026-10-14T20:30:50",
+     "seo": "prodej-praha-zlicin-tulesicka-1-kk",
+     "street": {
+      "id": 101956,
+      "title": "Tulešická"
+     },
+     "village": {
+      "id": 6253,
+      "title": "Praha"
+     },
+     "villagePart": {
+      "id": 15111,
+      "title": "Zličín"
+     },
+     "address": {
+      "village": "praha",
+      "villagePart": "zlicin",
+      "street": "tulesicka"
+     },
+     "convenience": [
+      "terrace",
+      "garden",
+      "lift"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 1,
+     "availableFrom": null,
+     "priceNote": "včetně provize",
+     "offerType": "sale",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682947",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/prodej-praha-zlicin-tulesicka-1-kk/5682947"
+    },
+    {
+     "id": 5682943,
+     "title": "Prodej bytu 4+1 76 m2",
+     "area": 76,
+     "description": "Prodej prostorného bytu 4+1 s lodžií – Brno-Bohunice, ul. Vedlejší\n\nNabízíme k prodeji prostorný byt o dispozici 4+1 a u",
+     "disposition": "fourPlusOne",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 49.17066,
+      "lng": 16.57043
+     },
+     "photos": [
+      {
+       "id": 24076104,
+       "path": "https://photo.ulovdomov.cz/4l/lusHFIltrH24076104",
+       "alt": "Prodej bytu 4+1 76 m2"
+      },
+      {
+       "id": 24076105,
+       "path": "https://photo.ulovdomov.cz/5h/H2m5HiRj7K24076105",
+       "alt": "Prodej bytu 4+1 76 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 7990000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perRealEstate",
+     "published": "2026-10-14T20:11:52",
+     "seo": "prodej-brno-bohunice-vedlejsi-4-1",
+     "street": {
+      "id": 8238,
+      "title": "Vedlejší"
+     },
+     "village": {
+      "id": 347,
+      "title": "Brno"
+     },
+     "villagePart": {
+      "id": 873,
+      "title": "Bohunice"
+     },
+     "address": {
+      "village": "brno",
+      "villagePart": "bohunice",
+      "street": "vedlejsi"
+     },
+     "convenience": [
+      "loggia",
+      "garden",
+      "lift"
+     ],
+     "houseConvenience": [
+      "cellar"
+     ],
+     "floorLevel": 6,
+     "availableFrom": null,
+     "priceNote": "včetně provize",
+     "offerType": "sale",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5682943",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/prodej-brno-bohunice-vedlejsi-4-1/5682943"
+    },
+    {
+     "id": 5676916,
+     "title": "Prodej bytu 3+kk 56 m2",
+     "area": 56,
+     "description": "Nabízíme k prodeji právo užívání bytu o dispozici 3+kk s podlahovou plochou 56 m², situovaného v 1. patře cihlového byto",
+     "disposition": "threePlusKk",
+     "houseType": null,
+     "geoCoordinates": {
+      "lat": 50.04569,
+      "lng": 14.48903
+     },
+     "photos": [
+      {
+       "id": 23841133,
+       "path": "https://photo.ulovdomov.cz/3a/AyAdYzc6Nm23841133",
+       "alt": "Prodej bytu 3+kk 56 m2"
+      },
+      {
+       "id": 23841134,
+       "path": "https://photo.ulovdomov.cz/4g/gaQ0ronQr523841134",
+       "alt": "Prodej bytu 3+kk 56 m2"
+      }
+     ],
+     "rentalPrice": {
+      "value": 5950000,
+      "currency": "CZK"
+     },
+     "isNoCommission": false,
+     "depositPrice": null,
+     "monthlyFeesPrice": null,
+     "priceUnit": "perRealEstate",
+     "published": "2026-09-02T10:35:07",
+     "seo": "prodej-praha-zabehlice-svojsovicka-3-kk",
+     "street": {
+      "id": 101635,
+      "title": "Svojšovická"
+     },
+     "village": {
+      "id": 6253,
+      "title": "Praha"
+     },
+     "villagePart": {
+      "id": 15109,
+      "title": "Záběhlice"
+     },
+     "address": {
+      "village": "praha",
+      "villagePart": "zabehlice",
+      "street": "svojsovicka"
+     },
+     "convenience": [
+      "garden"
+     ],
+     "houseConvenience": [],
+     "floorLevel": 1,
+     "availableFrom": "2026-08-01",
+     "priceNote": null,
+     "offerType": "sale",
+     "propertyType": "flat",
+     "adminUrl": "https://www.ulovdomov.cz/xadmin/offer/detail/5676916",
+     "showScamWarn": false,
+     "isContacted": false,
+     "isTop": false,
+     "absoluteUrl": "https://www.ulovdomov.cz/inzerat/prodej-praha-zabehlice-svojsovicka-3-kk/5676916"
+    }
+   ],
+   "markers": [
+    {
+     "geoCoordinates": {
+      "lat": 50.56069,
+      "lng": 13.7788
+     },
+     "offerIds": [
+      5682953
+     ]
+    },
+    {
+     "geoCoordinates": {
+      "lat": 49.92992,
+      "lng": 17.88647
+     },
+     "offerIds": [
+      5672006
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -172,6 +172,7 @@ def specs_from_text(text: str) -> tuple[list[str], list[dict[str, str]]]:
 class BazosClient:
     def __init__(self, search_url: str) -> None:
         self.search_url = search_url
+        self.failed_pages: list[int] = []
         from app.scrape_http import scrape_timeout
 
         self._client = httpx.AsyncClient(
@@ -278,22 +279,23 @@ class BazosClient:
 
         async def one(page: int) -> tuple[list[Listing], int]:
             async with gate:
-                try:
-                    return await self.fetch_page(page)
-                except Exception:
-                    await asyncio.sleep(0.25)
-                    return await self.fetch_page(page)
+                last: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        return await self.fetch_page(page)
+                    except Exception as exc:  # noqa: BLE001 - retried, then reported via failed_pages
+                        last = exc
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                raise last or RuntimeError("bazos page failed")
 
         pages = list(range(2, needed + 1))
-        failed = 0
+        self.failed_pages = []
         for start in range(0, len(pages), 6):
-            rest = await asyncio.gather(
-                *(one(page) for page in pages[start : start + 6]),
-                return_exceptions=True,
-            )
-            for item in rest:
+            chunk = pages[start : start + 6]
+            rest = await asyncio.gather(*(one(page) for page in chunk), return_exceptions=True)
+            for page, item in zip(chunk, rest):
                 if isinstance(item, Exception):
-                    failed += 1
+                    self.failed_pages.append(page)
                     continue
                 batch, page_total = item
                 total = page_total or total

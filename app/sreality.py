@@ -141,6 +141,12 @@ def listing_from_dict(data: dict[str, Any] | Listing | None) -> Listing:
 
 _SHARED_BUILD_ID: str | None = None
 
+# Measured 2026-10: the search API pages by 22 and refuses offsets >= ~10 000 (HTTP 500 from
+# strana=455 on). Any shard with a larger total must be split (region/disposition/price).
+PAGE_SIZE = 22
+MAX_RESULT_OFFSET = 10_000
+MAX_PAGE = MAX_RESULT_OFFSET // PAGE_SIZE  # 454
+
 
 class SrealityClient:
     def __init__(self, search_url: str) -> None:
@@ -197,6 +203,8 @@ class SrealityClient:
         return listings, total
 
     async def fetch_page(self, page: int = 1, newest: bool = True) -> tuple[list[Listing], int]:
+        if page > MAX_PAGE:
+            return [], 0  # beyond the portal's result window: it answers 500, do not hammer it
         try:
             return await self._fetch_next_data(page, newest)
         except httpx.TimeoutException:

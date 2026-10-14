@@ -1,0 +1,218 @@
+{
+ "data": {
+  "searchOffer": {
+   "total": 14859,
+   "lockedOffersCount": 893,
+   "items": [
+    {
+     "id": "24749404",
+     "url": "",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-14T19:50:43.548Z",
+     "category": "OTHERS_FLAT",
+     "isLocked": true,
+     "price": {
+      "type": "FIXED",
+      "total": null,
+      "canonical": null,
+      "currency": null
+     },
+     "area": {
+      "main": null
+     },
+     "photos": {
+      "main": null
+     },
+     "location": {
+      "address": null,
+      "latitude": 49.23,
+      "longitude": 15.89
+     }
+    },
+    {
+     "id": "24746547",
+     "url": "/pronajem/byt-2+1-podrouzkova-ostrava/24746547",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T20:00:35.396Z",
+     "category": "FLAT21",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 13500,
+      "canonical": 13500,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 50
+     },
+     "photos": {
+      "main": "offer/ee8/ee8yhbgppe-1500x1000xd0d0d0"
+     },
+     "location": {
+      "address": "Podroužkova, Ostrava",
+      "latitude": 49.845956974307086,
+      "longitude": 18.17144011360996
+     }
+    },
+    {
+     "id": "24746540",
+     "url": "/pronajem/byt-2+1-zeleznicarska-ceska-lipa/24746540",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T20:00:26.907Z",
+     "category": "FLAT21",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 15500,
+      "canonical": 15500,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 62
+     },
+     "photos": {
+      "main": "offer/25c/25cyuuyvug-800x600x505030"
+     },
+     "location": {
+      "address": "Železničářská, Česká Lípa",
+      "latitude": 50.6925775,
+      "longitude": 14.5277536
+     }
+    },
+    {
+     "id": "24746539",
+     "url": "/pronajem/byt-2+kk-vychodni-pardubice-pardubicky-pardubicky-kraj/24746539",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T19:56:53.405Z",
+     "category": "FLAT2_KK",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 15500,
+      "canonical": 15500,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 58
+     },
+     "photos": {
+      "main": "offer/bk6/bk6my5jfrx-900x1200xb0b0b0"
+     },
+     "location": {
+      "address": "Východní, Pardubice - Pardubičky, Pardubický kraj",
+      "latitude": 50.03079,
+      "longitude": 15.79433
+     }
+    },
+    {
+     "id": "24746531",
+     "url": "/pronajem/byt-ostatni-byty-olomouc-779-00/24746531",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T19:55:14.628Z",
+     "category": "OTHERS_FLAT",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 11000,
+      "canonical": 11000,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": null
+     },
+     "photos": {
+      "main": "offer/xyp/xypqm66my2-903x1200xb0b090"
+     },
+     "location": {
+      "address": "Olomouc, 779 00",
+      "latitude": 49.593577,
+      "longitude": 17.29866
+     }
+    },
+    {
+     "id": "24746533",
+     "url": "/pronajem/byt-ostatni-byty-cesky-brod-282-01/24746533",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T19:55:14.087Z",
+     "category": "OTHERS_FLAT",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 22000,
+      "canonical": 22000,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": null
+     },
+     "photos": {
+      "main": "offer/9jz/9jzfps7pwz-1200x903x70b0f0"
+     },
+     "location": {
+      "address": "Český Brod, 282 01",
+      "latitude": 50.071464,
+      "longitude": 14.893684
+     }
+    },
+    {
+     "id": "24746528",
+     "url": "/pronajem/byt-1+kk-biskupcova-praha-3-zizkov/24746528",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T19:36:13.187Z",
+     "category": "FLAT1_KK",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 16800,
+      "canonical": 16800,
+      "currency": "CZK"
+     },
+     "area": {
+      "main": 25
+     },
+     "photos": {
+      "main": "offer/gdx/gdx4k7w9yz-1501x1000xb0b0b0"
+     },
+     "location": {
+      "address": "Biskupcova, Praha 3 - Žižkov",
+      "latitude": 50.091504,
+      "longitude": 14.480184
+     }
+    },
+    {
+     "id": "24746279",
+     "url": "/pronajem/byt-1+1-schurmannova-nitra-nitra-nitriansky-kraj/24746279",
+     "purpose": "RENT",
+     "property": "FLAT",
+     "createdAt": "2026-10-12T15:30:28.752Z",
+     "category": "FLAT11",
+     "isLocked": false,
+     "price": {
+      "type": "FIXED",
+      "total": 590,
+      "canonical": 14390,
+      "currency": "EUR"
+     },
+     "area": {
+      "main": 41
+     },
+     "photos": {
+      "main": "offer/r8a/r8aa386trg-674x1200xf0d0d0"
+     },
+     "location": {
+      "address": "Schurmannova, Nitra - Nitra, Nitriansky kraj",
+      "latitude": 48.3123133,
+      "longitude": 18.0797658
+     }
+    }
+   ]
+  }
+ }
+}

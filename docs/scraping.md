@@ -489,3 +489,35 @@ List crawl + JSON parse drží GIL. Ve `SCRAPE_ROLE=all` uvicorn event loop ček
 - `GET /api/perf/diag` → pooly, poslední tick
 - `GET /api/admin/ops` → historie ticků, scrape_jobs, stuck recovery
 - sqlite: `SELECT value FROM meta WHERE key='scrape_worker_tick'`
+
+---
+
+## 13. Měření portálů a ladění (2026-10-14)
+
+Živě změřeno (≤1 req/s). „Reálně“ = počet bytů na webu, pronájem / prodej.
+
+| portál | reálně | stránkování | ~ms/req | doporučené tempo |
+|---|---|---|---|---|
+| sreality | 11 741 / 21 292 | `strana=N`, 22/str., max 454 str. → shardy kraj × dispozice | 110–200 | conc. 4 |
+| idnes | ≈7,7 k / ≈16 k (odhad) | `?page=`, 25/str. | – | **1 req/s**, jinak 429 + `Retry-After: 3600` (≈2 500 req / 20 min / IP) |
+| bazos | 5 803 / 8 891 | `?crp=N`, 20/str. | 30–120 | conc. 6 |
+| bezrealitky | 2 105 / 974 (jen ČR, `regionOsmIds`) | GraphQL `limit` max 100 | 300–900 | conc. 2 |
+| realingo | 14 859 / 29 512 | GraphQL `first` max 500; anonym nevidí inzeráty <48 h | – | conc. 2 |
+| ulovdomov | 3 132 / 2 361 | `POST /v1/offer/find`, perPage 200 | 1 500–2 700 | conc. 1 |
+| ceskereality | 4 931 / 9 857 | `?strana=N` 20/str., nationwide max 12 str. → shardy kraj (+ Praha prodej × dispozice) | 600–1 000 | conc. 1, 1 s |
+| annonce | 1 485 / 3 953 | `?page=N` | 260 | conc. 1–2, 0,5 s |
+| mmreality | 593 / 1 713 | `/nemovitosti/{offer}/byty/?page=N`, 11/str. | 850 | conc. 1, 1 s |
+| remax | 1 157 / 2 052 | `?stranka=N`, 21/str. | 120–330 | conc. 1–2 |
+| realitymix | 5 165 / 10 136 | `?stranka=N`, 20/str. | 100–500 | conc. 1–2 |
+| realitycz | 870 / ≈1 780 | `?g=N-1`, 25/str.; prodej po krajích (celostátní strop ~1 500) | 230–600 | conc. 1, 1 s |
+| espolubydleni | 2 012 | `/podnajem-spolubydlici/N` | 45–200 | conc. 1–2 |
+| eurobydleni | 4 914 / 8 872 | `/page-N/` (HTML) nebo XHR `ajaxPageLoad.php` | 40–130 (XHR) | conc. 1 |
+
+### Co se změnilo v enginu
+
+- **Early stop (discovery):** když stránka 1 obsahuje jen inzeráty shodné s uloženými (`app/scrape_fast.py`), další stránky se nestahují. Každý `SCRAPE_DISCOVERY_FULL_EVERY`. tick (10) jede plnou hloubku. `SCRAPE_DISCOVERY_EARLY_STOP=0` vypne.
+- **Fast touch:** nezměněné inzeráty dostanou jen `last_seen` (`SCRAPE_FAST_TOUCH=0` vypne).
+- **Rolling okno stránek (deep):** shard s víc stránkami než `SCRAPE_DEEP_PAGES` (25) se prochází po oknech – stránka 1 + další okno při každém průchodu (`fetch_pages_parallel(window_start=…)`).
+- **429 cooldown + pacing:** `app/portal_pacing.py` (min. rozestup per portál, `Retry-After`); engine při cooldownu neposílá nic. Env `PORTAL_MIN_INTERVAL_<PORTAL>`. idnes ceiling 2.
+- **Stale sweep:** shard je kompletní od `CATALOG_COMPLETE_RATIO` (0,985, dřív 0,92) a `gone` dostanou jen řádky neviděné `CATALOG_STALE_GRACE_SEC` (3 h). Bazoš s neúplným crawlem (`failed_pages`) už sweep nespustí. Strop stránek denního syncu 800.
+- **Shardy:** Sreality všechny kraje × dispozice, ČeskéReality kraje (+ Praha prodej × dispozice), Reality.cz prodej po krajích.

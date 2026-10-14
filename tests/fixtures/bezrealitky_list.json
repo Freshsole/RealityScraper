@@ -1,0 +1,470 @@
+{
+ "PRONAJEM": {
+  "data": {
+   "listAdverts": {
+    "totalCount": 2104,
+    "list": [
+     {
+      "id": "925934",
+      "uri": "925934-nabidka-pronajem-bytu-u-komina-praha",
+      "estateType": "BYT",
+      "offerType": "PRONAJEM",
+      "disposition": "DISP_2_KK",
+      "surface": 59,
+      "price": 28300,
+      "charges": 4400,
+      "currency": "CZK",
+      "originalPrice": 28300,
+      "isDiscounted": false,
+      "isNew": true,
+      "reserved": false,
+      "imageAltText": "Pronájem bytu 2+kk 59 m², U Komína, Praha",
+      "address": "U Komína, Praha - Radlice",
+      "gps": {
+       "lat": 50.055585,
+       "lng": 14.3814298
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/925k/925934/1752996923-ltevwvkfyl-byt-2c-u-kom-c2-a1na-289-29.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/925k/925934/1752996923-ltevwvkfyl-byt-2c-u-kom-c2-a1na-289-29.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/925k/925934/1752996923-qjbyxhiefl-byt-2c-u-kom-c2-a1na-287-29.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": true,
+      "lift": true,
+      "parking": false,
+      "petFriendly": null,
+      "barrierFree": true,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "139223",
+      "uri": "139223-nabidka-pronajem-bytu-poupetova-praha",
+      "estateType": "BYT",
+      "offerType": "PRONAJEM",
+      "disposition": "DISP_1_KK",
+      "surface": 37,
+      "price": 19500,
+      "charges": 2550,
+      "currency": "CZK",
+      "originalPrice": 19500,
+      "isDiscounted": false,
+      "isNew": false,
+      "reserved": true,
+      "imageAltText": "Pronájem bytu 1+kk 37 m², Poupětova, Praha",
+      "address": "Poupětova, Praha - Holešovice",
+      "gps": {
+       "lat": 50.1068612,
+       "lng": 14.4486271
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main_nowm/data/images/advert/139k/139223/40b9fffb4ef2efbdb57d540e2e77b5bf.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main_nowm/data/images/advert/139k/139223/40b9fffb4ef2efbdb57d540e2e77b5bf.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main_nowm/data/images/advert/139k/139223/aa949bba6029d34e49f84b9ae3ee1a44.jpg"
+       }
+      ],
+      "balcony": true,
+      "loggia": null,
+      "cellar": null,
+      "terrace": false,
+      "garage": false,
+      "lift": true,
+      "parking": null,
+      "petFriendly": null,
+      "barrierFree": null,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "868303",
+      "uri": "868303-nabidka-pronajem-bytu-senacka-hlavni-mesto-praha",
+      "estateType": "BYT",
+      "offerType": "PRONAJEM",
+      "disposition": "DISP_1_KK",
+      "surface": 34,
+      "price": 17500,
+      "charges": 3080,
+      "currency": "CZK",
+      "originalPrice": 17500,
+      "isDiscounted": false,
+      "isNew": false,
+      "reserved": false,
+      "imageAltText": "Pronájem bytu 1+kk 34 m², Šenácká, Hlavní město Praha",
+      "address": "Šenácká, Praha - Hodkovičky",
+      "gps": {
+       "lat": 50.022712,
+       "lng": 14.4022004
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/868k/868303/1729265628-ezjlrnnaby-img-9948.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/868k/868303/1729265628-ezjlrnnaby-img-9948.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/868k/868303/1729265688-lsoiahwijo-img-9983.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": true,
+      "parking": true,
+      "petFriendly": null,
+      "barrierFree": true,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "1078124",
+      "uri": "1078124-nabidka-pronajem-bytu-skalove-praha",
+      "estateType": "BYT",
+      "offerType": "PRONAJEM",
+      "disposition": "DISP_1_KK",
+      "surface": 40,
+      "price": 24500,
+      "charges": 3500,
+      "currency": "CZK",
+      "originalPrice": 24500,
+      "isDiscounted": false,
+      "isNew": true,
+      "reserved": false,
+      "imageAltText": "Pronájem bytu 1+kk 40 m², Skálové, Praha",
+      "address": "Skálové, Praha - Braník",
+      "gps": {
+       "lat": 50.0333342,
+       "lng": 14.415422
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078124/1792005968-ibyutcoxpa-tempimagewupbjq.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078124/1792005968-ibyutcoxpa-tempimagewupbjq.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078124/1792006110-svuooonnio-tempimageffyxey.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": true,
+      "lift": true,
+      "parking": false,
+      "petFriendly": null,
+      "barrierFree": false,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "1058212",
+      "uri": "1058212-nabidka-pronajem-bytu-prazskeho-praha",
+      "estateType": "BYT",
+      "offerType": "PRONAJEM",
+      "disposition": "DISP_3_1",
+      "surface": 62,
+      "price": 25000,
+      "charges": 9800,
+      "currency": "CZK",
+      "originalPrice": 25000,
+      "isDiscounted": false,
+      "isNew": true,
+      "reserved": false,
+      "imageAltText": "Pronájem bytu 3+1 62 m², Pražského, Praha",
+      "address": "Pražského, Praha - Hlubočepy",
+      "gps": {
+       "lat": 50.0362234,
+       "lng": 14.382835
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1058k/1058212/1787342325-wsxvpktdzv-1-photo-2026-08-17-17-50-13.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1058k/1058212/1787342325-wsxvpktdzv-1-photo-2026-08-17-17-50-13.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1058k/1058212/1787342325-rptyoqyqlu-2-photo-2026-08-17-17-50-13.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": false,
+      "parking": true,
+      "petFriendly": null,
+      "barrierFree": false,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "PANEL",
+      "frontGarden": null
+     }
+    ]
+   }
+  }
+ },
+ "PRODEJ": {
+  "data": {
+   "listAdverts": {
+    "totalCount": 974,
+    "list": [
+     {
+      "id": "1066906",
+      "uri": "1066906-nabidka-prodej-bytu-kpt-stranskeho-praha",
+      "estateType": "BYT",
+      "offerType": "PRODEJ",
+      "disposition": "DISP_3_KK",
+      "surface": 65,
+      "price": 8449900,
+      "charges": 0,
+      "currency": "CZK",
+      "originalPrice": 8449900,
+      "isDiscounted": false,
+      "isNew": false,
+      "reserved": false,
+      "imageAltText": "Prodej bytu 3+kk 65 m², Kpt. Stránského, Praha",
+      "address": "Kpt. Stránského, Praha - Černý Most",
+      "gps": {
+       "lat": 50.1025278,
+       "lng": 14.582025
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066906/1789408425-dhgjtyiwur-img-1428.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066906/1789408425-dhgjtyiwur-img-1428.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066906/1789408425-tssrkrtqnt-img-1429.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": true,
+      "parking": false,
+      "petFriendly": null,
+      "barrierFree": true,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "PANEL",
+      "frontGarden": null
+     },
+     {
+      "id": "1078119",
+      "uri": "1078119-nabidka-prodej-bytu-novy-jicin",
+      "estateType": "BYT",
+      "offerType": "PRODEJ",
+      "disposition": "DISP_3_1",
+      "surface": 75,
+      "price": 4200000,
+      "charges": 0,
+      "currency": "CZK",
+      "originalPrice": 4200000,
+      "isDiscounted": false,
+      "isNew": true,
+      "reserved": false,
+      "imageAltText": "Prodej bytu 3+1 75 m², Nový Jičín",
+      "address": "Kunín - Kunín, Moravskoslezský kraj",
+      "gps": {
+       "lat": 49.6405813,
+       "lng": 17.9897963
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078119/1792002140-joygicsxru-img-8420.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078119/1792002140-joygicsxru-img-8420.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1078k/1078119/1792002140-odyyekvgni-img-8419.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": false,
+      "parking": false,
+      "petFriendly": null,
+      "barrierFree": false,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "1070677",
+      "uri": "1070677-nabidka-prodej-bytu-primatorska-praha",
+      "estateType": "BYT",
+      "offerType": "PRODEJ",
+      "disposition": "DISP_1_1",
+      "surface": 57,
+      "price": 8700000,
+      "charges": 0,
+      "currency": "CZK",
+      "originalPrice": 9490000,
+      "isDiscounted": true,
+      "isNew": false,
+      "reserved": false,
+      "imageAltText": "Prodej bytu 1+1 57 m², Primátorská, Praha",
+      "address": "Primátorská, Praha - Libeň",
+      "gps": {
+       "lat": 50.1137608,
+       "lng": 14.471977
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1070k/1070677/1790256282-lmftqjnbsu-primatorska-47-byt-10-00010-copy.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1070k/1070677/1790256282-lmftqjnbsu-primatorska-47-byt-10-00010-copy.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1070k/1070677/1790256281-xsoelssekb-primatorska-47-byt-10-00004a-copy.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": true,
+      "parking": true,
+      "petFriendly": null,
+      "barrierFree": false,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     },
+     {
+      "id": "1066895",
+      "uri": "1066895-nabidka-prodej-bytu-krestova-ostrava",
+      "estateType": "BYT",
+      "offerType": "PRODEJ",
+      "disposition": "DISP_3_1",
+      "surface": 72,
+      "price": 4490000,
+      "charges": 0,
+      "currency": "CZK",
+      "originalPrice": 4750000,
+      "isDiscounted": true,
+      "isNew": false,
+      "reserved": false,
+      "imageAltText": "Prodej bytu 3+1 72 m², Krestova, Ostrava",
+      "address": "Krestova, Ostrava - Hrabůvka, Moravskoslezský kraj",
+      "gps": {
+       "lat": 49.7815969,
+       "lng": 18.2627485
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066895/1789401496-ejocumruqi-be677077-b75c-4e64-9bfb-1db2dec4c855.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066895/1789401496-ejocumruqi-be677077-b75c-4e64-9bfb-1db2dec4c855.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1066k/1066895/1789401514-qgaafidwaw-image5.png"
+       }
+      ],
+      "balcony": false,
+      "loggia": false,
+      "cellar": false,
+      "terrace": false,
+      "garage": false,
+      "lift": true,
+      "parking": false,
+      "petFriendly": null,
+      "barrierFree": true,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "PANEL",
+      "frontGarden": null
+     },
+     {
+      "id": "1034329",
+      "uri": "1034329-nabidka-prodej-bytu-bessemerova-praha",
+      "estateType": "BYT",
+      "offerType": "PRODEJ",
+      "disposition": "DISP_3_KK",
+      "surface": 82,
+      "price": 3987000,
+      "charges": 0,
+      "currency": "CZK",
+      "originalPrice": 3987000,
+      "isDiscounted": false,
+      "isNew": false,
+      "reserved": false,
+      "imageAltText": "Prodej bytu 3+kk 82 m², Bessemerova, Praha",
+      "address": "Bessemerova, Praha - Třebonice",
+      "gps": {
+       "lat": 50.048364,
+       "lng": 14.3004641
+      },
+      "mainImage": {
+       "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1034k/1034329/1781345936-xcwkunrjyl-britka-8-np-c1-popis.jpg"
+      },
+      "publicImages": [
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1034k/1034329/1781345936-xcwkunrjyl-britka-8-np-c1-popis.jpg"
+       },
+       {
+        "url": "https://api.bezrealitky.cz/media/cache/record_main/data/images/advert/1034k/1034329/1781345988-elinjssdmd-img-2294.jpg"
+       }
+      ],
+      "balcony": false,
+      "loggia": true,
+      "cellar": true,
+      "terrace": false,
+      "garage": true,
+      "lift": true,
+      "parking": true,
+      "petFriendly": null,
+      "barrierFree": true,
+      "roommate": false,
+      "shortTerm": false,
+      "construction": "BRICK",
+      "frontGarden": null
+     }
+    ]
+   }
+  }
+ }
+}

@@ -5,7 +5,7 @@ import json
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,8 @@ class Hub:
         self.catalog_reader_fn: Any = None
         self._owner_sync_at = 0.0
         self._recent_shard_idx = 0
+        self._discovery_ticks = 0
+        self._deep_windows: dict[str, int] = {}
         self._deep_shard_idx = 0
         self.dedupe_running = False
         self.dedupe_scanning = False
@@ -1206,11 +1208,25 @@ class Hub:
         error: str | None = None
         write_note: str | None = None
         try:
+            self._discovery_ticks += 1
+            known_fn = None
+            if (
+                config.SCRAPE_DISCOVERY_EARLY_STOP
+                and config.SCRAPE_FAST_TOUCH
+                and self._discovery_ticks % config.SCRAPE_DISCOVERY_FULL_EVERY != 0
+            ):
+                from app import scrape_fast
+                from app.identity import listing_key
+
+                store_path = str(self.store.path)
+                if scrape_fast.peek(store_path) is not None:
+                    known_fn = lambda item: scrape_fast.is_known(store_path, listing_key(item.url), item)
             results = await engine.fetch_shards(
                 recent,
                 client_factory=self.client_for,
                 max_pages=config.SCRAPE_RECENT_PAGES,
                 deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
+                known_fn=known_fn,
             )
             seen: set[int] = set()
             for item in results:
@@ -1248,6 +1264,7 @@ class Hub:
                 "shards": len(recent),
                 "listings": len(disc_listings),
                 "pages_ok": disc_pages,
+                "early_stops": engine.metrics.early_stops,
                 "deferred": disc_deferred,
                 "new": int(disc_stats.get("new") or 0),
                 "updated": int(disc_stats.get("updated") or 0),
@@ -1290,6 +1307,7 @@ class Hub:
                 client_factory=self.client_for,
                 max_pages=config.SCRAPE_DEEP_PAGES,
                 deadline_sec=float(config.SCRAPE_DEEP_DEADLINE_SEC),
+                windows=self._deep_windows,
             )
             seen: set[int] = set()
             for item in results:
@@ -1769,7 +1787,12 @@ class Hub:
                 if ok:
                     complete_portals.append(portal)
             if complete_portals:
-                await self._job_db(self.store.mark_catalog_stale_gone, started, complete_portals)
+                grace_before = (
+                    datetime.now(timezone.utc) - timedelta(seconds=config.CATALOG_STALE_GRACE_SEC)
+                ).isoformat()
+                await self._job_db(
+                    self.store.mark_catalog_stale_gone, min(started, grace_before), complete_portals
+                )
             all_today = True
             for portal in config.CATALOG_SYNC_HOURS:
                 last = await self._job_db(self.store.get_meta, f"catalog_sync_{portal}_last") or ""
@@ -1826,9 +1849,9 @@ class Hub:
             needed: int | None = None
             pending_write: asyncio.Task[None] | None = None
             rate_retries = 0
-            while page <= 400:
+            while page <= 800:
                 window = max(1, min(8, engine.limiter_for(portal).limit))
-                pages = list(range(page, min(page + window, (needed or 400) + 1)))
+                pages = list(range(page, min(page + window, (needed or 800) + 1)))
                 if not pages:
                     break
                 results = await asyncio.gather(
@@ -1913,7 +1936,7 @@ class Hub:
             if pending_write is not None:
                 await pending_write
             complete = True
-            if total and upserts < max(1, int(total * 0.92)):
+            if total and upserts < max(1, int(total * config.CATALOG_COMPLETE_RATIO)):
                 complete = False
             last_error = None if complete else f"Incomplete crawl: upserts={upserts} total={total}"
             # Bot-protection blokace (403/429 po retriech) - zapiš skutečnou
@@ -1958,16 +1981,21 @@ class Hub:
             # Chunked writes — a single 30k+ lock was starving minute_discovery ticks.
             await self._catalog_upsert(listings, kind="seeded")
             pages = max(1, (int(total) + 19) // 20) if total else 1
+            failed_pages = list(getattr(client, "failed_pages", None) or [])
+            complete = not failed_pages and (
+                not total or len(listings) >= int(total * config.CATALOG_COMPLETE_RATIO)
+            )
             await self._job_db(
                 self.store.update_scrape_job,
                 job["id"],
-                status="done",
+                status="done" if complete else "partial",
+                last_error=None if complete else f"Incomplete bazos crawl: pages_failed={failed_pages[:10]} got={len(listings)}/{total}",
                 finished_at=utc_now(),
                 last_total=total,
                 upserts=len(listings),
                 page=pages,
             )
-            return True
+            return complete
         except Exception as exc:
             await self._job_db(
                 self.store.update_scrape_job,

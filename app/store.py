@@ -3240,6 +3240,14 @@ class Store:
         kind: str,
         fast: bool,
     ) -> dict[str, int]:
+        touched = 0
+        fp_cache: dict[str, Any] | None = None
+        fp_updates: dict[str, Any] = {}
+        if kind == "refresh" and config.SCRAPE_FAST_TOUCH:
+            from app import scrape_fast
+
+            fp_cache = scrape_fast.cache_for(str(self.path), conn)
+            listings, touched = self._touch_unchanged(conn, listings, fp_cache)
         keys = [listing_key(item.url) for item in listings]
         existing: dict[str, sqlite3.Row] = {}
         for offset in range(0, len(keys), 400):
@@ -3303,6 +3311,10 @@ class Store:
             if key in seen_keys:
                 continue
             seen_keys.add(key)
+            if fp_cache is not None and (prev is None or prev["listing_key"] == key):
+                from app import scrape_fast
+
+                fp_updates[key] = scrape_fast.listing_fingerprint(listing)
             portal = portal_from_url(listing.url)
             extras_json = _extras_json(listing.extras)
             image = cdn_image_url(listing.image_url)
@@ -3455,7 +3467,55 @@ class Store:
                         skip_nearby=fast,
                         fast=fast,
                     )
-        return {"new": new, "updated": updated, "same": same}
+        if fp_cache is not None and fp_updates:
+            fp_cache.update(fp_updates)
+        return {"new": new, "updated": updated, "same": same + touched}
+
+    def _touch_unchanged(
+        self,
+        conn: sqlite3.Connection,
+        listings: list[Listing],
+        fp_cache: dict[str, Any],
+    ) -> tuple[list[Listing], int]:
+        """Bump last_seen for listings identical to what is stored; return the rest."""
+        from app import scrape_fast
+
+        rest: list[Listing] = []
+        same_keys: list[str] = []
+        same_urls: list[str] = []
+        done: set[str] = set()
+        for listing in listings:
+            key = listing_key(listing.url)
+            if key in done:
+                continue
+            if fp_cache.get(key) == scrape_fast.listing_fingerprint(listing):
+                done.add(key)
+                same_keys.append(key)
+                same_urls.append(listing.url)
+            else:
+                rest.append(listing)
+        if not same_keys:
+            return rest, 0
+        now = utc_now()
+        for offset in range(0, len(same_keys), 400):
+            part = same_keys[offset : offset + 400]
+            holders = ",".join("?" * len(part))
+            conn.execute(
+                f"UPDATE catalog_listings SET last_seen = ?, gone = 0 WHERE listing_key IN ({holders})",
+                (now, *part),
+            )
+            if _writes_listings_row("refresh"):
+                conn.execute(
+                    f"UPDATE listings SET last_seen = ?, gone = 0 "
+                    f"WHERE monitor_id = ? AND listing_key IN ({holders})",
+                    (now, CATALOG_MONITOR_ID, *part),
+                )
+            urls = same_urls[offset : offset + 400]
+            conn.execute(
+                f"UPDATE listing_links SET last_seen = ?, gone = 0 WHERE url IN ({','.join('?' * len(urls))})",
+                (now, *urls),
+            )
+        return rest, len(same_keys)
 
     def _upsert_listings_refresh_batch(
         self,

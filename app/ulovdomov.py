@@ -44,9 +44,75 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+DISPOSITION = {
+    "onePlusKk": "1+kk", "onePlusOne": "1+1", "twoPlusKk": "2+kk", "twoPlusOne": "2+1",
+    "threePlusKk": "3+kk", "threePlusOne": "3+1", "fourPlusKk": "4+kk", "fourPlusOne": "4+1",
+    "fivePlusKk": "5+kk", "fivePlusOne": "5+1", "sixAndMore": "6+", "atypical": "atyp",
+}
+# Max rows per find request the API accepts (500 works, 1000 -> HTTP 500). Each response also carries
+# a ~250 KB `markers` block, so bigger pages are cheaper per row; 200 = whole rent market in 16 pages (<= SCRAPE_DEEP_PAGES=20).
+FIND_PAGE_SIZE = 200
+
+
+def _title_of(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("title") or value.get("name") or "").strip()
+    return ""
+
+
+def listing_from_find_row(raw: dict[str, Any], offer: str) -> Listing | None:
+    """Maps one row of POST /v1/offer/find (2026 schema: absoluteUrl, rentalPrice, street/village{title})."""
+    offer_id = raw.get("id")
+    url = str(raw.get("absoluteUrl") or "").split("#")[0].strip()
+    if not url:
+        seo = str(raw.get("seo") or "").strip()
+        if not offer_id:
+            return None
+        url = f"{SITE}/inzerat/{seo}/{offer_id}" if seo else f"{SITE}/inzerat/{offer_id}"
+    row_offer = str(raw.get("offerType") or "")
+    if row_offer:
+        offer = "prodej" if row_offer == "sale" else "pronajem"
+    price = raw.get("rentalPrice")
+    price_czk = _as_int(price.get("value") if isinstance(price, dict) else None)
+    if price_czk is not None and price_czk <= 1:
+        price_czk = None
+    locality = ", ".join(t for t in (_title_of(raw.get("street")), _title_of(raw.get("village"))) if t)
+    photos = [
+        str(p.get("path") or "").strip()
+        for p in (raw.get("photos") or [])
+        if isinstance(p, dict) and p.get("path")
+    ][:40]
+    geo = raw.get("geoCoordinates")
+    disp_raw = str(raw.get("disposition") or "")
+    return listing_from_card(
+        listing_id=numeric_id(offer_id, url),
+        name=str(raw.get("title") or "").strip() or f"{'Pronájem' if offer == 'pronajem' else 'Prodej'} bytu",
+        url=url,
+        price_czk=price_czk,
+        price_label="",
+        locality=locality,
+        disposition=DISPOSITION.get(disp_raw, ""),
+        area_m2=_as_int(raw.get("area")),
+        image_url=photos[0] if photos else None,
+        photos=photos,
+        offer=offer,
+        estate="dum" if raw.get("propertyType") == "house" else "byt",
+        created_on=str(raw.get("published") or "") or None,
+        description=str(raw.get("description") or "").strip() or None,
+        lat=_as_float(geo.get("lat") if isinstance(geo, dict) else None),
+        lon=_as_float(geo.get("lng") if isinstance(geo, dict) else None),
+    )
+
+
 def offers_from_payload(payload: Any) -> tuple[list[dict[str, Any]], int]:
     if not isinstance(payload, dict):
         return [], 0
+    extra = payload.get("extraData")
+    if isinstance(extra, dict) and isinstance(payload.get("data"), dict):
+        rows = payload["data"].get("offers")
+        if isinstance(rows, list):
+            total = _as_int(extra.get("total")) or len(rows)
+            return [item for item in rows if isinstance(item, dict)], total
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if isinstance(payload.get("data"), list):
         rows = payload["data"]
@@ -179,7 +245,7 @@ def listing_from_detail(data: dict[str, Any]) -> Listing | None:
 class UlovdomovClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "page"
-    PAGE_SIZE = 20
+    PAGE_SIZE = FIND_PAGE_SIZE
 
     def __init__(self, search_url: str) -> None:
         super().__init__(search_url)
@@ -193,23 +259,17 @@ class UlovdomovClient(HtmlPortalClient):
         return 2 if self._context() == "prodej" else 1
 
     def _find_body(self, page: int) -> dict[str, Any]:
+        # 2026 schema (the old numeric offerTypeId/pageIndex body now answers HTTP 500 udBe.internalServerError).
+        # Paging + sorting go in the query string (page, perPage, sorting=latest).
         return {
-            "offerTypeId": self._offer_type_id(),
             "bounds": BOUNDS,
-            "noCommitionFee": None,
-            "dispositions": [],
-            "area": {"from": None, "to": None},
-            "price": {"from": None, "to": None},
-            "furnishing": [],
-            "conveniences": [],
-            "isBalcony": None,
-            "pageIndex": max(0, page - 1),
-            "offerAge": None,
-            "specialFlag": None,
-            "sorting": "latest",
+            "offerType": "sale" if self._context() == "prodej" else "rent",
+            "propertyType": "flat",
         }
 
     def listing_from_offer(self, raw: dict[str, Any], offer: str) -> Listing | None:
+        if "absoluteUrl" in raw or "rentalPrice" in raw:
+            return listing_from_find_row(raw, offer)
         listing_id = raw.get("id") or raw.get("offerId") or raw.get("seoId")
         slug = str(raw.get("seoUrl") or raw.get("slug") or raw.get("url") or "").strip()
         if not listing_id and not slug:

@@ -102,13 +102,10 @@ def daily_shards() -> list[dict[str, str]]:
     sreality_regions = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
         f"praha-{i}" for i in range(1, 11)
     ]
-    large_regions = {
-        "stredocesky-kraj",
-        "jihomoravsky-kraj",
-        "moravskoslezsky-kraj",
-        "ustecky-kraj",
-        *[f"praha-{i}" for i in range(1, 11)],
-    }
+    # Measured 2026-10: 20+ region shards exceed the 440 rows a rolling-deep pass reaches
+    # (prodej jihocesky 1150, karlovarsky 1013, plzensky 952 ...), so every region is sliced by
+    # disposition. Sreality serves at most 454 pages x 22 rows per query.
+    large_regions = set(sreality_regions)
     for offer in ("pronajem", "prodej"):
         for region in sreality_regions:
             size_batches: list[list[str]] = (
@@ -217,6 +214,50 @@ def daily_shards() -> list[dict[str, str]]:
         )
     for portal_id, urls in EXTRA_URLS.items():
         for offer in ("pronajem", "prodej"):
+            if portal_id == "ceskereality":
+                # Nationwide lists stop at 12 pages (240 rows) and Praha-sale at 99 pages, so slice
+                # by region and Praha additionally by disposition.
+                from app.portal_urls import CESKEREALITY_SIZES
+
+                for region in localities.SREALITY_CZECH_REGIONS:
+                    slices: list[list[str]] = (
+                        [[size] for size in CESKEREALITY_SIZES] if region == "praha" and offer == "prodej" else [[]]
+                    )
+                    for sizes in slices:
+                        size_key = sizes[0] if sizes else "all"
+                        shards.append(
+                            {
+                                "kind": "catalog_daily",
+                                "portal": portal_id,
+                                "shard_key": f"{portal_id}:byty:{offer}:{region}:{size_key}",
+                                "search_url": urls.build_url(
+                                    {
+                                        "source": portal_id,
+                                        "offers": [offer],
+                                        "category": "byty",
+                                        "districts": [region],
+                                        "sizes": sizes,
+                                    }
+                                ),
+                            }
+                        )
+                continue
+            if portal_id == "realitycz" and offer == "prodej":
+                # The nationwide listing stops after ~1 500 of ~1 780 flats; the sum of regions is complete.
+                from app.portal_urls import REALITYCZ_REGION_SLUGS
+
+                for slug in REALITYCZ_REGION_SLUGS:
+                    shards.append(
+                        {
+                            "kind": "catalog_daily",
+                            "portal": portal_id,
+                            "shard_key": f"{portal_id}:byty:{offer}:{slug}",
+                            "search_url": urls.build_url(
+                                {"source": portal_id, "offers": [offer], "category": "byty", "districts": [slug]}
+                            ),
+                        }
+                    )
+                continue
             shards.append(
                 {
                     "kind": "catalog_daily",

@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import html as html_lib
 import re
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app.html_listing import HtmlPortalClient, abs_url, clean, listing_from_card, numeric_id, parse_area, parse_disposition, parse_price
+from app.html_listing import HtmlPortalClient, with_page, abs_url, clean, listing_from_card, numeric_id, parse_area, parse_disposition, parse_price
 from app.portal_urls import remax_url
 from app.sreality import Listing
 
 SITE = remax_url.site
-CARD_RE = re.compile(
-    r'<div class="pl-items__item"([^>]{0,2000})>(.{0,80000}?)</div>\s*(?=<div class="pl-items__item"|<nav|$)',
-    re.S | re.I,
-)
+CARD_START_RE = re.compile(r'<div class="pl-items__item"', re.I)
+TOTAL_RE = re.compile(r"z\s+celkem\s*<span>\s*([\d\s\xa0]+?)\s*</span>", re.I)
 ATTR_RE = re.compile(r'data-([a-z\-]{1,40})="([^"]{0,500})"', re.I)
 DETAIL_RE = re.compile(r"/reality/detail/(\d{4,12})/([^\"'\s]{1,300})")
 
@@ -25,7 +24,11 @@ def _unescape(value: str) -> str:
 class RemaxClient(HtmlPortalClient):
     SITE = SITE
     PAGE_PARAM = "stranka"
-    PAGE_SIZE = 20
+    # 21 cards per page (the parser may drop a card without a detail link).
+    PAGE_SIZE = 21
+    # The list page is ~260 kB and cards run to the very end; the shared 180 kB
+    # truncation cut it to 8 cards.
+    FULL_LIST_HTML = True
 
     def _context(self) -> str:
         raw = (self.search_url or "").lower()
@@ -33,12 +36,36 @@ class RemaxClient(HtmlPortalClient):
             return "prodej"
         return "pronajem"
 
+    def _page_url(self, page: int, newest: bool = True) -> str:
+        # Legacy ``/reality/byty/?sale=2&order_by_price=0`` 301-redirects to
+        # ``/reality/byty/pronajem/?order_by_price=0`` (= most expensive first) and
+        # drops nothing but sorts wrongly; go straight to the canonical path.
+        split = urlsplit(self.search_url or "")
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        if split.path.rstrip("/") == "/reality/byty" and query.get("sale") in {"1", "2"}:
+            path = "/reality/byty/prodej/" if query["sale"] == "1" else "/reality/byty/pronajem/"
+            query.pop("sale", None)
+            query.pop("order_by_price", None)
+            base = urlunsplit((split.scheme or "https", split.netloc or "www.remax-czech.cz", path, urlencode(query), ""))
+            return with_page(base, page, self.PAGE_PARAM)
+        return super()._page_url(page, newest=newest)
+
+    def _parse_total(self, html: str) -> int:
+        m = TOTAL_RE.search((html or "")[:400_000])
+        if not m:
+            return 0
+        digits = re.sub(r"\D", "", m.group(1))
+        return int(digits) if digits else 0
+
     def _parse_list(self, html: str) -> list[Listing]:
         items: list[Listing] = []
         seen: set[str] = set()
         offer = self._context()
-        for attrs, body in CARD_RE.findall(html or "") or [("", html or "")]:
-            listing = self._parse_card(attrs + " " + body, offer)
+        text = html or ""
+        starts = [m.start() for m in CARD_START_RE.finditer(text)]
+        blocks = [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+        for block in blocks or [text]:
+            listing = self._parse_card(block[:60_000], offer)
             if listing and listing.url not in seen:
                 seen.add(listing.url)
                 items.append(listing)
