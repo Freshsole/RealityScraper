@@ -167,30 +167,44 @@ def daily_shards() -> list[dict[str, str]]:
     idnes_localities = [item for item in localities.SREALITY_CZECH_REGIONS if item != "praha"] + [
         f"praha-{i}" for i in range(1, 11)
     ]
+    # reality.idnes.cz repeats the last page after ~46 pages (1 150 rows): measured prodej totals of
+    # jihomoravsky 1 897, stredocesky 1 806, moravskoslezsky 1 417, ustecky 1 289 exceed that, so those
+    # regions are sliced by disposition (the slices add up exactly to the region total).
+    idnes_big = {
+        ("prodej", "jihomoravsky-kraj"),
+        ("prodej", "moravskoslezsky-kraj"),
+        ("prodej", "stredocesky-kraj"),
+        ("prodej", "ustecky-kraj"),
+    }
     for offer in ("pronajem", "prodej"):
         for region in idnes_localities:
-            url = idnes_url.build_url(
-                {
-                    "source": "idnes",
-                    "offers": [offer],
-                    "category": "byty",
-                    "districts": [region],
-                    "sizes": [],
-                    "sort": "nejnovejsi",
-                    "price_from": None,
-                    "price_to": None,
-                    "area_from": None,
-                    "area_to": None,
-                }
+            size_slices: list[list[str]] = (
+                [[size_id] for size_id, _label in idnes_url.SIZES] if (offer, region) in idnes_big else [[]]
             )
-            shards.append(
-                {
-                    "kind": "catalog_daily",
-                    "portal": "idnes",
-                    "shard_key": f"idnes:byty:{offer}:{region}",
-                    "search_url": url,
-                }
-            )
+            for sizes in size_slices:
+                url = idnes_url.build_url(
+                    {
+                        "source": "idnes",
+                        "offers": [offer],
+                        "category": "byty",
+                        "districts": [region],
+                        "sizes": sizes,
+                        "sort": "nejnovejsi",
+                        "price_from": None,
+                        "price_to": None,
+                        "area_from": None,
+                        "area_to": None,
+                    }
+                )
+                size_key = f":{sizes[0]}" if sizes else ""
+                shards.append(
+                    {
+                        "kind": "catalog_daily",
+                        "portal": "idnes",
+                        "shard_key": f"idnes:byty:{offer}:{region}{size_key}",
+                        "search_url": url,
+                    }
+                )
     # Bazoš: apartments only (byt). Other categories are kept in DB history but no longer scraped.
     for offer in ("pronajem", "prodej"):
         shards.append(

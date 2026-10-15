@@ -70,7 +70,12 @@ class IdnesUrlTests(unittest.TestCase):
         self.assertFalse(any(":drazba:" in item["shard_key"] for item in shards))
         self.assertTrue(any("jihocesky-kraj" in item["shard_key"] for item in shards))
         self.assertGreater(len(shards), 20)
-        self.assertLess(len(shards), 80)
+        self.assertLess(len(shards), 120)
+        # regions above iDNES' ~1 150-row paging cap are sliced by disposition
+        sliced = [item for item in shards if item["shard_key"].startswith("idnes:byty:prodej:stredocesky-kraj:")]
+        self.assertGreaterEqual(len(sliced), 10)
+        self.assertTrue(all("dispozice=" in item["search_url"] for item in sliced))
+        self.assertFalse(any(item["shard_key"] == "idnes:byty:prodej:stredocesky-kraj" for item in shards))
         value = oid_to_int("6a5a0f6686ba1a60050d59cb")
         self.assertLessEqual(value, JS_SAFE_ID)
         self.assertEqual(value, oid_to_int("6a5a0f6686ba1a60050d59cb"))
