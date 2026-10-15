@@ -1499,6 +1499,14 @@ def _scrape_store(store: Store, hub: Any | None) -> Store:
     """
     if config.SCRAPE_ROLE == "all":
         return getattr(hub, "store", None) or store
+    # The worker's catalog pipelines write into the catalog OWNER's store, which is not necessarily the
+    # store of the admin who happens to be logged in (the card then showed jobs from days ago).
+    try:
+        owner_id = user_registry.catalog_owner_id(hub.store) if hub is not None else None
+        if owner_id and hasattr(hub, "store_for"):
+            return hub.store_for(owner_id)
+    except Exception:
+        pass
     return store
 
 
@@ -1573,6 +1581,12 @@ def catalog_progress_payload(store: Store, hub: Any | None = None) -> dict[str, 
     running_mem = sorted(getattr(hub, "catalog_running_portals", set()) or [])
     running_set = set(running_mem)
     queued = [str(item) for item in (data.get("queued_portals") or [])]
+    try:  # requests made from the web are written to the global store until the worker picks them up
+        global_store = getattr(hub, "store", None)
+        if global_store is not None and str(global_store.path) != str(store.path):
+            queued = sorted(set(queued) | set(global_store.catalog_queued_portals()))
+    except Exception:
+        pass
     titles = dict(PORTAL_LABELS)
     for item in data.get("portals") or []:
         portal = str(item.get("id") or "")

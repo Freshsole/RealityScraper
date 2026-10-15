@@ -69,3 +69,17 @@ class ClientCacheTests(unittest.IsolatedAsyncioTestCase):
             for i in range(50):
                 hub.detail_client_for(f"https://www.sreality.cz/detail/prodej/byt/2+kk/praha/{i}")
             self.assertEqual(len(hub.clients), 1)  # one shared detail client, not one per listing
+
+
+class WriteLockTests(unittest.TestCase):
+    def test_child_hubs_do_not_share_the_catalog_write_lock(self):
+        import tempfile as _tf
+
+        with _tf.TemporaryDirectory() as tmp, patch.object(config, "DB_PATH", Path(tmp) / "g.sqlite"), \
+                patch.object(config, "SCRAPE_ROLE", "worker"):
+            primary = Hub()
+            a = Hub(store_path=Path(tmp) / "u" / "a" / "monitor.sqlite", shared=primary)
+            b = Hub(store_path=Path(tmp) / "u" / "b" / "monitor.sqlite", shared=primary)
+            self.assertIsNot(a._catalog_write, b._catalog_write)
+            self.assertIsNot(a._catalog_write, primary._catalog_write)
+            self.assertIs(a.job_pool, primary.job_pool)  # threads and limiters are still shared

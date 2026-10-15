@@ -111,7 +111,9 @@ class Hub:
             self._scrape_registry = shared._scrape_registry
             self._portal_gate = shared._portal_gate
             self._bazos_gate = shared._bazos_gate
-            self._catalog_write = shared._catalog_write
+            # NOT shared: every hub writes its own SQLite file, so one process-wide lock made all users'
+            # monitor polls wait behind the catalog owner's sync/discovery (measured lock_ms 12-59 s).
+            self._catalog_write = asyncio.Lock()
             self.ui_pool = shared.ui_pool
             self.auth_pool = shared.auth_pool
             self.job_pool = shared.job_pool
