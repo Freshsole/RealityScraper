@@ -282,6 +282,8 @@ def _monitor_hit_sql() -> str:
 
 
 CATALOG_MONITOR_ID = "__catalog__"
+# Portals use 1 Kč (or 0) as "price on request"; no real flat costs less than this.
+MIN_PLAUSIBLE_PRICE_CZK = 100
 
 
 def _writes_listings_row(kind: str | None) -> bool:
@@ -3034,11 +3036,11 @@ class Store:
         now = utc_now()
         portal = portal_from_url(listing.url)
         # Normalize junk metrics before any write.
-        if listing.price_czk is not None and int(listing.price_czk) <= 0:
+        if listing.price_czk is not None and int(listing.price_czk) < MIN_PLAUSIBLE_PRICE_CZK:
             listing = replace(
                 listing,
                 price_czk=None,
-                price_label=(listing.price_label if listing.price_label and "0 Kč" not in listing.price_label else "Cena na dotaz"),
+                price_label="Cena na dotaz",
             )
         estate = ""
         if isinstance(listing.extras, dict):
@@ -3271,15 +3273,11 @@ class Store:
         from app.html_listing import sanitize_area_m2
 
         for listing in listings:
-            if listing.price_czk is not None and int(listing.price_czk) <= 0:
+            if listing.price_czk is not None and int(listing.price_czk) < MIN_PLAUSIBLE_PRICE_CZK:
                 listing = replace(
                     listing,
                     price_czk=None,
-                    price_label=(
-                        listing.price_label
-                        if listing.price_label and "0 Kč" not in (listing.price_label or "")
-                        else "Cena na dotaz"
-                    ),
+                    price_label="Cena na dotaz",
                 )
             estate = ""
             if isinstance(listing.extras, dict):
@@ -4914,6 +4912,40 @@ class Store:
                 f"SELECT monitor_id, id, name, price_czk, price_label, disposition, area_m2, locality, url, image_url FROM listings {clause} LIMIT 40"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def catalog_missing_coords(self, portals: tuple[str, ...], limit: int = 10, skip: set[str] | None = None) -> list[dict[str, Any]]:
+        """Newest live catalog rows without coordinates (they can never show on the map)."""
+        holders = ",".join("?" * len(portals))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT listing_key, id, name, price_czk, price_label, disposition, area_m2, locality, url, image_url "
+                f"FROM catalog_listings WHERE gone = 0 AND lat IS NULL AND portal IN ({holders}) "
+                f"ORDER BY first_seen DESC LIMIT ?",
+                (*portals, int(limit) + len(skip or ())),
+            ).fetchall()
+        out = [dict(row) for row in rows if row["listing_key"] not in (skip or set())]
+        return out[: int(limit)]
+
+    def set_catalog_location(self, listing_key_value: str, url: str, lat: float, lon: float) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE catalog_listings SET lat = ?, lon = ? WHERE listing_key = ?", (lat, lon, listing_key_value))
+            conn.execute(
+                "UPDATE listings SET lat = ?, lon = ? WHERE monitor_id = ? AND url = ?",
+                (lat, lon, CATALOG_MONITOR_ID, url),
+            )
+
+    def clean_price_placeholders(self) -> int:
+        """One-off: 1 Kč style placeholders already stored become 'price on request'."""
+        total = 0
+        with self.connect() as conn:
+            for table in ("catalog_listings", "listings"):
+                cur = conn.execute(
+                    f"UPDATE {table} SET price_czk = NULL, price_label = 'Cena na dotaz' "
+                    f"WHERE price_czk IS NOT NULL AND price_czk < ?",
+                    (MIN_PLAUSIBLE_PRICE_CZK,),
+                )
+                total += cur.rowcount or 0
+        return total
 
     def update_location(self, listing: Listing, monitor_id: str | None = None) -> None:
         if listing.lat is None or listing.lon is None:

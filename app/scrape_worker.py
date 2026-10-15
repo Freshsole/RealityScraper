@@ -157,6 +157,7 @@ class ScrapeWorker:
                 asyncio.create_task(user_hub._recent_catalog_loop(), name=f"worker-new-discovery:{user_id}"),
                 asyncio.create_task(user_hub._deep_catalog_loop(), name=f"worker-rolling-deep:{user_id}"),
                 asyncio.create_task(user_hub._dedupe_loop(), name=f"worker-dedupe:{user_id}"),
+                asyncio.create_task(user_hub.catalog_coords_loop(), name=f"worker-catalog-coords:{user_id}"),
                 asyncio.create_task(self._stale_sweep_loop(user_hub), name=f"worker-stale-sweep:{user_id}"),
             ]
         self.user_hubs[user_id] = user_hub

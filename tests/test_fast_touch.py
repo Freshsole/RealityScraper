@@ -155,3 +155,29 @@ class RollingWindowTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(max(calls), total_pages)
             covered.update(calls)
         self.assertEqual(covered, set(range(1, total_pages + 1)))
+
+
+class PriceAndCoordsTests(unittest.TestCase):
+    def test_one_crown_placeholder_becomes_price_on_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "p.sqlite")
+            item = replace(_mk(1, price=1), name="Prodej bytu 5+1 240 m²")
+            store.upsert_catalog_listings_batch([item], kind="seeded")
+            with store.connect() as conn:
+                row = conn.execute("SELECT price_czk, price_label FROM catalog_listings").fetchone()
+            self.assertIsNone(row["price_czk"])
+            self.assertEqual(row["price_label"], "Cena na dotaz")
+
+    def test_cleanup_and_catalog_coordinates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "c.sqlite")
+            item = replace(_mk(2, price=15000), lat=None, lon=None, url="https://reality.idnes.cz/detail/prodej/byt/x/abc123/")
+            store.upsert_catalog_listings_batch([item], kind="seeded")
+            with store.connect() as conn:
+                conn.execute("UPDATE catalog_listings SET price_czk = 1, lat = NULL, portal = 'idnes'")
+            self.assertEqual(store.clean_price_placeholders() >= 1, True)
+            rows = store.catalog_missing_coords(("idnes",), 10)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(store.catalog_missing_coords(("idnes",), 10, {rows[0]["listing_key"]}), [])
+            store.set_catalog_location(rows[0]["listing_key"], rows[0]["url"], 50.1, 14.4)
+            self.assertEqual(store.catalog_missing_coords(("idnes",), 10), [])

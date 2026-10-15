@@ -2314,6 +2314,58 @@ class Hub:
                 continue
             await asyncio.sleep(0.2)
 
+    COORD_BACKFILL_PORTALS = ("idnes", "bazos")  # the only portals whose detail page carries coordinates
+
+    async def catalog_coords_loop(self) -> None:
+        """Fill lat/lon of catalog rows from detail pages (list pages of iDNES carry none: 42 % unmappable)."""
+        await asyncio.sleep(120)
+        try:
+            cleaned = await self._job_db(self.store.clean_price_placeholders)
+            if cleaned:
+                print(f"catalog price placeholders cleaned rows={cleaned}", flush=True)
+        except Exception as exc:
+            print(f"catalog price cleanup failed: {exc}", flush=True)
+        tried: set[str] = set()
+        filled = 0
+        while self.running:
+            try:
+                if self.catalog_running:
+                    await asyncio.sleep(5)
+                    continue
+                rows = await self._job_db(
+                    self.store.catalog_missing_coords, self.COORD_BACKFILL_PORTALS, 10, tried
+                )
+                if not rows:
+                    await asyncio.sleep(300)
+                    tried.clear()
+                    continue
+                for row in rows:
+                    tried.add(row["listing_key"])
+                    listing = Listing(
+                        id=int(row["id"]), name=row.get("name") or "", price_czk=row.get("price_czk"),
+                        price_label=row.get("price_label") or "", disposition=row.get("disposition") or "",
+                        area_m2=row.get("area_m2"), locality=row.get("locality") or "", url=row.get("url") or "",
+                        image_url=row.get("image_url"),
+                    )
+                    try:
+                        detail = await self.detail_client_for(listing.url).fetch_detail(listing)
+                    except Exception:
+                        await asyncio.sleep(1.0)
+                        continue
+                    if detail.lat is not None and detail.lon is not None:
+                        await self._job_db(
+                            self.store.set_catalog_location, row["listing_key"], listing.url, detail.lat, detail.lon
+                        )
+                        filled += 1
+                        if filled % 200 == 0:
+                            print(f"catalog coords backfill filled={filled}", flush=True)
+                    await asyncio.sleep(1.2)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.last_error = f"catalog-coords: {exc}"
+                await asyncio.sleep(30)
+
     def status(self, *, fresh: bool = False) -> dict[str, Any]:
         now = time.monotonic()
         if not fresh and self._status_cache is not None and now - self._status_cache_at < 1.5:
