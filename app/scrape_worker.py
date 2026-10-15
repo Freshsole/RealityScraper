@@ -70,17 +70,22 @@ class ScrapeWorker:
         try:
             while self.running:
                 try:
+                    pass_ok = pass_fd_errors = 0
                     for user_id, user_hub in list(self.user_hubs.items()):
                         try:
                             await self._user_tick(user_hub)
+                            pass_ok += 1
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
+                            if "unable to open database file" in str(exc) or "Too many open files" in str(exc):
+                                pass_fd_errors += 1
                             user_hub.last_error = f"scrape_worker: {exc}"
                             print(
                                 f"scrape_worker tick error user={user_id}: {exc}\n{traceback.format_exc()}",
                                 flush=True,
                             )
+                    self._check_fd_exhaustion(pass_ok, pass_fd_errors)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -219,6 +224,23 @@ class ScrapeWorker:
             await self._maybe_forced_catalog(user_hub)
             await user_hub.maybe_run_catalog_sync(force=False)
         await user_hub._flush_scrape_metrics()
+
+    FD_EXHAUSTION_PASSES = 6
+
+    def _check_fd_exhaustion(self, ok: int, fd_errors: int) -> None:
+        """Out of file descriptors makes every DB open fail while the heartbeat stays green.
+        After several fully failed passes exit so the container restart policy brings a clean worker."""
+        if ok > 0 or fd_errors == 0:
+            self._fd_failed_passes = 0
+            return
+        self._fd_failed_passes = getattr(self, "_fd_failed_passes", 0) + 1
+        if self._fd_failed_passes >= self.FD_EXHAUSTION_PASSES:
+            print(
+                f"scrape_worker: {self._fd_failed_passes} passes without a usable DB handle "
+                "(file descriptors exhausted?) - exiting for restart",
+                flush=True,
+            )
+            os._exit(70)
 
     async def _stale_sweep_loop(self, user_hub: Hub) -> None:
         """Hourly independent staleness sweep — does not wait for portal sync completion."""

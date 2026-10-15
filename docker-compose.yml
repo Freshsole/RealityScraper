@@ -66,6 +66,10 @@ services:
     volumes:
       - realitify-data:/data
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     stop_grace_period: 30s
     deploy:
       resources:
@@ -91,6 +95,10 @@ services:
     volumes:
       - realitify-data:/data
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     stop_grace_period: 40s
     deploy:
       resources:

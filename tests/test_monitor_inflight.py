@@ -46,3 +46,26 @@ class InflightTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_cache_is_bounded_and_detail_clients_are_shared(self):
+        import tempfile as _tf
+
+        closed: list[object] = []
+
+        class C:
+            async def aclose(self):
+                closed.append(self)
+
+        with _tf.TemporaryDirectory() as tmp, patch.object(config, "DB_PATH", Path(tmp) / "c.sqlite"), \
+                patch.object(config, "SCRAPE_ROLE", "worker"), patch.object(config, "CLIENT_CACHE_MAX", 8), \
+                patch("app.monitor.client_for", lambda url: C()):
+            hub = Hub()
+            for i in range(30):
+                hub.client_for(f"https://www.sreality.cz/hledani/prodej/byty/x{i}")
+            self.assertLessEqual(len(hub.clients), 8)
+            hub.clients.clear()
+            for i in range(50):
+                hub.detail_client_for(f"https://www.sreality.cz/detail/prodej/byt/2+kk/praha/{i}")
+            self.assertEqual(len(hub.clients), 1)  # one shared detail client, not one per listing

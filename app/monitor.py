@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import time
+from collections import OrderedDict
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,10 +32,34 @@ def _is_restart_noise(message: object) -> bool:
     return "Obnoveno po restartu" in str(message or "")
 
 
+class _ClientScope:
+    """Opens uncached clients for one crawl tick and closes them all afterwards."""
+
+    def __init__(self, hub: "Hub") -> None:
+        self._hub = hub
+        self._items: list[object] = []
+
+    def open(self, search_url: str):
+        client = self._hub._transient_client(search_url)
+        self._items.append(client)
+        return client
+
+    async def close(self) -> None:
+        items, self._items = self._items, []
+        for client in items:
+            closer = getattr(client, "aclose", None)
+            if closer is None:
+                continue
+            try:
+                await asyncio.wait_for(closer(), timeout=1.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+
+
 class Hub:
     def __init__(self, store_path: str | Path | None = None, *, shared: Hub | None = None) -> None:
         self.store = Store(Path(store_path) if store_path else config.DB_PATH)
-        self.clients: dict[str, object] = {}
+        self.clients: OrderedDict[str, object] = OrderedDict()
         self.running = False
         self.checking = False
         # Web-process cache of per-user private stores (user_id -> Store).
@@ -102,12 +127,49 @@ class Hub:
         self._status_cache_at = 0.0
         self.catalog_gen = 0
 
-    def client_for(self, search_url: str):
-        client = self.clients.get(search_url)
-        if client is None:
-            client = client_for(search_url)
-            self.clients[search_url] = client
+    def client_for(self, search_url: str, *, key: str | None = None):
+        """Cached portal client. Every client owns an httpx pool whose keep-alive socket stays open
+        while it is cached (measured: 60 cached clients = 62 fds), so the cache is a bounded LRU."""
+        cache_key = key or search_url
+        client = self.clients.get(cache_key)
+        if client is not None:
+            self.clients.move_to_end(cache_key)
+            return client
+        client = client_for(search_url)
+        self.clients[cache_key] = client
+        while len(self.clients) > max(8, int(config.CLIENT_CACHE_MAX)):
+            _old_key, old = self.clients.popitem(last=False)
+            self._retire_client(old)
         return client
+
+    def detail_client_for(self, listing_url: str):
+        """Detail fetches only need a client of the right portal/offer, not one per listing URL."""
+        from urllib.parse import urlsplit
+
+        parts = [part for part in urlsplit(listing_url or "").path.split("/") if part][:2]
+        return self.client_for(listing_url, key=f"detail:{portal_of(listing_url)}:{'/'.join(parts)}")
+
+    def _transient_client(self, search_url: str):
+        """Uncached client for one-off shards (deep crawl, catalog sync); the caller closes it."""
+        return client_for(search_url)
+
+    def _retire_client(self, client: object) -> None:
+        closer = getattr(client, "aclose", None)
+        if closer is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        async def _later() -> None:
+            await asyncio.sleep(60)  # a request may still be using it
+            try:
+                await asyncio.wait_for(closer(), timeout=2.0)
+            except (asyncio.TimeoutError, Exception):
+                pass
+
+        loop.create_task(_later())
 
     def store_for(self, user_id: str) -> Store:
         """Return the private Store for a user (web process), creating it on demand."""
@@ -1318,6 +1380,7 @@ class Hub:
             return
         started = time.monotonic()
         engine = ScrapeEngine(registry=self._scrape_registry, priority=2, pipeline="deep")
+        deep_clients = _ClientScope(self)
         listings: list[Listing] = []
         pages_ok = 0
         deferred = 0
@@ -1326,7 +1389,7 @@ class Hub:
         try:
             results = await engine.fetch_shards(
                 deep,
-                client_factory=self.client_for,
+                client_factory=deep_clients.open,
                 max_pages=config.SCRAPE_DEEP_PAGES,
                 deadline_sec=float(config.SCRAPE_DEEP_DEADLINE_SEC),
                 windows=self._deep_windows,
@@ -1356,6 +1419,8 @@ class Hub:
         except Exception as exc:
             error = str(exc)[:240]
             self.last_error = f"rolling-deep: {error}"
+        finally:
+            await deep_clients.close()
 
         deep_total = len([item for item in daily_shards() if item.get("portal") == "sreality"]) or 1
         coverage_pct = round(100.0 * self._deep_shard_idx / deep_total, 1)
@@ -1842,7 +1907,19 @@ class Hub:
             self.catalog_running = bool(self.catalog_running_portals)
 
     async def _run_catalog_job(self, job: dict[str, Any]) -> bool:
-        client = self.client_for(job["search_url"])
+        # One client per shard (hundreds per sync) must not stay cached with an open socket.
+        client = self._transient_client(job["search_url"])
+        try:
+            return await self._run_catalog_job_with(job, client)
+        finally:
+            closer = getattr(client, "aclose", None)
+            if closer is not None:
+                try:
+                    await asyncio.wait_for(closer(), timeout=2.0)
+                except (asyncio.TimeoutError, Exception):
+                    pass
+
+    async def _run_catalog_job_with(self, job: dict[str, Any], client: Any) -> bool:
         if str(job.get("portal") or "") == "bazos" and hasattr(client, "fetch_catalog"):
             return await self._run_bazos_catalog_job(job, client)
         page = max(int(job.get("page") or 1), 1)
@@ -2072,7 +2149,7 @@ class Hub:
         for row in self.store.stale_catalog_listings(days=1, limit=8):
             listing = _listing_from_catalog_dict(row)
             try:
-                listing = await self.client_for(row.get("url") or "").fetch_detail(listing)
+                listing = await self.detail_client_for(row.get("url") or "").fetch_detail(listing)
                 self.store.upsert_catalog_listing(listing, kind="refresh")
             except ListingGone:
                 self.store.mark_catalog_listing_gone(row.get("listing_key") or "")
@@ -2214,7 +2291,7 @@ class Hub:
             monitor = self.store.get_monitor(row.get("monitor_id") or "default")
             search_url = (monitor or {}).get("search_url") or config.SEARCH_URL
             try:
-                listing = await self.client_for(search_url).fetch_detail(listing)
+                listing = await self.detail_client_for(search_url).fetch_detail(listing)
                 self.store.update_location(listing, row.get("monitor_id"))
             except Exception:
                 continue

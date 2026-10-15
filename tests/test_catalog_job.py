@@ -55,7 +55,7 @@ class CatalogJobTests(unittest.IsolatedAsyncioTestCase):
                 kind="catalog_daily", portal="sreality", shard_key="sreality:t",
                 search_url="https://www.sreality.cz/hledani/prodej/byty/jihocesky-kraj?razeni=nejnovejsi",
             )
-            with patch.object(Hub, "client_for", lambda self, url: client), \
+            with patch.object(Hub, "_transient_client", lambda self, url: client), \
                     patch("asyncio.sleep", new=_fast_sleep):
                 ok = await hub._run_catalog_job(job)
             status = hub.store.ensure_scrape_job(
