@@ -703,7 +703,9 @@ class Hub:
                     }
                 ],
                 client_factory=self.client_for,
-                max_pages=config.POLL_PAGES,
+                # Portals with big pages (Bezrealitky/Realingo 100, UlovDomov 50) already return the newest
+                # listings on page 1; a second page only doubles the rows written per poll.
+                max_pages=1 if int(getattr(client, "PAGE_SIZE", 0) or 0) >= 40 else config.POLL_PAGES,
                 deadline_sec=float(config.SCRAPE_MONITOR_DEADLINE_SEC),
             )
             result = fetched[0]

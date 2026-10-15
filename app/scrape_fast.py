@@ -75,3 +75,16 @@ def forget(path: str, keys: list[str]) -> None:
     if cache:
         for key in keys:
             cache.pop(key, None)
+
+
+_RESULTS: dict[str, dict[str, tuple[Fingerprint, str, float]]] = {}
+
+
+def results_cache(path: str) -> dict[str, tuple[Fingerprint, str, float]]:
+    """url key -> (fingerprint, catalog row key) for the monitor poll path.
+
+    Single-listing upserts store rows under their canonical key (`url:host/path`), batch upserts under
+    host+path, so the row key to touch has to be remembered next to the fingerprint. Filled by the first
+    full upsert of each listing; a restart just means one full poll."""
+    with _LOCK:
+        return _RESULTS.setdefault(path, {})

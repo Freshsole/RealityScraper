@@ -60,6 +60,36 @@ class FastTouchTests(unittest.TestCase):
             conn.close()
 
 
+class MonitorResultsTests(unittest.TestCase):
+    def test_results_path_skips_unchanged_but_reports_price_change(self):
+        from app.monitor import snapshot_price_change
+
+        def varied(i: int, price: int = 15000) -> Listing:
+            base = _mk(i, price)
+            return replace(base, area_m2=30 + i, lat=49 + i * 0.01, lon=14 + i * 0.01, locality=f"Ulice {i}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "r.sqlite")
+            items = [varied(i) for i in range(20)]
+            first = store.upsert_catalog_listings_results(items, kind="refresh")
+            self.assertEqual(len(first), 20)
+            second = store.upsert_catalog_listings_results(items, kind="refresh")
+            self.assertEqual(len(second), 20)
+            third = store.upsert_catalog_listings_results(items, kind="refresh")
+            # unchanged rows come back with a price-equal prev, so the monitor loop skips them
+            for item, listing in zip(third, items):
+                self.assertIsNotNone(item["prev"])
+                self.assertEqual(snapshot_price_change(item["prev"], listing), [])
+            changed = list(items)
+            changed[5] = varied(5, 12000)
+            fourth = store.upsert_catalog_listings_results(changed, kind="refresh")
+            self.assertTrue(snapshot_price_change(fourth[5]["prev"], changed[5]))  # 15000 -> 12000 detected
+            self.assertEqual(snapshot_price_change(fourth[4]["prev"], changed[4]), [])
+            # a brand new listing is still reported as new (prev is None)
+            fresh = store.upsert_catalog_listings_results([varied(99)], kind="refresh")
+            self.assertIsNone(fresh[0]["prev"])
+
+
 class EarlyStopTests(unittest.IsolatedAsyncioTestCase):
     async def _crawl(self, known):
         import time

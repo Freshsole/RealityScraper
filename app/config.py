@@ -286,3 +286,6 @@ CLIENT_CACHE_MAX = max(8, int(os.getenv("CLIENT_CACHE_MAX", "96")))
 # Threads for every Hub's DB work in one process. In the worker ALL user hubs (+ the catalog owner's
 # discovery/deep/sync) share one pool; with 4 threads a minute's ~100 live polls queued for 60-80 s.
 JOB_POOL_WORKERS = max(2, int(os.getenv("JOB_POOL_WORKERS", "16" if (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower() == "worker" else "4")))
+
+# Monitor-poll fast touch: how long an "unchanged" verdict is trusted before the row is fully re-upserted.
+SCRAPE_FAST_TOUCH_TTL_SEC = max(30, int(os.getenv("SCRAPE_FAST_TOUCH_TTL_SEC", "900")))

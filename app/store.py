@@ -3496,26 +3496,38 @@ class Store:
                 rest.append(listing)
         if not same_keys:
             return rest, 0
+        self._touch_rows(conn, same_keys, same_urls)
+        return rest, len(same_keys)
+
+    def _touch_rows(
+        self, conn: sqlite3.Connection, keys: list[str], urls: list[str], *, listings_by_url: bool = False
+    ) -> None:
         now = utc_now()
-        for offset in range(0, len(same_keys), 400):
-            part = same_keys[offset : offset + 400]
+        for offset in range(0, len(keys), 400):
+            part = keys[offset : offset + 400]
             holders = ",".join("?" * len(part))
             conn.execute(
                 f"UPDATE catalog_listings SET last_seen = ?, gone = 0 WHERE listing_key IN ({holders})",
                 (now, *part),
             )
+            chunk_urls = urls[offset : offset + 400]
             if _writes_listings_row("refresh"):
-                conn.execute(
-                    f"UPDATE listings SET last_seen = ?, gone = 0 "
-                    f"WHERE monitor_id = ? AND listing_key IN ({holders})",
-                    (now, CATALOG_MONITOR_ID, *part),
-                )
-            urls = same_urls[offset : offset + 400]
+                if listings_by_url:
+                    conn.execute(
+                        f"UPDATE listings SET last_seen = ?, gone = 0 "
+                        f"WHERE monitor_id = ? AND url IN ({','.join('?' * len(chunk_urls))})",
+                        (now, CATALOG_MONITOR_ID, *chunk_urls),
+                    )
+                else:
+                    conn.execute(
+                        f"UPDATE listings SET last_seen = ?, gone = 0 "
+                        f"WHERE monitor_id = ? AND listing_key IN ({holders})",
+                        (now, CATALOG_MONITOR_ID, *part),
+                    )
             conn.execute(
-                f"UPDATE listing_links SET last_seen = ?, gone = 0 WHERE url IN ({','.join('?' * len(urls))})",
-                (now, *urls),
+                f"UPDATE listing_links SET last_seen = ?, gone = 0 WHERE url IN ({','.join('?' * len(chunk_urls))})",
+                (now, *chunk_urls),
             )
-        return rest, len(same_keys)
 
     def _upsert_listings_refresh_batch(
         self,
@@ -3598,17 +3610,60 @@ class Store:
         kind: str = "refresh",
         fast: bool = True,
     ) -> list[dict[str, Any]]:
-        """Batch monitored listings in one transaction while preserving previous snapshots."""
+        """Batch monitored listings in one transaction while preserving previous snapshots.
+
+        Listings identical to what is stored (same fingerprint) only get `last_seen` touched in bulk and
+        report a price-equal `prev`, so the caller skips them; a 100-row poll used to cost ~1 s of
+        per-row SQL."""
         if not listings:
             return []
-        results: list[dict[str, Any]] = []
+        results: list[dict[str, Any] | None] = [None] * len(listings)
         with self.connect() as conn:
             conn.execute("PRAGMA busy_timeout=8000")
-            for listing in listings:
-                results.append(
-                    self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
-                )
-        return results
+            rc: dict[str, Any] | None = None
+            todo = list(range(len(listings)))
+            if kind == "refresh" and config.SCRAPE_FAST_TOUCH:
+                from app import scrape_fast
+
+                rc = scrape_fast.results_cache(str(self.path))
+                todo = []
+                same_keys: list[str] = []
+                same_urls: list[str] = []
+                for index, listing in enumerate(listings):
+                    hit = rc.get(listing_key(listing.url))
+                    # Entries expire so a row removed meanwhile (dedupe merge, sweep) is re-inserted.
+                    if (
+                        hit is not None
+                        and time.monotonic() - hit[2] < config.SCRAPE_FAST_TOUCH_TTL_SEC
+                        and hit[0] == scrape_fast.listing_fingerprint(listing)
+                    ):
+                        same_keys.append(hit[1])
+                        same_urls.append(listing.url)
+                        results[index] = {
+                            "listing_key": hit[1],
+                            "url_key": listing_key(listing.url),
+                            "canonical_key": hit[1],
+                            "new": False,
+                            "changed": False,
+                            "prev": {"price_czk": listing.price_czk, "price_label": listing.price_label},
+                        }
+                    else:
+                        todo.append(index)
+                if same_keys:
+                    self._touch_rows(conn, same_keys, same_urls, listings_by_url=True)
+            for index in todo:
+                listing = listings[index]
+                result = self.upsert_catalog_listing(listing, kind=kind, conn=conn, fast=fast)
+                results[index] = result
+                if rc is not None and not result.get("skipped") and result.get("listing_key"):
+                    from app import scrape_fast
+
+                    rc[listing_key(listing.url)] = (
+                        scrape_fast.listing_fingerprint(listing),
+                        result["listing_key"],
+                        time.monotonic(),
+                    )
+        return [item for item in results if item is not None]
 
     def record_scrape_tick(self, tick: dict[str, Any], *, keep: int = 120) -> None:
         """Persist latest minute scrape tick + rolling history for admin/provoz."""
