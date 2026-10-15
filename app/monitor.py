@@ -119,7 +119,7 @@ class Hub:
             self._scrape_registry = LimiterRegistry()
             self.ui_pool = CountedPool(max_workers=4, thread_name_prefix="rf-ui", pool_name="ui")
             self.auth_pool = CountedPool(max_workers=2, thread_name_prefix="rf-auth", pool_name="auth")
-            self.job_pool = CountedPool(max_workers=4, thread_name_prefix="rf-job", pool_name="job")
+            self.job_pool = CountedPool(max_workers=config.JOB_POOL_WORKERS, thread_name_prefix="rf-job", pool_name="job")
         self._monitor_engine = ScrapeEngine(
             registry=self._scrape_registry, priority=0, pipeline="monitor"
         )
@@ -609,7 +609,12 @@ class Hub:
                         )
                         took = time.monotonic() - job_started
                         if took > 30.0:
-                            print(f"monitor slow job portal={portal_of(job_url)} sec={took:.0f} url={job_url[:90]}", flush=True)
+                            print(
+                                f"monitor slow job portal={portal_of(job_url)} sec={took:.0f} "
+                                f"phases={(outcome or {}).get('phases') if isinstance(outcome, dict) else None} "
+                                f"url={job_url[:90]}",
+                                flush=True,
+                            )
                         return outcome
                     except asyncio.TimeoutError:
                         message = (
@@ -687,6 +692,8 @@ class Hub:
         client = self.client_for(job["search_url"])
         notified: list[Listing] = []
         errors: list[str] = []
+        phase_t0 = time.monotonic()
+        phases: dict[str, int] = {}
         try:
             fetched = await self._monitor_engine.fetch_shards(
                 [
@@ -704,15 +711,20 @@ class Hub:
             notify_limit = len(listings)
             if result.error:
                 errors.append(result.error)
+            phases["fetch_ms"] = int((time.monotonic() - phase_t0) * 1000)
             # All catalog writers share one lock. Monitor batches queue first at the
             # network limiter and then serialize here instead of fighting SQLite.
+            lock_t0 = time.monotonic()
             async with self._catalog_write:
+                phases["lock_ms"] = int((time.monotonic() - lock_t0) * 1000)
+                db_t0 = time.monotonic()
                 upserts = await self._job_db(
                     self.store.upsert_catalog_listings_results,
                     listings,
                     kind="refresh",
                     fast=True,
                 )
+                phases["db_ms"] = int((time.monotonic() - db_t0) * 1000)
             for index, (listing, upsert) in enumerate(zip(listings, upserts)):
                 try:
                     # The common unchanged case only needs last_seen from the batch write.
@@ -809,6 +821,7 @@ class Hub:
                 "total": total,
                 "new": [item.to_dict() for item in notified],
                 "errors": errors,
+                "phases": phases,
             }
         except Exception as exc:
             for monitor in monitors:

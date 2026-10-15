@@ -296,8 +296,14 @@ class ScrapeWorker:
                 faulthandler.dump_traceback_later(timeout, repeat=False, file=sys.stderr)
                 await asyncio.sleep(0.5)
                 ticks += 1
-                if ticks % 120 == 0 and parse_pool.procs():
-                    print(f"scrape_worker: parse_pool procs={parse_pool.procs()} {parse_pool.stats}", flush=True)
+                if ticks % 120 == 0:
+                    from app import perf_diag
+
+                    print(
+                        f"scrape_worker: pools in_flight={perf_diag.snapshot().get('pool_in_flight')} "
+                        f"hubs={len(self.user_hubs)} parse_pool procs={parse_pool.procs()} {parse_pool.stats}",
+                        flush=True,
+                    )
         finally:
             faulthandler.cancel_dump_traceback_later()
 
@@ -346,30 +352,56 @@ class ScrapeWorker:
                 await asyncio.sleep(1)
 
 
+    def _request_stores(self, user_hub: Hub) -> list[Any]:
+        """Stores an admin request may sit in: the owner's own store and the global one.
+
+        The web process writes `catalog_sync_request` / `scrape_url_request` through its global hub
+        (the global store), while the catalog pipelines run on the owner's per-user store, so the
+        worker has to look in both or the admin buttons silently do nothing."""
+        stores = [user_hub.store]
+        global_store = self.hub.store
+        if str(global_store.path) != str(user_hub.store.path):
+            stores.append(global_store)
+        return stores
+
     async def _maybe_forced_catalog(self, user_hub: Hub | None = None) -> None:
         user_hub = user_hub if user_hub is not None else self.hub
-        raw = await user_hub._job_db(user_hub.store.get_meta, "catalog_sync_request")
-        if not raw:
+        wanted: set[str] = set()
+        found_in: list[Any] = []
+        for store in self._request_stores(user_hub):
+            raw = await user_hub._job_db(store.get_meta, "catalog_sync_request")
+            if not raw:
+                continue
+            found_in.append(store)
+            try:
+                payload = json.loads(str(raw))
+            except json.JSONDecodeError:
+                payload = None
+            portals = [str(item) for item in payload if str(item).strip()] if isinstance(payload, list) else []
+            wanted |= {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
+        if not found_in:
             return
-        portals = None
-        try:
-            payload = json.loads(str(raw))
-            if isinstance(payload, list):
-                portals = [str(item) for item in payload if str(item).strip()]
-        except json.JSONDecodeError:
-            portals = None
-        wanted = {str(item) for item in (portals or config.CATALOG_SYNC_HOURS) if item}
         to_start = wanted - user_hub.catalog_running_portals
-        if not to_start:
-            return
         leftover = sorted(wanted - to_start)
-        await user_hub._job_db(
-            user_hub.store.set_meta,
-            "catalog_sync_request",
-            json.dumps(leftover) if leftover else None,
-        )
+        if not to_start:
+            print(
+                f"catalog_sync request waiting: portals={sorted(wanted)} already running={sorted(user_hub.catalog_running_portals)}",
+                flush=True,
+            )
+            return
+        for store in found_in:
+            await user_hub._job_db(
+                store.set_meta,
+                "catalog_sync_request",
+                json.dumps(leftover) if leftover and store is user_hub.store else None,
+            )
         user_hub.catalog_running_portals |= to_start
         user_hub.catalog_running = True
+        print(
+            f"catalog_sync request picked up portals={sorted(to_start)} "
+            f"from={[str(s.path) for s in found_in]}",
+            flush=True,
+        )
         asyncio.create_task(
             user_hub.run_catalog_sync(portals=sorted(to_start), rerun=True, claimed=True),
             name="forced-catalog",
@@ -377,24 +409,27 @@ class ScrapeWorker:
 
     async def _maybe_scrape_url_request(self, user_hub: Hub | None = None) -> None:
         user_hub = user_hub if user_hub is not None else self.hub
-        raw = await user_hub._job_db(user_hub.store.get_meta, "scrape_url_request")
-        if not raw:
-            return
-        await user_hub._job_db(user_hub.store.set_meta, "scrape_url_request", None)
-        try:
-            payload = json.loads(str(raw))
-        except json.JSONDecodeError:
-            return
-        if not isinstance(payload, dict):
-            return
-        url = str(payload.get("url") or "").strip()
-        if not url:
-            return
-        try:
-            pages = int(payload.get("max_pages") or 40)
-        except (TypeError, ValueError):
-            pages = 40
-        await user_hub._run_scrape_search_url(url, pages)
+        stores = self._request_stores(user_hub) if user_hub.catalog_owner else [user_hub.store]
+        for store in stores:
+            raw = await user_hub._job_db(store.get_meta, "scrape_url_request")
+            if not raw:
+                continue
+            await user_hub._job_db(store.set_meta, "scrape_url_request", None)
+            try:
+                payload = json.loads(str(raw))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            url = str(payload.get("url") or "").strip()
+            if not url:
+                continue
+            try:
+                pages = int(payload.get("max_pages") or 40)
+            except (TypeError, ValueError):
+                pages = 40
+            print(f"scrape_url request picked up url={url[:100]} pages={pages} from={store.path}", flush=True)
+            await user_hub._run_scrape_search_url(url, pages)
 
 
 async def _amain() -> None:
