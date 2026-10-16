@@ -76,6 +76,7 @@ def agent_auth_block() -> dict[str, Any]:
         "credential_types_supported": ["oauth2_access_token", "api_key"],
         "revocation_uri": f"{b}/oauth/revoke",
         "documentation": f"{b}/auth.md",
+        "skill": f"{b}/auth.md",
     }
 
 
