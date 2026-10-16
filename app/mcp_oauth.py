@@ -93,6 +93,7 @@ def authorization_server_metadata() -> dict[str, Any]:
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "client_id_metadata_document_supported": True,
+        "poppy_domains": ["realitify.cz"],
         "agent_auth": agent_auth_block(),
     }
 

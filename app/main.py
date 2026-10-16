@@ -4131,10 +4131,21 @@ def _mcp_http(request: Request, payload: Any):
     return JSONResponse(payload)
 
 
-@app.get("/.well-known/oauth-protected-resource")
 @app.get("/.well-known/oauth-protected-resource/mcp")
 async def oauth_protected_resource() -> dict:
     return mcp_oauth.protected_resource_metadata()
+
+
+@app.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource_root(request: Request) -> dict:
+    # RFC 9728: metadata at the origin root describes the origin itself (resource == requested origin).
+    data = dict(mcp_oauth.protected_resource_metadata())
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    base = mcp_oauth.issuer()
+    if host in {"realitify.cz", "www.realitify.cz"}:
+        base = f"https://{host}"
+    data["resource"] = base
+    return data
 
 
 @app.get("/.well-known/oauth-authorization-server")

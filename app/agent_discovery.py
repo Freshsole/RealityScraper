@@ -147,6 +147,7 @@ def poppy() -> dict[str, Any]:
     return {
         "protocol_version": "0.1",
         "organization": {"name": "Realitify", "domain": DOMAIN, "url": b},
+        "auth": {"issuer": b},
         "agent": {"mcp": f"{b}/mcp"},
         "apis": {"openapi": f"{b}/api/agents/openapi.json"},
         "web": {},
@@ -155,7 +156,7 @@ def poppy() -> dict[str, Any]:
 
 def auth_md() -> str:
     b = base()
-    return f"""# Realitify – agent authentication
+    return f"""# Realitify auth.md – agent authentication
 
 Realitify exposes a read-only public catalog and an authenticated MCP/REST API for managing monitors.
 
