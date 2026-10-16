@@ -43,6 +43,7 @@ from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
 from app import whatsapp as wa_notify
+from app import agent_discovery
 from app import agents as agent_hub
 from app import mcp_oauth
 
@@ -906,6 +907,7 @@ SEO_PAGES = [
     ("/o-nas", "monthly", "0.7"),
     ("/about", "monthly", "0.6"),
     ("/mcp-docs", "weekly", "0.8"),
+    ("/mcp-docs-cs", "weekly", "0.7"),
     ("/llms.txt", "monthly", "0.5"),
     ("/pronajem-praha", "weekly", "0.9"),
     ("/pronajem-brno", "weekly", "0.8"),
@@ -948,12 +950,20 @@ def robots_txt() -> Response:
         "User-agent: Bingbot\nAllow: /\n\n"
         "User-agent: Googlebot\nAllow: /\n\n"
         "User-agent: SeznamBot\nAllow: /\n\n"
+        "User-agent: Google-Extended\nAllow: /\n\n"
+        "User-agent: Applebot\nAllow: /\n\n"
+        "User-agent: Applebot-Extended\nAllow: /\n\n"
+        "User-agent: DuckAssistBot\nAllow: /\n\n"
+        "User-agent: MistralAI-User\nAllow: /\n\n"
+        "User-agent: Meta-ExternalAgent\nAllow: /\n\n"
+        "User-agent: Amazonbot\nAllow: /\n\n"
+        "User-agent: CCBot\nAllow: /\n\n"
         "User-agent: *\n"
+        "Content-Signal: ai-train=yes, search=yes, ai-input=yes\n"
         "Allow: /\n"
         "Disallow: /admin\n"
         "Disallow: /api/\n"
         "Disallow: /prihlaseni\n"
-        "Disallow: /registrace\n"
         "Disallow: /heslo\n"
         "Disallow: /nastaveni\n"
         "Disallow: /prehled\n"
@@ -1228,6 +1238,7 @@ def apple_touch_icon() -> FileResponse:
 app.add_api_route("/favicon.ico", favicon_ico, methods=["GET"], include_in_schema=False)
 app.add_api_route("/favicon.svg", favicon_svg, methods=["GET"], include_in_schema=False)
 app.add_api_route("/apple-touch-icon.png", apple_touch_icon, methods=["GET"], include_in_schema=False)
+agent_discovery.install(app)
 app.add_api_route("/sitemap.xml", sitemap_xml, methods=["GET"], include_in_schema=False)
 app.add_api_route("/robots.txt", robots_txt, methods=["GET"], include_in_schema=False)
 app.add_api_route("/llms.txt", llms_txt_route, methods=["GET"], include_in_schema=False)

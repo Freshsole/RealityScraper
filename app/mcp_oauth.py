@@ -63,6 +63,19 @@ def protected_resource_metadata() -> dict[str, Any]:
         "authorization_servers": [issuer()],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["mcp"],
+        "resource_name": "Realitify MCP and REST API",
+        "resource_documentation": f"{issuer()}/mcp-docs",
+    }
+
+
+def agent_auth_block() -> dict[str, Any]:
+    b = issuer()
+    return {
+        "register_uri": f"{b}/oauth/register",
+        "identity_types_supported": ["user"],
+        "credential_types_supported": ["oauth2_access_token", "api_key"],
+        "revocation_uri": f"{b}/oauth/revoke",
+        "documentation": f"{b}/auth.md",
     }
 
 
@@ -80,6 +93,7 @@ def authorization_server_metadata() -> dict[str, Any]:
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "client_id_metadata_document_supported": True,
+        "agent_auth": agent_auth_block(),
     }
 
 

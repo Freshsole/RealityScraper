@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "27", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1"}
+ASSET_V = {"site": "28", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1"}
 
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
@@ -148,7 +148,8 @@ def page(
     </main>
     {FOOTER_HTML if footer else ''}
     <script src="/static/site/nav.js?v={ASSET_V['navjs']}" defer></script>
-    <script src="/static/site/pages.js?v={ASSET_V['pagesjs']}" defer></script>{scripts}
+    <script src="/static/site/pages.js?v={ASSET_V['pagesjs']}" defer></script>
+    <script src="/static/site/webmcp.js?v=1" defer></script>{scripts}
   </body>
 </html>"""
 

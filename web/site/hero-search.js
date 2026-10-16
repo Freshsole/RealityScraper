@@ -122,7 +122,7 @@
         document.getElementById('hs-modal-title').textContent = 'Našli jsme ' + fmt(total) + ' nabídek';
         box.innerHTML = '<ul class="hs-list">' + (d.items || []).map(function (it) {
           return '<li><span class="hs-loc">' + esc(it.locality || '') + '</span><span class="hs-spec">' + esc((it.disposition || '') + (it.area_m2 ? ' · ' + it.area_m2 + ' m²' : '')) + '</span><strong>' + esc(it.price_label || (it.price_czk ? fmt(it.price_czk) + ' Kč' : '')) + '</strong></li>';
-        }).join('') + '</ul><p class="hs-more">…a další ' + fmt(Math.max(total - 3, 0)) + ' po registraci.</p>';
+        }).join('') + '</ul><p class="hs-rest">…a další ' + fmt(Math.max(total - 3, 0)) + ' po registraci.</p>';
       })
       .catch(function () {
         document.getElementById('hs-teaser').innerHTML = '';

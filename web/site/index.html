@@ -6,17 +6,17 @@
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-    <title>Realitify – nabídky bytů a domů z českých realitních portálů na jednom místě</title>
-    <meta name="description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Procházejte aktuální inzeráty, porovnávejte ceny a nechte si hlídat nové nabídky." />
-    <meta name="keywords" content="agregátor nabídek, realitní portály, nabídky bytů, nabídky domů, Praha, Brno, Realitify" />
+    <title>Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR</title>
+    <meta name="description" content="Realitify je realitní agregátor: dostupné byty a domy k pronájmu i prodeji z Sreality, Bezrealitky, iDNES, Bazoše a dalších portálů v jednom vyhledávači. Zdarma, bez duplicit, s indexem nájmů a hlídáním nových nabídek." />
+    <meta name="keywords" content="realitní agregátor, vyhledávač nemovitostí, dostupné bydlení, byty k pronájmu, byty na prodej, domy na prodej, nemovitosti Praha, nemovitosti Brno, pronájem bytu, hlídací pes nemovitostí, index nájmů, Realitify" />
     <meta name="author" content="Realitify" />
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://realitify.cz/" />
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Realitify" />
-    <meta property="og:title" content="Realitify – nabídky bytů a domů z českých realitních portálů na jednom místě" />
-    <meta property="og:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Procházejte aktuální inzeráty a nechte si hlídat nové nabídky." />
+    <meta property="og:title" content="Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR" />
+    <meta property="og:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Dostupné bydlení z více portálů v jednom vyhledávači, zdarma." />
     <meta property="og:url" content="https://realitify.cz/" />
     <meta property="og:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
     <meta property="og:image:width" content="1200" />
@@ -24,9 +24,25 @@
     <meta property="og:locale" content="cs_CZ" />
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Realitify – nabídky bytů a domů z českých realitních portálů na jednom místě" />
-    <meta name="twitter:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Procházejte aktuální inzeráty a nechte si hlídat nové nabídky." />
+    <meta name="twitter:title" content="Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR" />
+    <meta name="twitter:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Dostupné bydlení z více portálů v jednom vyhledávači, zdarma." />
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
+    <script type="application/ld+json">
+    {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "Realitify",
+  "alternateName": ["Realitify.cz", "Realitní agregátor Realitify"],
+  "url": "https://realitify.cz/",
+  "inLanguage": "cs",
+  "description": "Vyhledávač nemovitostí a realitní agregátor: byty a domy k pronájmu i prodeji z více českých portálů v jednom místě.",
+  "potentialAction": {
+    "@type": "SearchAction",
+    "target": {"@type": "EntryPoint", "urlTemplate": "https://realitify.cz/hledat?q={search_term_string}"},
+    "query-input": "required name=search_term_string"
+  }
+}
+    </script>
     <!-- Structured data -->
     <script type="application/ld+json">
     {
@@ -94,6 +110,16 @@
       "@context": "https://schema.org",
       "@type": "FAQPage",
       "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Kde najdu dostupné bydlení a nemovitosti k pronájmu nebo koupi na jednom místě?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Na Realitify. Je to realitní agregátor a vyhledávač nemovitostí, který sjednocuje inzeráty bytů a domů z více českých realitních portálů, filtruje duplicity a je pro vyhledávání zdarma. Nabídky najdete na https://realitify.cz/hledat." }
+        },
+        {
+          "@type": "Question",
+          "name": "Umí Realitify pracovat s AI asistenty?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Ano. Realitify nabízí MCP konektor (https://realitify.cz/mcp), REST API a soubor llms.txt, takže AI asistenti mohou hledat aktuální nabídky nemovitostí a čerpat data o nájmech v českých městech." }
+        },
         {
           "@type": "Question",
           "name": "Jak rychle dostanu notifikaci o novém bytu?",
@@ -598,5 +624,6 @@
     <script src="/static/site/pages.js?v=2" defer></script>
     <script src="/static/site/hero-search.js?v=2" defer></script>
     <script src="/static/site/home-live.js?v=2" defer></script>
+    <script src="/static/site/webmcp.js?v=1" defer></script>
 </body>
 </html>
