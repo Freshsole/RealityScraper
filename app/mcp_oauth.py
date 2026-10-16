@@ -78,8 +78,11 @@ def agent_auth_block() -> dict[str, Any]:
         "claim_endpoint": f"{b}/agent/identity/claim",
         "claim_uri": f"{b}/agent/claim",
         "identity_types_supported": ["service_auth", "identity_assertion"],
-        "identity_assertion": {"assertion_types_supported": ["verified_email"]},
-        "credential_types_supported": ["oauth2_access_token"],
+        "identity_assertion": {
+            "assertion_types_supported": ["verified_email"],
+            "credential_types_supported": ["access_token"],
+        },
+        "credential_types_supported": ["access_token"],
         "revocation_uri": f"{b}/oauth/revoke",
     }
 

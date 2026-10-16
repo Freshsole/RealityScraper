@@ -148,46 +148,48 @@ def poppy() -> dict[str, Any]:
         "protocol_version": "0.1",
         "organization": {"name": "Realitify", "domain": DOMAIN, "url": b},
         "auth": {"issuer": b},
-        "agent": {"mcp": f"{b}/mcp"},
-        "apis": {"openapi": f"{b}/api/agents/openapi.json"},
+        "agent": {"protocols": [{"type": "mcp", "endpoint": f"{b}/mcp"}]},
+        "apis": [{"type": "openapi", "url": f"{b}/api/agents/openapi.json", "description": "Realitify REST API for listings, monitors and alerts"}],
         "web": {},
     }
 
 
 def auth_md() -> str:
     b = base()
-    return f"""# Realitify auth.md – agent authentication
+    text = f"""# Realitify auth.md – agent authentication
 
 Realitify is a Czech real-estate aggregator. Public search needs no credentials; managing monitors and
 alerts over MCP/REST needs an access token from a registered user (MCP access requires the PRO plan).
 
 ## Public (no auth)
 - `GET {b}/api/public/catalog?q=Praha&offer=pronajem` – search listings
-- `GET {b}/llms.txt`, `{b}/index.csv` – market data
+- `GET {b}/llms.txt`, {b}/index.csv – market data
 
 ## Authenticated resource
-- MCP (Streamable HTTP): `{b}/mcp`, REST: `{b}/api/v1`, OpenAPI: `{b}/api/agents/openapi.json`
-- Protected resource metadata: `{b}/.well-known/oauth-protected-resource`
-- Authorization server metadata (with `agent_auth`): `{b}/.well-known/oauth-authorization-server`
+- MCP (Streamable HTTP): {b}/mcp, REST: {b}/api/v1, OpenAPI: {b}/api/agents/openapi.json
+- Protected resource metadata: {b}/.well-known/oauth-protected-resource
+- Authorization server metadata (with `agent_auth`): {b}/.well-known/oauth-authorization-server
 - Scope: `mcp`
 
 ## Register an agent (user-claimed flow)
 1. `POST {b}/agent/identity` with JSON `{{"type":"service_auth","login_hint":"user@example.com","agent_name":"My agent"}}`
    (`login_hint` optional). Response: `claim_token` and `claim` (`user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`, `interval`).
-2. Show the user `user_code` and `verification_uri`. The user signs in at Realitify (free account: `{b}/registrace`) and confirms the code.
+2. Show the user `user_code` and `verification_uri`. The user signs in at Realitify (free account: {b}/registrace) and confirms the code.
 3. Poll `POST {b}/oauth/token` with `grant_type=urn:workos:agent-auth:grant-type:claim&claim_token=...` every `interval` seconds.
    - `authorization_pending` (400): keep polling
    - `expired_token` (400): `POST {b}/agent/identity/claim` with `{{"claim_token":"...","email":"..."}}` for a fresh code
    - `access_denied` (403): the account's plan does not include MCP
    - 200: `access_token` + `refresh_token` (Bearer, scope `mcp`)
-4. Call `{b}/mcp` with `Authorization: Bearer <access_token>`; refresh via `grant_type=refresh_token`.
+4. Call {b}/mcp with `Authorization: Bearer <access_token>`; refresh via `grant_type=refresh_token`.
 
 ## Alternatives
-- Interactive OAuth 2.1 + PKCE with dynamic client registration: `POST {b}/oauth/register`, authorize at `{b}/oauth/authorize`.
+- Interactive OAuth 2.1 + PKCE with dynamic client registration: `POST {b}/oauth/register`, authorize at {b}/oauth/authorize.
 
 ## Revocation
 `POST {b}/oauth/revoke` with `token=...`; users can also revoke in Settings → AI agents.
 """
+    # Scanners extract bare URLs from this file; backticks would stick to them.
+    return text.replace("`", "")
 
 
 # --- HTML -> markdown --------------------------------------------------------
