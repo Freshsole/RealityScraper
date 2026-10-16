@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import hashlib
 import io
 import json
@@ -550,6 +551,7 @@ async def agent_cors(request: Request, call_next):
         or path.startswith("/api/agents/openapi")
         or path.startswith("/.well-known/oauth")
         or path.startswith("/oauth/")
+        or path.startswith("/agent/identity")
     ):
         if request.method == "OPTIONS":
             response = Response(status_code=204)
@@ -4209,10 +4211,83 @@ def _oauth_store_for_token(token_value: str) -> Store:
     return hub.store
 
 
+@app.post("/agent/identity")
+async def agent_identity(request: Request):
+    """auth.md: start agent registration. The user confirms a code (claim ceremony)."""
+    _rate_limit_or_429(request, "agent_identity", "", 10, 3600)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    kind = str(body.get("type") or "service_auth")
+    if kind not in {"service_auth", "identity_assertion"}:
+        return JSONResponse({"error": "unsupported_identity_type"}, status_code=400)
+    if kind == "identity_assertion" and str(body.get("assertion_type") or "verified_email") != "verified_email":
+        return JSONResponse({"error": "unsupported_assertion_type"}, status_code=400)
+    email = str(body.get("login_hint") or body.get("email") or "").strip()
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        return JSONResponse({"error": "invalid_request", "error_description": "invalid email"}, status_code=400)
+    return JSONResponse(mcp_oauth.create_claim(hub.store, email=email, agent_name=str(body.get("agent_name") or "")))
+
+
+@app.post("/agent/identity/claim")
+async def agent_identity_claim(request: Request):
+    _rate_limit_or_429(request, "agent_claim", "", 20, 3600)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    body = body if isinstance(body, dict) else {}
+    try:
+        data = mcp_oauth.refresh_claim(hub.store, str(body.get("claim_token") or ""), str(body.get("email") or ""))
+    except ValueError:
+        return JSONResponse({"error": "expired_token"}, status_code=400)
+    return JSONResponse(data)
+
+
+@app.get("/agent/claim")
+async def agent_claim_page(request: Request):
+    code = str(request.query_params.get("user_code") or "")
+    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+    if not user:
+        nxt = "/agent/claim?" + urlencode({"user_code": code})
+        return RedirectResponse("/prihlaseni?next=" + quote(nxt, safe=""), status_code=303)
+    if not mcp_oauth.find_claim_by_code(hub.store, code):
+        return HTMLResponse(mcp_oauth.claim_page_html(user_code=code, email="", error="Kód je neplatný nebo vypršel."), status_code=400)
+    return HTMLResponse(mcp_oauth.claim_page_html(user_code=code, email=str(user.get("email") or "")), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/agent/claim")
+async def agent_claim_submit(request: Request):
+    form = {str(k): str(v) for k, v in (await request.form()).items()}
+    code = form.get("user_code", "")
+    user = user_account.user_from_session(hub.store, request.cookies.get(user_account.SESSION_COOKIE))
+    if not user:
+        return RedirectResponse("/prihlaseni?next=" + quote("/agent/claim?" + urlencode({"user_code": code}), safe=""), status_code=303)
+    _rate_limit_or_429(request, "agent_claim_submit", str(user.get("id")), 10, 600)
+    try:
+        mcp_oauth.approve_claim(hub.store, code, user)
+    except ValueError as exc:
+        return HTMLResponse(mcp_oauth.claim_page_html(user_code=code, email="", error=str(exc)), status_code=400)
+    return HTMLResponse(mcp_oauth.claim_page_html(user_code=code, email="", done=True), headers={"Cache-Control": "no-store"})
+
+
 @app.post("/oauth/token")
 async def oauth_token(request: Request):
     form = {str(key): str(value) for key, value in (await request.form()).items()}
     grant = str(form.get("grant_type") or "")
+    if grant == mcp_oauth.CLAIM_GRANT:
+        _rate_limit_or_429(request, "agent_claim_poll", "", 120, 600)
+        state, row = mcp_oauth.poll_claim(hub.store, str(form.get("claim_token") or ""))
+        if state == "pending":
+            return JSONResponse({"error": "authorization_pending"}, status_code=400)
+        if state != "approved" or not row:
+            return JSONResponse({"error": "expired_token"}, status_code=400)
+        try:
+            return JSONResponse(mcp_oauth.issue_agent_tokens(hub.store_for(str(row["user_id"])), str(row.get("name") or "")))
+        except PermissionError as exc:
+            return JSONResponse({"error": "access_denied", "error_description": str(exc)}, status_code=403)
     token_value = str(form.get("code") or form.get("refresh_token") or "")
     ustore = _oauth_store_for_token(token_value)
     try:

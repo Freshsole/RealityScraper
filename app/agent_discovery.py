@@ -158,21 +158,35 @@ def auth_md() -> str:
     b = base()
     return f"""# Realitify auth.md – agent authentication
 
-Realitify exposes a read-only public catalog and an authenticated MCP/REST API for managing monitors.
+Realitify is a Czech real-estate aggregator. Public search needs no credentials; managing monitors and
+alerts over MCP/REST needs an access token from a registered user (MCP access requires the PRO plan).
 
 ## Public (no auth)
 - `GET {b}/api/public/catalog?q=Praha&offer=pronajem` – search listings
 - `GET {b}/llms.txt`, `{b}/index.csv` – market data
 
-## Authenticated (MCP + REST)
-- Resource: `{b}/mcp` (Streamable HTTP), REST under `{b}/api/v1`
+## Authenticated resource
+- MCP (Streamable HTTP): `{b}/mcp`, REST: `{b}/api/v1`, OpenAPI: `{b}/api/agents/openapi.json`
 - Protected resource metadata: `{b}/.well-known/oauth-protected-resource`
-- Authorization server metadata: `{b}/.well-known/oauth-authorization-server`
-- Registration: dynamic client registration `POST {b}/oauth/register` (RFC 7591), PKCE S256 required
+- Authorization server metadata (with `agent_auth`): `{b}/.well-known/oauth-authorization-server`
 - Scope: `mcp`
-- A human user must approve access on `{b}/oauth/authorize`; accounts are created at `{b}/registrace` (free tier).
-- Alternatively use an API key (Bearer) generated in account settings.
-- Revocation: `POST {b}/oauth/revoke`
+
+## Register an agent (user-claimed flow)
+1. `POST {b}/agent/identity` with JSON `{{"type":"service_auth","login_hint":"user@example.com","agent_name":"My agent"}}`
+   (`login_hint` optional). Response: `claim_token` and `claim` (`user_code`, `verification_uri`, `verification_uri_complete`, `expires_in`, `interval`).
+2. Show the user `user_code` and `verification_uri`. The user signs in at Realitify (free account: `{b}/registrace`) and confirms the code.
+3. Poll `POST {b}/oauth/token` with `grant_type=urn:workos:agent-auth:grant-type:claim&claim_token=...` every `interval` seconds.
+   - `authorization_pending` (400): keep polling
+   - `expired_token` (400): `POST {b}/agent/identity/claim` with `{{"claim_token":"...","email":"..."}}` for a fresh code
+   - `access_denied` (403): the account's plan does not include MCP
+   - 200: `access_token` + `refresh_token` (Bearer, scope `mcp`)
+4. Call `{b}/mcp` with `Authorization: Bearer <access_token>`; refresh via `grant_type=refresh_token`.
+
+## Alternatives
+- Interactive OAuth 2.1 + PKCE with dynamic client registration: `POST {b}/oauth/register`, authorize at `{b}/oauth/authorize`.
+
+## Revocation
+`POST {b}/oauth/revoke` with `token=...`; users can also revoke in Settings → AI agents.
 """
 
 

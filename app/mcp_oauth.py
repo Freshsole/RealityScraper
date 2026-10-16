@@ -71,12 +71,16 @@ def protected_resource_metadata() -> dict[str, Any]:
 def agent_auth_block() -> dict[str, Any]:
     b = issuer()
     return {
-        "register_uri": f"{b}/oauth/register",
-        "identity_types_supported": ["user"],
-        "credential_types_supported": ["oauth2_access_token", "api_key"],
-        "revocation_uri": f"{b}/oauth/revoke",
-        "documentation": f"{b}/auth.md",
         "skill": f"{b}/auth.md",
+        "documentation": f"{b}/auth.md",
+        "register_uri": f"{b}/agent/identity",
+        "identity_endpoint": f"{b}/agent/identity",
+        "claim_endpoint": f"{b}/agent/identity/claim",
+        "claim_uri": f"{b}/agent/claim",
+        "identity_types_supported": ["service_auth", "identity_assertion"],
+        "identity_assertion": {"assertion_types_supported": ["verified_email"]},
+        "credential_types_supported": ["oauth2_access_token"],
+        "revocation_uri": f"{b}/oauth/revoke",
     }
 
 
@@ -90,7 +94,7 @@ def authorization_server_metadata() -> dict[str, Any]:
         "revocation_endpoint": f"{base}/oauth/revoke",
         "scopes_supported": ["mcp", "offline_access"],
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": ["authorization_code", "refresh_token", CLAIM_GRANT],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "client_id_metadata_document_supported": True,
@@ -354,6 +358,138 @@ def complete_authorize(store: Store, params: dict[str, str], client_store: Store
         query["state"] = fields["state"]
     parsed = urlparse(fields["redirect_uri"])
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment))
+
+
+# --- Agent registration (auth.md): user-claimed flow -------------------------
+CLAIMS_META = "agent_claims"
+CLAIM_TTL_SEC = 15 * 60
+CLAIM_GRANT = "urn:workos:agent-auth:grant-type:claim"
+_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789"
+
+
+def _new_user_code() -> str:
+    raw = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _claim_view(row: dict[str, Any], claim_token: str | None = None) -> dict[str, Any]:
+    uri = f"{issuer()}/agent/claim"
+    out = {
+        "claim": {
+            "user_code": row["user_code"],
+            "verification_uri": uri,
+            "verification_uri_complete": f"{uri}?user_code={row['user_code']}",
+            "expires_in": max(0, int(row["exp"]) - int(time.time())),
+            "interval": 5,
+        }
+    }
+    if claim_token:
+        out["claim_token"] = claim_token
+    return out
+
+
+def create_claim(store: Store, *, email: str, agent_name: str = "") -> dict[str, Any]:
+    now = int(time.time())
+    token = "rf_claim_" + secrets.token_urlsafe(32)
+    row = {
+        "token_hash": _hash(token),
+        "user_code": _new_user_code(),
+        "email": email.strip().lower()[:254],
+        "name": (agent_name or "AI agent").strip()[:80],
+        "exp": now + CLAIM_TTL_SEC,
+        "user_id": "",
+    }
+    rows = [r for r in _read(store, CLAIMS_META) if int(r.get("exp") or 0) > now]
+    rows.append(row)
+    store.set_meta(CLAIMS_META, json.dumps(rows[-200:], ensure_ascii=False))
+    return _claim_view(row, token)
+
+
+def refresh_claim(store: Store, claim_token: str, email: str = "") -> dict[str, Any]:
+    digest = _hash(claim_token)
+    now = int(time.time())
+    rows = _read(store, CLAIMS_META)
+    for row in rows:
+        if row.get("token_hash") == digest and int(row.get("exp") or 0) > now and not row.get("user_id"):
+            row["user_code"] = _new_user_code()
+            row["exp"] = now + CLAIM_TTL_SEC
+            if email:
+                row["email"] = email.strip().lower()[:254]
+            store.set_meta(CLAIMS_META, json.dumps(rows[-200:], ensure_ascii=False))
+            return _claim_view(row)
+    raise ValueError("expired_token")
+
+
+def find_claim_by_code(store: Store, user_code: str) -> dict[str, Any] | None:
+    code = (user_code or "").strip().upper()
+    now = int(time.time())
+    for row in _read(store, CLAIMS_META):
+        if row.get("user_code") == code and int(row.get("exp") or 0) > now and not row.get("user_id"):
+            return row
+    return None
+
+
+def approve_claim(store: Store, user_code: str, user: dict[str, Any]) -> dict[str, Any]:
+    code = (user_code or "").strip().upper()
+    now = int(time.time())
+    rows = _read(store, CLAIMS_META)
+    for row in rows:
+        if row.get("user_code") == code and int(row.get("exp") or 0) > now and not row.get("user_id"):
+            hint = str(row.get("email") or "")
+            if hint and hint != str(user.get("email") or "").strip().lower():
+                raise ValueError("Kód byl vydán pro jiný e-mail, než je e-mail přihlášeného účtu.")
+            row["user_id"] = str(user.get("id") or "")
+            store.set_meta(CLAIMS_META, json.dumps(rows[-200:], ensure_ascii=False))
+            return row
+    raise ValueError("Kód je neplatný nebo vypršel.")
+
+
+def poll_claim(store: Store, claim_token: str) -> tuple[str, dict[str, Any] | None]:
+    """('pending'|'expired'|'approved', row). An approved claim is consumed."""
+    digest = _hash(claim_token)
+    now = int(time.time())
+    rows = _read(store, CLAIMS_META)
+    for row in rows:
+        if row.get("token_hash") != digest:
+            continue
+        if row.get("user_id"):
+            store.set_meta(CLAIMS_META, json.dumps([r for r in rows if r is not row], ensure_ascii=False))
+            return "approved", row
+        if int(row.get("exp") or 0) <= now:
+            return "expired", None
+        return "pending", None
+    return "expired", None
+
+
+def issue_agent_tokens(user_store: Store, name: str) -> dict[str, Any]:
+    from app.agents import mcp_enabled
+
+    if not mcp_enabled(user_store):
+        raise PermissionError("MCP je v tarifu PRO")
+    return token_payload(_issue_tokens(user_store, name or "AI agent"))
+
+
+def claim_page_html(*, user_code: str, email: str, error: str = "", done: bool = False) -> str:
+    err = f'<p class="err">{escape(error)}</p>' if error else ""
+    if done:
+        body = "<h1>Hotovo</h1><p>Agent byl propojen s vaším účtem. Můžete se vrátit do aplikace agenta.</p>"
+    else:
+        body = f"""<h1>Povolit AI agenta?</h1>
+    <p>Agent žádá o přístup k vašemu účtu Realitify. Potvrďte jen tehdy, pokud kód <strong>{escape(user_code)}</strong> vám zobrazil váš agent.</p>
+    {err}
+    <form method="post" action="/agent/claim">
+      <input type="hidden" name="user_code" value="{escape(user_code)}" />
+      <button type="submit">Povolit agenta</button>
+    </form>"""
+    return f"""<!doctype html>
+<html lang="cs"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" /><title>Propojit agenta — Realitify</title>
+<style>
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f9f6;font-family:Inter,system-ui,sans-serif;color:#163300}}
+main{{width:min(440px,calc(100% - 32px));background:#fff;border-radius:24px;padding:32px}}
+h1{{font-size:22px;margin:0 0 8px}}p{{margin:0 0 16px;line-height:1.45;color:#3d4a33}}.err{{color:#9b1c1c}}
+button{{appearance:none;border:0;background:#9fe870;color:#163300;font-weight:700;border-radius:999px;padding:12px 18px;cursor:pointer;width:100%}}
+</style></head><body><main>{body}</main></body></html>"""
 
 
 def consent_html(params: dict[str, str], *, error: str = "") -> str:
