@@ -675,8 +675,16 @@ def create_checkout(store: Store, plan_id: str, email: str = "", promo_code: str
         "success_url": f"{config.PUBLIC_BASE_URL}/nastaveni/predplatne?billing=success&session_id={{CHECKOUT_SESSION_ID}}",
         "cancel_url": f"{config.PUBLIC_BASE_URL}/nastaveni/predplatne?billing=cancel",
         "locale": "cs",
+        # Checkout Studio parameters (fixed_by_ui)
+        "ui_mode": "hosted_page",  # the Stripe API rejects the older "hosted" value
+        "billing_address_collection": "auto",
+        "phone_number_collection": {"enabled": True},
         "automatic_tax": {"enabled": False},
-        "managed_payments": {"enabled": False},
+        "payment_method_collection": "always",
+        "submit_type": "auto",
+        "saved_payment_method_options": {"payment_method_save": "enabled"},
+        "integration_identifier": "hosted_web_0001",
+        "origin_context": "web",
         "subscription_data": subscription_data,
         "metadata": {"plan": plan_id, "promo": promo["code"] if promo else ""},
     }
