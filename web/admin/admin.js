@@ -2740,7 +2740,7 @@
         <h2 class="ad-kicker">Poslední leady</h2>
         <article class="ad-card">
           <div class="ad-utbl-wrap">
-            <div class="ad-utbl">
+            <div class="ad-utbl ad-leads-tbl">
               <div class="ad-utbl-head"><span>E-mail</span><span>Zdroj</span><span>Kdy</span></div>
               <div>${items.map(row).join("") || ""}</div>
               <div class="ad-utbl-empty" ${items.length ? "hidden" : ""}>Zatím žádné leady.</div>

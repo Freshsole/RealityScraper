@@ -4605,3 +4605,11 @@ img {
   }
 }
 
+
+.ad-leads-tbl .ad-utbl-head,
+.ad-leads-tbl .ad-utbl-row {
+  grid-template-columns: minmax(220px, 2.4fr) minmax(90px, 1fr) minmax(150px, 1.4fr);
+}
+.ad-leads-tbl .ad-utbl-row {
+  min-height: 52px;
+}
