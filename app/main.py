@@ -977,8 +977,9 @@ def robots_txt() -> Response:
         "\n"
         "Sitemap: https://realitify.cz/sitemap.xml\n"
     )
+    # Short TTL: crawlers and scanners cache robots.txt for as long as we allow.
     return Response(content=txt, media_type="text/plain",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "public, max-age=900"})
 
 
 def seznam_wmt_verify() -> Response:
