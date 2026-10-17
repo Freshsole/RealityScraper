@@ -59,53 +59,78 @@ class CatalogPlaceTests(unittest.TestCase):
         return_value={"dělnická": (50.1027, 14.4502)},
     )
     @patch("app.places.street_index_cached", return_value={})
-    def test_idnes_praha7_without_coords_matches_place_filter(self, _cached, _streets):
+    def test_offers_without_gps_are_located_once_by_backfill_not_while_reading(self, _cached, _streets):
         self.store.upsert_catalog_listing(listing(), kind="seeded")
         self.store.upsert_catalog_listing(
             listing(
                 id=2,
-                locality="Sokolovská, Praha 8 - Karlín",
-                url="https://reality.idnes.cz/detail/pronajem/byt/praha-8-sokolovska/bbbbbbbbbbbbbbbbbbbbbbbb/",
+                locality="Sokolovská, Brno - Židenice",
+                url="https://reality.idnes.cz/detail/pronajem/byt/brno-sokolovska/bbbbbbbbbbbbbbbbbbbbbbbb/",
             ),
             kind="seeded",
         )
-        data = self.store.catalog(
-            {
-                "portal": "idnes",
-                "district": "Praha 7",
-                "place_geoms": [PRAHA7],
-                "limit": 20,
-                "offset": 0,
-                "status": "all",
-                "include_pins": "1",
-            }
-        )
+        query = {"portal": "idnes", "place_geoms": [PRAHA7], "limit": 20, "offset": 0, "status": "all", "include_pins": "1"}
+        before = self.store.catalog(dict(query))
+        # Reading never guesses a position: no GPS, not in the place, not on the map.
+        self.assertEqual(before["total"], 0)
+        self.assertEqual(before["pins"], [])
+        stats = self.store.locate_catalog_listings()
+        self.assertGreaterEqual(stats["rows"], 1)
+        data = self.store.catalog(dict(query))
+        # Brno stays out, Praha 7 street lands on the street, list == pins.
         self.assertEqual(data["total"], 1)
         self.assertIn("Praha 7", data["items"][0]["locality"])
         self.assertEqual(len(data["pins"]), 1)
-        self.assertFalse(data["pins"][0].get("approx"))
+        self.assertEqual(data["pinned"], data["total"])
         self.assertAlmostEqual(data["pins"][0]["lat"], 50.1027, places=3)
         self.assertAlmostEqual(data["pins"][0]["lon"], 14.4502, places=3)
 
     @patch(
         "app.places.street_index_for_locality",
-        return_value={"dělnická": (50.1027, 14.4502), "komunardů": (50.1062, 14.4499)},
+        # Same street name, but the index point is in another town: must be rejected.
+        return_value={"šimáčkova": (49.88, 16.05)},
     )
     @patch("app.places.street_index_cached", return_value={})
-    def test_street_localities_get_distinct_pins(self, _cached, _streets):
-        self.store.upsert_catalog_listing(listing(), kind="seeded")
+    def test_backfill_rejects_street_match_in_another_city(self, _cached, _streets):
         self.store.upsert_catalog_listing(
-            listing(
-                id=4,
-                locality="Komunardů, Praha 7 - Holešovice",
-                url="https://reality.idnes.cz/detail/pronajem/byt/praha-7-komunardu/cccccccccccccccccccccccc/",
-            ),
+            listing(id=5, locality="Šimáčkova, Praha 7 - Holešovice",
+                    url="https://reality.idnes.cz/detail/pronajem/byt/praha-7-simackova/eeeeeeeeeeeeeeeeeeeeeeee/"),
             kind="seeded",
         )
-        data = self.store.catalog({"place_geoms": [PRAHA7], "limit": 20, "offset": 0, "status": "all", "include_pins": "1"})
-        pts = {(round(pin["lat"], 4), round(pin["lon"], 4)) for pin in data["pins"]}
-        self.assertEqual(len(data["pins"]), 2)
-        self.assertEqual(len(pts), 2)
+        self.store.locate_catalog_listings()
+        data = self.store.catalog({"portal": "idnes", "place_geoms": [PRAHA7], "limit": 20, "offset": 0, "status": "all", "include_pins": "1"})
+        for pin in data["pins"]:
+            self.assertLess(abs(pin["lat"] - 50.10), 0.1)
+            self.assertLess(abs(pin["lon"] - 14.44), 0.1)
+
+    def test_list_total_and_pins_are_the_same_set(self):
+        for i in range(1, 8):
+            self.store.upsert_catalog_listing(
+                listing(
+                    id=100 + i,
+                    lat=50.095 + i * 0.003,
+                    lon=14.42 + i * 0.002,
+                    locality=f"Ulice {i}, Praha 7 - Holešovice",
+                    url=f"https://reality.idnes.cz/detail/pronajem/byt/praha-7-ulice-{i}/{i:024d}/",
+                ),
+                kind="seeded",
+            )
+        # one in the polygon bbox but outside the polygon, one far away
+        self.store.upsert_catalog_listing(listing(id=200, lat=50.0, lon=14.0, locality="Praha 7 - Holešovice",
+                                                  url="https://reality.idnes.cz/detail/pronajem/byt/x/" + "9" * 24 + "/"), kind="seeded")
+        query = {"place_geoms": [PRAHA7], "limit": 3, "offset": 0, "status": "all", "include_pins": "1"}
+        page1 = self.store.catalog(dict(query))
+        pins_only = self.store.catalog(dict(query, pins_only=True))
+        self.assertEqual(page1["total"], 7)
+        self.assertEqual(len(page1["items"]), 3)
+        self.assertEqual({p["listing_key"] for p in page1["pins"]}, {p["listing_key"] for p in pins_only["items"]})
+        self.assertEqual(sum(p["count"] for p in page1["pins"]), page1["total"])
+        # paging walks the whole set, no duplicates
+        seen = []
+        for off in (0, 3, 6):
+            seen += [i["id"] for i in self.store.catalog(dict(query, offset=off, include_pins="0"))["items"]]
+        self.assertEqual(len(seen), 7)
+        self.assertEqual(len(set(seen)), 7)
 
     def test_coords_outside_polygon_are_excluded(self):
         self.store.upsert_catalog_listing(

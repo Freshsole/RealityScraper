@@ -56,6 +56,7 @@
   let lastItems = [];
   let lastCatalogQuery = location.search;
   let total = 0;
+  let pinned = 0; // offers that have a pin on the map (== total whenever the map area restricts the list)
   let offset = 0;
   let loaded = false;
   let lightboxPhotos = [];
@@ -1584,7 +1585,8 @@
           return;
         }
         // Nikdy nerozbaluj ceny na mapu — popup + seznam vpravo.
-        if (groupNeedsApproxTip(group) || catalogMap.getZoom() >= 14) {
+        const serverCluster = group.items.some((item) => item.cluster);
+        if (!serverCluster && (groupNeedsApproxTip(group) || catalogMap.getZoom() >= 14)) {
           openStackPopup(marker, group);
           return;
         }
@@ -1603,7 +1605,9 @@
 
   function updateCountLabel() {
     const el = $("catalog-count");
-    if (el) el.textContent = `${total} nemovitostí`;
+    if (!el) return;
+    const unmapped = total - pinned;
+    el.textContent = unmapped > 0 ? `${total} nemovitostí · ${pinned} na mapě` : `${total} nemovitostí`;
   }
 
   function renderMapPins(items) {
@@ -2071,27 +2075,6 @@
     document.querySelector(".catalog-side")?.classList.toggle("is-loading", Boolean(listOn));
   }
 
-  async function refreshCatalogPins(seq, signal) {
-    try {
-      const pinTimeout = AbortSignal.timeout(12000);
-      const combined =
-        signal && typeof AbortSignal.any === "function"
-          ? AbortSignal.any([signal, pinTimeout])
-          : pinTimeout;
-      const response = await fetch(`/api/catalog/pins?${queryString({ limit: LIMIT, offset: 0 })}`, {
-        signal: combined,
-      });
-      if (seq !== catalogSeq || !response.ok) return;
-      const pinData = await response.json();
-      const pins = uniqueOffers(pinData.items || []);
-      if (pins.length) renderMapPins(pins);
-      else if (seq === catalogSeq) renderMapPins([]);
-    } catch (err) {
-      if (err?.name === "AbortError") return;
-      /* list is already visible */
-    }
-  }
-
   function finishCatalogLoad(seq, { keepCount = false } = {}) {
     // Only the newest in-flight load may clear busy/loading.
     if (seq !== catalogSeq) return;
@@ -2148,9 +2131,11 @@
     }
     let data;
     try {
-      const response = await fetch(`/api/catalog?${queryString({ limit: LIMIT, offset, include_pins: "0" })}`, {
-        signal: ac.signal,
-      });
+      // One request: the list, the total and the pins are cut from the same set on the server.
+      const response = await fetch(
+        `/api/catalog?${queryString({ limit: LIMIT, offset, include_pins: append ? "0" : "1" })}`,
+        { signal: ac.signal },
+      );
       if (!response.ok) throw new Error("catalog");
       data = await response.json();
     } catch (err) {
@@ -2175,8 +2160,8 @@
     try {
       applyPlaceGeoms(data.places);
       const items = uniqueOffers(data.items || []);
-      const incomingPins = uniqueOffers(data.pins && data.pins.length ? data.pins : items);
       total = data.total || 0;
+      if (!append) pinned = Number.isFinite(Number(data.pinned)) ? Number(data.pinned) : total;
       renderFacets(data.facets);
       if (append) lastItems = uniqueOffers(lastItems.concat(items));
       else lastItems = items;
@@ -2191,12 +2176,11 @@
       }
       renderList(items, append);
       if (!append) {
-        renderMapPins(incomingPins.length ? incomingPins : []);
+        renderMapPins(uniqueOffers(data.pins || []));
         drawPlaceLayer(false);
         if (needPlaceFit && (selectedPlaces.length || circleFilter)) goToSelection();
         needPlaceFit = false;
         setCatalogLoading(false, true);
-        await refreshCatalogPins(seq, ac.signal);
       }
       offset = lastItems.length;
       $("catalog-more").hidden = lastItems.length >= total;

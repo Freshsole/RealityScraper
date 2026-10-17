@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import zlib
 import logging
 import re
 import secrets
@@ -178,7 +180,15 @@ def _is_discord_webhook(url: str) -> bool:
 
 def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
     identity = listing_identity(row)
-    return {
+    locality = str(row.get("locality") or "")
+    # Flag only (the pin stays where the offer is stored): coordinates equal to a city/district
+    # centroid mean the portal never gave a street.
+    approx = bool(
+        locality
+        and places.coords_are_approx_dump(locality, row.get("lat"), row.get("lon"))
+        and not places.locality_has_street(locality)
+    )
+    pin = {
         "id": row.get("id"),
         "monitor_id": row.get("monitor_id"),
         "lat": row.get("lat"),
@@ -192,34 +202,55 @@ def _pin_item(row: dict[str, Any]) -> dict[str, Any]:
         "url": row.get("url") or "",
         "count": int(row["count"]) if row.get("count") else 1,
     }
-
-
-def _place_center(geoms: list[dict[str, Any]]) -> tuple[float, float] | None:
-    for geom in geoms:
-        try:
-            return float(geom["lat"]), float(geom["lon"])
-        except (TypeError, ValueError, KeyError):
-            continue
-    return None
-
-
-def _pin_with_place(row: dict[str, Any], geoms: list[dict[str, Any]] | None = None, approx: bool = False) -> dict[str, Any] | None:
-    pin = _pin_item(row)
-    if pin.get("lat") is not None and pin.get("lon") is not None:
-        if approx:
-            pin["approx"] = True
-        return pin
-    locality = str(row.get("locality") or "")
-    if "," in locality:
-        return None
-    center = _place_center(geoms or [])
-    if not center:
-        return None
-    seed = abs(int(row.get("id") or 0))
-    pin["lat"] = center[0] + ((seed % 17) - 8) * 0.00016
-    pin["lon"] = center[1] + ((seed % 13) - 6) * 0.0002
-    pin["approx"] = True
+    if approx:
+        pin["approx"] = True
     return pin
+
+
+# One listing is "on the map" iff it has real stored coordinates. The catalog never invents or
+# moves coordinates while reading: list, total and pins are all derived from the same located set.
+GPS_OK_SQL = "listings.lat IS NOT NULL AND listings.lon IS NOT NULL AND (listings.lat != 0 OR listings.lon != 0)"
+# Above this many offers the map gets grid clusters (exact counts) instead of one pin per offer.
+PIN_DETAIL_MAX = 3000
+PIN_GRID_CELLS = 24
+
+
+def _pin_cluster(lat: float, lon: float, count: int, tag: str) -> dict[str, Any]:
+    return {
+        "id": zlib.crc32(tag.encode()) & 0x7FFFFFFF,
+        "monitor_id": "__cluster__",
+        "lat": lat,
+        "lon": lon,
+        "price_czk": None,
+        "price_label": "",
+        "name": "",
+        "locality": "",
+        "listing_key": f"cluster:{tag}",
+        "canonical_key": f"cluster:{tag}",
+        "url": "",
+        "count": int(count),
+        "cluster": True,
+    }
+
+
+def _grid_pins(rows: list[dict[str, Any]], box: tuple[float, float, float, float]) -> list[dict[str, Any]]:
+    """Cluster located rows into a coarse grid. Sum of pin counts == len(rows), cells with a single
+    offer stay a normal price pin."""
+    south, north, west, east = box
+    cell = max(north - south, east - west, 0.001) / PIN_GRID_CELLS
+    cells: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (int((float(row["lat"]) - south) // cell), int((float(row["lon"]) - west) // cell))
+        cells.setdefault(key, []).append(row)
+    pins: list[dict[str, Any]] = []
+    for (ky, kx), group in cells.items():
+        if len(group) == 1:
+            pins.append(_pin_item(group[0]))
+            continue
+        lat = sum(float(r["lat"]) for r in group) / len(group)
+        lon = sum(float(r["lon"]) for r in group) / len(group)
+        pins.append(_pin_cluster(lat, lon, len(group), f"{ky}:{kx}"))
+    return pins
 
 
 def _hidden_listing_sql() -> str:
@@ -344,16 +375,11 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
         return
     if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
         return
-    gps = (
-        "listings.lat IS NOT NULL AND listings.lon IS NOT NULL "
-        "AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
-    )
+    gps = f"{GPS_OK_SQL} AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
     # What the user sees is what is listed: only offers whose coordinates lie inside the visible
     # viewport. (Locality text matching used to pull in whole districts, so the list and total
     # disagreed with the pins on the map.)
     filters["_bbox"] = (south, north, west, east)
-    filters["_bbox_anchors"] = []
-    filters["_bbox_span"] = (north - south) + (east - west)
     where.append(gps)
     params.extend([south, north, west, east])
 
@@ -367,7 +393,7 @@ def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) 
         return
     if not (-90 <= lat <= 90 and -180 <= lon <= 180 and 50 <= radius <= 50_000):
         return
-    where.append("listings.lat IS NOT NULL AND listings.lon IS NOT NULL")
+    where.append(GPS_OK_SQL)
     where.append(
         """
         (6371000 * acos(max(-1.0, min(1.0,
@@ -427,58 +453,11 @@ def _praha_okres_exclude_sql() -> tuple[str, list[str]]:
     return " AND ".join(parts), list(_PRAHA_OKRES_EXCLUDE_NEEDLES)
 
 
-def _prague_number_from_place(geom: dict[str, Any]) -> str | None:
-    ident = str(geom.get("id") or "")
-    slug = str(localities.OSM_TO_SREALITY.get(ident) or "")
-    match = re.match(r"praha-(\d+)$", slug, re.I)
-    if match:
-        return match.group(1)
-    match = _PRAHA_PLACE_RE.search(str(geom.get("label") or ""))
-    return match.group(1) if match else None
-
-
-def _place_text_sql(geoms: list[dict[str, Any]]) -> tuple[str, list[Any]]:
-    parts: list[str] = []
-    params: list[Any] = []
-    for geom in geoms:
-        number = _prague_number_from_place(geom)
-        if number:
-            parts.append("(listings.locality GLOB ? OR listings.locality GLOB ? OR listings.url LIKE ?)")
-            params.extend([f"*Praha {number}", f"*Praha {number}[^0-9]*", f"%praha-{number}%"])
-            continue
-        label = str(geom.get("label") or "").strip()
-        if label:
-            parts.append("(listings.locality LIKE ? OR listings.name LIKE ?)")
-            params.extend([f"%{label}%", f"%{label}%"])
-    if not parts:
-        return "", []
-    return "(" + " OR ".join(parts) + ")", params
-
-
-def listing_matches_place_text(row: dict[str, Any], geoms: list[dict[str, Any]]) -> bool:
-    locality = str(row.get("locality") or "")
-    url = str(row.get("url") or "").casefold()
-    name = str(row.get("name") or "")
-    hay = f"{locality} {name}".casefold()
-    for geom in geoms:
-        number = _prague_number_from_place(geom)
-        if number:
-            if re.search(rf"praha\s*{number}(?!\d)", locality, re.I) or f"praha-{number}" in url:
-                return True
-            continue
-        label = str(geom.get("label") or "").strip()
-        if label and label.casefold() in hay:
-            return True
-    return False
-
-
 def listing_matches_places(row: dict[str, Any], geoms: list[dict[str, Any]]) -> bool:
+    """Located offers only: the stored coordinates must lie inside the selected place."""
     if not geoms:
         return True
-    lat, lon = row.get("lat"), row.get("lon")
-    if lat is not None and lon is not None:
-        return places.point_matches(lat, lon, geoms)
-    return listing_matches_place_text(row, geoms)
+    return places.point_matches(row.get("lat"), row.get("lon"), geoms)
 
 
 class Store:
@@ -491,7 +470,6 @@ class Store:
         self._facets_cache: dict[str, Any] | None = None
         self._facets_base: dict[str, Any] = {"at": 0.0, "data": None}
         self._facets_at = 0.0
-        self._city_pin_cache: dict[tuple[Any, ...], tuple[float, list[dict[str, Any]], int, list[str]]] = {}
         # street-prefix → GPS | None (None = looked up, no usable peer)
         self._peer_street_cache: dict[str, tuple[float, float] | None] = {}
         self._monitor_index = None
@@ -5371,25 +5349,6 @@ class Store:
             self._record_price(conn, monitor_id, listing, now)
             self._save_photos(conn, monitor_id, listing, replace=True)
 
-    def _persist_locality_coords(self, locality: str, point: tuple[float, float], *, overwrite: bool = False) -> None:
-        with self.connect() as conn:
-            if overwrite:
-                conn.execute(
-                    """
-                    UPDATE listings SET lat = ?, lon = ?
-                    WHERE locality = ?
-                    """,
-                    (point[0], point[1], locality),
-                )
-            else:
-                conn.execute(
-                    """
-                    UPDATE listings SET lat = ?, lon = ?
-                    WHERE locality = ? AND (lat IS NULL OR lon IS NULL)
-                    """,
-                    (point[0], point[1], locality),
-                )
-
     def _peer_street_point(self, locality: str) -> tuple[float, float] | None:
         """Average GPS of other listings on the same street (skips city/district dumps).
 
@@ -5403,6 +5362,7 @@ class Store:
         if cache_key in self._peer_street_cache:
             return self._peer_street_cache[cache_key]
         needle_keys = set(places._street_lookup_keys(places.street_from_locality(locality)))
+        anchor = places.locality_anchor_match(locality)
         # LIKE is ASCII-case-insensitive; accents still need a usable prefix.
         raw_street = places.street_from_locality(locality)
         raw_bare = re.sub(r"[\s/]+\d.*$", "", raw_street).strip() or raw_street
@@ -5434,6 +5394,13 @@ class Store:
             if not (needle_keys & peer_keys):
                 continue
             try:
+                lat_chk, lon_chk = float(row["lat"]), float(row["lon"])
+            except (TypeError, ValueError):
+                continue
+            # The same street name exists in many towns: the sibling must be near the same city.
+            if anchor and math.hypot((lat_chk - anchor[1]) * 111.2, (lon_chk - anchor[2]) * 71.5) > self.LOCALITY_MAX_KM:
+                continue
+            try:
                 lat_f, lon_f = float(row["lat"]), float(row["lon"])
             except (TypeError, ValueError):
                 continue
@@ -5456,167 +5423,122 @@ class Store:
                 self._peer_street_cache.pop(drop_key, None)
         return result
 
-    def _apply_resolved_coords(
-        self,
-        loc: str,
-        group: list[dict[str, Any]],
-        streets: dict[str, tuple[float, float]],
-        *,
-        overwrite: bool = False,
-        allow_network: bool = True,
-        allow_peer: bool = True,
-        persist: bool = True,
-    ) -> None:
-        point, approx = places.resolve_locality_coords(loc, streets, allow_network=allow_network)
-        if allow_peer and places.locality_has_street(loc):
-            needs_peer = (
-                point is None
-                or approx
-                or places.coords_are_approx_dump(loc, point[0], point[1])
-            )
-            if needs_peer:
-                peer = self._peer_street_point(loc)
-                if peer:
-                    point, approx = peer, False
-        if not point:
-            return
-        if persist and not approx:
-            try:
-                self._persist_locality_coords(loc, point, overwrite=overwrite or places.locality_has_street(loc))
-            except sqlite3.OperationalError:
-                pass
-        for row in group:
-            row["lat"], row["lon"] = point
-            if approx:
-                row["_geo_approx"] = True
-            else:
-                row.pop("_geo_approx", None)
+    # A point further than this from the city named in the locality is a wrong match (same street
+    # name in another town), never an address.
+    LOCALITY_MAX_KM = 25.0
 
-    def _upgrade_coarse_coords(
-        self,
-        rows: list[dict[str, Any]],
-        geoms: list[dict[str, Any]] | None = None,
-        *,
-        limit: int = 48,
-        allow_network: bool = False,
-        peer_limit: int = 24,
-        persist: bool = True,
-    ) -> None:
-        """Fix street localities dumped onto a city/district centroid.
+    def _locality_point(self, loc: str, *, peer: bool = False) -> tuple[tuple[float, float], bool] | None:
+        """((lat, lon), is_centroid) for a locality text, or None. Never uses the network.
 
-        Catalog/pin requests must stay fast: default is local street-index only
-        (no Photon/Nominatim). Peer-street DB lookups are capped per request.
-        Network geocode is opt-in for workers/backfill.
-        Also relocates listings wrongly pinned on hl. m. Praha (e.g. Praha-západ).
+        Street index / geocode cache first, then (optionally) sibling offers on the same street, else
+        the centroid of the named city or district. Anything that lands far from the city named in the
+        text falls back to that city's centroid.
         """
-        pending: dict[str, list[dict[str, Any]]] = {}
-        wrong_city: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            loc = str(row.get("locality") or "").strip()
-            lat, lon = row.get("lat"), row.get("lon")
-            if not loc or lat is None or lon is None:
-                continue
-            fixed = places.wrong_city_anchor_point(loc, lat, lon)
-            if fixed:
-                wrong_city.setdefault(loc, []).append(row)
-                continue
-            if not places.locality_has_street(loc):
-                continue
-            if not places.coords_are_approx_dump(loc, lat, lon):
-                continue
-            pending.setdefault(loc, []).append(row)
-        for loc, group in wrong_city.items():
-            point = places.wrong_city_anchor_point(loc, group[0].get("lat"), group[0].get("lon"))
-            if not point:
-                continue
-            if persist:
-                try:
-                    self._persist_locality_coords(loc, point, overwrite=True)
-                except sqlite3.OperationalError:
-                    pass
-            for row in group:
-                row["lat"], row["lon"] = point
-                row["_geo_approx"] = True
-        if not pending:
-            return
-        # Cap unique street upgrades per request so pin loads stay interactive.
-        max_resolve = max(peer_limit, 48) if not allow_network else max(limit, peer_limit, 48)
-        if len(pending) > max_resolve:
-            keep = dict(list(pending.items())[:max_resolve])
-            for loc, group in pending.items():
-                if loc in keep:
-                    continue
-                for row in group:
-                    row["_geo_approx"] = True
-            pending = keep
-        streets: dict[str, tuple[float, float]] = {}
-        for geom in geoms or []:
-            streets.update(places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or ""))))
-        for loc in pending:
-            streets.update(places.street_index_for_locality(loc, allow_fetch=False))
-        attempts = 0
-        peer_attempts = 0
-        for loc, group in pending.items():
-            use_network = allow_network and attempts < limit
-            if use_network:
-                attempts += 1
-            use_peer = peer_attempts < peer_limit
-            if use_peer:
-                peer_attempts += 1
-            self._apply_resolved_coords(
-                loc,
-                group,
-                streets,
-                overwrite=True,
-                allow_network=use_network,
-                allow_peer=use_peer,
-                persist=persist,
-            )
-            if places.locality_has_street(loc) and any(row.get("_geo_approx") for row in group):
-                for row in group:
-                    row["_geo_approx"] = True
+        anchor = places.locality_anchor_match(loc)
+        streets = places.street_index_for_locality(loc, allow_fetch=False)
+        point, approx = places.resolve_locality_coords(loc, streets, allow_network=False)
+        centroid = bool(point) and (approx or places.coords_are_approx_dump(loc, point[0], point[1]))
+        if peer and places.locality_has_street(loc) and (point is None or centroid):
+            found = self._peer_street_point(loc)
+            if found:
+                point, centroid = found, False
+        if not point:
+            return None
+        if anchor:
+            km = math.hypot((point[0] - anchor[1]) * 111.2, (point[1] - anchor[2]) * 71.5)
+            if km > self.LOCALITY_MAX_KM:
+                return (anchor[1], anchor[2]), True
+        return (float(point[0]), float(point[1])), centroid
 
-    def _fill_missing_coords(
-        self,
-        rows: list[dict[str, Any]],
-        geoms: list[dict[str, Any]] | None = None,
-        *,
-        allow_network: bool = False,
-        peer_limit: int = 24,
-        persist: bool = True,
-    ) -> None:
-        pending: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            if row.get("lat") is not None and row.get("lon") is not None:
+    def locate_catalog_listings(self, limit: int = 3000, *, repair: bool = False) -> dict[str, int]:
+        """Persist coordinates so the map never has to guess while reading.
+
+        1. Offers without GPS get street-level coordinates (or their city centroid).
+        2. repair=True also fixes offers whose stored coordinates are wrong: a street address sitting
+           on a city/district centroid, or an outer district pinned on central Prague.
+        Rows whose locality names no known place stay unlocated (and off the map).
+        """
+        stats = {"localities": 0, "located": 0, "repaired": 0, "rows": 0}
+        updates: list[tuple[str, float, float, float | None, float | None]] = []
+        with self.connect(readonly=True) as conn:
+            missing = [
+                row[0]
+                for row in conn.execute(
+                    """
+                    SELECT locality FROM listings
+                    WHERE IFNULL(gone, 0) = 0 AND (lat IS NULL OR lon IS NULL)
+                      AND locality IS NOT NULL AND locality != ''
+                    GROUP BY locality LIMIT ?
+                    """,
+                    (int(limit),),
+                )
+            ]
+            suspicious: list[tuple[str, float, float]] = []
+            if repair:
+                for row in conn.execute(
+                    """
+                    SELECT locality, lat, lon, MAX(url LIKE '%idnes.cz%' OR url LIKE '%bazos%') FROM listings
+                    WHERE IFNULL(gone, 0) = 0 AND lat IS NOT NULL AND lon IS NOT NULL
+                      AND locality LIKE '%,%'
+                    GROUP BY locality, lat, lon
+                    """
+                ):
+                    loc, lat, lon, no_native_gps = row[0], float(row[1]), float(row[2]), bool(row[3])
+                    if places.wrong_city_anchor_point(loc, lat, lon) or (
+                        places.locality_has_street(loc) and places.coords_are_approx_dump(loc, lat, lon)
+                    ):
+                        suspicious.append((loc, lat, lon))
+                        continue
+                    # iDNES / Bazoš coordinates were once filled by street-name lookups across all towns:
+                    # far from the named city is a certain error there (other portals ship native GPS).
+                    if no_native_gps:
+                        anchor = places.locality_anchor_match(loc)
+                        if anchor and math.hypot((lat - anchor[1]) * 111.2, (lon - anchor[2]) * 71.5) > 30:
+                            suspicious.append((loc, lat, lon))
+        for loc in missing:
+            stats["localities"] += 1
+            found = self._locality_point(loc)
+            if found:
+                stats["located"] += 1
+                updates.append((loc, found[0][0], found[0][1], None, None))
+        for loc, lat, lon in suspicious[: int(limit)]:
+            wrong_city = places.wrong_city_anchor_point(loc, lat, lon)
+            found = self._locality_point(loc, peer=True)
+            point = wrong_city or (found[0] if found else None)
+            if not point or (abs(point[0] - lat) < 1e-6 and abs(point[1] - lon) < 1e-6):
                 continue
-            loc = str(row.get("locality") or "").strip()
-            if not loc:
-                continue
-            pending.setdefault(loc, []).append(row)
-        if not pending:
-            return
-        streets: dict[str, tuple[float, float]] = {}
-        for geom in geoms or []:
-            streets.update(places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or ""))))
-        for loc in pending:
-            streets.update(places.street_index_for_locality(loc, allow_fetch=False))
-        attempts = 0
-        peer_attempts = 0
-        for loc, group in pending.items():
-            use_network = allow_network and places.locality_has_street(loc) and attempts < 64
-            if use_network:
-                attempts += 1
-            use_peer = peer_attempts < peer_limit
-            if use_peer and places.locality_has_street(loc):
-                peer_attempts += 1
-            self._apply_resolved_coords(
-                loc,
-                group,
-                streets,
-                allow_network=use_network,
-                allow_peer=use_peer,
-                persist=persist,
-            )
+            stats["repaired"] += 1
+            updates.append((loc, float(point[0]), float(point[1]), lat, lon))
+        if not updates:
+            return stats
+        with self.connect() as conn:
+            for loc, lat, lon, old_lat, old_lon in updates:
+                if old_lat is None:
+                    cond, cond_params = "(lat IS NULL OR lon IS NULL)", ()
+                else:
+                    cond, cond_params = "lat = ? AND lon = ?", (old_lat, old_lon)
+                keys = [
+                    row[0]
+                    for row in conn.execute(
+                        f"SELECT listing_key FROM listings WHERE locality = ? AND {cond}", (loc, *cond_params)
+                    )
+                    if row[0]
+                ]
+                cur = conn.execute(
+                    f"UPDATE listings SET lat = ?, lon = ? WHERE locality = ? AND {cond}",
+                    (lat, lon, loc, *cond_params),
+                )
+                stats["rows"] += cur.rowcount or 0
+                for i in range(0, len(keys), 500):
+                    chunk = keys[i : i + 500]
+                    try:
+                        conn.execute(
+                            f"UPDATE catalog_listings SET lat = ?, lon = ? WHERE listing_key IN ({','.join('?' * len(chunk))})",
+                            (lat, lon, *chunk),
+                        )
+                    except sqlite3.OperationalError:
+                        break
+        return stats
 
     def catalog(self, filters: dict[str, Any]) -> dict[str, Any]:
         from app.sources import PORTAL_IDS, url_likes
@@ -5787,19 +5709,13 @@ class Store:
             if leftover and not place_geoms:
                 _or_likes(where, params, "listings.locality", [f"%{label}%" for label in leftover])
         if place_geoms:
+            # Located offers only. Text matching of "Praha 7" and read-time coordinate guessing used
+            # to put offers into the list that were not (or were elsewhere) on the map.
+            where.append(GPS_OK_SQL)
             box = places.bbox_of(place_geoms)
-            geo_sql = "listings.lat IS NOT NULL AND listings.lon IS NOT NULL"
-            geo_params: list[Any] = []
             if box:
-                geo_sql += " AND listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?"
-                geo_params.extend([box[0], box[1], box[2], box[3]])
-            text_sql, text_params = _place_text_sql(place_geoms)
-            if text_sql:
-                where.append(f"(({geo_sql}) OR ((listings.lat IS NULL OR listings.lon IS NULL) AND {text_sql}))")
-                params.extend([*geo_params, *text_params])
-            else:
-                where.append(geo_sql)
-                params.extend(geo_params)
+                where.append("listings.lat BETWEEN ? AND ? AND listings.lon BETWEEN ? AND ?")
+                params.extend([box[0], box[1], box[2], box[3]])
         estates = _csv(filters.get("estate"))
         if estates:
             estate_parts = []
@@ -5986,10 +5902,6 @@ class Store:
                 )
                 """
             )
-        if filters.get("pins_only"):
-            if str(filters.get("places") or "").strip() and not place_geoms:
-                return {"items": []}
-            return self._catalog_pins(where, params, place_geoms, filters)
         sorts = {
             "newest": "listings.first_seen DESC",
             "oldest": "listings.first_seen ASC",
@@ -6015,83 +5927,16 @@ class Store:
         order = sorts.get((filters.get("sort") or "newest").strip(), sorts["newest"])
         limit = min(max(int(filters.get("limit") or 36), 1), 120)
         offset = max(int(filters.get("offset") or 0), 0)
-        clause = " AND ".join(where)
-        identity = listing_identity_sql()
+        pins_only = bool(filters.get("pins_only"))
+        want_pins = pins_only or str(filters.get("include_pins") or "0").strip().lower() not in {"0", "false", "no"}
         if place_geoms:
-            light_sql = f"""
-                SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
-                       listings.price_czk, listings.price_label, listings.name, listings.locality,
-                       listings.listing_key, listings.canonical_key, listings.url
-                FROM listings
-                WHERE {clause}
-                ORDER BY {order}
-                LIMIT 8000
-            """
-            with self.connect(readonly=True) as conn:
-                fetched = [dict(row) for row in conn.execute(light_sql, params).fetchall()]
-            seen_keys: set[str] = set()
-            matched: list[dict[str, Any]] = []
-            for row in fetched:
-                key = listing_identity(row)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                if not listing_matches_places(row, place_geoms):
-                    continue
-                matched.append(row)
-            total = len(matched)
-            self._fill_missing_coords(matched, place_geoms, peer_limit=24, persist=False)
-            self._upgrade_coarse_coords(matched, place_geoms, peer_limit=24, persist=False)
-            page = matched[offset : offset + limit]
-            rows = []
-            if page:
-                holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in page)
-                flat = [item for row in page for item in (row["monitor_id"], row["id"])]
-                full_sql = f"""
-                    SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                    FROM listings
-                    LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                    WHERE {holders}
-                """
-                with self.connect(readonly=True) as conn:
-                    by_id = {
-                        (row["monitor_id"], row["id"]): dict(row)
-                        for row in conn.execute(full_sql, flat)
-                    }
-                rows = [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
+            resolved = self._resolve_in_places(where, params, place_geoms, order, offset, limit, want_pins)
         else:
-            fetch_limit = min((offset + limit) * 4, 2000)
-            sql = f"""
-                SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
-                FROM listings
-                LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                WHERE {clause}
-                ORDER BY {order}
-                LIMIT ?
-            """
-            if filters.get("_bbox") is not None:
-                with self.connect(readonly=True) as conn:
-                    total = int(
-                        conn.execute(
-                            f"SELECT COUNT(*) FROM (SELECT 1 FROM listings WHERE {clause} GROUP BY {identity})",
-                            params,
-                        ).fetchone()[0]
-                    )
-                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
-            else:
-                count_sql = f"SELECT COUNT(*) FROM listings WHERE {clause}"
-                with self.connect(readonly=True) as conn:
-                    total = int(conn.execute(count_sql, params).fetchone()[0])
-                    fetched = [dict(row) for row in conn.execute(sql, (*params, fetch_limit)).fetchall()]
-            seen_keys = set()
-            rows = []
-            for row in fetched:
-                key = listing_identity(row)
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                rows.append(row)
-            rows = rows[offset : offset + limit]
+            bbox = filters.get("_bbox") if isinstance(filters.get("_bbox"), tuple) else None
+            resolved = self._resolve_in_sql(where, params, bbox, circle_active, order, offset, limit, want_pins, pins_only)
+        total, rows, pins = resolved["total"], resolved["rows"], resolved["pins"]
+        if pins_only:
+            return {"items": pins, "total": total, "pinned": resolved["pinned"]}
         keys = [(row["monitor_id"], row["id"]) for row in rows]
         photos: dict[tuple[str, int], list[str]] = {}
         if keys:
@@ -6112,260 +5957,184 @@ class Store:
         self._attach_catalog_extras(items, twins=False)
         want_facets = str(filters.get("facets") or "1").strip().lower() not in {"0", "false", "no"}
         facets = self.catalog_facets() if want_facets else {}
-        payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets}
-        include_pins = str(filters.get("include_pins") or "0").strip().lower() not in {"0", "false", "no"}
+        payload = {"items": items, "total": total, "limit": limit, "offset": offset, "facets": facets, "pins": pins}
+        if want_pins:
+            payload["pinned"] = resolved["pinned"]
         if place_geoms:
             payload["places"] = places.public_geoms(place_geoms)
-            payload["pins"] = (
-                [
-                    pin
-                    for row in matched
-                    if (
-                        pin := _pin_with_place(
-                            row,
-                            place_geoms,
-                            approx=bool(row.get("_geo_approx"))
-                            or (
-                                places.coords_are_approx_dump(
-                                    str(row.get("locality") or ""),
-                                    row.get("lat"),
-                                    row.get("lon"),
-                                )
-                                and not places.locality_has_street(str(row.get("locality") or ""))
-                            ),
-                        )
-                    )
-                ]
-                if include_pins
-                else []
-            )
-        elif include_pins:
-            payload["pins"] = self._catalog_pins(where, params, None, filters)["items"]
-        else:
-            payload["pins"] = []
-        if not payload["total"]:
-            payload["total"] = offset + len(items) + (limit if len(items) >= limit else 0)
         return payload
 
-    def _catalog_pins(
+    def _full_rows(self, page: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Full listing rows for a page of light rows, in the same order."""
+        if not page:
+            return []
+        holders = " OR ".join("(listings.monitor_id = ? AND listings.id = ?)" for _ in page)
+        flat = [item for row in page for item in (row["monitor_id"], row["id"])]
+        full_sql = f"""
+            SELECT listings.*, monitors.name AS monitor_name, monitors.search_url AS search_url
+            FROM listings
+            LEFT JOIN monitors ON monitors.id = listings.monitor_id
+            WHERE {holders}
+        """
+        with self.connect(readonly=True) as conn:
+            by_id = {(row["monitor_id"], row["id"]): dict(row) for row in conn.execute(full_sql, flat)}
+        return [by_id[key] for row in page if (key := (row["monitor_id"], row["id"])) in by_id]
+
+    _LIGHT_COLS = (
+        "listings.id, listings.monitor_id, listings.lat, listings.lon, listings.price_czk, "
+        "listings.price_label, listings.name, listings.locality, listings.listing_key, "
+        "listings.canonical_key, listings.url"
+    )
+
+    def _resolve_in_places(
         self,
         where: list[str],
         params: list[Any],
-        place_geoms: list[dict[str, Any]] | None = None,
-        filters: dict[str, Any] | None = None,
+        place_geoms: list[dict[str, Any]],
+        order: str,
+        offset: int,
+        limit: int,
+        want_pins: bool,
     ) -> dict[str, Any]:
-        clause = " AND ".join(where)
-        filters = filters or {}
-        anchors = [item for item in (filters.get("_bbox_anchors") or []) if isinstance(item, tuple)]
-        bbox = filters.get("_bbox")
-        wide = False
-        if isinstance(bbox, tuple) and len(bbox) == 4:
-            south, north, west, east = bbox
-            wide = (north - south) + (east - west) > 1.5
-        pin_limit = 8000 if place_geoms or wide or len(anchors) > 3 or isinstance(bbox, tuple) else 800
-        span = float(filters.get("_bbox_span") or 0)
-        cache_hit = False
-        cache_key: tuple[Any, ...] | None = None
-        leftover = 0
-        leftover_sample: list[str] = []
-        select = """
-            SELECT listings.id, listings.monitor_id, listings.lat, listings.lon,
-                   listings.price_czk, listings.price_label, listings.name, listings.locality,
-                   listings.listing_key, listings.canonical_key, listings.url
-            FROM listings
+        """Offers whose stored coordinates lie inside the selected place(s).
+
+        The one located set: total, the page and the pins are all cut from `matched`.
         """
-        fetched: list[dict[str, Any]] = []
-        if anchors and not place_geoms and wide and span >= 3.5:
-            skip = {"south", "north", "west", "east", "lat", "lon", "radius_m", "limit", "offset", "sort", "places", "place_geoms", "place_empty"}
-            cache_key = tuple(sorted((str(k), str(v)) for k, v in filters.items() if not str(k).startswith("_") and k not in skip))
-            hit = self._city_pin_cache.get(cache_key)
-            if hit and time.monotonic() - hit[0] < 45:
-                fetched, leftover, leftover_sample = hit[1], hit[2], hit[3]
-                cache_hit = True
-                filters["_pin_leftover"] = leftover
-                filters["_pin_leftover_sample"] = leftover_sample
-        if not cache_hit:
-            with self.connect(readonly=True) as conn:
-                if anchors and not place_geoms and wide:
-                    agg_sql = f"""
-                    SELECT listings.locality AS locality, COUNT(*) AS n,
-                           AVG(listings.lat) AS lat, AVG(listings.lon) AS lon
-                    FROM (
-                        SELECT listings.locality, listings.lat, listings.lon
-                        FROM listings
-                        WHERE {clause}
-                        GROUP BY {listing_identity_sql()}
-                    ) listings
-                    GROUP BY listings.locality
-                    """
-                    cities: dict[str, dict[str, Any]] = {}
-                    leftover = 0
-                    leftover_sample = []
-
-                    def add_city(label: str, alat: float, alon: float, n: int) -> None:
-                        key = f"{round(alat, 3)}:{round(alon, 3)}:{label}"
-                        bucket = cities.get(key)
-                        if not bucket:
-                            seed = 0
-                            for ch in key:
-                                seed = (seed * 33 + ord(ch)) & 0x7FFFFFFF
-                            bucket = {
-                                "id": seed,
-                                "monitor_id": "__cluster__",
-                                "lat": alat,
-                                "lon": alon,
-                                "locality": label,
-                                "name": label,
-                                "listing_key": f"cluster:{key}",
-                                "canonical_key": f"cluster:{key}",
-                                "url": "",
-                                "count": 0,
-                                "_geo_approx": True,
-                            }
-                            cities[key] = bucket
-                        bucket["count"] += int(n or 0)
-
-                    for row in conn.execute(agg_sql, params).fetchall():
-                        loc = str(row["locality"] or "")
-                        n = int(row["n"] or 0)
-                        match = places.locality_anchor_match(loc, collapse_prague=False)
-                        lat = row["lat"]
-                        lon = row["lon"]
-                        if match:
-                            add_city(match[0], match[1], match[2], n)
-                        elif lat is not None and lon is not None:
-                            label = loc.split(",")[-1].strip() or loc or "Další"
-                            add_city(label[:40], round(float(lat), 2), round(float(lon), 2), n)
-                        else:
-                            leftover += n
-                            if len(leftover_sample) < 8:
-                                leftover_sample.append(loc[:60])
-                    if leftover:
-                        add_city("Další", 49.82, 15.47, leftover)
-                    fetched.extend(cities.values())
-                    filters["_pin_leftover"] = leftover
-                    filters["_pin_leftover_sample"] = leftover_sample
-                    if cache_key is not None:
-                        self._city_pin_cache[cache_key] = (time.monotonic(), list(fetched), leftover, leftover_sample)
-                elif anchors and not place_geoms:
-                    # Piny jen se souřadnicemi ve viewportu — dřívější LIMIT 400
-                    # z celého locality-match setu podvzorkoval čtvrti (11→22 při zoomu).
-                    pin_cap = max(int(pin_limit), 8000)
-                    if isinstance(bbox, tuple) and len(bbox) == 4:
-                        b_south, b_north, b_west, b_east = bbox
-                        gps_sql = f"""
-                        {select}
-                        WHERE {clause}
-                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                          AND listings.lat BETWEEN ? AND ?
-                          AND listings.lon BETWEEN ? AND ?
-                        ORDER BY listings.notified DESC, listings.rowid ASC
-                        LIMIT {pin_cap}
-                        """
-                        gps_rows = [
-                            dict(row)
-                            for row in conn.execute(
-                                gps_sql, (*params, b_south, b_north, b_west, b_east)
-                            ).fetchall()
-                        ]
-                    else:
-                        gps_sql = f"""
-                        {select}
-                        WHERE {clause}
-                          AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                        ORDER BY listings.notified DESC, listings.rowid ASC
-                        LIMIT {pin_cap}
-                        """
-                        gps_rows = [dict(row) for row in conn.execute(gps_sql, params).fetchall()]
-                    self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
-                    fetched.extend(gps_rows)
-                    null_sql = f"""
-                    {select}
-                    WHERE {clause}
-                      AND (listings.lat IS NULL OR listings.lon IS NULL)
-                    ORDER BY listings.first_seen DESC
-                    LIMIT 2000
-                    """
-                    null_pending: dict[str, list[dict[str, Any]]] = {}
-                    for row in conn.execute(null_sql, params).fetchall():
-                        item = dict(row)
-                        loc = str(item.get("locality") or "").strip()
-                        if not loc:
-                            continue
-                        null_pending.setdefault(loc, []).append(item)
-                    streets: dict[str, tuple[float, float]] = {}
-                    for geom in place_geoms or []:
-                        streets.update(
-                            places.street_index_cached(places.normalize_osm_id(str(geom.get("id") or "")))
-                        )
-                    for loc in null_pending:
-                        streets.update(places.street_index_for_locality(loc, allow_fetch=False))
-                    buckets: dict[str, list[dict[str, Any]]] = {}
-                    for loc, group in null_pending.items():
-                        # No network on pin requests — street index / cache or city dump only.
-                        point, approx = places.resolve_locality_coords(
-                            loc, streets, allow_network=False
-                        )
-                        if not point:
-                            continue
-                        if isinstance(bbox, tuple) and len(bbox) == 4:
-                            b_south, b_north, b_west, b_east = bbox
-                            if not (b_south <= point[0] <= b_north and b_west <= point[1] <= b_east):
-                                continue
-                        if not approx:
-                            try:
-                                self._persist_locality_coords(loc, point)
-                            except sqlite3.OperationalError:
-                                pass
-                            for item in group:
-                                item["lat"], item["lon"] = point
-                                item.pop("_geo_approx", None)
-                                fetched.append(item)
-                            continue
-                        for item in group:
-                            seed = abs(int(item.get("id") or 0))
-                            item["lat"] = point[0] + ((seed % 17) - 8) * 0.0012
-                            item["lon"] = point[1] + ((seed % 13) - 6) * 0.0016
-                            item["_geo_approx"] = True
-                            key = f"{round(point[0], 2)}:{round(point[1], 2)}"
-                            bucket = buckets.setdefault(key, [])
-                            if len(bucket) < 50:
-                                bucket.append(item)
-                    for bucket in buckets.values():
-                        fetched.extend(bucket)
-                else:
-                    sql = f"""
-                    {select}
-                    WHERE {clause}
-                      AND listings.lat IS NOT NULL AND listings.lon IS NOT NULL
-                    ORDER BY listings.notified DESC, listings.rowid ASC
-                    LIMIT {int(pin_limit)}
-                    """
-                    gps_rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
-                    if not isinstance(bbox, tuple):
-                        # Inside a viewport pins stay where the offer is stored, so the pin set
-                        # is exactly the listed set.
-                        self._upgrade_coarse_coords(gps_rows, place_geoms, peer_limit=8, persist=False)
-                    fetched.extend(gps_rows)
-        items = []
+        sql = f"""
+            SELECT {self._LIGHT_COLS}
+            FROM listings
+            WHERE {" AND ".join(where)}
+            ORDER BY {order}
+        """
+        with self.connect(readonly=True) as conn:
+            fetched = [dict(row) for row in conn.execute(sql, params).fetchall()]
         seen: set[str] = set()
+        matched: list[dict[str, Any]] = []
         for row in fetched:
             key = listing_identity(row)
             if key in seen:
                 continue
-            if place_geoms and not places.point_matches(row.get("lat"), row.get("lon"), place_geoms):
-                continue
             seen.add(key)
-            pin = _pin_item(row)
-            loc = str(row.get("locality") or "")
-            if row.get("_geo_approx"):
-                pin["approx"] = True
-            elif places.coords_are_approx_dump(loc, pin.get("lat"), pin.get("lon")) and not places.locality_has_street(loc):
-                pin["approx"] = True
-            items.append(pin)
-            if not wide and len(items) >= pin_limit:
-                break
-        return {"items": items}
+            if listing_matches_places(row, place_geoms):
+                matched.append(row)
+        pins: list[dict[str, Any]] = []
+        if want_pins:
+            if len(matched) <= PIN_DETAIL_MAX:
+                pins = [_pin_item(row) for row in matched]
+            else:
+                box = places.bbox_of(place_geoms) or (
+                    min(float(r["lat"]) for r in matched), max(float(r["lat"]) for r in matched),
+                    min(float(r["lon"]) for r in matched), max(float(r["lon"]) for r in matched),
+                )
+                pins = _grid_pins(matched, box)
+        return {
+            "total": len(matched),
+            "rows": self._full_rows(matched[offset : offset + limit]),
+            "pins": pins,
+            "pinned": len(matched),
+        }
+
+    def _resolve_in_sql(
+        self,
+        where: list[str],
+        params: list[Any],
+        bbox: tuple[float, float, float, float] | None,
+        circle_active: bool,
+        order: str,
+        offset: int,
+        limit: int,
+        want_pins: bool,
+        pins_only: bool,
+    ) -> dict[str, Any]:
+        """Viewport / circle / unrestricted catalog: one deduplicated set computed in SQL."""
+        clause = " AND ".join(where)
+        identity = listing_identity_sql()
+        located = bbox is not None or circle_active
+        with self.connect(readonly=True) as conn:
+            total = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM (SELECT 1 FROM listings WHERE {clause} GROUP BY {identity})",
+                    params,
+                ).fetchone()[0]
+            )
+            rows: list[dict[str, Any]] = []
+            if not pins_only:
+                page_sql = f"""
+                    SELECT {self._LIGHT_COLS}
+                    FROM listings
+                    WHERE {clause}
+                    GROUP BY {identity}
+                    ORDER BY {order}
+                    LIMIT ? OFFSET ?
+                """
+                rows = [dict(row) for row in conn.execute(page_sql, (*params, limit, offset)).fetchall()]
+            pins: list[dict[str, Any]] = []
+            pinned = 0
+            if want_pins:
+                pin_clause = clause if located else f"{clause} AND {GPS_OK_SQL}"
+                pinned = total if located else int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM (SELECT 1 FROM listings WHERE {pin_clause} GROUP BY {identity})",
+                        params,
+                    ).fetchone()[0]
+                )
+                if pinned <= PIN_DETAIL_MAX:
+                    pins = [
+                        _pin_item(dict(row))
+                        for row in conn.execute(
+                            f"SELECT {self._LIGHT_COLS} FROM listings WHERE {pin_clause} GROUP BY {identity}",
+                            params,
+                        )
+                    ]
+                else:
+                    pins = self._grid_pins_sql(conn, pin_clause, params, identity, bbox)
+        return {
+            "total": total,
+            "rows": [] if pins_only else self._full_rows(rows),
+            "pins": pins,
+            "pinned": pinned,
+        }
+
+    def _grid_pins_sql(
+        self,
+        conn: sqlite3.Connection,
+        clause: str,
+        params: list[Any],
+        identity: str,
+        bbox: tuple[float, float, float, float] | None,
+    ) -> list[dict[str, Any]]:
+        """Grid clusters with exact counts for a big located set (SUM(count) == the set size)."""
+        if bbox is None:
+            south, north, west, east = 48.5, 51.1, 12.0, 18.9
+        else:
+            south, north, west, east = bbox
+        cell = max(north - south, east - west, 0.001) / PIN_GRID_CELLS
+        sql = f"""
+            SELECT COUNT(*) AS n, AVG(lat) AS lat, AVG(lon) AS lon, MIN(rid) AS rid,
+                   CAST((lat - ?) / ? AS INTEGER) AS ky, CAST((lon - ?) / ? AS INTEGER) AS kx
+            FROM (
+                SELECT listings.rowid AS rid, listings.lat AS lat, listings.lon AS lon
+                FROM listings WHERE {clause} GROUP BY {identity}
+            )
+            GROUP BY ky, kx
+        """
+        cells = conn.execute(sql, (south, cell, west, cell, *params)).fetchall()
+        singles = [row["rid"] for row in cells if row["n"] == 1]
+        single_rows: dict[int, dict[str, Any]] = {}
+        for i in range(0, len(singles), 500):
+            chunk = singles[i : i + 500]
+            for row in conn.execute(
+                f"SELECT listings.rowid AS rid, {self._LIGHT_COLS} FROM listings WHERE listings.rowid IN ({','.join('?' * len(chunk))})",
+                chunk,
+            ):
+                single_rows[row["rid"]] = dict(row)
+        pins: list[dict[str, Any]] = []
+        for row in cells:
+            if row["n"] == 1 and row["rid"] in single_rows:
+                pins.append(_pin_item(single_rows[row["rid"]]))
+            else:
+                pins.append(_pin_cluster(float(row["lat"]), float(row["lon"]), int(row["n"]), f"{row['ky']}:{row['kx']}"))
+        return pins
 
     def _district_where(self, district: str, offer: str = "", disposition: str = "") -> tuple[list[str], list[Any]]:
         where = ["IFNULL(listings.gone, 0) = 0"]

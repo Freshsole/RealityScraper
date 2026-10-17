@@ -29,6 +29,9 @@ def _listing(i: int, *, locality: str = "Brno", rent: bool = True, price: int | 
         locality=f"Ulice {i}, {locality}",
         url=f"https://www.sreality.cz/detail/{kind}/byt/2+kk/{locality.lower()}/{7000 + i}",
         image_url=f"https://img.example/{i}.jpg",
+        # Stored coordinates: a place filter only lists offers that are actually on the map.
+        lat=49.195 + i * 0.0005 if locality == "Brno" else None,
+        lon=16.607 + i * 0.0005 if locality == "Brno" else None,
     )
 
 

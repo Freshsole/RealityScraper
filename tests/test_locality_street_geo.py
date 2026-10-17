@@ -104,12 +104,13 @@ class UpgradeCoarseCoordsTests(unittest.TestCase):
         self.store.upsert_catalog_listing(listing, kind="seeded")
 
         def boom(_text: str):
-            raise AssertionError("catalog must not network-geocode")
+            raise AssertionError("locating must not network-geocode")
 
         with patch("app.places.geocode_locality_sync", side_effect=boom), patch(
             "app.places.street_index_for_locality",
             return_value={"dělnická 12": (50.1027, 14.4502), "dělnická": (50.1027, 14.4502)},
         ), patch("app.places.street_index_cached", return_value={}):
+            self.store.locate_catalog_listings(repair=True)
             data = self.store.catalog(
                 {
                     "limit": 20,
@@ -163,11 +164,12 @@ class UpgradeCoarseCoordsTests(unittest.TestCase):
         self.store.upsert_catalog_listing(listing, kind="seeded")
 
         def boom(_text: str):
-            raise AssertionError("catalog must not network-geocode")
+            raise AssertionError("locating must not network-geocode")
 
         with patch("app.places.geocode_locality_sync", side_effect=boom), patch(
             "app.places.street_index_for_locality", return_value={}
         ), patch("app.places.street_index_cached", return_value={}):
+            self.store.locate_catalog_listings(repair=True)
             data = self.store.catalog(
                 {
                     "limit": 20,
@@ -237,6 +239,7 @@ class UpgradeCoarseCoordsTests(unittest.TestCase):
         with patch("app.places.geocode_locality_sync", side_effect=AssertionError("no network")), patch(
             "app.places.street_index_for_locality", return_value={}
         ), patch("app.places.street_index_cached", return_value={}):
+            self.store.locate_catalog_listings(repair=True)
             data = self.store.catalog(
                 {
                     "limit": 20,
@@ -276,6 +279,7 @@ class UpgradeCoarseCoordsTests(unittest.TestCase):
         with patch("app.places.geocode_locality_sync", side_effect=AssertionError("no network")), patch(
             "app.places.street_index_for_locality", return_value={}
         ), patch("app.places.street_index_cached", return_value={}):
+            self.store.locate_catalog_listings(repair=True)
             data = self.store.catalog(
                 {
                     "limit": 20,

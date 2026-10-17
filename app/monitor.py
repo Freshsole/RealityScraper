@@ -2327,11 +2327,25 @@ class Hub:
             print(f"catalog price cleanup failed: {exc}", flush=True)
         tried: set[str] = set()
         filled = 0
+        next_repair = 0.0
+        next_locate = 0.0
         while self.running:
             try:
                 if self.catalog_running:
                     await asyncio.sleep(5)
                     continue
+                # The map never guesses while reading: offers without GPS get stored coordinates here
+                # (street index / city centroid), and wrong stored ones are repaired once a day.
+                if time.monotonic() >= next_locate:
+                    repair = time.monotonic() >= next_repair
+                    located = await self._job_db(
+                        self.store.locate_catalog_listings, 100000 if repair else 3000, repair=repair
+                    )
+                    next_locate = time.monotonic() + 300
+                    if repair:
+                        next_repair = time.monotonic() + 86400
+                    if located.get("rows"):
+                        print(f"catalog locate: {located}", flush=True)
                 rows = await self._job_db(
                     self.store.catalog_missing_coords, self.COORD_BACKFILL_PORTALS, 10, tried
                 )
