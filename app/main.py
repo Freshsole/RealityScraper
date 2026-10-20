@@ -1548,7 +1548,7 @@ async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None
 
 @app.post("/api/auth/register")
 async def auth_register_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
-    _rate_limit_or_429(request, "auth_register", "ip", 5, 3600)
+    _rate_limit_or_429(request, "auth_register", "ip", config.REGISTER_LIMIT_PER_HOUR, 3600)
     body = payload or {}
     if body.get("terms") is not True:
         raise HTTPException(400, "Pro registraci je nutný souhlas s obchodními podmínkami.")

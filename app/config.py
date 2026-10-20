@@ -318,3 +318,6 @@ JOB_POOL_WORKERS = max(2, int(os.getenv("JOB_POOL_WORKERS", "16" if (os.getenv("
 
 # Monitor-poll fast touch: how long an "unchanged" verdict is trusted before the row is fully re-upserted.
 SCRAPE_FAST_TOUCH_TTL_SEC = max(30, int(os.getenv("SCRAPE_FAST_TOUCH_TTL_SEC", "900")))
+
+# Max. registrací z jedné IP za hodinu (anti-abuse; sdílené IP jako mobilní sítě potřebují víc než 5)
+REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "20") or "20")
