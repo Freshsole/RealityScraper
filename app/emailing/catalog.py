@@ -281,6 +281,11 @@ TEMPLATES: tuple[TemplateDef, ...] = (
         "10 alertů po sobě bez otevření nebo bounce.", "Při hard bounce neposílat (adresa nefunguje), jen banner v aplikaci.",
         "Dostáváte naše upozornění?", "Posledních 10 jste neotevřeli. Možná padají do spamu.",
         [_link("Odkaz na nastavení upozornění")]),
+    _mk("5.4b", "dog_auto_paused", 5, "Pes automaticky pozastaven", A,
+        "7 dní po e-mailu 5.4, pokud uživatel žádné upozornění neotevřel (automatické pozastavení psů).",
+        "Aspoň jeden pes byl pozastaven. Max 1× denně.",
+        "Pozastavili jsme hlídání „{{pes_nazev}}“", "Dlouho jste neotevřeli žádné upozornění. Nastavení zůstává uložené.",
+        [_v(*_PES), _v("odkaz", "Odkaz „Znovu zapnout hlídání“", _LINK)]),
     # --- 6. Retence ---
     _mk("6.1", "found_home", 6, "Našli jste bydlení?", L,
         "30 a 60 dní od vytvoření prvního psa.", "Nějaký pes je aktivní. Končí, jakmile uživatel klikne na jakoukoli volbu.",

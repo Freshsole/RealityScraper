@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -474,7 +475,8 @@ def send_alert(ustore: Any, item: Any, monitor_name: str = "") -> bool:
         "odkaz": url,
         "odkaz_mapa": link("/nabidka", "alert", "alerts"),
         "odkaz_upravit": link("/monitory", "alert", "alerts"),
-        "odkaz_pozastavit": tracking.action_url(user["id"], "pauza"),
+        "odkaz_pozastavit": tracking.action_url(
+            user["id"], "pauza", str(attr("monitor_id") or _monitor_id_by_name(ustore, monitor_name))),
         "upsell_html": upsell,
     }
     log_id = service.send_template(
@@ -516,6 +518,9 @@ def send_digest(ustore: Any, items: list[dict[str, Any]]) -> bool:
         "radky_html": rows,
         "odkaz": link("/nabidka", "alert_digest", "alerts"),
         "odkaz_upravit": link("/nastaveni/notifikace", "alert_digest", "alerts"),
+        "odkaz_pozastavit": tracking.action_url(
+            user["id"], "pauza",
+            str(cheapest.get("monitor_id") or _monitor_id_by_name(ustore, str(cheapest.get("monitor_name") or "")))),
     }
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H")
     return bool(service.send_template("alert_digest", user=user, variables=variables, dedupe_key=f"digest:{user['id']}:{stamp}"))
@@ -862,15 +867,33 @@ def _rule_dog_inactive(ctx: _Ctx) -> None:
                 continue
             if _send("dog_inactive", user, {
                 "pes_nazev": describe_monitor(m), "pocet_cena": str(sug["pocet_cena"]),
-                "odkaz": link("/monitory", "dog_inactive", "alerts"), "odkaz_pozastavit": tracking.action_url(uid, "pauza")},
+                "odkaz": link("/monitory", "dog_inactive", "alerts"),
+                "odkaz_pozastavit": tracking.action_url(uid, "pauza", str(m["id"]))},
                     f"dog_inactive:{m['id']}:{datetime.now(timezone.utc):%Y%m}"):
                 estore.set_meta(f"dog_inactive:{m['id']}", estore.now_iso())
 
 
-def _pause_monitors(ustore: Any) -> int:
+def _pause_monitors(ustore: Any, monitor_id: str = "") -> list[dict[str, Any]]:
+    """Switch dogs off (one dog when ``monitor_id`` is given); returns the dogs that were running."""
     with ustore.connect() as conn:
-        cur = conn.execute("UPDATE monitors SET enabled = 0 WHERE enabled = 1")
-        return cur.rowcount
+        conn.row_factory = sqlite3.Row
+        sql = "SELECT id, name FROM monitors WHERE enabled = 1" + (" AND id = ?" if monitor_id else "")
+        rows = [dict(r) for r in conn.execute(sql, (monitor_id,) if monitor_id else ()).fetchall()]
+        for r in rows:
+            conn.execute("UPDATE monitors SET enabled = 0 WHERE id = ?", (r["id"],))
+    return rows
+
+
+def _monitor_id_by_name(ustore: Any, name: str) -> str:
+    if not name:
+        return ""
+    try:
+        for m in ustore.list_monitors_light():
+            if str(m.get("name") or "").strip() == name.strip():
+                return str(m.get("id") or "")
+    except Exception:
+        pass
+    return ""
 
 
 def _rule_alerts_unopened(ctx: _Ctx) -> None:
@@ -895,8 +918,14 @@ def _rule_alerts_unopened(ctx: _Ctx) -> None:
                 estore.set_meta(f"unopened_notice:{uid}", estore.now_iso())
         elif datetime.now(timezone.utc) - notice >= timedelta(days=7) and not _recent_open(uid, notice):
             # nobody reads them: stop the dogs to protect the sender reputation
-            if _pause_monitors(ctx.store_for(uid)):
+            paused = _pause_monitors(ctx.store_for(uid))
+            if paused:
                 estore.set_meta(f"auto_paused:{uid}", estore.now_iso())
+                names = [describe_monitor(m) for m in paused]
+                _send("dog_auto_paused", user, {
+                    "pes_nazev": names[0] if len(names) == 1 else f"{names[0]} a další ({len(names) - 1})",
+                    "odkaz": tracking.action_url(uid, "zapnout")},
+                      f"dog_auto_paused:{uid}:{estore.now_iso()[:10]}")
             estore.set_meta(f"unopened_notice:{uid}", estore.now_iso())
 
 
@@ -1069,11 +1098,25 @@ def _rule_resume(ctx: _Ctx) -> None:
         except Exception as exc:
             print(f"[email] resume {uid}: {exc}", flush=True)
         estore.set_meta(row["key"], "")
+    with estore.db() as conn:
+        dogs = conn.execute("SELECT key FROM email_meta WHERE key LIKE 'resume_dog:%' AND value <= ? AND value != ''", (now,)).fetchall()
+    for row in dogs:
+        _, uid, mid = row["key"].split(":", 2)
+        try:
+            from app import billing
+
+            ustore = ctx.store_for(uid)
+            with ustore.connect() as conn:
+                conn.execute("UPDATE monitors SET enabled = 1 WHERE id = ?", (mid,))
+            billing.apply_watch_limit(ustore)
+        except Exception as exc:
+            print(f"[email] resume dog {uid}/{mid}: {exc}", flush=True)
+        estore.set_meta(row["key"], "")
 
 
 # ----------------------------------------------------------- one-click --
 
-def handle_action(user_id: str, action: str, store_for: StoreFor) -> str:
+def handle_action(user_id: str, action: str, store_for: StoreFor, monitor_id: str = "") -> str:
     """Link actions from e-mails (6.1 choices, cancellation reason). Returns the confirmation message."""
     user = get_user(user_id)
     if not user:
@@ -1082,6 +1125,19 @@ def handle_action(user_id: str, action: str, store_for: StoreFor) -> str:
     if action.startswith("duvod_"):
         estore.set_meta(f"cancel_reason:{user_id}", action)
         return "Děkujeme za odpověď, pomůže nám to zlepšit Realitify."
+    if action == "zapnout":
+        from app import billing
+
+        with ustore.connect() as conn:
+            conn.execute("UPDATE monitors SET enabled = 1 WHERE enabled = 0")
+        billing.apply_watch_limit(ustore)
+        estore.set_meta(f"unopened_notice:{user_id}", "")
+        return "Hlídání jsme znovu zapnuli."
+    if action == "pauza" and monitor_id:
+        # one dog from an alert: only that dog is paused, the others keep running
+        if _pause_monitors(ustore, monitor_id):
+            estore.set_meta(f"resume_dog:{user_id}:{monitor_id}", estore.iso_in(30 * 86400))
+        return "Tohoto hlídacího psa jsme pozastavili na měsíc. Pak ho samo znovu zapneme."
     estore.set_meta(f"found_exit:{user_id}", "found" if action == "found" else "1")
     if action == "hledam":
         return "Díky, hlídáme dál a držíme palce."

@@ -13,7 +13,7 @@ Zdroj textů: `Marketing emails/Realitify – automatické e-maily (wording).md`
 | --- | --- | --- | --- | --- |
 | Transakční | `transactional` | `Realitify <noreply@realitify.cz>` | podpora@realitify.cz | odkaz na nastavení notifikací |
 | Alerty | `alerts` | `Realitify <alerty@realitify.cz>` | podpora@realitify.cz | odkaz na nastavení notifikací |
-| Lifecycle | `lifecycle` | `Realitify <tym@realitify.cz>` | podpora@realitify.cz | "Tento e-mail dostáváte, protože máte účet na Realitify.cz. Nastavení e-mailů · Odhlásit z tipů a novinek" |
+| Lifecycle | `lifecycle` | `Realitify <ahoj@realitify.cz>` | podpora@realitify.cz | "Tento e-mail dostáváte, protože máte účet na Realitify.cz. Nastavení e-mailů · Odhlásit z tipů a novinek" |
 
 Adresy se berou z env (`EMAIL_FROM_TRANSACTIONAL`, `EMAIL_FROM_ALERTS`, `EMAIL_FROM_LIFECYCLE`, `EMAIL_REPLY_TO`), fallback na `SMTP_FROM`. SMTP login zůstává jeden, From se jen mění.
 Kampaně z adminu jdou jako stream `lifecycle` (patička s odhlášením).
@@ -50,6 +50,7 @@ HTML soubor každé šablony: `Marketing emails/<číslo>_<klíč>.html`, např.
 | 5.2 | alert_digest | alerts | Souhrn nabídek |
 | 5.3 | dog_inactive | alerts | Pes bez aktivity |
 | 5.4 | alerts_unopened | alerts | Upozornění nečtete |
+| 5.4b | dog_auto_paused | alerts | Pes automaticky pozastaven |
 | 6.1 | found_home | lifecycle | Našli jste bydlení? |
 | 6.1b | found_home_followup | lifecycle | Gratulujeme (po kliknutí na "Ano") |
 | 6.2 | market_monthly | lifecycle | Měsíční přehled trhu |

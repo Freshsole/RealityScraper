@@ -1928,11 +1928,11 @@ async def email_click_redirect(token: str, u: str = "") -> Response:
 
 
 @app.get("/e/a/{token}", include_in_schema=False)
-async def email_action_link(token: str, a: str = "") -> Response:
-    user_id = email_tracking.parse_action(token, a)
+async def email_action_link(token: str, a: str = "", m: str = "") -> Response:
+    user_id = email_tracking.parse_action(token, a, m)
     if not user_id:
         return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
-    message = await asyncio.to_thread(email_triggers.handle_action, user_id, a, hub.store_for)
+    message = await asyncio.to_thread(email_triggers.handle_action, user_id, a, hub.store_for, m)
     import html as _html
 
     return HTMLResponse(email_tracking.page("Hotovo", f"<p>{_html.escape(message)}</p>"), headers={"Cache-Control": "no-store"})

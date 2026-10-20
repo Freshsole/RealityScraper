@@ -99,7 +99,7 @@ def test_transactional_is_sent_at_once_from_its_own_sender(env):
 
 def test_streams_use_their_senders_and_alerts_are_not_unsubscribable(env):
     assert "alerty@realitify.cz" in service.sender_for("alerts")
-    assert "tym@realitify.cz" in service.sender_for("lifecycle")
+    assert "ahoj@realitify.cz" in service.sender_for("lifecycle")
     assert "noreply@realitify.cz" in service.sender_for("transactional")
 
 
@@ -109,7 +109,7 @@ def test_lifecycle_is_queued_and_carries_unsubscribe_headers(env):
     assert estore.log_get(log_id)["status"] == "queued" and not env.sent
     service.process_queue()
     msg = env.sent[0]
-    assert "tym@realitify.cz" in msg["From"]
+    assert "ahoj@realitify.cz" in msg["From"]
     assert tracking.unsubscribe_url(user["id"]) in msg["List-Unsubscribe"]
     assert msg["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
     html = msg.get_body(("html",)).get_content()
@@ -458,6 +458,41 @@ def test_found_home_action_pauses_dogs_and_sends_followup(env):
     assert not any(m["enabled"] for m in ustore.list_monitors_light())
     assert estore.get_meta(f"found_exit:{user['id']}") == "found"
     assert [r["template_key"] for r in estore.log_query()["items"]] == ["found_home_followup"]
+
+
+def test_pause_action_pauses_only_that_dog_and_is_signed_per_dog(env, monkeypatch):
+    from app import billing
+
+    monkeypatch.setattr(billing, "watch_limit_for", lambda store: None)
+    user = make_user(env)
+    ustore = env.store_for(user["id"])
+    for mid in ("a", "b"):
+        ustore.save_monitor({"id": mid, "name": f"Pes {mid}", "search_url": "https://www.sreality.cz/hledani/pronajem/byty/praha"})
+    url = tracking.action_url(user["id"], "pauza", "a")
+    token = url.split("/e/a/")[1].split("?")[0]
+    assert tracking.parse_action(token, "pauza", "a") == user["id"]
+    assert tracking.parse_action(token, "pauza", "b") is None  # the signature covers the dog id
+    assert tracking.parse_action(token, "pauza") is None
+    triggers.handle_action(user["id"], "pauza", env.store_for, "a")
+    state = {m["id"]: m["enabled"] for m in ustore.list_monitors_light()}
+    assert not state["a"] and state["b"]
+
+
+def test_auto_pause_sends_dog_auto_paused_and_zapnout_resumes(env):
+    user = make_user(env)
+    ustore = env.store_for(user["id"])
+    ustore.save_monitor({"id": "default", "name": "Pes a", "search_url": "https://www.sreality.cz/hledani/pronajem/byty/praha"})
+    for i in range(10):
+        estore.log_insert(user_id=user["id"], to_email=user["email"], template_key="alert_new_listing", stream="alerts",
+                          status="sent", sent_at=estore.now_iso(), subject="x")
+    ctx = triggers._Ctx(env.store_for)
+    triggers._rule_alerts_unopened(ctx)
+    estore.set_meta(f"unopened_notice:{user['id']}", (datetime.now(timezone.utc) - timedelta(days=8)).isoformat())
+    triggers._rule_alerts_unopened(ctx)
+    assert not any(m["enabled"] for m in ustore.list_monitors_light())
+    assert len(estore.log_query(template="dog_auto_paused")["items"]) == 1
+    triggers.handle_action(user["id"], "zapnout", env.store_for)
+    assert all(m["enabled"] for m in ustore.list_monitors_light())
 
 
 # -------------------------------------------------------------- admin API --

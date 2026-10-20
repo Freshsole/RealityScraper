@@ -452,6 +452,15 @@ def bodies() -> dict[str, Body]:
         + sign()
     )
 
+    B["dog_auto_paused"] = (
+        h1("Hlídání jsme pozastavili")
+        + HI
+        + p("pozastavili jsme hlídání <strong>{{pes_nazev}}</strong>, protože jste dlouho neotevřeli žádné naše upozornění. Chrání to doručitelnost e-mailů a nezahlcujeme vás zbytečně.")
+        + p("Nastavení máte pořád uložené. Jakmile budete znovu hledat, stačí hlídání jedním kliknutím zapnout.")
+        + button("Znovu zapnout hlídání")
+        + sign()
+    )
+
     # 6. Retence
     B["found_home"] = (
         h1("Už máte nové bydlení?")

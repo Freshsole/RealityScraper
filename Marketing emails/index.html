@@ -15,7 +15,7 @@ header p{margin:0;font-size:13px;color:#555b54}
 iframe{width:100%;height:760px;border:0;background:#f7f9f6}
 </style></head><body><main>
 <h1>Automatické e-maily Realitify</h1>
-<p class="lead">31 šablon vykreslených s ukázkovými daty. Vygenerováno skriptem scripts/build_marketing_emails.py.</p>
+<p class="lead">32 šablon vykreslených s ukázkovými daty. Vygenerováno skriptem scripts/build_marketing_emails.py.</p>
 <div class="grid"><section id="verify_email"><header><span class="n">1.1</span><div><h2>Ověření e-mailu</h2><p><b>Předmět:</b> Potvrďte prosím svůj e-mail<br><b>Stream:</b> transactional · <b>Trigger:</b> Registrace. Pokud uživatel neověří do 24 h, jednou znovu.<br><b>Soubor:</b> 1.1_verify_email.html</p></div></header><iframe loading="lazy" srcdoc="&lt;!doctype html&gt;
 &lt;html lang=&quot;cs&quot; xmlns=&quot;http://www.w3.org/1999/xhtml&quot;&gt;
 &lt;head&gt;
@@ -1331,6 +1331,57 @@ iframe{width:100%;height:760px;border:0;background:#f7f9f6}
       &lt;table role=&quot;presentation&quot; width=&quot;100%&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot;&gt;&lt;tr&gt;
         &lt;td class=&quot;em-pad&quot; style=&quot;padding:36px 40px 32px;&quot;&gt;
 &lt;h1 style=&quot;margin:0 0 20px;font:800 28px/1.15 Manrope,Inter,Helvetica,Arial,sans-serif;letter-spacing:-0.02em;color:#163300;&quot;&gt;Dostáváte naše upozornění?&lt;/h1&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;Dobrý den, Jiří,&lt;/p&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;poslali jsme vám 10 upozornění na nové nabídky, ale žádné jste neotevřeli. Možná končí ve spamu, v Hromadné poště nebo v záložce Promo akce.&lt;/p&gt;&lt;p style=&quot;margin:0px 0 8px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;Co pomůže:&lt;/p&gt;&lt;ul style=&quot;margin:0 0 16px;padding:0 0 0 22px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;&lt;li style=&quot;margin:0 0 8px;padding-left:4px;&quot;&gt;Přidejte si alerty@realitify.cz do kontaktů.&lt;/li&gt;&lt;li style=&quot;margin:0 0 8px;padding-left:4px;&quot;&gt;Přesuňte náš e-mail do složky Doručené / Primární.&lt;/li&gt;&lt;li style=&quot;margin:0 0 8px;padding-left:4px;&quot;&gt;S tarifem PRO můžete dostávat upozornění i jako push notifikaci nebo na Discord.&lt;/li&gt;&lt;/ul&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;Už nehledáte? Hlídání pozastavte, ať vás nezahlcujeme.&lt;/p&gt;&lt;table role=&quot;presentation&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot; style=&quot;margin:8px 0 24px;&quot;&gt;&lt;tr&gt;&lt;td align=&quot;center&quot; bgcolor=&quot;#9fe870&quot; style=&quot;border-radius:999px;border:2px solid #9fe870;&quot;&gt;&lt;a href=&quot;https://realitify.cz/odkaz-ukazka&quot; style=&quot;display:inline-block;padding:13px 30px;font:600 16px/20px Inter,Helvetica,Arial,sans-serif;color:#163300;text-decoration:none;border-radius:999px;&quot;&gt;Upravit upozornění&lt;/a&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;p style=&quot;margin:8px 0 0px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#163300;&quot;&gt;Tým Realitify&lt;/p&gt;
+        &lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+    &lt;/td&gt;&lt;/tr&gt;
+    &lt;tr&gt;&lt;td style=&quot;padding:22px 8px 0;font:400 12px/1.6 Inter,Helvetica,Arial,sans-serif;color:#868685;text-align:center;&quot;&gt;
+      Upozornění z vašeho hlídacího psa na Realitify.cz. &lt;a href=&quot;https://realitify.cz/nastaveni&quot; style=&quot;color:#555b54;text-decoration:underline;&quot;&gt;Nastavení notifikací&lt;/a&gt;&lt;br&gt;
+      &lt;span style=&quot;color:#a9b4ad;&quot;&gt;© 2026 Realitify · podpora@realitify.cz&lt;/span&gt;
+    &lt;/td&gt;&lt;/tr&gt;
+  &lt;/table&gt;
+&lt;/td&gt;&lt;/tr&gt;
+&lt;/table&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe></section><section id="dog_auto_paused"><header><span class="n">5.4b</span><div><h2>Pes automaticky pozastaven</h2><p><b>Předmět:</b> Pozastavili jsme hlídání „Praha 2, 2+kk do 25 000 Kč“<br><b>Stream:</b> alerts · <b>Trigger:</b> 7 dní po e-mailu 5.4, pokud uživatel žádné upozornění neotevřel (automatické pozastavení psů).<br><b>Soubor:</b> 5.4b_dog_auto_paused.html</p></div></header><iframe loading="lazy" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;cs&quot; xmlns=&quot;http://www.w3.org/1999/xhtml&quot;&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;x-apple-disable-message-reformatting&quot;&gt;
+&lt;meta name=&quot;color-scheme&quot; content=&quot;light&quot;&gt;
+&lt;meta name=&quot;supported-color-schemes&quot; content=&quot;light&quot;&gt;
+&lt;title&gt;Pozastavili jsme hlídání „Praha 2, 2+kk do 25 000 Kč“&lt;/title&gt;
+&lt;link href=&quot;https://fonts.googleapis.com/css2?family=Manrope:wght@800&amp;family=Inter:wght@400;600;800&amp;display=swap&quot; rel=&quot;stylesheet&quot;&gt;
+&lt;style&gt;
+  body{margin:0;padding:0;background:#f7f9f6;}
+  table{border-collapse:separate;border-spacing:0;}
+  img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}
+  a{color:#163300;}
+  @media (max-width:620px){
+    .em-wrap{width:100%!important;}
+    .em-pad{padding:28px 22px!important;}
+    .em-outer{padding:0!important;}
+    .em-card{border-radius:0!important;border-left:0!important;border-right:0!important;}
+  }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body style=&quot;margin:0;padding:0;background:#f7f9f6;&quot;&gt;
+&lt;div style=&quot;display:none;max-height:0;overflow:hidden;opacity:0;color:#f7f9f6;font-size:1px;line-height:1px;&quot;&gt;Dlouho jste neotevřeli žádné upozornění. Nastavení zůstává uložené.&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&amp;#847;&amp;zwnj;&amp;nbsp;&lt;/div&gt;
+&lt;table role=&quot;presentation&quot; width=&quot;100%&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot; bgcolor=&quot;#f7f9f6&quot; style=&quot;background:#f7f9f6;&quot;&gt;
+&lt;tr&gt;&lt;td align=&quot;center&quot; class=&quot;em-outer&quot; style=&quot;padding:32px 12px;&quot;&gt;
+  &lt;table role=&quot;presentation&quot; class=&quot;em-wrap&quot; width=&quot;600&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot; style=&quot;width:600px;max-width:600px;&quot;&gt;
+    &lt;tr&gt;&lt;td style=&quot;padding:0 4px 18px;&quot;&gt;
+      &lt;a href=&quot;https://realitify.cz&quot; style=&quot;text-decoration:none;&quot;&gt;
+        &lt;table role=&quot;presentation&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot;&gt;&lt;tr&gt;
+          &lt;td style=&quot;vertical-align:middle;&quot;&gt;&lt;img src=&quot;https://realitify.cz/static/site/assets/email-logo.png&quot; width=&quot;40&quot; height=&quot;40&quot; alt=&quot;Realitify&quot; style=&quot;display:block;border-radius:12px;&quot;&gt;&lt;/td&gt;
+          &lt;td style=&quot;vertical-align:middle;padding-left:10px;font:800 18px/1 Manrope,Inter,Helvetica,Arial,sans-serif;letter-spacing:0.04em;color:#163300;&quot;&gt;REALITIFY&lt;/td&gt;
+        &lt;/tr&gt;&lt;/table&gt;
+      &lt;/a&gt;
+    &lt;/td&gt;&lt;/tr&gt;
+    &lt;tr&gt;&lt;td class=&quot;em-card&quot; bgcolor=&quot;#ffffff&quot; style=&quot;background:#ffffff;border:1px solid #e8ebe6;border-radius:24px;&quot;&gt;
+      &lt;table role=&quot;presentation&quot; width=&quot;100%&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot;&gt;&lt;tr&gt;
+        &lt;td class=&quot;em-pad&quot; style=&quot;padding:36px 40px 32px;&quot;&gt;
+&lt;h1 style=&quot;margin:0 0 20px;font:800 28px/1.15 Manrope,Inter,Helvetica,Arial,sans-serif;letter-spacing:-0.02em;color:#163300;&quot;&gt;Hlídání jsme pozastavili&lt;/h1&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;Dobrý den, Jiří,&lt;/p&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;pozastavili jsme hlídání &lt;strong&gt;Praha 2, 2+kk do 25 000 Kč&lt;/strong&gt;, protože jste dlouho neotevřeli žádné naše upozornění. Chrání to doručitelnost e-mailů a nezahlcujeme vás zbytečně.&lt;/p&gt;&lt;p style=&quot;margin:0px 0 16px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#555b54;&quot;&gt;Nastavení máte pořád uložené. Jakmile budete znovu hledat, stačí hlídání jedním kliknutím zapnout.&lt;/p&gt;&lt;table role=&quot;presentation&quot; cellpadding=&quot;0&quot; cellspacing=&quot;0&quot; border=&quot;0&quot; style=&quot;margin:8px 0 24px;&quot;&gt;&lt;tr&gt;&lt;td align=&quot;center&quot; bgcolor=&quot;#9fe870&quot; style=&quot;border-radius:999px;border:2px solid #9fe870;&quot;&gt;&lt;a href=&quot;https://realitify.cz/odkaz-ukazka&quot; style=&quot;display:inline-block;padding:13px 30px;font:600 16px/20px Inter,Helvetica,Arial,sans-serif;color:#163300;text-decoration:none;border-radius:999px;&quot;&gt;Znovu zapnout hlídání&lt;/a&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;p style=&quot;margin:8px 0 0px;font:400 16px/1.6 Inter,Helvetica,Arial,sans-serif;color:#163300;&quot;&gt;Tým Realitify&lt;/p&gt;
         &lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
     &lt;/td&gt;&lt;/tr&gt;
     &lt;tr&gt;&lt;td style=&quot;padding:22px 8px 0;font:400 12px/1.6 Inter,Helvetica,Arial,sans-serif;color:#868685;text-align:center;&quot;&gt;

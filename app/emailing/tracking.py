@@ -65,18 +65,21 @@ def unsubscribe_url(user_id: str) -> str:
 
 # ------------------------------------------------------ one-click actions --
 
-ACTIONS = {"found", "hledam", "pauza", "duvod_bydleni", "duvod_draha", "duvod_relevance", "duvod_jiny"}
+ACTIONS = {"found", "hledam", "pauza", "zapnout", "duvod_bydleni", "duvod_draha", "duvod_relevance", "duvod_jiny"}
 
 
-def action_url(user_id: str, action: str) -> str:
-    return f"{base_url()}/e/a/{user_id}.{_sig(f'act:{user_id}:{action}')}?a={action}"
+def action_url(user_id: str, action: str, monitor_id: str = "") -> str:
+    """Signed one-click link; with ``monitor_id`` the action applies to that dog only."""
+    mid = str(monitor_id or "")
+    url = f"{base_url()}/e/a/{user_id}.{_sig(f'act:{user_id}:{action}:{mid}')}?a={action}"
+    return f"{url}&m={quote(mid)}" if mid else url
 
 
-def parse_action(token: str, action: str) -> str | None:
+def parse_action(token: str, action: str, monitor_id: str = "") -> str | None:
     if action not in ACTIONS:
         return None
     user_id, _, sig = (token or "").rpartition(".")
-    if not user_id or not _ok(f"act:{user_id}:{action}", sig):
+    if not user_id or not _ok(f"act:{user_id}:{action}:{monitor_id or ''}", sig):
         return None
     return user_id
 

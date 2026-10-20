@@ -17,7 +17,7 @@ from app.emailing import catalog, render, tracking
 from app.emailing import store as estore
 
 STREAMS = ("transactional", "alerts", "lifecycle")
-_STREAM_LOCAL = {"transactional": "noreply", "alerts": "alerty", "lifecycle": "tym"}
+_STREAM_LOCAL = {"transactional": "noreply", "alerts": "alerty", "lifecycle": "ahoj"}
 _BACKOFF_SEC = (60, 300, 1800)
 MAX_ATTEMPTS = 3
 
@@ -29,7 +29,7 @@ GUARDS: dict[str, Guard] = {}
 # ------------------------------------------------------------- senders --
 
 def sender_for(stream: str) -> str:
-    """From header for a stream: env override, else <noreply|alerty|tym>@ on the SMTP_FROM domain."""
+    """From header for a stream: env override, else <noreply|alerty|ahoj>@ on the SMTP_FROM domain."""
     explicit = {
         "transactional": config.EMAIL_FROM_TRANSACTIONAL,
         "alerts": config.EMAIL_FROM_ALERTS,
