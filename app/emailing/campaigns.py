@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app import email_notify
+from app import config, email_notify
 from app.emailing import render, service, tracking
 from app.emailing import store as estore
 
@@ -166,6 +166,8 @@ def start(cid: int, store_for: StoreFor | None = None) -> dict[str, Any]:
         raise ValueError("Kampaň už byla spuštěna")
     if not (campaign["subject"] or "").strip() or not (campaign["body"] or "").strip():
         raise ValueError("Kampaň musí mít předmět i obsah")
+    if config.EMAIL_ONLY_TRANSACTIONAL:
+        raise ValueError("Odesílání je pozastavené (EMAIL_ONLY_TRANSACTIONAL): odchází jen transakční e-maily")
     estore.campaign_update(cid, status="sending", started_at=estore.now_iso())
     queued = 0
     for person in audience(campaign["segment"], store_for):

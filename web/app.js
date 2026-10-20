@@ -2734,6 +2734,9 @@ async function loadAccountProfile() {
   const profile = await response.json().catch(() => emptyProfile());
   localStorage.removeItem(PROFILE_KEY);
   applyProfile(profile);
+  document.querySelectorAll(".mail-pause").forEach((el) => {
+    el.hidden = !profile.email_alerts_paused;
+  });
   return profile;
 }
 

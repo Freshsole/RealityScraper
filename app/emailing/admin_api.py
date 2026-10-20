@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Body, Cookie, HTTPException, Query
 
-from app import email_notify
+from app import config, email_notify
 from app.emailing import campaigns, catalog, render, service
 from app.emailing import store as estore
 
@@ -284,6 +284,7 @@ def build_router(admin_user: AdminUser, store_for: StoreFor) -> APIRouter:
                 "provider": email_notify.provider(),
                 "suppressed": estore.count_suppressed(),
                 "paused_sec": int(service.paused_for()),
+                "only_transactional": bool(config.EMAIL_ONLY_TRANSACTIONAL),
                 "smtp_configured": email_notify.configured(),
                 "senders": service.senders(),
                 "queue": {"queued": int(queued), "failed_24h": int(failed)},

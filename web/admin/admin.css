@@ -4677,3 +4677,5 @@ a.em-tr:hover, .em-log-tr[data-id]:hover { background: var(--canvas); cursor: po
   .em-seg { grid-template-columns: 1fr; }
   .em-test { margin-left: 0; width: 100%; }
 }
+
+.em-paused { padding: 4px 12px; border-radius: 999px; background: #fff3c4; color: #7a5b00; font-weight: 700; }

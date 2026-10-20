@@ -151,6 +151,8 @@ async def notify_listing(
     ignore_quiet: bool = False,
     prefix: str = "",
 ) -> bool:
+    if config.EMAIL_ONLY_TRANSACTIONAL and kind != "test":
+        return False
     if not should_send(store, kind, ignore_quiet=ignore_quiet):
         return False
     if kind == "new" and _templated():
@@ -164,6 +166,8 @@ async def notify_listing(
 
 async def notify_digest(store: Store, items: list[dict[str, Any]], *, test: bool = False) -> bool:
     kind = "test" if test else "digest"
+    if config.EMAIL_ONLY_TRANSACTIONAL and not test:
+        return False
     if not should_send(store, kind, ignore_quiet=test):
         return False
     if not test and items and _templated():

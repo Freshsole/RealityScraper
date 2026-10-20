@@ -1678,7 +1678,8 @@ async def auth_logout_api(realitify_session: str | None = Cookie(default=None, a
 
 @app.get("/api/auth/me")
 async def auth_me(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
-    return await _auth_db(_current_user, realitify_session)
+    user = await _auth_db(_current_user, realitify_session)
+    return {**user, "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL)}
 
 
 def _extension_session(request: Request, cookie: str | None) -> str | None:

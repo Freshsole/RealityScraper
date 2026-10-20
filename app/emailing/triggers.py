@@ -647,6 +647,19 @@ def _locality_stats(ctx: _Ctx, locality: str) -> dict[str, dict[str, Any]]:
 
 # -------------------------------------------------------------- scheduler --
 
+BARRIER_KEY = "pause_barrier"
+# Rules that must keep running while only transactional mail is allowed (no marketing mail is sent from them).
+_PAUSE_SAFE_RULES = {"resume", "verify_retry"}
+
+
+def _fresh(moment: datetime | None) -> bool:
+    """False when the trigger moment fell into (or before the end of) a pause: nothing is back-filled afterwards."""
+    if moment is None:
+        return False
+    barrier = _parse(estore.get_meta(BARRIER_KEY))
+    return barrier is None or moment > barrier
+
+
 def _due(rule: str, every: float) -> bool:
     now = time.monotonic()
     last = _STATE["last"].get(rule)
@@ -675,7 +688,12 @@ def run_scheduler(store_for: StoreFor | None) -> None:
         ("resume", 600, _rule_resume),
         ("verify_retry", 600, _rule_verify_retry),
     ]
+    paused = config.EMAIL_ONLY_TRANSACTIONAL
+    if paused:
+        estore.set_meta(BARRIER_KEY, estore.now_iso())
     for name, every, fn in rules:
+        if paused and name not in _PAUSE_SAFE_RULES:
+            continue
         if not _due(name, every):
             continue
         try:
@@ -699,7 +717,8 @@ def _rule_onboarding(ctx: _Ctx) -> None:
         monitors = _monitors(ustore)
         age = now - verified_at
         if monitors:
-            if estore.get_meta(f"first_dog:{uid}") is None and service.is_enabled("first_dog_confirm"):
+            if (estore.get_meta(f"first_dog:{uid}") is None and service.is_enabled("first_dog_confirm")
+                    and _fresh(_parse(monitors[0].get("created_at")))):
                 first = monitors[0]
                 plan = _plan(ustore).get("plan", "free")
                 portals = "Sreality, Bezrealitky, Reality.iDNES, Bazoš" if plan == "free" else (
@@ -712,12 +731,16 @@ def _rule_onboarding(ctx: _Ctx) -> None:
                     estore.set_meta(f"first_dog:{uid}", estore.now_iso())
             continue
         if age >= timedelta(days=1) and age < timedelta(days=3):
+            if not _fresh(verified_at + timedelta(days=1)):
+                continue
             locality = "Praha"
             new = len([r for r in ctx.rows(1) if locality.lower() in str(r.get("locality") or "").lower()])
             if new:
                 _send("nudge_no_dog", user, {"lokalita": locality, "pocet": str(new), "pes_filtr": f"pronájem bytů, {locality}",
                                              "odkaz": link("/monitory", "nudge_no_dog")}, f"nudge_no_dog:{uid}")
         elif age >= timedelta(days=3):
+            if not _fresh(verified_at + timedelta(days=3)):
+                continue
             locality = "Praha"
             stats = _locality_stats(ctx, locality)
             if len(stats) == 3:
@@ -740,6 +763,8 @@ def _rule_dog_no_matches(ctx: _Ctx) -> None:
         for m in _monitors(ustore):
             made = _parse(m.get("created_at"))
             if not made or not m.get("enabled") or datetime.now(timezone.utc) - made < timedelta(days=7):
+                continue
+            if not _fresh(made + timedelta(days=7)):
                 continue
             if int(m.get("tracked") or 0) > 0 or estore.get_meta(f"no_matches:{m['id']}"):
                 continue
@@ -916,7 +941,8 @@ def _rule_alerts_unopened(ctx: _Ctx) -> None:
             if _send("alerts_unopened", user, {"odkaz": link("/nastaveni/notifikace", "alerts_unopened", "alerts")},
                      f"alerts_unopened:{uid}:{last[0]['id']}"):
                 estore.set_meta(f"unopened_notice:{uid}", estore.now_iso())
-        elif datetime.now(timezone.utc) - notice >= timedelta(days=7) and not _recent_open(uid, notice):
+        elif (datetime.now(timezone.utc) - notice >= timedelta(days=7) and _fresh(notice + timedelta(days=7))
+              and not _recent_open(uid, notice)):
             # nobody reads them: stop the dogs to protect the sender reputation
             paused = _pause_monitors(ctx.store_for(uid))
             if paused:
@@ -948,7 +974,7 @@ def _rule_found_home(ctx: _Ctx) -> None:
             continue
         days = (now - min(stamps)).days
         step = 60 if days >= 60 else 30 if days >= 30 else 0
-        if not step:
+        if not step or not _fresh(min(stamps) + timedelta(days=step)):
             continue
         with estore.db() as conn:
             alerts = conn.execute("SELECT COUNT(*) FROM email_log WHERE user_id = ? AND template_key = 'alert_new_listing' AND status = 'sent'", (uid,)).fetchone()[0]
@@ -1042,7 +1068,7 @@ def _rule_winback(ctx: _Ctx) -> None:
             continue
         days = (now - ended).days
         step = 90 if days >= 90 else 30 if days >= 30 else 0
-        if not step or days > 120:
+        if not step or days > 120 or not _fresh(ended + timedelta(days=step)):
             continue
         reason = estore.get_meta(f"cancel_reason:{uid}") or ""
         if reason == "duvod_bydleni" or estore.get_meta(f"found_exit:{uid}") == "found":

@@ -212,6 +212,8 @@ EMAIL_TOKEN_SECRET = os.getenv("EMAIL_TOKEN_SECRET", "").strip()
 # Finishes "autory odměníme ..." in the "found a home" follow-up (6.1b).
 EMAIL_STORY_REWARD = os.getenv("EMAIL_STORY_REWARD", "poděkováním").strip() or "poděkováním"
 EMAIL_AUTOMATION = os.getenv("EMAIL_AUTOMATION", "1").strip() in {"1", "true", "yes"}
+# Temporary pause: only transactional e-mails (account, billing) leave; alerts, lifecycle and campaigns are skipped.
+EMAIL_ONLY_TRANSACTIONAL = os.getenv("EMAIL_ONLY_TRANSACTIONAL", "0").strip().lower() in {"1", "true", "yes"}
 # Amazon SES (SMTP interface): optional configuration set + SNS webhook protection + send rate limits.
 SES_CONFIGURATION_SET = os.getenv("SES_CONFIGURATION_SET", "").strip()
 SES_WEBHOOK_TOKEN = os.getenv("SES_WEBHOOK_TOKEN", "").strip()

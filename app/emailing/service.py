@@ -89,6 +89,13 @@ def _throttle() -> float:
     return 0.0
 
 
+def paused_stream(stream: str, meta: Mapping[str, Any] | None = None) -> bool:
+    """EMAIL_ONLY_TRANSACTIONAL: everything except transactional mail (and admin tests) is held back."""
+    if not config.EMAIL_ONLY_TRANSACTIONAL or stream == "transactional":
+        return False
+    return not (meta or {}).get("test")
+
+
 def _is_stale(row: dict[str, Any]) -> bool:
     if row.get("template_key") not in STALE_KEYS:
         return False
@@ -239,7 +246,12 @@ def send_template(
     values = {**common_vars(user, recipient), **{k: ("" if v is None else str(v)) for k, v in (variables or {}).items()}}
     rendered = render.render(eff["html"], eff["subject"], eff["preheader"], values, text_body=eff["text_body"])
     skip: str | None = None
-    if not eff["enabled"] and not force:
+    if paused_stream(tdef.stream, meta):
+        # Alerts would flood the log (one row per listing and user); the pause is visible in the admin status instead.
+        if tdef.stream == "alerts":
+            return None
+        skip = "paused"
+    elif not eff["enabled"] and not force:
         skip = "disabled"
     elif tdef.stream == "lifecycle" and not force:
         flags = _user_flags(user_id)
@@ -344,6 +356,9 @@ def process_now(log_id: int) -> str:
         meta = json.loads(row.get("meta") or "{}")
     except json.JSONDecodeError:
         meta = {}
+    if paused_stream(str(row.get("stream") or ""), meta):
+        estore.log_update(log_id, status="skipped", error="paused")
+        return "skipped"
     guard = GUARDS.get(row.get("template_key") or "")
     if guard:
         try:
@@ -433,7 +448,8 @@ async def run_email_loop(store_for: Callable[[str], Any] | None = None, global_s
             for _ in range(5):  # keep draining while the queue is full (the rate limit still applies)
                 if await asyncio.to_thread(process_queue, 50) < 50:
                     break
-            await asyncio.to_thread(campaigns.run_due, store_for)
+            if not config.EMAIL_ONLY_TRANSACTIONAL:
+                await asyncio.to_thread(campaigns.run_due, store_for)
             if loop.time() - last_sched >= 60:
                 last_sched = loop.time()
                 await asyncio.to_thread(triggers.run_scheduler, store_for)

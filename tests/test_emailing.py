@@ -843,3 +843,68 @@ def test_admin_status_reports_provider_and_suppressed(api, env, monkeypatch):
     estore.suppress("a@example.cz", "complaint")
     body = api.get("/api/admin/emails/status").json()
     assert body["provider"] == "ses" and body["suppressed"] == 1
+
+
+# ------------------------------------------------- only transactional --
+
+def test_only_transactional_sends_account_mail_and_skips_the_rest(env, monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", True)
+    user = make_user(env)
+    tid = service.send_template("verify_email", user=user, variables={"odkaz": "https://realitify.test/x"})
+    assert estore.log_get(tid)["status"] == "sent"
+    wid = service.send_template("welcome", user=user, variables={"odkaz": "https://realitify.test/x"})
+    row = estore.log_get(wid)
+    assert row["status"] == "skipped" and row["error"] == "paused"
+    assert service.send_template("alert_new_listing", user=user, variables={}) is None  # alerts are not even logged
+    assert [m["To"] for m in env.sent] == [user["email"]] and len(env.sent) == 1
+
+
+def test_only_transactional_holds_back_rows_queued_earlier_but_lets_admin_tests_out(env, monkeypatch):
+    user = make_user(env)
+    qid = service.send_template("welcome", user=user, variables={"odkaz": "https://realitify.test/x"})
+    assert estore.log_get(qid)["status"] == "queued"
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", True)
+    service.process_queue()
+    assert estore.log_get(qid)["error"] == "paused" and not env.sent
+    rendered = render.Rendered("[TEST] s", "", "<p>x</p>", "x")
+    tid = service._enqueue(template_key="welcome", stream="lifecycle", to="me@example.cz", user_id="", rendered=rendered, meta={"test": True, "force": True})
+    assert service.process_now(tid) == "sent"
+
+
+def test_only_transactional_blocks_campaigns_and_legacy_notifications(env, monkeypatch):
+    import asyncio
+    from app import email_notify
+
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", True)
+    cid = estore.campaign_save({"name": "x", "mode": "text", "subject": "s", "body": "b", "segment": {}})
+    with pytest.raises(ValueError):
+        campaigns.start(cid, env.store_for)
+    assert asyncio.run(email_notify.notify_listing(env.gstore, {"name": "x"}, "new")) is False
+    assert asyncio.run(email_notify.notify_digest(env.gstore, [{"name": "x"}])) is False
+
+
+def test_pause_does_not_backfill_lifecycle_mail_afterwards(env, monkeypatch):
+    user = make_user(env)
+    verified = datetime.now(timezone.utc) - timedelta(hours=30)
+    estore.set_meta(f"verified:{user['id']}", verified.isoformat())
+    ctx = triggers._Ctx(env.store_for)
+    monkeypatch.setattr(ctx, "rows", lambda days: [{"locality": "Praha 2", "url": "https://x"}] * 5)
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", True)
+    triggers.run_scheduler(env.store_for)  # paused tick: only resume/verify_retry run, the barrier is recorded
+    assert estore.log_query()["items"] == []
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", False)
+    estore.set_meta(triggers.BARRIER_KEY, (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat())  # the pause ended 2 h ago
+    triggers._rule_onboarding(ctx)  # the 1-day nudge fell into the pause: it is not sent late
+    assert estore.log_query()["items"] == []
+    # a user who becomes due after the pause is served normally
+    fresh = make_user(env, email="new@example.cz")
+    estore.set_meta(f"verified:{fresh['id']}", (datetime.now(timezone.utc) + timedelta(hours=-25)).isoformat())
+    triggers._rule_onboarding(ctx)
+    assert [r["template_key"] for r in estore.log_query()["items"]] == ["nudge_no_dog"]
+
+
+def test_status_reports_only_transactional(env, api, monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", True)
+    assert api.get("/api/admin/emails/status").json()["only_transactional"] is True
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", False)
+    assert api.get("/api/admin/emails/status").json()["only_transactional"] is False

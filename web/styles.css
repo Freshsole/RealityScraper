@@ -3205,3 +3205,17 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
   background: var(--surface); padding: 0 14px;
   font: 600 13px Inter, sans-serif; color: var(--forest);
 }
+
+/* Temporary pause of e-mail alerts (EMAIL_ONLY_TRANSACTIONAL): quiet mint notice */
+.mail-pause {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: var(--mint);
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.mail-pause[hidden] { display: none; }
+#view-overview > .mail-pause { margin: 16px 0 0; }
