@@ -22,6 +22,11 @@ def configured() -> bool:
     return bool(config.SMTP_HOST and (config.SMTP_FROM or config.SMTP_USER))
 
 
+def provider() -> str:
+    """"ses" when SMTP_HOST is the Amazon SES SMTP endpoint, else plain "smtp"."""
+    return "ses" if "amazonaws.com" in (config.SMTP_HOST or "").lower() else "smtp"
+
+
 def from_addr() -> str:
     return (config.SMTP_FROM or config.SMTP_USER or "").strip()
 
@@ -111,6 +116,11 @@ def send_mime(msg: EmailMessage) -> None:
     """Deliver a prepared message through the configured SMTP account."""
     if not config.SMTP_HOST:
         raise RuntimeError("E-mail není nastavený (SMTP_HOST a SMTP_FROM)")
+    from app.emailing import store as estore
+
+    for _name, addr in (parseaddr(part) for part in str(msg["To"] or "").split(",")):
+        if addr and estore.is_suppressed(addr):
+            raise smtplib.SMTPRecipientsRefused({addr: (550, b"suppressed")})
     port = config.SMTP_PORT
     if port == 465:
         with smtplib.SMTP_SSL(config.SMTP_HOST, port, timeout=20, context=ssl.create_default_context()) as smtp:

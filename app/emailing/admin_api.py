@@ -281,6 +281,9 @@ def build_router(admin_user: AdminUser, store_for: StoreFor) -> APIRouter:
                 queued = conn.execute("SELECT COUNT(*) FROM email_log WHERE status IN ('queued','sending')").fetchone()[0]
                 failed = conn.execute("SELECT COUNT(*) FROM email_log WHERE status = 'failed' AND created_at >= ?", (since,)).fetchone()[0]
             return {
+                "provider": email_notify.provider(),
+                "suppressed": estore.count_suppressed(),
+                "paused_sec": int(service.paused_for()),
                 "smtp_configured": email_notify.configured(),
                 "senders": service.senders(),
                 "queue": {"queued": int(queued), "failed_24h": int(failed)},

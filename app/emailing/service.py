@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import smtplib
 import threading
+import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid, parseaddr
 from typing import Any, Callable, Mapping
@@ -20,6 +23,13 @@ STREAMS = ("transactional", "alerts", "lifecycle")
 _STREAM_LOCAL = {"transactional": "noreply", "alerts": "alerty", "lifecycle": "ahoj"}
 _BACKOFF_SEC = (60, 300, 1800)
 MAX_ATTEMPTS = 3
+AUTH_PAUSE_SEC = 300  # after an SMTP login failure nothing is sent for 5 minutes (messages stay queued)
+STALE_ALERT_SEC = 6 * 3600  # an alert about a new listing is useless after this long
+STALE_KEYS = ("alert_new_listing", "alert_digest")
+
+_pause_until = 0.0
+_throttle_lock = threading.Lock()
+_last_send = 0.0
 
 # Per-template check run right before delivery of a delayed mail: returns a skip reason or None.
 Guard = Callable[[dict[str, Any]], "str | None"]
@@ -49,6 +59,57 @@ def sender_for(stream: str) -> str:
 
 def senders() -> dict[str, str]:
     return {stream: sender_for(stream) for stream in STREAMS}
+
+
+# ------------------------------------------------------ pause / limits --
+
+def paused_for() -> float:
+    """Seconds left of the post-auth-failure pause (0 when sending is allowed)."""
+    return max(0.0, _pause_until - time.time())
+
+
+def _pause_sending(seconds: float = AUTH_PAUSE_SEC) -> None:
+    global _pause_until
+    _pause_until = time.time() + seconds
+
+
+def _throttle() -> float:
+    """Honour EMAIL_MAX_PER_SEC by a short sleep; returns seconds to defer when EMAIL_MAX_PER_HOUR is reached."""
+    global _last_send
+    hourly = config.EMAIL_MAX_PER_HOUR
+    if hourly and estore.sent_since(estore.iso_in(-3600)) >= hourly:
+        return 60.0
+    per_sec = config.EMAIL_MAX_PER_SEC
+    if per_sec > 0:
+        with _throttle_lock:
+            wait = _last_send + 1.0 / per_sec - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            _last_send = time.monotonic()
+    return 0.0
+
+
+def _is_stale(row: dict[str, Any]) -> bool:
+    if row.get("template_key") not in STALE_KEYS:
+        return False
+    try:
+        created = datetime.fromisoformat(str(row.get("created_at") or ""))
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - created > timedelta(seconds=STALE_ALERT_SEC)
+
+
+def _defer(row: dict[str, Any], seconds: float, error: str | None = None) -> None:
+    """Put a claimed row back to the queue without counting the attempt."""
+    estore.log_update(
+        int(row["id"]),
+        status="queued",
+        attempts=max(0, int(row.get("attempts") or 1) - 1),
+        error=error,
+        scheduled_at=estore.iso_in(seconds),
+    )
 
 
 # ----------------------------------------------------------- templates --
@@ -186,6 +247,8 @@ def send_template(
             skip = "marketing_unsub"
     if skip is None and not email_notify.configured():
         skip = "smtp_not_configured"
+    if skip is None and estore.is_suppressed(recipient):
+        skip = "suppressed"
     if skip:
         return _enqueue(template_key=key, stream=tdef.stream, to=recipient, user_id=user_id, rendered=rendered, status="skipped", error=skip, meta=meta)
     log_id = _enqueue(
@@ -251,6 +314,12 @@ def build_message(row: dict[str, Any], meta: dict[str, Any]) -> EmailMessage:
         msg["List-Unsubscribe"] = f"<{tracking.unsubscribe_url(user_id)}>, <mailto:{config.EMAIL_REPLY_TO}?subject=unsubscribe>"
         msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.set_content(row.get("text_body") or render.html_to_text(row.get("html") or ""))
+    if config.SES_CONFIGURATION_SET:
+        msg["X-SES-CONFIGURATION-SET"] = config.SES_CONFIGURATION_SET
+        tags = [("stream", stream), ("log_id", str(row.get("id") or ""))]
+        if row.get("template_key"):
+            tags.insert(0, ("template_key", str(row["template_key"])))
+        msg["X-SES-MESSAGE-TAGS"] = ", ".join(f"{k}={re.sub(r'[^A-Za-z0-9_.@-]', '_', v)}" for k, v in tags if v)
     if row.get("html") and not meta.get("plain_only"):
         html_out = tracking.instrument(
             row["html"], int(row["id"]), pixel=stream in ("alerts", "lifecycle"), clicks=stream == "lifecycle"
@@ -290,8 +359,30 @@ def process_now(log_id: int) -> str:
         if flags and flags.get("marketing_unsub"):
             estore.log_update(log_id, status="skipped", error="marketing_unsub")
             return "skipped"
+    if estore.is_suppressed(row["to_email"]):
+        estore.log_update(log_id, status="skipped", error="suppressed")
+        return "skipped"
+    if _is_stale(row):
+        estore.log_update(log_id, status="skipped", error="stale")
+        return "skipped"
+    remaining = paused_for()
+    if remaining > 0:
+        _defer(row, remaining + 1, error=row.get("error") or "smtp_auth_paused")
+        return "queued"
+    wait = _throttle()
+    if wait > 0:
+        _defer(row, wait, error="rate_limited")
+        return "queued"
     try:
         deliver(build_message(row, meta))
+    except smtplib.SMTPAuthenticationError as exc:
+        # Bad SMTP credentials hit every message: stop for a while instead of burning the attempts of the queue.
+        _pause_sending()
+        if _is_stale(row):
+            estore.log_update(log_id, status="skipped", error="stale")
+            return "skipped"
+        _defer(row, AUTH_PAUSE_SEC + 1, error=f"auth: {exc}"[:500])
+        return "queued"
     except smtplib.SMTPRecipientsRefused as exc:
         estore.log_update(log_id, status="failed", error=f"bounce: {exc}"[:500])
         return "failed"
@@ -307,6 +398,8 @@ def process_now(log_id: int) -> str:
 
 
 def process_queue(limit: int = 50) -> int:
+    if paused_for() > 0:
+        return 0
     done = 0
     for log_id in estore.due_ids(limit):
         process_now(log_id)
@@ -337,7 +430,9 @@ async def run_email_loop(store_for: Callable[[str], Any] | None = None, global_s
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await asyncio.to_thread(process_queue, 50)
+            for _ in range(5):  # keep draining while the queue is full (the rate limit still applies)
+                if await asyncio.to_thread(process_queue, 50) < 50:
+                    break
             await asyncio.to_thread(campaigns.run_due, store_for)
             if loop.time() - last_sched >= 60:
                 last_sched = loop.time()

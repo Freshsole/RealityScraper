@@ -1,6 +1,7 @@
 """Automatic e-mails: rendering, queue and delivery, dedupe, unsubscribe, click safety, campaigns, triggers, admin API."""
 from __future__ import annotations
 
+import json
 import smtplib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -563,3 +564,282 @@ def test_admin_api_campaign_flow(api, env):
     assert detail["stats"]["sent"] == 1
     assert api.get("/api/admin/emails/campaigns").json()["campaigns"][0]["id"] == created["id"]
     assert api.post(f"/api/admin/emails/campaigns/{created['id']}/send").status_code == 400
+
+
+# ------------------------------------------------------------------- SES --
+
+def _alert(env, user, **kw):
+    return service.send_template(
+        "alert_new_listing", user=user, immediate=False,
+        variables={"dispozice": "2+kk", "plocha": "50", "lokalita_detail": "Praha", "cena": "20 000", "odkaz": "https://x.cz", **kw},
+    )
+
+
+@pytest.fixture()
+def ses_state(monkeypatch):
+    monkeypatch.setattr(service, "_pause_until", 0.0)
+    monkeypatch.setattr(service, "_last_send", 0.0)
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_SEC", 0.0)
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_HOUR", 0)
+    monkeypatch.setattr(config, "SES_CONFIGURATION_SET", "")
+    monkeypatch.setattr(config, "SES_WEBHOOK_TOKEN", "")
+    monkeypatch.setattr(config, "SES_SNS_TOPIC_ARN", "")
+
+
+def test_provider_detects_ses(monkeypatch):
+    from app import email_notify
+
+    monkeypatch.setattr(config, "SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
+    assert email_notify.provider() == "ses"
+    monkeypatch.setattr(config, "SMTP_HOST", "smtp.websupport.cz")
+    assert email_notify.provider() == "smtp"
+
+
+def test_configuration_set_adds_ses_headers(env, ses_state, monkeypatch):
+    monkeypatch.setattr(config, "SES_CONFIGURATION_SET", "realitify")
+    user = make_user(env)
+    log_id = _alert(env, user)
+    service.process_now(log_id)
+    msg = env.sent[0]
+    assert msg["X-SES-CONFIGURATION-SET"] == "realitify"
+    tags = msg["X-SES-MESSAGE-TAGS"]
+    assert "template_key=alert_new_listing" in tags and "stream=alerts" in tags and f"log_id={log_id}" in tags
+
+
+def test_no_ses_headers_without_configuration_set(env, ses_state):
+    user = make_user(env)
+    service.process_now(_alert(env, user))
+    assert env.sent[0]["X-SES-CONFIGURATION-SET"] is None
+
+
+def test_hourly_limit_defers_instead_of_failing(env, ses_state, monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_HOUR", 1)
+    user = make_user(env)
+    first = service.send_template("password_changed", user=user, variables={"datum_cas": "x", "odkaz": "https://x.cz"})
+    second = service.send_template("password_changed", user=user, variables={"datum_cas": "y", "odkaz": "https://x.cz"})
+    assert estore.log_get(first)["status"] == "sent"
+    row = estore.log_get(second)
+    assert row["status"] == "queued" and row["attempts"] == 0 and row["scheduled_at"] > estore.now_iso()
+    assert len(env.sent) == 1
+
+
+def test_per_second_limit_spaces_sends(env, ses_state, monkeypatch):
+    import time
+
+    monkeypatch.setattr(config, "EMAIL_MAX_PER_SEC", 20.0)
+    user = make_user(env)
+    started = time.monotonic()
+    for i in range(3):
+        service.send_template("password_changed", user=user, variables={"datum_cas": str(i), "odkaz": "https://x.cz"})
+    assert time.monotonic() - started >= 0.09 and len(env.sent) == 3
+
+
+def test_auth_failure_pauses_sending_and_keeps_messages_queued(env, ses_state, monkeypatch):
+    user = make_user(env)
+
+    def deny(msg):
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.8 authentication failed")
+
+    monkeypatch.setattr(service, "deliver", deny)
+    first = service.send_template("password_changed", user=user, variables={"datum_cas": "x", "odkaz": "https://x.cz"})
+    row = estore.log_get(first)
+    assert row["status"] == "queued" and row["attempts"] == 0 and row["error"].startswith("auth:")
+    assert service.paused_for() > 200
+    calls: list[Any] = []
+    monkeypatch.setattr(service, "deliver", lambda m: calls.append(m))
+    second = service.send_template("password_changed", user=user, variables={"datum_cas": "y", "odkaz": "https://x.cz"})
+    assert estore.log_get(second)["status"] == "queued" and not calls
+    estore.log_update(second, scheduled_at=estore.now_iso())
+    assert service.process_queue() == 0  # paused: queue is not even touched
+    monkeypatch.setattr(service, "_pause_until", 0.0)
+    estore.log_update(first, scheduled_at=estore.now_iso())
+    estore.log_update(second, scheduled_at=estore.now_iso())
+    service.process_queue()
+    assert len(calls) == 2 and estore.log_get(first)["status"] == "sent"
+
+
+def test_old_alerts_are_skipped_as_stale_but_other_mails_are_not(env, ses_state):
+    user = make_user(env)
+    old = estore.iso_in(-7 * 3600)
+    alert = _alert(env, user)
+    estore.log_update(alert, created_at=old)
+    other = service.send_template("welcome", user=user, variables={"odkaz": "https://x.cz"})
+    estore.log_update(other, created_at=old)
+    service.process_queue()
+    assert estore.log_get(alert)["status"] == "skipped" and estore.log_get(alert)["error"] == "stale"
+    assert estore.log_get(other)["status"] == "sent"
+
+
+def test_suppressed_address_is_skipped_everywhere(env, ses_state):
+    user = make_user(env, email="bounced@example.cz")
+    estore.suppress("Bounced@Example.cz", "bounce:General")
+    log_id = service.send_template("password_changed", user=user, variables={"datum_cas": "x", "odkaz": "https://x.cz"})
+    row = estore.log_get(log_id)
+    assert row["status"] == "skipped" and row["error"] == "suppressed" and not env.sent
+    # suppressed after queueing
+    other = make_user(env, email="later@example.cz")
+    queued = service.send_template("welcome", user=other, variables={"odkaz": "https://x.cz"})
+    estore.suppress("later@example.cz", "complaint")
+    service.process_queue()
+    assert estore.log_get(queued)["status"] == "skipped" and not env.sent
+
+
+def test_legacy_send_mime_refuses_suppressed(env, ses_state):
+    from email.message import EmailMessage
+    from app import email_notify
+
+    estore.suppress("x@example.cz", "complaint")
+    msg = EmailMessage()
+    msg["To"] = "Jiří <x@example.cz>"
+    with pytest.raises(smtplib.SMTPRecipientsRefused):
+        email_notify.send_mime(msg)
+
+
+# ------------------------------------------------------------ SNS webhook --
+
+def _sns_signed(topic="arn:aws:sns:eu-central-1:1:t", inner=None, kind="Notification", version="2"):
+    """Build an SNS message signed with a throwaway key; returns (message, certificate pem)."""
+    import base64
+    import datetime as dt
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    from cryptography.x509.oid import NameOID
+
+    from app.emailing import ses
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "sns.amazonaws.com")])
+    now = dt.datetime.now(dt.timezone.utc)
+    cert = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+        .serial_number(1).not_valid_before(now).not_valid_after(now + dt.timedelta(days=1)).sign(key, hashes.SHA256())
+    )
+    msg = {
+        "Type": kind,
+        "MessageId": "m1",
+        "TopicArn": topic,
+        "Message": json.dumps(inner or {}),
+        "Timestamp": "2026-10-20T10:00:00.000Z",
+        "SignatureVersion": version,
+        "SigningCertURL": "https://sns.eu-central-1.amazonaws.com/SimpleNotificationService-x.pem",
+    }
+    if kind == "SubscriptionConfirmation":
+        msg.update({"Token": "tok", "SubscribeURL": "https://sns.eu-central-1.amazonaws.com/?Action=ConfirmSubscription&Token=tok"})
+    digest = hashes.SHA256() if version == "2" else hashes.SHA1()
+    sig = key.sign(ses.string_to_sign(msg), padding.PKCS1v15(), digest)
+    msg["Signature"] = base64.b64encode(sig).decode()
+    return msg, cert.public_bytes(serialization.Encoding.PEM)
+
+
+@pytest.fixture()
+def sns(env, ses_state, monkeypatch):
+    from app.emailing import ses
+
+    fetched: list[str] = []
+    state = {"pem": b""}
+
+    def fake_fetch(url):
+        fetched.append(url)
+        return state["pem"]
+
+    monkeypatch.setattr(ses, "fetch", fake_fetch)
+    monkeypatch.setattr(ses, "_CERTS", {})
+    monkeypatch.setattr(config, "SES_WEBHOOK_TOKEN", "secret-token")
+    return type("S", (), {"fetched": fetched, "state": state, "ses": ses})
+
+
+def _post(sns, env, msg, pem, token="secret-token"):
+    sns.state["pem"] = pem
+    sns.ses._CERTS.clear()  # every test message is signed with a fresh key
+    body = json.dumps(msg).encode()
+    return sns.ses.process_request(body, token)
+
+
+BOUNCE = {
+    "notificationType": "Bounce",
+    "bounce": {"bounceType": "Permanent", "bounceSubType": "General", "bouncedRecipients": [{"emailAddress": "Gone@Example.cz"}]},
+    "mail": {"tags": {"log_id": ["999"]}},
+}
+
+
+def test_webhook_suppresses_hard_bounce_and_flags_user(env, sns):
+    user = make_user(env, email="gone@example.cz")
+    msg, pem = _sns_signed(inner=BOUNCE)
+    status, body = _post(sns, env, msg, pem)
+    assert status == 200 and body["suppressed"] == 1
+    assert estore.is_suppressed("gone@example.cz")
+    with estore.db() as conn:
+        assert conn.execute("SELECT email_suppressed FROM users WHERE id = ?", (user["id"],)).fetchone()[0] == 1
+
+
+def test_webhook_works_with_signature_version_1(env, sns):
+    msg, pem = _sns_signed(inner=BOUNCE, version="1")
+    assert _post(sns, env, msg, pem)[0] == 200 and estore.is_suppressed("gone@example.cz")
+
+
+def test_webhook_ignores_soft_bounce_and_delivery_but_stores_complaints(env, sns):
+    soft = {"notificationType": "Bounce", "bounce": {"bounceType": "Transient", "bouncedRecipients": [{"emailAddress": "soft@example.cz"}]}}
+    msg, pem = _sns_signed(inner=soft)
+    assert _post(sns, env, msg, pem)[0] == 200 and not estore.is_suppressed("soft@example.cz")
+    msg, pem = _sns_signed(inner={"notificationType": "Delivery"})
+    assert _post(sns, env, msg, pem)[0] == 200
+    complaint = {"notificationType": "Complaint", "complaint": {"complainedRecipients": [{"emailAddress": "angry@example.cz"}]}}
+    msg, pem = _sns_signed(inner=complaint)
+    assert _post(sns, env, msg, pem)[0] == 200 and estore.is_suppressed("angry@example.cz")
+
+
+def test_webhook_marks_the_sent_log_row_failed(env, sns):
+    user = make_user(env, email="gone@example.cz")
+    log_id = service.send_template("password_changed", user=user, variables={"datum_cas": "x", "odkaz": "https://x.cz"})
+    inner = {**BOUNCE, "mail": {"tags": {"log_id": [str(log_id)]}}}
+    msg, pem = _sns_signed(inner=inner)
+    _post(sns, env, msg, pem)
+    assert estore.log_get(log_id)["status"] == "failed"
+
+
+def test_webhook_rejects_forged_signature_wrong_token_and_missing_config(env, sns, monkeypatch):
+    msg, pem = _sns_signed(inner=BOUNCE)
+    forged = {**msg, "Message": json.dumps({**BOUNCE, "bounce": {**BOUNCE["bounce"], "bouncedRecipients": [{"emailAddress": "victim@example.cz"}]}})}
+    assert _post(sns, env, forged, pem)[0] == 403
+    assert _post(sns, env, msg, pem, token="nope")[0] == 403
+    assert not estore.is_suppressed("victim@example.cz") and not estore.is_suppressed("gone@example.cz")
+    monkeypatch.setattr(config, "SES_WEBHOOK_TOKEN", "")
+    assert _post(sns, env, msg, pem)[0] == 503
+    assert sns.ses.process_request(b"not json", "x")[0] == 400
+
+
+def test_webhook_topic_allow_list(env, sns, monkeypatch):
+    monkeypatch.setattr(config, "SES_WEBHOOK_TOKEN", "")
+    monkeypatch.setattr(config, "SES_SNS_TOPIC_ARN", "arn:aws:sns:eu-central-1:1:mine")
+    msg, pem = _sns_signed(topic="arn:aws:sns:eu-central-1:2:other", inner=BOUNCE)
+    assert _post(sns, env, msg, pem)[0] == 403
+    msg, pem = _sns_signed(topic="arn:aws:sns:eu-central-1:1:mine", inner=BOUNCE)
+    assert _post(sns, env, msg, pem)[0] == 200
+
+
+def test_signing_cert_url_must_be_sns_https(env, sns):
+    ses = sns.ses
+    assert ses.cert_url_ok("https://sns.eu-central-1.amazonaws.com/a.pem")
+    for bad in ("http://sns.eu-central-1.amazonaws.com/a.pem", "https://evil.example.com/a.pem",
+                "https://sns.eu-central-1.amazonaws.com.evil.com/a.pem", "https://sns.eu-central-1.amazonaws.com/a.txt"):
+        assert not ses.cert_url_ok(bad)
+    msg, pem = _sns_signed(inner=BOUNCE)
+    msg["SigningCertURL"] = "https://evil.example.com/a.pem"
+    assert _post(sns, env, msg, pem)[0] == 403 and not sns.fetched
+
+
+def test_subscription_confirmation_only_to_amazonaws(env, sns):
+    msg, pem = _sns_signed(kind="SubscriptionConfirmation")
+    assert _post(sns, env, msg, pem)[0] == 200
+    assert sns.fetched[-1].startswith("https://sns.eu-central-1.amazonaws.com/?Action=ConfirmSubscription")
+    sns.fetched.clear()
+    assert not sns.ses.subscribe_url_ok("https://evil.example.com/confirm")
+    assert not sns.ses.subscribe_url_ok("http://sns.eu-central-1.amazonaws.com/x")
+
+
+def test_admin_status_reports_provider_and_suppressed(api, env, monkeypatch):
+    monkeypatch.setattr(config, "SMTP_HOST", "email-smtp.eu-central-1.amazonaws.com")
+    estore.suppress("a@example.cz", "complaint")
+    body = api.get("/api/admin/emails/status").json()
+    assert body["provider"] == "ses" and body["suppressed"] == 1

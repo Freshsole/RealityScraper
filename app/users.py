@@ -70,6 +70,8 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub INTEGER NOT NULL DEFAULT 0")
     if "marketing_unsub_at" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub_at TEXT")
+    if "email_suppressed" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email_suppressed INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (

@@ -93,6 +93,9 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE TABLE IF NOT EXISTS email_meta (key TEXT PRIMARY KEY, value TEXT)")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS email_suppressions (email TEXT PRIMARY KEY, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)"
+    )
 
 
 def bind(store: "Store") -> None:
@@ -439,3 +442,36 @@ def campaigns_due(store: "Store | None" = None) -> list[int]:
             (now_iso(),),
         ).fetchall()
     return [int(r["id"]) for r in rows]
+
+
+# --------------------------------------------------------- suppression --
+
+def suppress(email: str, reason: str, store: "Store | None" = None) -> bool:
+    """Remember an address that bounced hard or complained. Returns True when it was new."""
+    addr = (email or "").strip().lower()
+    if not addr:
+        return False
+    with db(store) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO email_suppressions (email, reason, created_at) VALUES (?, ?, ?)",
+            (addr, (reason or "")[:200], now_iso()),
+        )
+        return cur.rowcount == 1
+
+
+def is_suppressed(email: str, store: "Store | None" = None) -> bool:
+    addr = (email or "").strip().lower()
+    if not addr:
+        return False
+    with db(store) as conn:
+        return conn.execute("SELECT 1 FROM email_suppressions WHERE email = ?", (addr,)).fetchone() is not None
+
+
+def count_suppressed(store: "Store | None" = None) -> int:
+    with db(store) as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM email_suppressions").fetchone()[0])
+
+
+def sent_since(iso: str, store: "Store | None" = None) -> int:
+    with db(store) as conn:
+        return int(conn.execute("SELECT COUNT(*) FROM email_log WHERE status = 'sent' AND sent_at >= ?", (iso,)).fetchone()[0])

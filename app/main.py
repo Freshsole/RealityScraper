@@ -44,6 +44,7 @@ from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
 from app.emailing import admin_api as email_admin_api
+from app.emailing import ses as email_ses
 from app.emailing import store as email_store
 from app.emailing import tracking as email_tracking
 from app.emailing import triggers as email_triggers
@@ -1913,6 +1914,16 @@ def _admin_store(token: str | None) -> tuple[dict[str, Any], Store]:
 
 
 app.include_router(email_admin_api.build_router(_admin_user, hub.store_for))
+
+
+@app.post("/api/ses/webhook", include_in_schema=False)
+async def ses_webhook(request: Request, token: str = "") -> JSONResponse:
+    """Amazon SNS -> hard bounces and complaints go to the suppression list."""
+    body = await request.body()
+    if len(body) > 1_000_000:
+        return JSONResponse({"detail": "too large"}, status_code=413)
+    status, payload = await asyncio.to_thread(email_ses.process_request, body, token)
+    return JSONResponse(payload, status_code=status)
 
 
 @app.get("/e/o/{token}.gif", include_in_schema=False)

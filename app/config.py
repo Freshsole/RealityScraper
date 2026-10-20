@@ -212,6 +212,21 @@ EMAIL_TOKEN_SECRET = os.getenv("EMAIL_TOKEN_SECRET", "").strip()
 # Finishes "autory odměníme ..." in the "found a home" follow-up (6.1b).
 EMAIL_STORY_REWARD = os.getenv("EMAIL_STORY_REWARD", "poděkováním").strip() or "poděkováním"
 EMAIL_AUTOMATION = os.getenv("EMAIL_AUTOMATION", "1").strip() in {"1", "true", "yes"}
+# Amazon SES (SMTP interface): optional configuration set + SNS webhook protection + send rate limits.
+SES_CONFIGURATION_SET = os.getenv("SES_CONFIGURATION_SET", "").strip()
+SES_WEBHOOK_TOKEN = os.getenv("SES_WEBHOOK_TOKEN", "").strip()
+SES_SNS_TOPIC_ARN = os.getenv("SES_SNS_TOPIC_ARN", "").strip()
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, "") or default))
+    except ValueError:
+        return default
+
+
+EMAIL_MAX_PER_SEC = _env_float("EMAIL_MAX_PER_SEC", 10.0)
+EMAIL_MAX_PER_HOUR = int(_env_float("EMAIL_MAX_PER_HOUR", 0))
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
