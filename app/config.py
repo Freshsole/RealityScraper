@@ -216,6 +216,8 @@ EMAIL_AUTOMATION = os.getenv("EMAIL_AUTOMATION", "1").strip() in {"1", "true", "
 EMAIL_ONLY_TRANSACTIONAL = os.getenv("EMAIL_ONLY_TRANSACTIONAL", "0").strip().lower() in {"1", "true", "yes"}
 # Amazon SES (SMTP interface): optional configuration set + SNS webhook protection + send rate limits.
 SES_CONFIGURATION_SET = os.getenv("SES_CONFIGURATION_SET", "").strip()
+# Optional separate set for the transactional stream (falls back to SES_CONFIGURATION_SET).
+SES_CONFIGURATION_SET_TRANSACTIONAL = os.getenv("SES_CONFIGURATION_SET_TRANSACTIONAL", "").strip()
 SES_WEBHOOK_TOKEN = os.getenv("SES_WEBHOOK_TOKEN", "").strip()
 SES_SNS_TOPIC_ARN = os.getenv("SES_SNS_TOPIC_ARN", "").strip()
 

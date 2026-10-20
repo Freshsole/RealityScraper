@@ -45,3 +45,11 @@ Co se děje: trvalý bounce a stížnost uloží adresu do tabulky `email_suppre
 
 - Chyba přihlášení (535) pozastaví odesílání na 5 minut. Zprávy zůstanou ve frontě. Alerty starší než 6 hodin se označí `skipped` (`stale`), aby se po opravě neodeslala záplava neaktuálních nabídek.
 - Dočasné chyby se opakují 3× (1, 5, 30 minut), pak `failed`.
+
+## Transakční configuration set a odhlášení z alertů
+
+- `SES_CONFIGURATION_SET_TRANSACTIONAL` (např. `realitify-transactional`): stream `transactional` (1.x, 4.x) posílá hlavičku s tímto setem, `alerts` a `lifecycle` zůstávají na `SES_CONFIGURATION_SET`. Prázdné = vše na `SES_CONFIGURATION_SET`. Nový set vytvoř stejně jako `realitify-alerts`: event destination Bounce + Complaint → stejný SNS topic, VDM engagement tracking vypnutý (Override account level settings → Disabled).
+- Alerty (5.x) mají `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058). Odkaz `/odhlasit?kind=alerts&token=...` vypne u uživatele e-mailová upozornění (`notify_prefs.email=false`), psi zůstanou. Zapnout zpět jde na stránce odhlášení nebo v nastavení notifikací. Patička alertů má viditelný odkaz "Odhlásit upozornění" (`{{odhlasit_alerty_url}}`).
+- Lifecycle e-maily dál používají `marketing_unsub` (`/odhlasit?token=...`).
+- SNS Delivery události webhook přijme a jen potvrdí (nic neukládá).
+- Pravidlo 6 h pro zastaralé alerty (`skipped`/`stale`) platí dál.

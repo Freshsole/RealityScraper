@@ -908,3 +908,30 @@ def test_status_reports_only_transactional(env, api, monkeypatch):
     assert api.get("/api/admin/emails/status").json()["only_transactional"] is True
     monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", False)
     assert api.get("/api/admin/emails/status").json()["only_transactional"] is False
+
+
+def test_alerts_unsubscribe_token_and_headers(monkeypatch):
+    from app.emailing import tracking, service
+
+    tok = tracking.alerts_unsubscribe_token("u1")
+    assert tracking.parse_alerts_unsubscribe_token(tok) == "u1"
+    assert tracking.parse_unsubscribe_token(tok) is None  # namespaces are separate
+    assert tracking.parse_alerts_unsubscribe_token(tracking.unsubscribe_token("u1")) is None
+    assert "kind=alerts" in tracking.alerts_unsubscribe_url("u1")
+    row = {"stream": "alerts", "subject": "x", "to_email": "a@b.cz", "user_id": "u1", "html": "<p>x</p>", "id": 1, "template_key": "alert_new_listing"}
+    msg = service.build_message(row, {})
+    assert "kind=alerts" in msg["List-Unsubscribe"]
+    assert msg["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
+
+
+def test_transactional_config_set(monkeypatch):
+    from app import config
+    from app.emailing import service
+
+    monkeypatch.setattr(config, "SES_CONFIGURATION_SET", "realitify-alerts")
+    monkeypatch.setattr(config, "SES_CONFIGURATION_SET_TRANSACTIONAL", "realitify-transactional")
+    base = {"subject": "x", "to_email": "a@b.cz", "user_id": "", "html": "", "id": 1}
+    assert service.build_message({**base, "stream": "transactional"}, {})["X-SES-CONFIGURATION-SET"] == "realitify-transactional"
+    assert service.build_message({**base, "stream": "alerts"}, {})["X-SES-CONFIGURATION-SET"] == "realitify-alerts"
+    monkeypatch.setattr(config, "SES_CONFIGURATION_SET_TRANSACTIONAL", "")
+    assert service.build_message({**base, "stream": "transactional"}, {})["X-SES-CONFIGURATION-SET"] == "realitify-alerts"

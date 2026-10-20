@@ -128,7 +128,8 @@ FOOTERS = {
     ),
     "alerts": (
         'Upozornění z vašeho hlídacího psa na Realitify.cz. '
-        '<a href="{{nastaveni_url}}" style="color:#555b54;text-decoration:underline;">Nastavení notifikací</a>'
+        '<a href="{{nastaveni_url}}" style="color:#555b54;text-decoration:underline;">Nastavení notifikací</a> · '
+        '<a href="{{odhlasit_alerty_url}}" style="color:#555b54;text-decoration:underline;">Odhlásit upozornění</a>'
     ),
 }
 

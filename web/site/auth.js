@@ -317,7 +317,7 @@ if (loginForm) {
     try {
       const account = await postJson("/api/auth/login", { email, password });
       const next = new URLSearchParams(location.search).get("next") || "/prehled";
-      if (account && account.email_verified === false) {
+      if (account && account.email_verified === false && account.email_verification_required !== false) {
         location.href = `/registrace?verify=1&next=${encodeURIComponent(next)}`;
         return;
       }
@@ -846,7 +846,7 @@ if (register) {
       profile = null;
     }
     if (!profile) return;
-    if (profile.email_verified) show(1);
+    if (profile.email_verified || profile.email_verification_required === false) show(1);
     else showVerify(profile.email, true);
   })();
 
@@ -872,7 +872,7 @@ if (register) {
         terms: register.querySelector("#reg-agree").checked,
       });
       rememberNext();
-      if (created && created.email_verified === false) {
+      if (created && created.email_verified === false && created.email_verification_required !== false) {
         showVerify(created.email, created.verification_sent !== false);
       } else {
         show(1);

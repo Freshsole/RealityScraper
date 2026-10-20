@@ -169,6 +169,7 @@ def common_vars(user: Mapping[str, Any] | None, to: str) -> dict[str, str]:
         "base_url": base,
         "nastaveni_url": f"{base}/nastaveni",
         "odhlasit_url": tracking.unsubscribe_url(uid) if uid else f"{base}/nastaveni",
+        "odhlasit_alerty_url": tracking.alerts_unsubscribe_url(uid) if uid else f"{base}/nastaveni",
         "podpora_email": "podpora@realitify.cz",
         "rok": str(estore.datetime.now().year),
     }
@@ -325,9 +326,17 @@ def build_message(row: dict[str, Any], meta: dict[str, Any]) -> EmailMessage:
     if stream == "lifecycle" and user_id:
         msg["List-Unsubscribe"] = f"<{tracking.unsubscribe_url(user_id)}>, <mailto:{config.EMAIL_REPLY_TO}?subject=unsubscribe>"
         msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    elif stream == "alerts" and user_id:
+        msg["List-Unsubscribe"] = f"<{tracking.alerts_unsubscribe_url(user_id)}>, <mailto:{config.EMAIL_REPLY_TO}?subject=unsubscribe>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
     msg.set_content(row.get("text_body") or render.html_to_text(row.get("html") or ""))
-    if config.SES_CONFIGURATION_SET:
-        msg["X-SES-CONFIGURATION-SET"] = config.SES_CONFIGURATION_SET
+    config_set = (
+        (config.SES_CONFIGURATION_SET_TRANSACTIONAL or config.SES_CONFIGURATION_SET)
+        if stream == "transactional"
+        else config.SES_CONFIGURATION_SET
+    )
+    if config_set:
+        msg["X-SES-CONFIGURATION-SET"] = config_set
         tags = [("stream", stream), ("log_id", str(row.get("id") or ""))]
         if row.get("template_key"):
             tags.insert(0, ("template_key", str(row["template_key"])))

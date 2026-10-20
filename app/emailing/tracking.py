@@ -63,6 +63,21 @@ def unsubscribe_url(user_id: str) -> str:
     return f"{base_url()}/odhlasit?token={quote(unsubscribe_token(user_id))}"
 
 
+def alerts_unsubscribe_token(user_id: str) -> str:
+    return f"{user_id}.{_sig(f'unsub-alerts:{user_id}')}"
+
+
+def parse_alerts_unsubscribe_token(token: str) -> str | None:
+    user_id, _, sig = (token or "").rpartition(".")
+    if not user_id or not _ok(f"unsub-alerts:{user_id}", sig):
+        return None
+    return user_id
+
+
+def alerts_unsubscribe_url(user_id: str) -> str:
+    return f"{base_url()}/odhlasit?kind=alerts&token={quote(alerts_unsubscribe_token(user_id))}"
+
+
 # ------------------------------------------------------ one-click actions --
 
 ACTIONS = {"found", "hledam", "pauza", "zapnout", "duvod_bydleni", "duvod_draha", "duvod_relevance", "duvod_jiny"}
@@ -156,6 +171,27 @@ button,a.btn{{display:inline-block;margin-top:12px;padding:13px 28px;border:0;bo
 
 def page(title: str, body_html: str) -> str:
     return _PAGE.format(title=_html.escape(title), body=body_html)
+
+
+def alerts_unsubscribe_page(token: str, *, done: bool = False, resubscribed: bool = False) -> str:
+    t = _html.escape(token, quote=True)
+    action = f'/odhlasit?kind=alerts&token={t}'
+    if done:
+        return page(
+            "Upozornění vypnuta",
+            "<p>E-mailová upozornění na nové nabídky jsme vypnuli. Hlídací psi i nastavení zůstávají uložené"
+            " a e-maily o účtu a platbách vám chodí dál. Upozornění jde znovu zapnout v nastavení notifikací.</p>"
+            f'<form method="post" action="{action}"><input type="hidden" name="action" value="resubscribe">'
+            "<button type=\"submit\">Zapnout zpět</button></form>",
+        )
+    if resubscribed:
+        return page("Upozornění zapnuta", "<p>E-mailová upozornění na nové nabídky jsme znovu zapnuli.</p>")
+    return page(
+        "Odhlásit e-mailová upozornění",
+        "<p>Přestaneme vám posílat e-maily s novými nabídkami. Hlídací psi zůstanou uložení a upozornění jde"
+        " kdykoli znovu zapnout v nastavení notifikací. E-maily o účtu a platbách zůstanou zapnuté.</p>"
+        f'<form method="post" action="{action}"><button type="submit">Odhlásit upozornění</button></form>',
+    )
 
 
 def unsubscribe_page(token: str, *, done: bool = False, resubscribed: bool = False) -> str:

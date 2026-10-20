@@ -6,6 +6,7 @@ import json
 import secrets
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator, TYPE_CHECKING
@@ -153,6 +154,43 @@ def get_meta(key: str, store: "Store | None" = None) -> str | None:
 def set_meta(key: str, value: str, store: "Store | None" = None) -> None:
     with db(store) as conn:
         conn.execute("INSERT OR REPLACE INTO email_meta(key, value) VALUES (?, ?)", (key, value))
+
+
+# --------------------------------------------- e-mail verification switch --
+
+_VERIFY_KEY = "require_email_verification"
+_VERIFY_TTL_SEC = 10.0
+_verify_cache: dict[str, Any] = {"value": True, "at": 0.0}
+
+
+def verification_required(store: "Store | None" = None) -> bool:
+    """Admin switch (default on). Cached for a few seconds so it is not a query per request."""
+    now = time.monotonic()
+    if store is None and now - float(_verify_cache["at"]) < _VERIFY_TTL_SEC:
+        return bool(_verify_cache["value"])
+    try:
+        value = get_meta(_VERIFY_KEY, store) != "0"
+    except Exception:
+        return bool(_verify_cache["value"])
+    if store is None:
+        _verify_cache.update(value=value, at=now)
+    return value
+
+
+def verification_setting(store: "Store | None" = None) -> dict[str, Any]:
+    return {
+        "required": verification_required(store),
+        "updated_by": get_meta(_VERIFY_KEY + "_by", store) or "",
+        "updated_at": get_meta(_VERIFY_KEY + "_at", store) or "",
+    }
+
+
+def set_verification_required(required: bool, by: str = "", store: "Store | None" = None) -> dict[str, Any]:
+    set_meta(_VERIFY_KEY, "1" if required else "0", store)
+    set_meta(_VERIFY_KEY + "_by", by or "", store)
+    set_meta(_VERIFY_KEY + "_at", now_iso(), store)
+    _verify_cache.update(value=bool(required), at=time.monotonic())
+    return verification_setting(store)
 
 
 def secret(store: "Store | None" = None) -> bytes:

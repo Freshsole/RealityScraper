@@ -53,6 +53,7 @@ COMMON_VARS: tuple[Var, ...] = (
     Var("base_url", "Veřejná URL appky", "https://realitify.cz"),
     Var("nastaveni_url", "Odkaz na nastavení e-mailů a notifikací", "https://realitify.cz/nastaveni"),
     Var("odhlasit_url", "Podepsaný odkaz pro odhlášení z tipů a novinek", "https://realitify.cz/odhlasit?token=ukazka"),
+    Var("odhlasit_alerty_url", "Podepsaný odkaz pro vypnutí e-mailových upozornění na nabídky", "https://realitify.cz/odhlasit?kind=alerts&token=ukazka"),
     Var("podpora_email", "E-mail podpory", "podpora@realitify.cz"),
     Var("rok", "Aktuální rok", "2026"),
     Var("preheader", "Preheader šablony (vkládá renderer)", "Ukázkový preheader"),

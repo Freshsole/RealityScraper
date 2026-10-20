@@ -67,8 +67,41 @@
         <span class="em-sub">Odesílatelé: ${Object.entries(s)
           .map(([k, v]) => `${esc(STREAMS[k] || k)}: ${esc(v)}`)
           .join(" · ")}</span>
+      </div>
+      ${verifyCard(st.verification)}`;
+    };
+
+    const verifyCard = (v) => {
+      if (!v) return "";
+      const on = v.required !== false;
+      const meta = v.updated_at
+        ? `Naposledy změnil ${esc(v.updated_by || "admin")} · ${esc(new Date(v.updated_at).toLocaleString("cs-CZ"))}`
+        : "";
+      return `<div class="em-verify ${on ? "" : "is-off"}">
+        <div>
+          <b>Povinné ověření e-mailu při registraci</b>
+          <span class="em-sub">Vypnutí: uživatelé se dostanou do appky hned, e-mail zůstane neověřený (slabší ochrana proti falešným účtům). ${meta}</span>
+        </div>
+        <span class="em-pill ${on ? "em-sent" : "em-failed"}">${on ? "Zapnuto" : "Vypnuto"}</span>
+        <button type="button" class="ad-btn ghost tiny" data-em-verify="${on ? "0" : "1"}">${on ? "Vypnout" : "Zapnout"}</button>
       </div>`;
     };
+
+    main.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest("[data-em-verify]");
+      if (!btn) return;
+      const required = btn.dataset.emVerify === "1";
+      if (!required && !window.confirm("Opravdu vypnout povinné ověření e-mailu? Noví uživatelé se dostanou do appky bez potvrzení e-mailu.")) return;
+      btn.disabled = true;
+      try {
+        await api("/api/admin/settings/email-verification", { method: "POST", body: JSON.stringify({ required }) });
+        toast(required ? "Ověření e-mailu je povinné." : "Ověření e-mailu je vypnuté.");
+        setTimeout(() => location.reload(), 600);
+      } catch (err) {
+        toast(err.message || "Uložení se nepovedlo.", true);
+        btn.disabled = false;
+      }
+    });
 
     const head = (title, lead, active, st) => `
       <header class="ad-pagehead">

@@ -485,7 +485,12 @@ async def require_verified_email_for_writes(request: Request, call_next):
             user = await asyncio.get_running_loop().run_in_executor(
                 hub.auth_pool, user_account.user_from_session, hub.store, token
             )
-            if user and not user.get("email_verified") and user.get("role") != "admin":
+            if (
+                user
+                and not user.get("email_verified")
+                and user.get("role") != "admin"
+                and await asyncio.get_running_loop().run_in_executor(hub.auth_pool, email_store.verification_required)
+            ):
                 return JSONResponse(
                     {"detail": "Nejdřív potvrďte svůj e-mail.", "verification_required": True},
                     status_code=403,
@@ -1562,7 +1567,8 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
     if not user.get("email_verified"):
         # Do not make the sign-up wait for SMTP; "send again" reports failures explicitly.
         asyncio.create_task(_send_verification_email(request, user), name="send-verification")
-    response = JSONResponse({**user, "verification_sent": True})
+    required = await _auth_db(email_store.verification_required)
+    response = JSONResponse({**user, "verification_sent": True, "email_verification_required": required})
     _set_session_cookie(response, token)
     try:
         site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
@@ -1592,7 +1598,8 @@ async def auth_login_api(request: Request, payload: dict[str, Any] | None = Body
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    response = JSONResponse(user)
+    required = await _auth_db(email_store.verification_required)
+    response = JSONResponse({**user, "email_verification_required": required})
     _set_session_cookie(response, token)
     return response
 
@@ -1679,7 +1686,31 @@ async def auth_logout_api(realitify_session: str | None = Cookie(default=None, a
 @app.get("/api/auth/me")
 async def auth_me(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     user = await _auth_db(_current_user, realitify_session)
-    return {**user, "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL)}
+    required = await _auth_db(email_store.verification_required)
+    return {
+        **user,
+        "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL),
+        "email_verification_required": required,
+    }
+
+
+@app.get("/api/admin/settings/email-verification")
+async def admin_email_verification_get(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    _admin_user(realitify_admin)
+    return await asyncio.to_thread(email_store.verification_setting)
+
+
+@app.post("/api/admin/settings/email-verification")
+async def admin_email_verification_set(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    admin = _admin_user(realitify_admin)
+    body = payload or {}
+    if not isinstance(body.get("required"), bool):
+        raise HTTPException(400, "Chybí pole required (true/false)")
+    by = str(admin.get("email") or admin.get("name") or "admin")
+    return await asyncio.to_thread(email_store.set_verification_required, body["required"], by)
 
 
 def _extension_session(request: Request, cookie: str | None) -> str | None:
@@ -1951,14 +1982,26 @@ async def email_action_link(token: str, a: str = "", m: str = "") -> Response:
 
 
 @app.get("/odhlasit", include_in_schema=False)
-async def email_unsubscribe_page(token: str = "") -> Response:
+async def email_unsubscribe_page(token: str = "", kind: str = "") -> Response:
+    if kind == "alerts":
+        if not email_tracking.parse_alerts_unsubscribe_token(token):
+            return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
+        return HTMLResponse(email_tracking.alerts_unsubscribe_page(token), headers={"Cache-Control": "no-store"})
     if not email_tracking.parse_unsubscribe_token(token):
         return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
     return HTMLResponse(email_tracking.unsubscribe_page(token), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/odhlasit", include_in_schema=False)
-async def email_unsubscribe_submit(request: Request, token: str = "") -> Response:
+async def email_unsubscribe_submit(request: Request, token: str = "", kind: str = "") -> Response:
+    if kind == "alerts":
+        alerts_uid = email_tracking.parse_alerts_unsubscribe_token(token)
+        if not alerts_uid:
+            return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
+        form = await request.form()
+        back = str(form.get("action") or "") == "resubscribe"
+        await asyncio.to_thread(lambda: hub.store_for(alerts_uid).save_notify_prefs({"email": back}))
+        return HTMLResponse(email_tracking.alerts_unsubscribe_page(token, done=not back, resubscribed=back))
     user_id = email_tracking.parse_unsubscribe_token(token)
     if not user_id:
         return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)

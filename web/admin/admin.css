@@ -4679,3 +4679,6 @@ a.em-tr:hover, .em-log-tr[data-id]:hover { background: var(--canvas); cursor: po
 }
 
 .em-paused { padding: 4px 12px; border-radius: 999px; background: #fff3c4; color: #7a5b00; font-weight: 700; }
+.em-verify { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; padding: 12px 20px; border-radius: 16px; background: var(--white); border: 1px solid var(--line); font-size: 13px; }
+.em-verify > div { flex: 1 1 320px; display: grid; gap: 2px; }
+.em-verify.is-off { background: #fff3c4; border-color: #e6c860; }
