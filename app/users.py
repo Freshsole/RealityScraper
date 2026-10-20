@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from app.store import Store
 
 SESSION_TTL_SEC = 30 * 24 * 3600
-RESET_TTL_SEC = 24 * 3600
+RESET_TTL_SEC = 3600
 _ITERATIONS = 200_000
 
 
@@ -66,6 +66,10 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
         # Účty vzniklé před zavedením verifikace považujeme za ověřené.
         conn.execute("UPDATE users SET email_verified = 1")
+    if "marketing_unsub" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub INTEGER NOT NULL DEFAULT 0")
+    if "marketing_unsub_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub_at TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -97,6 +101,9 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_email_verifications_user ON email_verifications(user_id)")
+    from app.emailing import store as email_store
+
+    email_store.ensure_schema(conn)
     # Verification is enforced from now on. Everybody who already has an account (the
     # link used to point at a page that did not exist) is grandfathered in exactly once.
     done = conn.execute("SELECT value FROM meta WHERE key = 'email_verify_enforced_at'").fetchone()
@@ -139,6 +146,7 @@ def _row_to_user(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "last": row["last"] or "",
         "role": (row["role"] or "user").strip().lower() or "user",
         "email_verified": bool(verified),
+        "marketing_unsub": bool(row["marketing_unsub"]) if "marketing_unsub" in row.keys() else False,
         "created_at": row["created_at"],
     }
 
@@ -423,7 +431,7 @@ def clear_password_resets(store: Store, user_id: str) -> None:
 
 # ------------------------------------------------- email verification --
 
-VERIFY_TTL_SEC = 48 * 3600
+VERIFY_TTL_SEC = 24 * 3600
 
 
 def create_email_verification(store: Store, user_id: str) -> str:
@@ -462,3 +470,43 @@ def mark_email_verified(store: Store, user_id: str) -> None:
     with store.connect() as conn:
         conn.execute("UPDATE users SET email_verified = 1 WHERE id = ?", (user_id,))
         conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))
+
+
+# ------------------------------------------------------ e-mail / delete --
+
+def set_marketing_unsub(store: Store, user_id: str, unsub: bool) -> None:
+    with store.connect() as conn:
+        conn.execute(
+            "UPDATE users SET marketing_unsub = ?, marketing_unsub_at = ? WHERE id = ?",
+            (1 if unsub else 0, _now() if unsub else None, user_id),
+        )
+
+
+def change_email(store: Store, user_id: str, new_email: str) -> dict[str, Any]:
+    """Switch the login e-mail; the new address has to be confirmed again."""
+    email_norm = (new_email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("Zadej platný e-mail")
+    try:
+        with store.connect() as conn:
+            conn.execute("UPDATE users SET email = ?, email_verified = 0 WHERE id = ?", (email_norm, user_id))
+            conn.execute("DELETE FROM email_verifications WHERE user_id = ?", (user_id,))
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("Tento e-mail už je registrovaný.") from exc
+    user = get_user_by_id(store, user_id)
+    if not user:
+        raise ValueError("Účet neexistuje")
+    return user
+
+
+def delete_user(store: Store, user_id: str) -> None:
+    """Remove the identity rows and the user's private store directory."""
+    import shutil
+
+    with store.connect() as conn:
+        for table in ("sessions", "password_resets", "email_verifications"):
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    folder = user_store_path(user_id).parent
+    if folder.is_dir() and folder.parent == user_data_dir():
+        shutil.rmtree(folder, ignore_errors=True)

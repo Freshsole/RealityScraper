@@ -202,6 +202,16 @@ SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "1").strip() in {"1", "true", "yes"}
+EMAIL_FROM_TRANSACTIONAL = os.getenv("EMAIL_FROM_TRANSACTIONAL", "").strip()
+EMAIL_FROM_ALERTS = os.getenv("EMAIL_FROM_ALERTS", "").strip()
+EMAIL_FROM_LIFECYCLE = os.getenv("EMAIL_FROM_LIFECYCLE", "").strip()
+EMAIL_REPLY_TO = os.getenv("EMAIL_REPLY_TO", "podpora@realitify.cz").strip()
+# Signs tracking / unsubscribe links. Empty = a random secret is generated and kept in the DB.
+EMAIL_TOKEN_SECRET = os.getenv("EMAIL_TOKEN_SECRET", "").strip()
+# Set to 0 to turn off the background e-mail queue + lifecycle scheduler.
+# Finishes "autory odměníme ..." in the "found a home" follow-up (6.1b).
+EMAIL_STORY_REWARD = os.getenv("EMAIL_STORY_REWARD", "poděkováním").strip() or "poděkováním"
+EMAIL_AUTOMATION = os.getenv("EMAIL_AUTOMATION", "1").strip() in {"1", "true", "yes"}
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()

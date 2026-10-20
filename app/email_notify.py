@@ -104,6 +104,13 @@ def _send_sync(to: str, subject: str, body: str) -> None:
         f'<div style="font-family:Inter,Arial,sans-serif;font-size:15px;color:#163300">{html_body}</div>',
         subtype="html",
     )
+    send_mime(msg)
+
+
+def send_mime(msg: EmailMessage) -> None:
+    """Deliver a prepared message through the configured SMTP account."""
+    if not config.SMTP_HOST:
+        raise RuntimeError("E-mail není nastavený (SMTP_HOST a SMTP_FROM)")
     port = config.SMTP_PORT
     if port == 465:
         with smtplib.SMTP_SSL(config.SMTP_HOST, port, timeout=20, context=ssl.create_default_context()) as smtp:
@@ -117,6 +124,8 @@ def _send_sync(to: str, subject: str, body: str) -> None:
         if config.SMTP_USER:
             smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
         smtp.send_message(msg)
+
+
 
 
 def send_message(to: str, subject: str, body: str) -> None:
@@ -134,6 +143,10 @@ async def notify_listing(
 ) -> bool:
     if not should_send(store, kind, ignore_quiet=ignore_quiet):
         return False
+    if kind == "new" and _templated():
+        from app.emailing import triggers
+
+        return await asyncio.to_thread(triggers.send_alert, store, item, monitor_name)
     subject, body = listing_text(item, kind, monitor_name, prefix=prefix)
     await asyncio.to_thread(send_message, account_email(store), subject, body)
     return True
@@ -143,6 +156,10 @@ async def notify_digest(store: Store, items: list[dict[str, Any]], *, test: bool
     kind = "test" if test else "digest"
     if not should_send(store, kind, ignore_quiet=test):
         return False
+    if not test and items and _templated():
+        from app.emailing import triggers
+
+        return await asyncio.to_thread(triggers.send_digest, store, items)
     if not items:
         subject = "Test souhrnu Realitify" if test else "Ranní souhrn Realitify"
         body = f"{subject}\nžádné nové zásahy"
@@ -158,7 +175,26 @@ async def notify_digest(store: Store, items: list[dict[str, Any]], *, test: bool
     return True
 
 
+def _templated() -> bool:
+    """Admin-editable templates are used once the app has bound the global store (always in production)."""
+    from app.emailing import store as email_store
+
+    return email_store.is_bound()
+
+
+def _send_templated(key: str, to: str, link: str) -> bool:
+    from app.emailing import service, store as email_store
+
+    log_id = service.send_template(key, user={"email": to}, variables={"odkaz": link}, immediate=True, force=True)
+    row = email_store.log_get(log_id) if log_id else None
+    if not row or row["status"] != "sent":
+        raise RuntimeError((row or {}).get("error") or "E-mail se nepodařilo odeslat")
+    return True
+
+
 def send_password_reset(to: str, reset_url: str) -> None:
+    if _templated() and _send_templated("password_reset", to, reset_url):
+        return
     subject = "Obnovení hesla Realitify"
     body = (
         "Dobrý den,\n\n"
@@ -171,6 +207,8 @@ def send_password_reset(to: str, reset_url: str) -> None:
 
 
 def send_email_verification(to: str, verify_url: str) -> None:
+    if _templated() and _send_templated("verify_email", to, verify_url):
+        return
     subject = "Potvrďte svůj e-mail — Realitify"
     body = (
         "Dobrý den,\n\n"

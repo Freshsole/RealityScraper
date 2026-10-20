@@ -2756,6 +2756,9 @@
       ? window.AdCms({ api, esc, ico, $, main, fmtN, getMe: () => me })
       : {};
 
+  const emailPages =
+    typeof window.AdEmails === "function" ? window.AdEmails({ api, esc, ico, $, main, fmtN, getMe: () => me }) : {};
+
   const routes = {
     prehled: pageOverview,
     uzivatele: pageUsers,
@@ -2768,6 +2771,7 @@
     fakturace: pageBilling,
     promo: pagePromo,
     ...cmsPages,
+    ...emailPages,
   };
 
   function syncAdminPath() {
@@ -2807,6 +2811,7 @@
     main.classList.toggle("ad-leady", route === "leady");
     main.classList.toggle("ad-bill", route === "fakturace");
     main.classList.toggle("ad-promo", route === "promo");
+    main.classList.toggle("ad-emails", route === "emaily");
     const cms = String(route).startsWith("cms");
     main.classList.toggle("ad-cms", cms);
     main.classList.toggle("ad-cms-edit", route === "cms-edit");

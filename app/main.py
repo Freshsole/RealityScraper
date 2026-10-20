@@ -43,6 +43,10 @@ from app import rate_limit
 from app import analytics as site_stats
 from app import push as web_push
 from app import email_notify as mail_notify
+from app.emailing import admin_api as email_admin_api
+from app.emailing import store as email_store
+from app.emailing import tracking as email_tracking
+from app.emailing import triggers as email_triggers
 from app import whatsapp as wa_notify
 from app import agent_discovery
 from app import agents as agent_hub
@@ -79,6 +83,13 @@ async def _background_startup() -> None:
     if perf_diag.ENABLED:
         asyncio.create_task(perf_diag.watchdog(), name="perf-watchdog")
     await hub.start()
+    email_store.bind(hub.store)
+    email_triggers._STATE["store_for"] = hub.store_for
+    if config.SCRAPE_ROLE != "web" and config.EMAIL_AUTOMATION:
+        # Split deployments run the queue in the scrape worker (one place sends the lifecycle mails).
+        from app.emailing import service as email_service
+
+        asyncio.create_task(email_service.run_email_loop(hub.store_for, hub.store), name="email-loop")
     from app import games as marketing_games
 
     marketing_games.schedule_pool_refresh(hub.store)
@@ -444,13 +455,16 @@ async def _send_verification_email(request: Request, user: dict[str, Any]) -> bo
             print("[verify] SMTP není nastavené, ověřovací e-mail nelze odeslat", flush=True)
         return False
     try:
-        await asyncio.to_thread(email_notify.send_email_verification, user["email"], verify_url)
-        return True
+        log_id = await asyncio.to_thread(email_triggers.on_verification_requested, user, verify_url)
+        row = await asyncio.to_thread(email_store.log_get, log_id) if log_id else None
+        if row and row["status"] == "sent":
+            return True
+        print(f"[verify] e-mail se nepodařilo odeslat: {(row or {}).get('error')}", flush=True)
     except Exception as exc:
         print(f"[verify] e-mail se nepodařilo odeslat: {exc}", flush=True)
-        if local_dev:
-            print(f"[verify] ověřovací odkaz pro {user['email']}: {verify_url}", flush=True)
-        return False
+    if local_dev:
+        print(f"[verify] ověřovací odkaz pro {user['email']}: {verify_url}", flush=True)
+    return False
 
 
 _VERIFY_EXEMPT = ("/api/auth/", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
@@ -964,6 +978,8 @@ def robots_txt() -> Response:
         "Content-Signal: ai-train=yes, search=yes, ai-input=yes\n"
         "Allow: /\n"
         "Disallow: /admin\n"
+        "Disallow: /e/\n"
+        "Disallow: /odhlasit\n"
         "Disallow: /api/\n"
         "Disallow: /prihlaseni\n"
         "Disallow: /heslo\n"
@@ -1528,6 +1544,8 @@ async def telemetry(request: Request, payload: dict[str, Any] | None = Body(None
 async def auth_register_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     _rate_limit_or_429(request, "auth_register", "ip", 5, 3600)
     body = payload or {}
+    if body.get("terms") is not True:
+        raise HTTPException(400, "Pro registraci je nutný souhlas s obchodními podmínkami.")
     try:
         user, token = await _auth_db(
             user_account.register,
@@ -1589,10 +1607,14 @@ async def auth_forgot_api(request: Request, payload: dict[str, Any] | None = Bod
             raise HTTPException(503, "Odesílání e-mailů není nastavené (SMTP_HOST / SMTP_FROM)")
         base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"
         reset_url = f"{base}/heslo?token={token}"
+        target = await _auth_db(user_registry.get_user_by_email, hub.store, email)
         try:
-            await asyncio.to_thread(mail_notify.send_password_reset, email, reset_url)
+            log_id = await asyncio.to_thread(email_triggers.on_password_reset_requested, target or email, reset_url)
+            row = await asyncio.to_thread(email_store.log_get, log_id) if log_id else None
         except Exception as exc:
             raise HTTPException(502, f"E-mail se nepodařilo odeslat: {exc}") from exc
+        if not row or row["status"] != "sent":
+            raise HTTPException(502, f"E-mail se nepodařilo odeslat: {(row or {}).get('error') or 'neznámá chyba'}")
     # Stejná odpověď i když účet neexistuje — neprozrazujeme e-maily.
     return {"ok": True}
 
@@ -1623,6 +1645,7 @@ async def auth_verify_email(token: str = "") -> dict:
     user = await _auth_db(user_registry.verify_email_with_token, hub.store, token)
     if not user:
         raise HTTPException(400, "Ověřovací odkaz je neplatný nebo vypršel")
+    asyncio.create_task(asyncio.to_thread(email_triggers.on_verified, user), name="email-on-verified")
     return {"ok": True}
 
 
@@ -1816,15 +1839,63 @@ async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_se
 
 
 @app.post("/api/auth/password")
-async def auth_password(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+async def auth_password(request: Request, payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     user = _current_user(realitify_session)
     body = payload or {}
     try:
         token = user_account.change_password(hub.store, str(user.get("id")), str(body.get("current") or ""), str(body.get("new") or ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    email_triggers.on_password_changed(user, f"{_site_base(request)}/heslo")
     response = JSONResponse({"ok": True})
     _set_session_cookie(response, token)
+    return response
+
+
+@app.post("/api/auth/email")
+async def auth_change_email(request: Request, payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    """Change the login e-mail (password required). The new address has to be confirmed."""
+    user = _current_user(realitify_session)
+    body = payload or {}
+    _rate_limit_or_429(request, "auth_email", f"{_client_ip(request)}:{user['id']}", 5, 3600)
+    old_email = str(user.get("email") or "")
+    if not await _auth_db(user_registry.verify_user_password, hub.store, old_email, str(body.get("password") or "")):
+        raise HTTPException(400, "Heslo nesedí")
+    try:
+        changed = await _auth_db(user_registry.change_email, hub.store, str(user["id"]), str(body.get("email") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    ustore = hub.store_for(str(user["id"]))
+    record = user_account.account_record(ustore)
+    record.update({"email": changed["email"], "email_verified": False})
+    user_account.save_account(ustore, record)
+    token = await _auth_db(user_registry.create_email_verification, hub.store, str(user["id"]))
+    verify_url = f"{_site_base(request)}/overeni?token={token}"
+    email_triggers.on_email_changed(changed, old_email, changed["email"], verify_url)
+    return {"ok": True, "email": changed["email"], "email_verified": False}
+
+
+@app.post("/api/auth/delete")
+async def auth_delete_account(request: Request, payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    """Delete the account for good (password required): cancels billing, removes data, sends the confirmation."""
+    user = _current_user(realitify_session)
+    body = payload or {}
+    _rate_limit_or_429(request, "auth_delete", f"{_client_ip(request)}:{user['id']}", 5, 3600)
+    if not await _auth_db(user_registry.verify_user_password, hub.store, str(user.get("email") or ""), str(body.get("password") or "")):
+        raise HTTPException(400, "Heslo nesedí")
+    if user.get("role") == "admin" or user_registry.is_admin(user):
+        raise HTTPException(400, "Účet administrátora nelze smazat")
+    uid = str(user["id"])
+    ustore = hub.store_for(uid)
+    try:
+        stripe_billing._cancel_stripe_now(ustore, ustore.billing_record() or {})
+    except Exception:
+        logger.exception("Zrušení předplatného při mazání účtu selhalo")
+    await _auth_db(user_registry.delete_user, hub.store, uid)
+    hub.drop_store_cache(uid)
+    asyncio.create_task(asyncio.to_thread(email_triggers.on_account_deleted, user), name="email-account-deleted")
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(user_account.SESSION_COOKIE, path="/")
     return response
 
 
@@ -1839,6 +1910,50 @@ def _admin_store(token: str | None) -> tuple[dict[str, Any], Store]:
     """Admin user + their private store (the store the admin panel operates on)."""
     user = _admin_user(token)
     return user, hub.store_for(str(user.get("id")))
+
+
+app.include_router(email_admin_api.build_router(_admin_user, hub.store_for))
+
+
+@app.get("/e/o/{token}.gif", include_in_schema=False)
+async def email_open_pixel(token: str) -> Response:
+    await asyncio.to_thread(email_tracking.record_open, token)
+    return Response(email_tracking.PIXEL_GIF, media_type="image/gif", headers={"Cache-Control": "no-store, max-age=0"})
+
+
+@app.get("/e/c/{token}", include_in_schema=False)
+async def email_click_redirect(token: str, u: str = "") -> Response:
+    target = await asyncio.to_thread(email_tracking.resolve_click, token, u)
+    return RedirectResponse(target or "/", status_code=302)
+
+
+@app.get("/e/a/{token}", include_in_schema=False)
+async def email_action_link(token: str, a: str = "") -> Response:
+    user_id = email_tracking.parse_action(token, a)
+    if not user_id:
+        return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
+    message = await asyncio.to_thread(email_triggers.handle_action, user_id, a, hub.store_for)
+    import html as _html
+
+    return HTMLResponse(email_tracking.page("Hotovo", f"<p>{_html.escape(message)}</p>"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/odhlasit", include_in_schema=False)
+async def email_unsubscribe_page(token: str = "") -> Response:
+    if not email_tracking.parse_unsubscribe_token(token):
+        return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
+    return HTMLResponse(email_tracking.unsubscribe_page(token), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/odhlasit", include_in_schema=False)
+async def email_unsubscribe_submit(request: Request, token: str = "") -> Response:
+    user_id = email_tracking.parse_unsubscribe_token(token)
+    if not user_id:
+        return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
+    form = await request.form()
+    resubscribe = str(form.get("action") or "") == "resubscribe"
+    await _auth_db(user_registry.set_marketing_unsub, hub.store, user_id, not resubscribe)
+    return HTMLResponse(email_tracking.unsubscribe_page(token, done=not resubscribe, resubscribed=resubscribe))
 
 
 @app.post("/api/admin/login")
@@ -3511,7 +3626,12 @@ async def save_monitor(
         raise HTTPException(400, "Chybí URL hledání. Vyplňte ho tlačítkem „Použít URL v profilu“.")
     existing = ustore.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
     try:
-        saved = ustore.save_monitor(payload)
+        try:
+            saved = ustore.save_monitor(payload)
+        except ValueError as exc:
+            if "Limit tarifu" in str(exc):
+                asyncio.create_task(asyncio.to_thread(email_triggers.on_dog_limit_hit, ustore), name="email-dog-limit")
+            raise
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     if existing is None:

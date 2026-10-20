@@ -25,7 +25,7 @@ def client():
 def _register(client, email="sec-test@example.com"):
     return client.post(
         "/api/auth/register",
-        json={"name": "Test Uživatel", "email": email, "password": "testpassword123"},
+        json={"name": "Test Uživatel", "email": email, "password": "testpassword123", "terms": True},
     )
 
 
@@ -80,7 +80,7 @@ def test_register_rate_limited(client):
     for i in range(6):
         r = client.post(
             "/api/auth/register",
-            json={"name": "Test", "email": f"rl{i}@example.com", "password": "testpassword123"},
+            json={"name": "Test", "email": f"rl{i}@example.com", "password": "testpassword123", "terms": True},
         )
     assert r.status_code == 429, f"očekáváno 429, je {r.status_code}"
 

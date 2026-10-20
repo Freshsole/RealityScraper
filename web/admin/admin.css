@@ -4613,3 +4613,67 @@ img {
 .ad-leads-tbl .ad-utbl-row {
   min-height: 52px;
 }
+
+/* ---- E-maily (em-) ---- */
+.ad-emails .ad-pagehead { margin-bottom: 16px; }
+.em-tabs { display: inline-flex; gap: 2px; padding: 4px; margin: 16px 0 24px; border-radius: 999px; background: var(--white); border: 1px solid var(--line); }
+.em-tabs a { padding: 8px 20px; border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--body); }
+.em-tabs a.is-on { background: var(--forest); color: #fff; }
+.em-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; margin-top: 16px; padding: 12px 20px; border-radius: 16px; background: var(--white); border: 1px solid var(--line); font-size: 13px; }
+.em-sub, .em-name small, .em-tr small { color: var(--body); font-size: 12px; font-weight: 400; }
+.em-pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--track); color: var(--forest); white-space: nowrap; }
+.em-pill.em-sent { background: var(--mint); }
+.em-pill.em-failed { background: #fbe3e3; color: var(--sold); }
+.em-pill.em-queued, .em-pill.em-sending { background: #fff3cf; color: #7a5b00; }
+.em-pill.em-skipped, .em-pill.em-canceled { background: var(--track); color: var(--body); }
+.em-err { color: var(--sold); font-style: normal; font-size: 12px; }
+.em-groups { display: flex; flex-direction: column; gap: 32px; }
+.em-group > .ad-kicker { margin-bottom: 12px; }
+.ad-card.em-card-flush { padding: 8px 0; overflow: hidden; }
+.em-tbl { min-width: 760px; }
+.em-tr { display: grid; grid-template-columns: minmax(0, 2.6fr) 1fr 1.6fr 1fr 1fr 1.3fr; gap: 16px; align-items: center; padding: 14px 24px; border-top: 1px solid var(--line); font-size: 13px; color: var(--forest); }
+a.em-tr:hover, .em-log-tr[data-id]:hover { background: var(--canvas); cursor: pointer; }
+.em-th { border-top: 0; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--body); }
+.em-th:hover { background: none !important; cursor: default !important; }
+.em-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.em-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.em-log-tr { grid-template-columns: 1.2fr 1.4fr 1.6fr 2fr 1.4fr .8fr .7fr; }
+.em-camp-tr { grid-template-columns: minmax(0, 2.4fr) 1fr 1.2fr .8fr 1fr .8fr .8fr; }
+.em-trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.em-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 24px; }
+.em-filters select, .em-filters input, .em-test input, .em-seg select, .em-form select { height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--white); font-size: 13px; }
+.em-filters input { flex: 1; min-width: 200px; }
+.em-counts { display: flex; flex-wrap: wrap; gap: 20px; padding: 0 24px 12px; font-size: 13px; }
+.em-pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px; font-size: 13px; }
+.em-pager button[disabled] { opacity: .4; cursor: default; }
+.em-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.em-form { display: flex; flex-direction: column; gap: 16px; padding: 28px; }
+.em-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+.em-form .cms-field select { width: 100%; }
+.em-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; font-size: 12px !important; line-height: 1.5; }
+.em-toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; }
+.em-vars { display: flex; flex-direction: column; gap: 8px; }
+.em-vars > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.em-var { padding: 4px 10px; border-radius: 999px; border: 0; background: var(--mint); color: var(--forest); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.em-var:hover { background: var(--green); }
+.em-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.em-form .em-actions { margin: 0; }
+.em-test { display: inline-flex; gap: 8px; margin-left: auto; }
+.em-preview { position: sticky; top: 0; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.em-prev-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.em-frame { width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+.em-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.em-checks { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 13px; }
+.em-audience { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.em-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(14, 15, 12, .55); }
+.em-modal[hidden] { display: none; }
+.em-modal-card { width: min(760px, 100%); max-height: 100%; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+@media (max-width: 1100px) {
+  .em-edit { grid-template-columns: 1fr; }
+  .em-preview { position: static; }
+}
+@media (max-width: 760px) {
+  .ad-emails.ad-main, .ad-main.ad-emails { padding: 24px 16px 60px; }
+  .em-seg { grid-template-columns: 1fr; }
+  .em-test { margin-left: 0; width: 100%; }
+}

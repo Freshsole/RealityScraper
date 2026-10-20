@@ -869,6 +869,7 @@ if (register) {
         email: register.querySelector("#email")?.value.trim() || "",
         password: pw.value,
         promo,
+        terms: register.querySelector("#reg-agree").checked,
       });
       rememberNext();
       if (created && created.email_verified === false) {

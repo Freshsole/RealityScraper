@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import calendar
@@ -361,9 +363,21 @@ def sync_subscription(store: Store, subscription: Any, customer_id: str | None =
         "schedule_id": schedule_id or "",
         "payment": _card_from_customer(customer) if customer else None,
     }
+    before = dict(store.billing_record() or {})
     store.save_billing_record(record)
     apply_watch_limit(store)
+    _email_hook(store, "sync", None, before)
     return billing_state(store)
+
+
+def _email_hook(store: Store, etype: str, obj: Any, before: dict[str, Any]) -> None:
+    """Automatic e-mails (trial, cancellation, end of subscription, invoices); never breaks billing."""
+    try:
+        from app.emailing import triggers
+
+        triggers.on_billing_event(store, etype, obj, before, dict(store.billing_record() or {}))
+    except Exception:
+        logging.getLogger(__name__).exception("E-mail k platbě se nepodařilo zařadit")
 
 
 def sync_checkout_session(store: Store, session_id: str) -> dict[str, Any]:
@@ -1575,6 +1589,13 @@ def handle_webhook(store: Store, payload: bytes, signature: str | None) -> dict[
             state = sync_subscription(store, sub_id)
             apply_watch_limit(store)
             return state
+    if etype in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment_failed"):
+        sub_id = _sget(obj, "subscription") or _sget(_sget(_sget(obj, "parent"), "subscription_details"), "subscription")
+        if sub_id:
+            sync_subscription(store, sub_id if isinstance(sub_id, str) else _sid(sub_id))
+            apply_watch_limit(store)
+        current = dict(store.billing_record() or {})
+        _email_hook(store, etype, obj, current)
     return billing_state(store)
 
 

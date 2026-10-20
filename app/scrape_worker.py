@@ -37,6 +37,7 @@ class ScrapeWorker:
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._ssr_task: asyncio.Task[None] | None = None
         self._stall_task: asyncio.Task[None] | None = None
+        self._email_task: asyncio.Task[None] | None = None
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
@@ -66,6 +67,12 @@ class ScrapeWorker:
         self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
         self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
         self._stall_task = asyncio.create_task(self._stall_dump_loop(), name="worker-stall-dump")
+        from app.emailing import service as email_service, store as email_store
+
+        email_store.bind(self.hub.store)
+        self._email_task = asyncio.create_task(
+            email_service.run_email_loop(self.hub.store_for, self.hub.store), name="worker-email-loop"
+        )
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -100,7 +107,7 @@ class ScrapeWorker:
                 parse_pool.close()
             except Exception:
                 pass
-            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task):
+            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task, self._email_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
