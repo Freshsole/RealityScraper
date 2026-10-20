@@ -172,7 +172,12 @@ def register(
     first, last = split_name(name)
     if not first:
         raise ValueError("Zadej jméno a příjmení")
-    promo = pending_promo_for_signup(promo_code)
+    try:
+        promo = pending_promo_for_signup(promo_code)
+    except ValueError:
+        # An unknown/expired promo code (stale ?promo= link, code from another Stripe mode)
+        # must never block sign-up; the account is created without a discount.
+        promo = ""
     user = user_registry.create_user(
         global_store,
         email=email_norm,
