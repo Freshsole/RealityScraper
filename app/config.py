@@ -214,6 +214,8 @@ EMAIL_STORY_REWARD = os.getenv("EMAIL_STORY_REWARD", "poděkováním").strip() o
 EMAIL_AUTOMATION = os.getenv("EMAIL_AUTOMATION", "1").strip() in {"1", "true", "yes"}
 # Temporary pause: only transactional e-mails (account, billing) leave; alerts, lifecycle and campaigns are skipped.
 EMAIL_ONLY_TRANSACTIONAL = os.getenv("EMAIL_ONLY_TRANSACTIONAL", "0").strip().lower() in {"1", "true", "yes"}
+# Alerts off, everything else (lifecycle, campaigns, transactional) keeps sending. Browser push is not affected.
+EMAIL_ALERTS_PAUSED = os.getenv("EMAIL_ALERTS_PAUSED", "0").strip().lower() in {"1", "true", "yes"}
 # Amazon SES (SMTP interface): optional configuration set + SNS webhook protection + send rate limits.
 SES_CONFIGURATION_SET = os.getenv("SES_CONFIGURATION_SET", "").strip()
 # Optional separate set for the transactional stream (falls back to SES_CONFIGURATION_SET).

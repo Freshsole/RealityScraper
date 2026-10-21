@@ -90,10 +90,12 @@ def _throttle() -> float:
 
 
 def paused_stream(stream: str, meta: Mapping[str, Any] | None = None) -> bool:
-    """EMAIL_ONLY_TRANSACTIONAL: everything except transactional mail (and admin tests) is held back."""
-    if not config.EMAIL_ONLY_TRANSACTIONAL or stream == "transactional":
+    """EMAIL_ONLY_TRANSACTIONAL holds back everything except transactional mail, EMAIL_ALERTS_PAUSED only alerts (admin tests always go)."""
+    if (meta or {}).get("test"):
         return False
-    return not (meta or {}).get("test")
+    if config.EMAIL_ALERTS_PAUSED and stream == "alerts":
+        return True
+    return bool(config.EMAIL_ONLY_TRANSACTIONAL and stream != "transactional")
 
 
 def _is_stale(row: dict[str, Any]) -> bool:

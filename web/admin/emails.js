@@ -60,7 +60,7 @@
       const s = st.senders || {};
       const q = st.queue || {};
       return `<div class="em-status">
-        ${st.only_transactional ? `<span class="em-paused">Pozastaveno: odchází jen transakční e-maily</span>` : ""}
+        ${st.only_transactional ? `<span class="em-paused">Pozastaveno: odchází jen transakční e-maily</span>` : st.alerts_paused ? `<span class="em-paused">E-mailová upozornění na nabídky jsou vypnutá</span>` : ""}
         <span>${pill(st.smtp_configured ? "sent" : "failed", st.smtp_configured ? "SMTP připraveno" : "SMTP není nastavené")}</span>
         <span>Fronta: <b>${n(q.queued)}</b></span>
         <span>Chyby za 24 h: <b>${n(q.failed_24h)}</b></span>

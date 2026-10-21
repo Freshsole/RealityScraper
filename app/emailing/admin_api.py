@@ -285,6 +285,7 @@ def build_router(admin_user: AdminUser, store_for: StoreFor) -> APIRouter:
                 "suppressed": estore.count_suppressed(),
                 "paused_sec": int(service.paused_for()),
                 "only_transactional": bool(config.EMAIL_ONLY_TRANSACTIONAL),
+                "alerts_paused": bool(config.EMAIL_ALERTS_PAUSED),
                 "verification": estore.verification_setting(),
                 "smtp_configured": email_notify.configured(),
                 "senders": service.senders(),

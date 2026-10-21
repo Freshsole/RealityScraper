@@ -1692,7 +1692,7 @@ async def auth_me(realitify_session: str | None = Cookie(default=None, alias="re
     required = await _auth_db(email_store.verification_required)
     return {
         **user,
-        "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL),
+        "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL or config.EMAIL_ALERTS_PAUSED),
         "email_verification_required": required,
     }
 

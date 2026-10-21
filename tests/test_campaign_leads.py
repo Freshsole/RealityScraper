@@ -60,3 +60,14 @@ def test_unsubscribe_suppresses_lead(env):
     assert emails({"audience": "leads"}) == []
     estore.unsuppress("lead@example.cz")
     assert emails({"audience": "leads"}) == ["lead@example.cz"]
+
+
+def test_alerts_pause_blocks_only_alerts(monkeypatch):
+    monkeypatch.setattr(config, "EMAIL_ONLY_TRANSACTIONAL", False)
+    monkeypatch.setattr(config, "EMAIL_ALERTS_PAUSED", True)
+    assert service.paused_stream("alerts") is True
+    assert service.paused_stream("alerts", {"test": True}) is False
+    for stream in ("lifecycle", "transactional"):
+        assert service.paused_stream(stream) is False
+    monkeypatch.setattr(config, "EMAIL_ALERTS_PAUSED", False)
+    assert service.paused_stream("alerts") is False
