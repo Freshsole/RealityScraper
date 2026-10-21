@@ -2022,11 +2022,6 @@ class Store:
 
     def _backfill_catalog_canonical(self, conn: sqlite3.Connection, *, merge: bool = False) -> None:
         try:
-            # Partial index: finding the (normally zero) rows without a canonical key must not scan the wide table.
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_catalog_no_canonical ON catalog_listings(listing_key)"
-                " WHERE IFNULL(canonical_key, '') = ''"
-            )
             missing = conn.execute(
                 "SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras, gone, id, last_seen FROM catalog_listings WHERE IFNULL(canonical_key, '') = ''"
             ).fetchall()
@@ -5111,9 +5106,6 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_first_seen ON catalog_listings(first_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
-        # Admin ops/catalog-quality aggregates (price_czk = 0 counts, duplicate groups) were full table scans.
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_price ON catalog_listings(price_czk)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor_canonical ON listings(monitor_id, canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_portal_seen ON catalog_listings(portal, last_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_portal ON catalog_listings(gone, portal)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_last_seen ON catalog_listings(gone, last_seen DESC)")
@@ -5202,6 +5194,24 @@ class Store:
         if "portals" not in cols:
             conn.execute("ALTER TABLE monitors ADD COLUMN portals TEXT NOT NULL DEFAULT 'all'")
             conn.execute("UPDATE monitors SET portals = 'all' WHERE IFNULL(portals, '') = ''")
+
+    _BACKGROUND_INDEXES = (
+        # Admin ops/catalog-quality aggregates (price_czk = 0 counts, duplicate groups) were full table scans.
+        "CREATE INDEX IF NOT EXISTS idx_catalog_price ON catalog_listings(price_czk)",
+        "CREATE INDEX IF NOT EXISTS idx_listings_monitor_canonical ON listings(monitor_id, canonical_key)",
+        # Finding the (normally zero) rows without a canonical key must not scan the wide table.
+        "CREATE INDEX IF NOT EXISTS idx_catalog_no_canonical ON catalog_listings(listing_key)"
+        " WHERE IFNULL(canonical_key, '') = ''",
+    )
+
+    def ensure_background_indexes(self) -> None:
+        """Build the big read-path indexes after startup, never in Store.__init__ (that blocks /health on a large volume)."""
+        for sql in self._BACKGROUND_INDEXES:
+            try:
+                with self.connect() as conn:
+                    conn.execute(sql)
+            except sqlite3.Error as exc:
+                print(f"[store] background index skipped: {exc}", flush=True)
 
     def _fix_sreality_images(self, conn: sqlite3.Connection) -> None:
         # One-off backfill: every write path already goes through cdn_image_url. Re-running the LIKE '%..%' scans over

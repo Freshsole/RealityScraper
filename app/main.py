@@ -122,6 +122,7 @@ async def _background_startup() -> None:
         except Exception as exc:
             print(f"seo sitemap warm failed: {exc}", flush=True)
 
+    threading.Thread(target=hub.store.ensure_background_indexes, name="store-indexes", daemon=True).start()
     threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
     threading.Thread(target=_diag_localhost_health, name="localhost-diag", daemon=True).start()
     try:
