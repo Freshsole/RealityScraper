@@ -221,6 +221,12 @@ SES_CONFIGURATION_SET_TRANSACTIONAL = os.getenv("SES_CONFIGURATION_SET_TRANSACTI
 SES_WEBHOOK_TOKEN = os.getenv("SES_WEBHOOK_TOKEN", "").strip()
 SES_SNS_TOPIC_ARN = os.getenv("SES_SNS_TOPIC_ARN", "").strip()
 
+# Google Form "měsíc PRO zdarma": odpovědi jdou do Google Sheets publikovaného jako CSV (Soubor > Sdílet > Publikovat na webu)
+FREE_PRO_SHEET_CSV_URL = os.getenv("FREE_PRO_SHEET_CSV_URL", "").strip()
+FREE_PRO_DISCORD_WEBHOOK_URL = _webhook_env("FREE_PRO_DISCORD_WEBHOOK_URL")
+FREE_PRO_DAYS = int(os.getenv("FREE_PRO_DAYS", "30") or 30)
+FREE_PRO_POLL_SECONDS = int(os.getenv("FREE_PRO_POLL_SECONDS", "300") or 300)
+
 
 def _env_float(name: str, default: float) -> float:
     try:

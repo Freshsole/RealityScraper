@@ -111,6 +111,8 @@ def sign(prefix: str = "") -> str:
     return p(f"{prefix}Tým Realitify".strip(), color=FOREST, mt=8, mb=0)
 
 
+FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLScjJhsLzt57s2Qa4Atc850IHKMM_WTvRtjKYBynS2ui5DjOxA/viewform?usp=dialog"
+
 HI = p("{{osloveni}}")
 HI_PLAIN = p("Dobrý den,")
 
@@ -506,6 +508,21 @@ def bodies() -> dict[str, Body]:
         + button("Návod na napojení")
         + small("Návod je pro ChatGPT, Claude i Grok. Váš osobní klíč najdete v Nastavení → MCP.")
         + sign()
+    )
+    B["free_pro_form"] = (
+        '<img src="{{base_url}}/static/site/assets/email-pro-free.png" width="520" alt="Realitify PRO zdarma" '
+        'style="display:block;width:100%;max-width:520px;height:auto;margin:0 auto 20px;">'
+        + h1("Měsíc Realitify PRO zdarma")
+        + HI
+        + p("kvůli nečekanému nárůstu uživatelů nám v poslední době nefungovaly e-maily tak, jak měly. Jako omluvu vám dáme <strong>Realitify PRO na měsíc zdarma</strong>.")
+        + p("Stačí vyplnit krátký formulář a tarif PRO vám aktivujeme.")
+        + p("Do doby, než e-maily znovu rozjedeme, doporučujeme zapnout si <strong>upozornění v prohlížeči</strong>. Nové nabídky vám tak dorazí hned.")
+        + button("Vyplnit formulář", FORM_URL)
+        + sign()
+        + rule()
+        + small("Omlouváme se. Dodavatel automatických e-mailových upozornění má momentálně problémy, "
+                "a proto jsme museli dočasně vypnout automatické e-maily s novými nemovitostmi. "
+                "V nejbližších dnech by měly e-maily opět fungovat jako dřív.")
     )
     return B
 

@@ -318,6 +318,10 @@ TEMPLATES: tuple[TemplateDef, ...] = (
         "Aktivace PRO (trial i placené), +1 den po 4.1.", "Uživatel MCP ještě nenapojil.",
         "Hledejte byty přímo v ChatGPT, Claude nebo Groku", "Napojení zabere 2 minuty.",
         [_link("Odkaz na návod k napojení")]),
+    _mk("6.5", "free_pro_form", 6, "Realitify PRO na měsíc zdarma (formulář)", L,
+        "Ručně / kampaň: omluva za výpadek e-mailových upozornění.", "Žádná.",
+        "Měsíc Realitify PRO zdarma", "Stačí vyplnit krátký formulář. Omlouváme se za výpadek upozornění.",
+        []),
 )
 
 _BY_KEY = {t.key: t for t in TEMPLATES}

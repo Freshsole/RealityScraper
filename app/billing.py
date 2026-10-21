@@ -155,6 +155,36 @@ def empty_billing() -> dict[str, Any]:
     }
 
 
+def comp_plan_of(record: dict[str, Any]) -> str:
+    """Granted (comp) plan, or "" when none or when a time-limited grant (``comp_until``) has run out."""
+    plan = record.get("comp_plan") if record.get("comp_plan") in PLANS else ""
+    until = str(record.get("comp_until") or "")
+    if plan and until:
+        try:
+            when = datetime.fromisoformat(until.replace("Z", "+00:00"))
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) >= when:
+                return ""
+        except ValueError:
+            pass
+    return plan
+
+
+def expire_comp_if_due(store: Store) -> bool:
+    """Drop an expired time-limited grant and re-apply the watch limit of the underlying plan."""
+    record = store.billing_record() or {}
+    if not record.get("comp_plan") or not record.get("comp_until") or comp_plan_of(record):
+        return False
+    record["comp_plan"] = ""
+    record["comp_until"] = ""
+    store.save_billing_record(record)
+    apply_watch_limit(store)
+    append_billing_log(store, {"kind": "Konec grantu", "plan": "PRO", "amount": "0 Kč", "status": "Hotovo", "ok": True,
+                               "note": "Skončil časově omezený tarif zdarma"})
+    return True
+
+
 def billing_state(store: Store) -> dict[str, Any]:
     data = {**empty_billing(), **(store.billing_record() or {})}
     plan = data.get("plan") if data.get("plan") in PLANS else "free"
@@ -186,7 +216,7 @@ def billing_state(store: Store) -> dict[str, Any]:
     data["pending_label"] = PLANS[pending]["label"] if pending else ""
     data["pending_at"] = data.get("pending_at") or None
     data["stripe_plan"] = plan
-    comp_plan = data.get("comp_plan") if data.get("comp_plan") in PLANS else ""
+    comp_plan = comp_plan_of(data)
     data["comp"] = bool(comp_plan)
     if comp_plan:
         plan = comp_plan
@@ -205,7 +235,7 @@ def billing_state(store: Store) -> dict[str, Any]:
 
 def watch_limit_for(store: Store) -> int | None:
     record = store.billing_record() or {}
-    plan = record.get("comp_plan") if record.get("comp_plan") in PLANS else (record.get("plan") or "free")
+    plan = comp_plan_of(record) or (record.get("plan") or "free")
     return PLANS.get(plan, PLANS["free"])["watch_limit"]
 
 
@@ -214,6 +244,10 @@ def apply_watch_limit(store: Store) -> list[str]:
 
 
 def settle_pending_if_due(store: Store) -> None:
+    try:
+        expire_comp_if_due(store)
+    except Exception:
+        pass
     record = store.billing_record() or {}
     pending_at = record.get("pending_at") or ""
     if not pending_at or not config.STRIPE_SECRET_KEY or not record.get("customer_id"):
@@ -1499,6 +1533,7 @@ def admin_set_plan(store: Store, plan_id: str, charge: bool, email: str = "") ->
         )
         return {"ok": True, "mode": "charge", "billing": result.get("billing") or billing_state(store), "message": note, "charged_czk": charged}
     record["comp_plan"] = plan_id
+    record["comp_until"] = ""
     record["plan"] = plan_id
     record["status"] = "active"
     record["comp_at"] = datetime.now(timezone.utc).isoformat()

@@ -52,6 +52,7 @@ from app import whatsapp as wa_notify
 from app import agent_discovery
 from app import agents as agent_hub
 from app import mcp_oauth
+from app import free_pro
 
 install_stdout_tee()
 from app import extension_score as ext_score
@@ -91,6 +92,8 @@ async def _background_startup() -> None:
         from app.emailing import service as email_service
 
         asyncio.create_task(email_service.run_email_loop(hub.store_for, hub.store), name="email-loop")
+    if config.FREE_PRO_SHEET_CSV_URL and config.SCRAPE_ROLE != "worker":
+        asyncio.create_task(free_pro.run_sheet_loop(hub.store, hub.store_for), name="free-pro-sheet")
     from app import games as marketing_games
 
     marketing_games.schedule_pool_refresh(hub.store)
