@@ -53,6 +53,7 @@ from app import whatsapp as wa_notify
 from app import agent_discovery
 from app import agents as agent_hub
 from app import mcp_oauth
+from app import admin_mcp
 from app import free_pro
 
 install_stdout_tee()
@@ -4638,6 +4639,72 @@ async def mcp_endpoint(request: Request):
         return _mcp_http(request, out)
     result = agent_hub.handle_mcp(mcp_store, payload if isinstance(payload, dict) else {}, _shared_catalog_for(mcp_store))
     return _mcp_http(request, result)
+
+
+def _require_https(request: Request) -> None:
+    """Admin MCP carries full admin power: refuse plaintext transport when the site is served over HTTPS."""
+    if config.PUBLIC_BASE_URL.startswith("https://"):
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",")[0].strip().lower()
+        if proto != "https":
+            raise HTTPException(403, "Admin MCP je dostupné jen přes HTTPS")
+
+
+@app.get("/api/admin/mcp-key")
+async def admin_mcp_key_get(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    admin = await _admin_user_async(realitify_admin)
+    key = await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, admin_mcp.get_key, hub.store, str(admin.get("id")))
+    return {"key": key, "mcp_url": admin_mcp.mcp_url(), "snippets": admin_mcp.connector_snippets()}
+
+
+@app.post("/api/admin/mcp-key")
+async def admin_mcp_key_create(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    admin = await _admin_user_async(realitify_admin)
+    try:
+        created = await asyncio.get_running_loop().run_in_executor(
+            _ADMIN_POOL, admin_mcp.create_key, hub.store, admin, str((payload or {}).get("name") or "")
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"key": created, "snippets": admin_mcp.connector_snippets(created["token"])}
+
+
+@app.delete("/api/admin/mcp-key")
+async def admin_mcp_key_delete(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    admin = await _admin_user_async(realitify_admin)
+    try:
+        return await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, admin_mcp.delete_key, hub.store, str(admin.get("id")))
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.api_route("/mcp-admin", methods=["GET", "POST", "HEAD"])
+async def admin_mcp_endpoint(request: Request):
+    _require_https(request)
+    try:
+        admin = await asyncio.get_running_loop().run_in_executor(
+            _ADMIN_POOL, admin_mcp.authenticate, hub.store, request.headers.get("authorization")
+        )
+    except PermissionError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    if not admin_mcp.rate_ok(str(admin.get("_key_id"))):
+        raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
+    if request.method != "POST":
+        return {"name": "realitify-admin", "protocolVersion": admin_mcp.PROTOCOL, "mcp_url": admin_mcp.mcp_url()}
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        raise HTTPException(400, "Očekávám JSON-RPC") from exc
+    if isinstance(payload, list):
+        out = []
+        for msg in payload:
+            item = await admin_mcp.handle(app, hub.store, admin, msg if isinstance(msg, dict) else {})
+            if item is not None:
+                out.append(item)
+        return _mcp_http(request, out)
+    return _mcp_http(request, await admin_mcp.handle(app, hub.store, admin, payload if isinstance(payload, dict) else {}))
 
 
 @app.get("/api/v1/listings")

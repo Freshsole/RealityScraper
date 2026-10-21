@@ -2836,6 +2836,93 @@
     `;
   }
 
+  async function pageSettings() {
+    const data = await api("/api/admin/mcp-key");
+    const key = data.key;
+    const fmtTs = (iso) => (iso ? new Date(iso).toLocaleString("cs-CZ") : "nikdy");
+    const note = (msg) => {
+      const el = $("ad-toast");
+      if (!el) return;
+      el.textContent = msg;
+      el.hidden = false;
+      setTimeout(() => (el.hidden = true), 2500);
+    };
+    const copy = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        note("Zkopírováno");
+      } catch {
+        note("Kopírování se nepodařilo");
+      }
+    };
+    const snippetBlock = (title, text, id) => `<div class="ad-field">
+        <label>${esc(title)}</label>
+        <pre id="${id}" style="white-space:pre-wrap;word-break:break-all;background:#f6f7f9;padding:12px;border-radius:8px;font-size:12px">${esc(text)}</pre>
+        <button class="ad-btn soft" type="button" data-copy="${id}">Kopírovat</button>
+      </div>`;
+    const bind = () => {
+      main.querySelectorAll("[data-copy]").forEach((btn) =>
+        btn.addEventListener("click", () => copy($(btn.dataset.copy).textContent)),
+      );
+    };
+    const renderKey = (created) => {
+      const host = $("mcp-key-host");
+      if (created) {
+        host.innerHTML = `
+          <p class="ad-lead"><strong>Token se zobrazí jen teď.</strong> Ulož si ho, v databázi je jen jeho otisk.</p>
+          ${snippetBlock("Token", created.key.token, "mcp-tok")}
+          ${snippetBlock("Claude Code (terminál)", created.snippets.claude_code, "mcp-cli")}
+          ${snippetBlock("Konfigurace JSON (Cursor, Claude Desktop…)", created.snippets.json, "mcp-json")}
+          <button class="ad-btn ghost" type="button" id="mcp-done">Hotovo</button>`;
+        $("mcp-done").addEventListener("click", () => pageSettings());
+        bind();
+        return;
+      }
+      if (key) {
+        host.innerHTML = `
+          <p class="ad-lead">Aktivní přístup <strong>${esc(key.name)}</strong> (<code>${esc(key.prefix)}…</code>)<br />
+          Vytvořen: ${esc(fmtTs(key.created_at))} · naposledy použit: ${esc(fmtTs(key.last_used_at))}</p>
+          ${snippetBlock("MCP URL", data.mcp_url, "mcp-url")}
+          ${snippetBlock("Claude Code (terminál)", data.snippets.claude_code, "mcp-cli")}
+          <button class="ad-btn ghost" type="button" id="mcp-revoke">Zrušit přístup</button>`;
+        $("mcp-revoke").addEventListener("click", async () => {
+          if (!confirm("Zrušit admin MCP přístup? AI klienti s tímto tokenem přestanou fungovat.")) return;
+          await api("/api/admin/mcp-key", { method: "DELETE" });
+          pageSettings();
+        });
+        bind();
+        return;
+      }
+      host.innerHTML = `
+        <p class="ad-lead">Zatím nemáš žádný přístup.</p>
+        <div class="ad-field"><label for="mcp-name">Název (např. Claude Code na notebooku)</label>
+        <input id="mcp-name" type="text" maxlength="80" placeholder="Admin AI" /></div>
+        <p class="ad-err" id="mcp-err"></p>
+        <button class="ad-btn" type="button" id="mcp-create">Vytvořit přístup</button>`;
+      $("mcp-create").addEventListener("click", async () => {
+        try {
+          const created = await api("/api/admin/mcp-key", {
+            method: "POST",
+            body: JSON.stringify({ name: $("mcp-name").value }),
+          });
+          renderKey(created);
+        } catch (err) {
+          $("mcp-err").textContent = err.message;
+        }
+      });
+    };
+    main.innerHTML = `
+      <header class="ad-pagehead">
+        <h1 class="ad-h">Nastavení</h1>
+        <p class="ad-lead">Admin MCP: AI klient (Claude Code, Cursor…) dostane tvoje admin pravomoci: čte všechna data, volá každý API endpoint a může cokoli vytvářet, přepisovat i mazat. Každý admin má jeden přístup. Spojení jde jen přes HTTPS, token je uložen jako otisk a změny se zapisují do auditu.</p>
+      </header>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">Admin MCP přístup</h2>
+        <article class="ad-card" style="padding:20px"><div id="mcp-key-host"></div></article>
+      </section>`;
+    renderKey(null);
+  }
+
   const cmsPages =
     typeof window.AdCms === "function"
       ? window.AdCms({ api, esc, ico, $, main, fmtN, getMe: () => me })
@@ -2855,6 +2942,7 @@
     leady: pageLeads,
     fakturace: pageBilling,
     promo: pagePromo,
+    nastaveni: pageSettings,
     ...cmsPages,
     ...emailPages,
   };

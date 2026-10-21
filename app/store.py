@@ -2022,6 +2022,11 @@ class Store:
 
     def _backfill_catalog_canonical(self, conn: sqlite3.Connection, *, merge: bool = False) -> None:
         try:
+            # Partial index: finding the (normally zero) rows without a canonical key must not scan the wide table.
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_catalog_no_canonical ON catalog_listings(listing_key)"
+                " WHERE IFNULL(canonical_key, '') = ''"
+            )
             missing = conn.execute(
                 "SELECT listing_key, url, lat, lon, disposition, area_m2, price_czk, price_label, extras, gone, id, last_seen FROM catalog_listings WHERE IFNULL(canonical_key, '') = ''"
             ).fetchall()
@@ -5106,6 +5111,9 @@ class Store:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_canonical ON catalog_listings(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_first_seen ON catalog_listings(first_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_canonical ON listings(canonical_key)")
+        # Admin ops/catalog-quality aggregates (price_czk = 0 counts, duplicate groups) were full table scans.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_price ON catalog_listings(price_czk)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_listings_monitor_canonical ON listings(monitor_id, canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_portal_seen ON catalog_listings(portal, last_seen)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_portal ON catalog_listings(gone, portal)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_catalog_gone_last_seen ON catalog_listings(gone, last_seen DESC)")
@@ -5196,6 +5204,14 @@ class Store:
             conn.execute("UPDATE monitors SET portals = 'all' WHERE IFNULL(portals, '') = ''")
 
     def _fix_sreality_images(self, conn: sqlite3.Connection) -> None:
+        # One-off backfill: every write path already goes through cdn_image_url. Re-running the LIKE '%..%' scans over
+        # listings + listing_photos on every Store init cost ~2.5 s per process start (and per admin cold load).
+        if conn.execute("SELECT 1 FROM meta WHERE key = 'sreality_images_fixed_v1'").fetchone():
+            return
+        self._fix_sreality_images_scan(conn)
+        conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('sreality_images_fixed_v1', '1')")
+
+    def _fix_sreality_images_scan(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             UPDATE listings
