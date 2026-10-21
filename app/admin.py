@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import threading
@@ -631,83 +632,156 @@ def _signups_by_day(created: list[str], days: int = 30) -> list[int]:
     return [by_day.get((today - timedelta(days=i)).isoformat(), 0) for i in range(days, -1, -1)]
 
 
+def cached_payload(key: str, loader: Any, ttl: float = 30.0, max_stale: float = 3600.0) -> Any:
+    """Admin pages aggregate every user's own SQLite file: serve a fresh-enough copy at once and refresh in one
+    background thread (stale-while-revalidate), so opening a page never waits on a full scan twice."""
+    return stripe_billing.cached_stripe(f"admin_{key}", ttl, loader, max_stale=max_stale)
+
+
+def invalidate_payloads() -> None:
+    """After an admin action (block, plan change, broadcast...) the next page load must show the change."""
+    stripe_billing.invalidate_cache("admin_users", "admin_overview", "admin_monitors", "admin_notifications", "admin_billing")
+
+
+_USER_STAT_CACHE: dict[str, tuple[Any, float, dict[str, Any]]] = {}
+_USER_STAT_LOCK = threading.Lock()
+
+
+def _store_sig(uid: str) -> tuple[Any, ...]:
+    """Cheap change marker of a user's DB (main file + WAL): unchanged marker = unchanged stats."""
+    base = str(user_registry.user_store_path(uid))
+    sig: list[Any] = []
+    for suffix in ("", "-wal"):
+        try:
+            st = os.stat(base + suffix)
+            sig.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append(None)
+    return tuple(sig)
+
+
+def _user_stats(ustore: Store) -> dict[str, Any]:
+    """Everything the users table needs from one user's private store."""
+    out: dict[str, Any] = {"monitors": 0, "discord": False, "whatsapp": False, "plan": "free", "plan_label": "Zdarma",
+                           "hits": 0, "uniq": 0, "blocked": False, "recheck_at": 0.0}
+    try:
+        out["monitors"] = len(ustore.list_monitors())
+    except Exception:
+        pass
+    try:
+        out["discord"] = bool(user_account.discord_status(ustore).get("linked"))
+    except Exception:
+        pass
+    try:
+        wa = wa_notify.status(ustore) or {}
+        out["whatsapp"] = bool(wa.get("enabled") or wa.get("phone"))
+    except Exception:
+        pass
+    try:
+        billing = stripe_billing.billing_state(ustore)
+        out["plan"] = billing.get("plan") or "free"
+        out["plan_label"] = billing.get("label") or "Zdarma"
+        until = str((ustore.billing_record() or {}).get("comp_until") or "")
+        if until:  # a time-limited grant flips the plan without any DB write
+            parsed = _parse_iso(until)
+            out["recheck_at"] = parsed.timestamp() if parsed else 0.0
+    except Exception:
+        pass
+    try:
+        with ustore.connect() as conn:
+            out["hits"] = int(conn.execute("SELECT COUNT(*) FROM events WHERE kind IN ('new','changed')").fetchone()[0] or 0)
+            out["uniq"] = int(conn.execute(
+                "SELECT COUNT(DISTINCT listing_id) FROM events WHERE kind IN ('new','changed')"
+            ).fetchone()[0] or 0)
+    except Exception:
+        pass
+    try:
+        out["blocked"] = bool(_blocked(ustore))
+    except Exception:
+        pass
+    return out
+
+
+def _last_seen_maps(gstore: Store) -> tuple[dict[str, str], dict[str, str]]:
+    """Newest login per user id and newest presence per e-mail, two queries for the whole table."""
+    sessions: dict[str, str] = {}
+    presence: dict[str, str] = {}
+    try:
+        with gstore.connect() as conn:
+            for uid, at in conn.execute("SELECT user_id, MAX(created_at) FROM sessions GROUP BY user_id").fetchall():
+                if uid and at:
+                    sessions[str(uid)] = str(at)
+            try:
+                for mail, at in conn.execute(
+                    "SELECT lower(email), MAX(last_seen) FROM analytics_presence GROUP BY lower(email)"
+                ).fetchall():
+                    if mail and at:
+                        presence[str(mail)] = str(at)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return sessions, presence
+
+
 def users_payload(store: Store, store_for=None) -> dict[str, Any]:
-    """All registered users with per-user stats (each from their own store)."""
+    """All registered users with per-user stats.
+
+    The per-user numbers come from each user's own SQLite file, so they are cached by the file's change marker:
+    a refresh only re-reads users whose DB actually changed (and only builds their Store), the rest costs two
+    ``stat`` calls. Last activity is computed for everybody with two grouped queries instead of two per user.
+    """
     def _spc(n: int) -> str:
         return f"{int(n):,}".replace(",", " ")
 
-    def _ustore(uid: str) -> Store | None:
-        if store_for is None:
-            return None
-        try:
-            return store_for(uid)
-        except Exception:
-            return None
-
+    sessions, presence = _last_seen_maps(store)
+    now = time.time()
     rows: list[dict[str, Any]] = []
     for row in user_registry.list_users(store):
         uid = str(row.get("id") or "")
         if not uid:
             continue
-        ustore = _ustore(uid)
         email = (row.get("email") or "").strip()
         name = f"{(row.get('first') or '').strip()} {(row.get('last') or '').strip()}".strip() or "—"
-        monitors: list = []
-        disc = {"linked": False}
-        wa: dict = {}
-        billing = {"plan": "free", "label": "Zdarma"}
-        hits = 0
-        uniq = 0
+        stats: dict[str, Any] | None = None
+        if store_for is not None:
+            with _USER_STAT_LOCK:
+                cached = _USER_STAT_CACHE.get(uid)
+            if cached and cached[0] == _store_sig(uid) and (not cached[2].get("recheck_at") or now < cached[2]["recheck_at"]):
+                stats = cached[2]
+            else:
+                try:
+                    stats = _user_stats(store_for(uid))
+                    # Marker taken after the reads: opening a store may itself write (schema, defaults).
+                    with _USER_STAT_LOCK:
+                        _USER_STAT_CACHE[uid] = (_store_sig(uid), now, stats)
+                except Exception:
+                    stats = None
+        stats = stats or {"monitors": 0, "discord": False, "whatsapp": False, "plan": "free", "plan_label": "Zdarma",
+                          "hits": 0, "uniq": 0, "blocked": False}
         last_at = row.get("created_at")
-        blocked = False
-        if ustore is not None:
-            try:
-                monitors = ustore.list_monitors()
-            except Exception:
-                monitors = []
-            try:
-                disc = user_account.discord_status(ustore)
-            except Exception:
-                pass
-            try:
-                wa = wa_notify.status(ustore)
-            except Exception:
-                pass
-            try:
-                billing = stripe_billing.billing_state(ustore)
-            except Exception:
-                pass
-            try:
-                hits = _count_events(ustore)
-                with ustore.connect() as conn:
-                    uniq = int(conn.execute(
-                        "SELECT COUNT(DISTINCT listing_id) FROM events WHERE kind IN ('new','changed')"
-                    ).fetchone()[0] or 0)
-            except Exception:
-                pass
-            last_at = _admin_last_seen(store, row)
-            try:
-                blocked = _blocked(ustore)
-            except Exception:
-                pass
+        if store_for is not None:
+            for cand in (sessions.get(uid), presence.get(email.lower())):
+                if cand and (not last_at or cand > last_at):
+                    last_at = cand
         rows.append({
             "id": uid,
             "email": email,
             "name": name,
             "registered": fmt_date(row.get("created_at")),
             "registered_at": row.get("created_at") or "",
-            "status": "Zablokovaný" if blocked else "Aktivní",
-            "blocked": blocked,
-            "plan": billing.get("plan") or "free",
-            "plan_label": billing.get("label") or "Zdarma",
+            "status": "Zablokovaný" if stats["blocked"] else "Aktivní",
+            "blocked": stats["blocked"],
+            "plan": stats["plan"],
+            "plan_label": stats["plan_label"],
             "role": (row.get("role") or "user"),
-            "monitors": len(monitors),
-            "discord": bool(disc.get("linked")),
-            "whatsapp": bool((wa or {}).get("enabled") or (wa or {}).get("phone")),
+            "monitors": stats["monitors"],
+            "discord": stats["discord"],
+            "whatsapp": stats["whatsapp"],
             "activity": relative_short(last_at),
             "activity_at": last_at or "",
-            "hits": hits,
-            "notif": f"{_spc(hits)} / {_spc(uniq)}",
+            "hits": stats["hits"],
+            "notif": f"{_spc(stats['hits'])} / {_spc(stats['uniq'])}",
         })
     rows.sort(key=lambda r: (r.get("role") != "admin", r.get("registered_at") or ""))
     audit = _json_meta(store, "admin_audit", [])

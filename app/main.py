@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 import time
 from urllib.parse import quote, urlencode
@@ -1517,7 +1518,7 @@ async def guest_status(
 async def admin_guest_leads(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     rows = await asyncio.to_thread(guest_access.list_leads)
     return {"count": len(rows), "items": rows}
 
@@ -1699,7 +1700,7 @@ async def auth_me(realitify_session: str | None = Cookie(default=None, alias="re
 
 @app.get("/api/admin/settings/email-verification")
 async def admin_email_verification_get(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     return await asyncio.to_thread(email_store.verification_setting)
 
 
@@ -1708,7 +1709,7 @@ async def admin_email_verification_set(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    admin = _admin_user(realitify_admin)
+    admin = await _admin_user_async(realitify_admin)
     body = payload or {}
     if not isinstance(body.get("required"), bool):
         raise HTTPException(400, "Chybí pole required (true/false)")
@@ -1948,6 +1949,19 @@ def _admin_store(token: str | None) -> tuple[dict[str, Any], Store]:
     return user, hub.store_for(str(user.get("id")))
 
 
+# Admin auth reads the (write-contended) global DB and the first hub.store_for() builds the big catalog Store:
+# never do that on the event loop, and keep it off the pools that serve users (login, catalog).
+_ADMIN_POOL = ThreadPoolExecutor(max_workers=3, thread_name_prefix="rf-admin")
+
+
+async def _admin_user_async(token: str | None) -> dict[str, Any]:
+    return await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, _admin_user, token)
+
+
+async def _admin_store_async(token: str | None) -> tuple[dict[str, Any], Store]:
+    return await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, _admin_store, token)
+
+
 app.include_router(email_admin_api.build_router(_admin_user, hub.store_for))
 
 
@@ -2048,21 +2062,61 @@ async def admin_logout_api(realitify_admin: str | None = Cookie(default=None, al
     return response
 
 
+_ADMIN_WARM = {"at": 0.0, "busy": False}
+
+
+def _warm_admin_pages() -> None:
+    """The admin opens the panel -> compute the heavy pages once in the background (one thread, at most every 5 min),
+    so the first click on Users / Overview / Operations is already served from the cache."""
+    now = time.time()
+    if _ADMIN_WARM["busy"] or now - float(_ADMIN_WARM["at"]) < 300:
+        return
+    _ADMIN_WARM.update(busy=True, at=now)
+
+    def run() -> None:
+        try:
+            admin_id = _admin_user_id()
+            astore = hub.store_for(admin_id) if admin_id else None
+            steps = [("users", lambda: admin_panel.users_payload(hub.store, hub.store_for))]
+            if astore is not None:
+                steps += [
+                    ("overview", lambda: admin_panel.overview_payload(astore, hub)),
+                    ("monitors", lambda: admin_panel.monitors_payload(astore, hub.store, hub.store_for)),
+                ]
+            for key, loader in steps:
+                try:
+                    admin_panel.cached_payload(key, loader)
+                except Exception as exc:
+                    print(f"[admin] warm {key}: {type(exc).__name__}: {exc}", flush=True)
+                time.sleep(0.2)  # one page at a time, never a burst
+            if astore is not None:
+                try:
+                    admin_panel.ops_payload_cached(astore, hub)
+                except Exception as exc:
+                    print(f"[admin] warm ops: {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            _ADMIN_WARM["busy"] = False
+
+    threading.Thread(target=run, name="admin-warm", daemon=True).start()
+
+
 @app.get("/api/admin/me")
 async def admin_me(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    return await asyncio.to_thread(_admin_user, realitify_admin)
+    user = await _admin_user_async(realitify_admin)
+    _warm_admin_pages()
+    return user
 
 
 @app.get("/api/admin/overview")
 async def admin_overview(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(admin_panel.overview_payload, astore, hub)
+    _, astore = await _admin_store_async(realitify_admin)
+    return await asyncio.to_thread(admin_panel.cached_payload, "overview", lambda: admin_panel.overview_payload(astore, hub))
 
 
 @app.get("/api/admin/users")
 async def admin_users(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
-    return await asyncio.to_thread(admin_panel.users_payload, hub.store, hub.store_for)
+    await _admin_user_async(realitify_admin)
+    return await asyncio.to_thread(admin_panel.cached_payload, "users", lambda: admin_panel.users_payload(hub.store, hub.store_for))
 
 
 @app.get("/api/admin/users/{user_id}")
@@ -2070,13 +2124,13 @@ async def admin_user_detail(
     user_id: str,
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
-    target = user_registry.get_user_by_id(hub.store, user_id)
+    await _admin_user_async(realitify_admin)
+    target = await asyncio.to_thread(user_registry.get_user_by_id, hub.store, user_id)
     if not target:
         raise HTTPException(404, "Uživatel neexistuje")
     try:
         return await asyncio.to_thread(
-            admin_panel.user_detail_payload, hub.store_for(str(target.get("id"))), target, hub.store
+            lambda: admin_panel.user_detail_payload(hub.store_for(str(target.get("id"))), target, hub.store)
         )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -2086,13 +2140,17 @@ async def admin_user_detail(
 async def admin_monitors(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
     loop = asyncio.get_running_loop()
     _, astore = await loop.run_in_executor(hub.auth_pool, _admin_store, realitify_admin)
-    return await loop.run_in_executor(hub.ui_pool, admin_panel.monitors_payload, astore, hub.store, hub.store_for)
+    return await loop.run_in_executor(
+        _ADMIN_POOL, admin_panel.cached_payload, "monitors", lambda: admin_panel.monitors_payload(astore, hub.store, hub.store_for)
+    )
 
 
 @app.get("/api/admin/notifications")
 async def admin_notifications(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(admin_panel.notifications_payload, astore, hub.store, hub.store_for)
+    _, astore = await _admin_store_async(realitify_admin)
+    return await asyncio.to_thread(
+        admin_panel.cached_payload, "notifications", lambda: admin_panel.notifications_payload(astore, hub.store, hub.store_for)
+    )
 
 
 @app.post("/api/admin/broadcast")
@@ -2100,9 +2158,13 @@ async def admin_broadcast(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user, astore = _admin_store(realitify_admin)
-    targets = [(str(u.get("id")), hub.store_for(str(u.get("id")))) for u in user_registry.list_users(hub.store) if u.get("id")]
-    return await admin_panel.send_broadcast(astore, payload or {}, user.get("name") or "Admin", user_stores=targets)
+    user, astore = await _admin_store_async(realitify_admin)
+    targets = await asyncio.to_thread(
+        lambda: [(str(u.get("id")), hub.store_for(str(u.get("id")))) for u in user_registry.list_users(hub.store) if u.get("id")]
+    )
+    result = await admin_panel.send_broadcast(astore, payload or {}, user.get("name") or "Admin", user_stores=targets)
+    admin_panel.invalidate_payloads()
+    return result
 
 
 @app.get("/api/admin/ops")
@@ -2153,7 +2215,7 @@ async def admin_scrape_url(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     body = payload or {}
     scope = str(body.get("scope") or "url").strip().lower()
     when = str(body.get("when") or "now").strip().lower()
@@ -2202,7 +2264,7 @@ async def admin_scrape_schedule_delete(
     job_id: str,
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     ok = await asyncio.to_thread(hub.store.remove_scrape_schedule, job_id)
     if not ok:
         raise HTTPException(404, "Naplánovaný scrape nenalezen")
@@ -2211,7 +2273,7 @@ async def admin_scrape_schedule_delete(
 
 @app.get("/api/admin/dedupe")
 async def admin_dedupe(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     return await asyncio.to_thread(admin_panel.dedupe_payload, astore, hub)
 
 
@@ -2220,7 +2282,7 @@ async def admin_dedupe_schedule(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     body = payload or {}
     try:
         hour = int(body.get("hour", 3))
@@ -2232,7 +2294,7 @@ async def admin_dedupe_schedule(
 
 @app.post("/api/admin/dedupe/run")
 async def admin_dedupe_run(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     result = hub.start_dedupe()
     if not result.get("ok"):
         raise HTTPException(409, "Deduplikace už běží")
@@ -2241,7 +2303,7 @@ async def admin_dedupe_run(realitify_admin: str | None = Cookie(default=None, al
 
 @app.post("/api/admin/dedupe/scan")
 async def admin_dedupe_scan(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     result = hub.start_dedupe_scan()
     if not result.get("ok"):
         raise HTTPException(409, "Deduplikace už běží")
@@ -2258,7 +2320,7 @@ async def admin_catalog_quality_dry_run(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
     """Dry-run counts via hub job_pool Store connection (not a side-process sqlite)."""
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     hours = max(24, min(720, int(max_age_hours or 72)))
     # The dry run json-decodes every live catalog row (seconds locally, far more in
     # production), so serve a cached result and recompute in the background.
@@ -2287,7 +2349,7 @@ async def admin_catalog_quality_run(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
     """Ordered one-shot cleanup through the same Store + job_pool as the worker."""
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     body = payload or {}
     dry_run = bool(body.get("dry_run", False))
     try:
@@ -2311,8 +2373,8 @@ async def admin_catalog_quality_run(
 
 @app.get("/api/admin/billing")
 async def admin_billing(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
-    return await asyncio.to_thread(admin_panel.billing_payload, astore, hub)
+    _, astore = await _admin_store_async(realitify_admin)
+    return await asyncio.to_thread(admin_panel.cached_payload, "billing", lambda: admin_panel.billing_payload(astore, hub), 60.0)
 
 
 @app.get("/api/admin/promo")
@@ -2320,7 +2382,7 @@ async def admin_promo(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
     month: str | None = Query(default=None),
 ) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     return await asyncio.to_thread(admin_panel.promo_payload, hub.store, month or "")
 
 
@@ -2329,7 +2391,7 @@ async def admin_promo_toggle(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
+    user = await _admin_user_async(realitify_admin)
     body = payload or {}
     try:
         return await asyncio.to_thread(admin_panel.toggle_promo_code, hub.store, str(body.get("code") or ""), bool(body.get("on")))
@@ -2342,7 +2404,7 @@ async def admin_promo_create(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
+    user = await _admin_user_async(realitify_admin)
     try:
         return await asyncio.to_thread(admin_panel.create_promo_code, hub.store, payload or {}, user.get("name") or "Admin")
     except ValueError as exc:
@@ -2354,7 +2416,7 @@ async def admin_promo_payout(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     body = payload or {}
     try:
         return await asyncio.to_thread(
@@ -2373,18 +2435,18 @@ async def admin_action(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user = _admin_user(realitify_admin)
+    user = await _admin_user_async(realitify_admin)
     body = payload or {}
     target_id = str(body.get("user_id") or "").strip()
-    target = user_registry.get_user_by_id(hub.store, target_id) if target_id else None
+    target = await asyncio.to_thread(user_registry.get_user_by_id, hub.store, target_id) if target_id else None
     if target is not None:
-        tstore = hub.store_for(str(target.get("id")))
+        tstore = await asyncio.to_thread(hub.store_for, str(target.get("id")))
         tuid: str | None = str(target.get("id"))
     else:
-        _, tstore = _admin_store(realitify_admin)
+        _, tstore = await _admin_store_async(realitify_admin)
         tuid = None
     try:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             admin_panel.apply_action,
             tstore,
             str(body.get("action") or ""),
@@ -2395,6 +2457,8 @@ async def admin_action(
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    admin_panel.invalidate_payloads()
+    return result
 
 
 @app.get("/api/stories")
@@ -2423,7 +2487,7 @@ async def public_inquiry(payload: dict[str, Any] | None = Body(None)) -> dict:
 
 @app.get("/api/admin/cms")
 async def admin_cms_list(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     return await asyncio.to_thread(stories_cms.list_articles, astore, hub.store)
 
 
@@ -2433,7 +2497,7 @@ async def admin_cms_inquiry_save(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     try:
         return await asyncio.to_thread(stories_cms.update_inquiry, astore, inquiry_id, payload or {})
     except KeyError as exc:
@@ -2446,7 +2510,7 @@ async def admin_cms_inquiry_save(
 async def admin_cms_inquiry_delete(
     inquiry_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")
 ) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     try:
         return await asyncio.to_thread(stories_cms.delete_inquiry, astore, inquiry_id)
     except KeyError as exc:
@@ -2455,7 +2519,7 @@ async def admin_cms_inquiry_delete(
 
 @app.get("/api/admin/cms/{article_id}")
 async def admin_cms_one(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     try:
         return await asyncio.to_thread(stories_cms.get_article, astore, article_id)
     except KeyError as exc:
@@ -2467,7 +2531,7 @@ async def admin_cms_create(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user, astore = _admin_store(realitify_admin)
+    user, astore = await _admin_store_async(realitify_admin)
     return await asyncio.to_thread(stories_cms.save_article, astore, None, payload or {}, user.get("name") or "Admin")
 
 
@@ -2477,7 +2541,7 @@ async def admin_cms_save(
     payload: dict[str, Any] | None = Body(None),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    user, astore = _admin_store(realitify_admin)
+    user, astore = await _admin_store_async(realitify_admin)
     try:
         return await asyncio.to_thread(stories_cms.save_article, astore, article_id, payload or {}, user.get("name") or "Admin")
     except KeyError as exc:
@@ -2486,7 +2550,7 @@ async def admin_cms_save(
 
 @app.post("/api/admin/cms/{article_id}/delete")
 async def admin_cms_delete(article_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _, astore = _admin_store(realitify_admin)
+    _, astore = await _admin_store_async(realitify_admin)
     try:
         return await asyncio.to_thread(stories_cms.delete_article, astore, article_id)
     except KeyError as exc:
@@ -2498,7 +2562,7 @@ async def admin_cms_upload(
     file: UploadFile = File(...),
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     raw = await file.read()
     if len(raw) > 5 * 1024 * 1024:
         raise HTTPException(400, "Soubor je větší než 5 MB")
@@ -2528,7 +2592,7 @@ async def admin_stacks(
     realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
 ) -> dict:
     """Where is the web process spending CPU? Samples every thread's Python stack ~20x/s."""
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     import collections
     import sys
     import threading
@@ -2568,7 +2632,7 @@ async def admin_stacks(
 
 @app.get("/api/perf/diag")
 async def perf_diag_snapshot(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     from app import perf_diag
 
     payload = perf_diag.snapshot()
@@ -2593,7 +2657,7 @@ async def version() -> dict:
 
 @app.post("/api/update")
 async def install_update(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     info = await version_info()
     if not info.get("update_available"):
         raise HTTPException(400, "Už máš nejnovější verzi")
@@ -2611,14 +2675,14 @@ async def install_update(realitify_admin: str | None = Cookie(default=None, alia
 
 @app.post("/api/monitor/start")
 async def start_monitor(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     await hub.start()
     return hub.status(fresh=True)
 
 
 @app.post("/api/monitor/stop")
 async def stop_monitor(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     await hub.stop()
     return hub.status(fresh=True)
 
@@ -2638,7 +2702,7 @@ async def check_now(payload: dict[str, Any] | None = Body(None), realitify_sessi
 
 @app.post("/api/catalog/sync")
 async def catalog_sync_now(payload: dict[str, Any] | None = None, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
-    _admin_user(realitify_admin)
+    await _admin_user_async(realitify_admin)
     raw = (payload or {}).get("portals") if isinstance(payload, dict) else None
     portals = None
     if isinstance(raw, str) and raw and raw != "all":

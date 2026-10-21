@@ -168,6 +168,19 @@
       .join("");
 
   async function api(path, opts) {
+    // A read that fails on the first try (cold server, brief 502/503/504, dropped connection) is retried once.
+    const read = !opts?.method || String(opts.method).toUpperCase() === "GET";
+    try {
+      return await apiOnce(path, opts);
+    } catch (err) {
+      const transient = !err.status || [502, 503, 504].includes(err.status);
+      if (!read || !transient) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      return apiOnce(path, opts);
+    }
+  }
+
+  async function apiOnce(path, opts) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 90000);
     let response;
