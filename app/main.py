@@ -2010,7 +2010,11 @@ async def email_unsubscribe_submit(request: Request, token: str = "", kind: str 
         return HTMLResponse(email_tracking.page("Odkaz je neplatný", "<p>Tenhle odkaz už neplatí.</p>"), status_code=400)
     form = await request.form()
     resubscribe = str(form.get("action") or "") == "resubscribe"
-    await _auth_db(user_registry.set_marketing_unsub, hub.store, user_id, not resubscribe)
+    lead = email_tracking.lead_email(user_id)
+    if lead:
+        await asyncio.to_thread(email_store.unsuppress if resubscribe else (lambda a: email_store.suppress(a, "unsubscribed")), lead)
+    else:
+        await _auth_db(user_registry.set_marketing_unsub, hub.store, user_id, not resubscribe)
     return HTMLResponse(email_tracking.unsubscribe_page(token, done=not resubscribe, resubscribed=resubscribe))
 
 

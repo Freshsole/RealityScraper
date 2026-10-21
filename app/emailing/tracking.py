@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import html as _html
@@ -57,6 +58,26 @@ def parse_unsubscribe_token(token: str) -> str | None:
     if not user_id or not _ok(f"unsub:{user_id}", sig):
         return None
     return user_id
+
+
+LEAD_PREFIX = "lead_"
+
+
+def lead_id(email: str) -> str:
+    """Pseudo user id of a lead (guest e-mail without an account); the unsubscribe link carries the address."""
+    raw = base64.urlsafe_b64encode((email or "").strip().lower().encode()).decode().rstrip("=")
+    return LEAD_PREFIX + raw
+
+
+def lead_email(user_id: str) -> str | None:
+    if not user_id.startswith(LEAD_PREFIX):
+        return None
+    raw = user_id[len(LEAD_PREFIX):]
+    try:
+        addr = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return addr if "@" in addr else None
 
 
 def unsubscribe_url(user_id: str) -> str:

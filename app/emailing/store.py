@@ -497,6 +497,13 @@ def suppress(email: str, reason: str, store: "Store | None" = None) -> bool:
         return cur.rowcount == 1
 
 
+def unsuppress(email: str, store: "Store | None" = None) -> None:
+    addr = (email or "").strip().lower()
+    if addr:
+        with db(store) as conn:
+            conn.execute("DELETE FROM email_suppressions WHERE email = ? AND reason = 'unsubscribed'", (addr,))
+
+
 def is_suppressed(email: str, store: "Store | None" = None) -> bool:
     addr = (email or "").strip().lower()
     if not addr:

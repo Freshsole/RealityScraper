@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app import config, email_notify
+from app import guest as guest_access
 from app.emailing import render, service, tracking
 from app.emailing import store as estore
 
@@ -35,6 +36,7 @@ def normalize_segment(raw: Any) -> dict[str, Any]:
     except (TypeError, ValueError):
         active_days = None
     return {
+        "audience": seg.get("audience") if seg.get("audience") in ("users", "leads", "both") else "users",
         "plans": plans,
         "verified": verified,
         "registered_from": str(seg.get("registered_from") or ""),
@@ -62,8 +64,34 @@ def normalize_when(value: Any) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
+def lead_audience(exclude: set[str] | None = None) -> list[dict[str, Any]]:
+    """Guest leads (e-mails from /hledat without an account), oldest first, one per address, minus suppressed ones."""
+    seen = set(exclude or ())
+    out: list[dict[str, Any]] = []
+    for row in reversed(guest_access.list_leads(1_000_000)):
+        addr = str(row.get("email") or "").strip().lower()
+        if "@" not in addr or addr in seen:
+            continue
+        seen.add(addr)
+        if estore.is_suppressed(addr):
+            continue
+        out.append({"id": tracking.lead_id(addr), "email": addr, "first": "", "name": "", "plan": "", "lead": True})
+    return out
+
+
 def audience(segment: Any, store_for: StoreFor | None = None) -> list[dict[str, Any]]:
-    """Recipients of a segment: [{id, email, first, name, plan}]. Unverified users only when verified='any'."""
+    """Recipients of a segment: registered users, guest leads or both (users win when an address is in both)."""
+    seg = normalize_segment(segment)
+    people = user_audience(seg, store_for) if seg["audience"] in ("users", "both") else []
+    if seg["audience"] in ("leads", "both"):
+        with estore.db() as conn:
+            registered = {str(r["email"]).strip().lower() for r in conn.execute("SELECT email FROM users").fetchall()}
+        people += lead_audience(registered)
+    return people
+
+
+def user_audience(segment: Any, store_for: StoreFor | None = None) -> list[dict[str, Any]]:
+    """Registered recipients: [{id, email, first, name, plan}]. Unverified users only when verified='any'."""
     seg = normalize_segment(segment)
     where, params = ["1=1"], []
     if seg["verified"] == "yes":
@@ -132,13 +160,19 @@ def render_campaign(campaign: dict[str, Any], user: dict[str, Any] | None, to: s
     """Returns (rendered, plain_only)."""
     values = service.common_vars(user, to)
     body = campaign.get("body") or ""
+    lead = bool((user or {}).get("lead"))
+
+    def why(text: str) -> str:
+        return text.replace("protože máte účet na Realitify.cz", "protože jste na Realitify.cz zadali svůj e-mail") if lead else text
+
     if campaign.get("mode") == "html":
         if "odhlasit_url" not in body:
             body = body + _HTML_FOOTER if "</html" not in body.lower() else re.sub(r"(?i)</body>", _HTML_FOOTER + "</body>", body, count=1)
         if "<html" not in body.lower():
             body = _WRAP.format(body=body)
+        body = why(body)
         return render.render(body, campaign.get("subject") or "", campaign.get("preheader") or "", values), False
-    text = body if "odhlasit_url" in body else body + _TEXT_FOOTER
+    text = why(body if "odhlasit_url" in body else body + _TEXT_FOOTER)
     text_out = render.substitute(text, values, escape=False).strip() + "\n"
     subject = render.substitute(campaign.get("subject") or "", values, escape=False).strip()
     return render.Rendered(subject, "", "", text_out), True
@@ -176,7 +210,7 @@ def start(cid: int, store_for: StoreFor | None = None) -> dict[str, Any]:
             template_key=None,
             stream="lifecycle",
             to=person["email"],
-            user_id=person["id"],
+            user_id="" if person.get("lead") else person["id"],
             rendered=rendered,
             campaign_id=cid,
             dedupe_key=f"camp:{cid}:{person['id']}",

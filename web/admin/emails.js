@@ -402,7 +402,7 @@
       const c = isNew
         ? { name: "", mode: "text", subject: "", preheader: "", body: "", segment: {}, status: "draft", scheduled_at: "" }
         : await get(`/campaigns/${encodeURIComponent(id)}`);
-      const seg = Object.assign({ plans: [], verified: "any", has_dog: "any", registered_from: "", registered_to: "", locality: "", active_days: "", include_unsubscribed: false }, c.segment || {});
+      const seg = Object.assign({ audience: "users", plans: [], verified: "any", has_dog: "any", registered_from: "", registered_to: "", locality: "", active_days: "", include_unsubscribed: false }, c.segment || {});
       const locked = ["sending", "sent", "canceled"].includes(c.status);
       const st = c.stats || c;
       const dt = c.scheduled_at ? String(c.scheduled_at).slice(0, 16) : "";
@@ -418,6 +418,7 @@
         <div class="em-edit" id="em-edit">
           <article class="ad-card em-form">
             <fieldset ${locked ? "disabled" : ""} class="em-fieldset">
+              ${isNew ? `<label class="cms-field"><span>Načíst ze šablony</span><select id="em-from-tpl"><option value="">Vybrat…</option><option value="free_pro_form">6.5 Měsíc PRO zdarma</option></select></label>` : ""}
               <label class="cms-field"><span>Název (interní)</span><input name="name" value="${esc(c.name)}" /></label>
               <label class="cms-field"><span>Režim</span>${sel("mode", c.mode, [["text", "Text"], ["html", "HTML"]])}</label>
               <label class="cms-field"><span>Předmět</span><input name="subject" value="${esc(c.subject)}" /></label>
@@ -425,6 +426,7 @@
               <label class="cms-field"><span>Obsah <small>(proměnné např. {{osloveni}}, {{jmeno}})</small></span><textarea name="body" rows="14" class="em-code" spellcheck="false">${esc(c.body)}</textarea></label>
               <h2 class="ad-kicker">Segment příjemců</h2>
               <div class="em-seg">
+                <label class="cms-field"><span>Komu</span>${sel("audience", seg.audience, [["users", "Registrovaní"], ["leads", "Leady (zadali e-mail bez účtu)"], ["both", "Registrovaní i leady"]])}<small>Filtry níže platí jen pro registrované.</small></label>
                 <div class="cms-field"><span>Tarif</span><div class="em-checks">${["free", "start", "pro"].map((p) => `<label><input type="checkbox" name="plan_${p}" ${(seg.plans || []).includes(p) ? "checked" : ""} /> ${p === "free" ? "Zdarma" : p === "start" ? "Start" : "PRO"}</label>`).join("")}<small>nic = všechny</small></div></div>
                 <label class="cms-field"><span>Ověřený e-mail</span>${sel("verified", seg.verified, [["any", "Libovolný"], ["yes", "Ověřený"], ["no", "Neověřený"]])}</label>
                 <label class="cms-field"><span>Má hlídacího psa</span>${sel("has_dog", seg.has_dog, [["any", "Libovolně"], ["yes", "Ano"], ["no", "Ne"]])}</label>
@@ -461,6 +463,7 @@
           body: f("body"),
           scheduled_at: f("scheduled_at") ? new Date(f("scheduled_at")).toISOString() : null,
           segment: {
+            audience: f("audience"),
             plans: ["free", "start", "pro"].filter((p) => root.querySelector(`[name="plan_${p}"]`).checked),
             verified: f("verified"),
             has_dog: f("has_dog"),
@@ -481,6 +484,25 @@
             `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.6;color:#163300;padding:24px;white-space:pre-wrap">${esc(p.body)}</div>`,
           );
       };
+      root.querySelector("#em-from-tpl")?.addEventListener("change", async (ev) => {
+        const key = ev.target.value;
+        if (!key) return;
+        try {
+          const t = await get(`/templates/${encodeURIComponent(key)}`);
+          const set = (k, v) => {
+            const el = root.querySelector(`[name="${k}"]`);
+            if (el) el.value = v;
+          };
+          set("mode", "html");
+          set("subject", t.subject || "");
+          set("preheader", t.preheader || "");
+          set("body", t.html || "");
+          if (!root.querySelector('[name="name"]').value) set("name", t.name || key);
+          paint();
+        } catch (err) {
+          toast(err.message || "Šablonu se nepodařilo načíst.", true);
+        }
+      });
       root.addEventListener("input", debounce(paint, 250));
       paint();
       const save = async () => {
