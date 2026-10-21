@@ -35,7 +35,16 @@ def normalize_segment(raw: Any) -> dict[str, Any]:
         active_days = int(seg.get("active_days")) if seg.get("active_days") not in (None, "") else None
     except (TypeError, ValueError):
         active_days = None
+    raw_ex = seg.get("exclude_emails") or []
+    if isinstance(raw_ex, str):
+        raw_ex = re.split(r"[\s,;]+", raw_ex)
+    exclude: list[str] = []
+    for item in raw_ex:
+        addr = str(item or "").strip().lower()
+        if "@" in addr and addr not in exclude:
+            exclude.append(addr)
     return {
+        "exclude_emails": exclude,
         "audience": seg.get("audience") if seg.get("audience") in ("users", "leads", "both") else "users",
         "plans": plans,
         "verified": verified,
@@ -87,6 +96,9 @@ def audience(segment: Any, store_for: StoreFor | None = None) -> list[dict[str, 
         with estore.db() as conn:
             registered = {str(r["email"]).strip().lower() for r in conn.execute("SELECT email FROM users").fetchall()}
         people += lead_audience(registered)
+    if seg["exclude_emails"]:
+        skip = set(seg["exclude_emails"])
+        people = [p for p in people if str(p["email"]).strip().lower() not in skip]
     return people
 
 

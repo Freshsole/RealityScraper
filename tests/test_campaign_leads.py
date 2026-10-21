@@ -71,3 +71,11 @@ def test_alerts_pause_blocks_only_alerts(monkeypatch):
         assert service.paused_stream(stream) is False
     monkeypatch.setattr(config, "EMAIL_ALERTS_PAUSED", False)
     assert service.paused_stream("alerts") is False
+
+
+def test_excluded_addresses_are_dropped_everywhere(env):
+    seg = {"audience": "both", "verified": "any", "exclude_emails": [" LEAD@example.cz ", "user@example.cz", "bad"]}
+    assert campaigns.normalize_segment(seg)["exclude_emails"] == ["lead@example.cz", "user@example.cz"]
+    assert emails(seg) == []
+    assert emails({"audience": "both", "verified": "any", "exclude_emails": "user@example.cz; x@y.cz"}) == ["lead@example.cz"]
+    assert campaigns.audience_preview(seg, None)["count"] == 0

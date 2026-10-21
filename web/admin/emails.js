@@ -402,7 +402,7 @@
       const c = isNew
         ? { name: "", mode: "text", subject: "", preheader: "", body: "", segment: {}, status: "draft", scheduled_at: "" }
         : await get(`/campaigns/${encodeURIComponent(id)}`);
-      const seg = Object.assign({ audience: "users", plans: [], verified: "any", has_dog: "any", registered_from: "", registered_to: "", locality: "", active_days: "", include_unsubscribed: false }, c.segment || {});
+      const seg = Object.assign({ audience: "users", exclude_emails: [], plans: [], verified: "any", has_dog: "any", registered_from: "", registered_to: "", locality: "", active_days: "", include_unsubscribed: false }, c.segment || {});
       const locked = ["sending", "sent", "canceled"].includes(c.status);
       const st = c.stats || c;
       const dt = c.scheduled_at ? String(c.scheduled_at).slice(0, 16) : "";
@@ -433,6 +433,7 @@
                 <label class="cms-field"><span>Registrace od</span><input type="date" name="registered_from" value="${esc(seg.registered_from || "")}" /></label>
                 <label class="cms-field"><span>Registrace do</span><input type="date" name="registered_to" value="${esc(seg.registered_to || "")}" /></label>
                 <label class="cms-field"><span>Lokalita psa</span><input name="locality" value="${esc(seg.locality || "")}" /></label>
+                <label class="cms-field"><span>Vyloučit e-maily <small>(po jednom na řádek nebo oddělené čárkou)</small></span><textarea name="exclude_emails" rows="3" spellcheck="false">${esc((seg.exclude_emails || []).join("\n"))}</textarea></label>
                 <label class="cms-field"><span>Aktivní za posledních (dní)</span><input type="number" min="0" name="active_days" value="${esc(seg.active_days ?? "")}" /></label>
               </div>
               <div class="em-audience"><button type="button" class="ad-btn soft" id="em-aud">Spočítat příjemce</button><span id="em-aud-out" class="em-sub"></span></div>
@@ -464,6 +465,7 @@
           scheduled_at: f("scheduled_at") ? new Date(f("scheduled_at")).toISOString() : null,
           segment: {
             audience: f("audience"),
+            exclude_emails: f("exclude_emails").split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter((x) => x.includes("@")),
             plans: ["free", "start", "pro"].filter((p) => root.querySelector(`[name="plan_${p}"]`).checked),
             verified: f("verified"),
             has_dog: f("has_dog"),
