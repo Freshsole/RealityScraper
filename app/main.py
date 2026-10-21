@@ -2119,6 +2119,20 @@ async def admin_users(realitify_admin: str | None = Cookie(default=None, alias="
     return await asyncio.to_thread(admin_panel.cached_payload, "users", lambda: admin_panel.users_payload(hub.store, hub.store_for))
 
 
+@app.post("/api/admin/users/vocatives")
+async def admin_set_vocatives(
+    payload: dict[str, Any] | None = Body(None),
+    realitify_admin: str | None = Cookie(default=None, alias="realitify_admin"),
+) -> dict:
+    """Hand-entered 5th case of first names (greeting in e-mails): {"items": [{"id", "vocative"}]}."""
+    await _admin_user_async(realitify_admin)
+    items = (payload or {}).get("items") or []
+    values = {str(i.get("id") or ""): str(i.get("vocative") or "") for i in items if isinstance(i, dict) and i.get("id")}
+    changed = await asyncio.to_thread(user_registry.set_vocatives, hub.store, values)
+    admin_panel.invalidate_payloads()
+    return {"ok": True, "changed": changed}
+
+
 @app.get("/api/admin/users/{user_id}")
 async def admin_user_detail(
     user_id: str,

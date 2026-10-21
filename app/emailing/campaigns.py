@@ -112,7 +112,7 @@ def user_audience(segment: Any, store_for: StoreFor | None = None) -> list[dict[
         params.append(since)
     with estore.db() as conn:
         rows = conn.execute(
-            f"SELECT id, email, first, last FROM users WHERE {' AND '.join(where)} ORDER BY created_at", params
+            f"SELECT id, email, first, last, first_vocative FROM users WHERE {' AND '.join(where)} ORDER BY created_at", params
         ).fetchall()
     needs_store = bool(seg["plans"] or seg["has_dog"] != "any" or seg["locality"])
     out: list[dict[str, Any]] = []
@@ -121,6 +121,7 @@ def user_audience(segment: Any, store_for: StoreFor | None = None) -> list[dict[
             "id": row["id"],
             "email": row["email"],
             "first": row["first"] or "",
+            "first_vocative": row["first_vocative"] or "",
             "name": f"{row['first'] or ''} {row['last'] or ''}".strip(),
             "plan": "",
         }
@@ -178,10 +179,19 @@ def render_campaign(campaign: dict[str, Any], user: dict[str, Any] | None, to: s
     return render.Rendered(subject, "", "", text_out), True
 
 
+SAMPLE_USER = {"first": "Jiří", "first_vocative": "Jiří", "id": ""}
+
+
+def preview(campaign: dict[str, Any]) -> dict[str, Any]:
+    """The campaign as a recipient gets it (variables, logo and images resolved), for the admin preview."""
+    rendered, plain = render_campaign(campaign, SAMPLE_USER, "jiri@example.cz")
+    return {"subject": rendered.subject, "html": "" if plain else rendered.html, "text": rendered.text, "plain": plain}
+
+
 def send_test(campaign: dict[str, Any], to: str) -> int | None:
     if not email_notify.configured():
         raise ValueError("SMTP není nastavené")
-    rendered, plain = render_campaign(campaign, {"first": "Jiří", "id": ""}, to)
+    rendered, plain = render_campaign(campaign, SAMPLE_USER, to)
     rendered = render.Rendered("[TEST] " + rendered.subject, rendered.preheader, rendered.html, rendered.text)
     log_id = service._enqueue(
         template_key=None, stream="lifecycle", to=to, user_id="", rendered=rendered, meta={"test": True, "force": True}, plain_only=plain

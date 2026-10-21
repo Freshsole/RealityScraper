@@ -162,10 +162,13 @@ def common_vars(user: Mapping[str, Any] | None, to: str) -> dict[str, str]:
     if not first:
         name = str((user or {}).get("name") or "").strip()
         first = name.split(" ")[0] if name else ""
+    vocative = str((user or {}).get("first_vocative") or "").strip()
     base = tracking.base_url()
     uid = str((user or {}).get("id") or "")
     return {
-        "osloveni": f"Dobrý den, {first}," if first else "Dobrý den,",
+        # Czech greeting needs the 5th case ("Adélo"), entered by hand in the admin; without it a plain greeting is safer
+        # than a wrong "Dobrý den, Adéla,".
+        "osloveni": f"Dobrý den, {vocative}," if vocative else "Dobrý den,",
         "jmeno": first,
         "email": to,
         "base_url": base,

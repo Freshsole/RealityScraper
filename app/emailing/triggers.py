@@ -271,7 +271,9 @@ def on_billing_event(ustore: Any, etype: str, obj: Any, before: dict[str, Any], 
     elif etype == "invoice.payment_failed":
         _on_invoice_failed(user, obj, after, before)
 
-    if a_plan in paid and a_status == "trialing" and b_status != "trialing" and sub_id:
+    shifted = _parse(after.get("payment_shift_until"))  # a month given away by us is not a customer's new trial
+    shift_active = bool(shifted and shifted > datetime.now(timezone.utc))
+    if a_plan in paid and a_status == "trialing" and b_status != "trialing" and sub_id and not shift_active:
         variables = {**_plan_vars(a_plan), "datum_konec": fmt_date(period_end), "odkaz": link("/monitory", "trial_started", "transactional")}
         _send("trial_started", user, variables, f"trial_started:{sub_id}")
         end = _parse(period_end)

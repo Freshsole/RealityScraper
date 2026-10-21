@@ -4682,3 +4682,13 @@ a.em-tr:hover, .em-log-tr[data-id]:hover { background: var(--canvas); cursor: po
 .em-verify { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; padding: 12px 20px; border-radius: 16px; background: var(--white); border: 1px solid var(--line); font-size: 13px; }
 .em-verify > div { flex: 1 1 320px; display: grid; gap: 2px; }
 .em-verify.is-off { background: #fff3c4; border-color: #e6c860; }
+
+/* Oslovení (5. pád) editor */
+.ad-voc { display: grid; gap: 6px; margin-top: 14px; }
+.ad-voc-row { display: grid; grid-template-columns: minmax(120px, 0.7fr) minmax(160px, 1.2fr) minmax(160px, 1fr); gap: 12px; align-items: center; padding: 6px 0; border-top: 1px solid #e8ebe6; }
+.ad-voc-row[hidden] { display: none; }
+.ad-voc-name { font-weight: 600; color: #163300; }
+.ad-voc-row input { width: 100%; padding: 8px 12px; border: 1px solid #d0d4cd; border-radius: 10px; font: inherit; }
+.ad-voc-row input::placeholder { color: #a9b4ad; }
+.ad-voc-only { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: #555b54; }
+@media (max-width: 720px) { .ad-voc-row { grid-template-columns: 1fr; } }

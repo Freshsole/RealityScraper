@@ -216,6 +216,17 @@ def build_router(admin_user: AdminUser, store_for: StoreFor) -> APIRouter:
 
         return await asyncio.to_thread(run)
 
+    @router.post("/campaigns/preview")
+    async def campaign_preview(payload: dict[str, Any] = Body(...), realitify_admin: str | None = Cookie(default=None)) -> dict:
+        auth(realitify_admin)
+        camp = {
+            "mode": "html" if payload.get("mode") == "html" else "text",
+            "subject": str(payload.get("subject") or ""),
+            "preheader": str(payload.get("preheader") or ""),
+            "body": str(payload.get("body") or ""),
+        }
+        return await asyncio.to_thread(campaigns.preview, camp)
+
     @router.post("/campaigns/audience")
     async def campaign_audience(payload: dict[str, Any] = Body(...), realitify_admin: str | None = Cookie(default=None)) -> dict:
         auth(realitify_admin)

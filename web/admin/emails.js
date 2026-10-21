@@ -475,14 +475,24 @@
           },
         };
       };
-      const paint = () => {
+      let paintSeq = 0;
+      const paint = async () => {
         const p = collect();
-        if (p.mode === "html") setFrame(frame, p.body);
-        else
-          setFrame(
-            frame,
-            `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.6;color:#163300;padding:24px;white-space:pre-wrap">${esc(p.body)}</div>`,
-          );
+        const seq = ++paintSeq;
+        try {
+          // The server renders it like a recipient gets it: variables, logo and images resolved.
+          const r = await post("/campaigns/preview", { mode: p.mode, subject: p.subject, preheader: p.preheader, body: p.body });
+          if (seq !== paintSeq) return;
+          if (r.plain) {
+            setFrame(
+              frame,
+              `<div style="font-family:Inter,Arial,sans-serif;font-size:15px;line-height:1.6;color:#163300;padding:24px;white-space:pre-wrap">${esc(r.text)}</div>`,
+            );
+          } else setFrame(frame, r.html);
+        } catch {
+          if (seq !== paintSeq) return;
+          setFrame(frame, p.mode === "html" ? p.body : `<div style="padding:24px;white-space:pre-wrap">${esc(p.body)}</div>`);
+        }
       };
       root.querySelector("#em-from-tpl")?.addEventListener("change", async (ev) => {
         const key = ev.target.value;
@@ -503,7 +513,7 @@
           toast(err.message || "Šablonu se nepodařilo načíst.", true);
         }
       });
-      root.addEventListener("input", debounce(paint, 250));
+      root.addEventListener("input", debounce(paint, 400));
       paint();
       const save = async () => {
         const r = await post("/campaigns", collect());

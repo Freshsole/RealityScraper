@@ -70,6 +70,8 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub INTEGER NOT NULL DEFAULT 0")
     if "marketing_unsub_at" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub_at TEXT")
+    if "first_vocative" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN first_vocative TEXT NOT NULL DEFAULT ''")
     if "email_suppressed" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN email_suppressed INTEGER NOT NULL DEFAULT 0")
     conn.execute(
@@ -149,6 +151,7 @@ def _row_to_user(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "role": (row["role"] or "user").strip().lower() or "user",
         "email_verified": bool(verified),
         "marketing_unsub": bool(row["marketing_unsub"]) if "marketing_unsub" in row.keys() else False,
+        "first_vocative": (row["first_vocative"] or "") if "first_vocative" in row.keys() else "",
         "created_at": row["created_at"],
     }
 
@@ -475,6 +478,52 @@ def mark_email_verified(store: Store, user_id: str) -> None:
 
 
 # ------------------------------------------------------ e-mail / delete --
+
+def set_vocatives(store: Store, values: dict[str, str]) -> int:
+    """Manually entered 5th case of the first name ("Adélo"), used in the greeting of e-mails. Returns rows changed."""
+    changed = 0
+    with store.connect() as conn:
+        for user_id, text in values.items():
+            value = " ".join(str(text or "").split())[:60]
+            cur = conn.execute("UPDATE users SET first_vocative = ? WHERE id = ? AND first_vocative != ?", (value, user_id, value))
+            changed += cur.rowcount
+    return changed
+
+
+_SOFT_END = tuple("šžčřďťňjc")
+
+
+def suggest_vocative(first: str) -> str:
+    """Rule-based guess of the Czech vocative of a first name. Only a suggestion for the admin to confirm."""
+    name = " ".join((first or "").split())
+    if not name:
+        return ""
+    low = name.lower()
+    if " " in name:  # "Jan Pavel": decline the last part only
+        head, _, tail = name.rpartition(" ")
+        return f"{head} {suggest_vocative(tail)}"
+    if low.endswith("a"):
+        return name[:-1] + "o"
+    if low.endswith(("e", "i", "o", "u", "y", "í", "é", "ý", "á", "ó", "ú", "ů")):
+        return name
+    if low.endswith("tr"):
+        return name[:-1] + "ře"
+    if low.endswith("něk"):
+        return name[:-3] + "ňku"
+    if low.endswith("ek"):
+        return name[:-2] + "ku"
+    if low.endswith("el") and not low.endswith(("iel", "uel")):
+        return name[:-2] + "le"
+    if low.endswith(("iel", "uel")):
+        return name + "i"
+    if low.endswith(("k", "g", "h")) or low.endswith("ch"):
+        return name + "u"
+    if low.endswith(_SOFT_END):
+        return name + "i"
+    if low.endswith(("r", "n", "m", "l", "s", "z", "d", "t", "b", "p", "v", "f")):
+        return name + "e"
+    return name
+
 
 def set_marketing_unsub(store: Store, user_id: str, unsub: bool) -> None:
     with store.connect() as conn:

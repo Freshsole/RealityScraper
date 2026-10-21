@@ -1477,6 +1477,42 @@ def _cancel_stripe_now(store: Store, record: dict[str, Any]) -> None:
     record["schedule_id"] = ""
 
 
+def extend_subscription(store: Store, days: int) -> dict[str, Any]:
+    """Push the next charge of a paid subscription back by ``days`` days without charging anything (Stripe ``trial_end``).
+
+    ``payment_shift_until`` is saved before the call so the "trial started" e-mails are not sent when the webhook
+    reports the subscription as trialing.
+    """
+    record = store.billing_record() or {}
+    sub_id = str(record.get("subscription_id") or "")
+    if not sub_id:
+        raise ValueError("Uživatel nemá aktivní předplatné")
+    _configure()
+    sub = stripe.Subscription.retrieve(sub_id, expand=["items.data.price"])
+    status = _sget(sub, "status") or ""
+    if status not in {"active", "trialing"} or _sget(sub, "cancel_at_period_end") or _sget(sub, "schedule"):
+        raise ValueError("Předplatné nejde posunout (končí, má plánovanou změnu nebo je v prodlení)")
+    end = int(_period_end(sub) or 0)
+    new_end = max(end, int(time.time())) + int(days) * 86400
+    shifted = datetime.fromtimestamp(new_end, tz=timezone.utc).isoformat()
+    record["payment_shift_until"] = shifted
+    store.save_billing_record(record)
+    try:
+        stripe.Subscription.modify(sub_id, trial_end=new_end, proration_behavior="none")
+    except Exception:
+        record.pop("payment_shift_until", None)
+        store.save_billing_record(record)
+        raise
+    record["current_period_end"] = shifted
+    store.save_billing_record(record)
+    append_billing_log(
+        store,
+        {"kind": "Posun platby", "plan": str(record.get("plan") or ""), "amount": "0 Kč", "status": "Hotovo", "ok": True,
+         "note": f"Další platba posunuta o {days} dní (měsíc zdarma z formuláře)"},
+    )
+    return {"ok": True, "next_charge": shifted}
+
+
 def admin_set_plan(store: Store, plan_id: str, charge: bool, email: str = "") -> dict[str, Any]:
     if plan_id not in PLANS:
         raise ValueError("Neznámý tarif")

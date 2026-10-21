@@ -500,6 +500,7 @@
           <p>Zobrazeno <strong id="u-shown">${rows.length}</strong> z ${esc(fmtN(total))} uživatelů</p>
           <div class="ad-umeta-btns">
             <button class="ad-btn outline" type="button">Hromadné akce ›</button>
+            <button class="ad-btn outline" type="button" id="u-voc">Oslovení (5. pád)</button>
             <button class="ad-btn soft" type="button" id="u-csv">Exportovat CSV</button>
           </div>
         </div>
@@ -548,6 +549,77 @@
             .join("") || `<p class="ad-k">Zatím žádné zásahy.</p>`
         }</div>
       </article>`;
+
+    const openVocatives = () => {
+      const list = rows.filter((r) => (r.first || "").trim());
+      const rowHtml = (r) => `<div class="ad-voc-row" data-id="${esc(r.id)}" data-orig="${esc(r.vocative || "")}" data-suggest="${esc(r.vocative_suggest || "")}">
+          <span class="ad-voc-name">${esc(r.first)}</span>
+          <span class="muted">${esc(r.email)}</span>
+          <input type="text" maxlength="60" value="${esc(r.vocative || "")}" placeholder="${esc(r.vocative_suggest || "")}" aria-label="Oslovení pro ${esc(r.first)}" />
+        </div>`;
+      main.innerHTML = `
+        <header class="ad-pagehead">
+          <a class="ad-back" href="/admin/uzivatele" id="voc-back">← Správa uživatelů</a>
+          <h1 class="ad-h">Oslovení v e-mailech</h1>
+          <p class="ad-lead">Do e-mailu se píše „Dobrý den, <b>Adélo</b>,“. Zadejte 5. pád křestního jména. Dokud není vyplněný, e-mail začíná jen „Dobrý den,“.
+          Šedý text v poli je automatický návrh, který zatím neplatí. Použije se až po uložení.</p>
+        </header>
+        <article class="ad-card ad-users-card">
+          <div class="ad-ufilter-actions">
+            <button class="ad-btn soft" type="button" id="voc-fill">Doplnit návrhy do prázdných</button>
+            <label class="ad-voc-only"><input type="checkbox" id="voc-empty" /> jen bez oslovení</label>
+            <span class="ad-k" id="voc-count"></span>
+            <button class="ad-btn" type="button" id="voc-save">Uložit změny</button>
+          </div>
+          <div class="ad-voc" id="voc-rows">${list.map(rowHtml).join("") || `<p class="ad-k">Žádný uživatel nemá vyplněné jméno.</p>`}</div>
+        </article>`;
+      const box = () => [...main.querySelectorAll(".ad-voc-row")];
+      const changed = () => box().filter((el) => el.querySelector("input").value.trim() !== (el.dataset.orig || ""));
+      const refresh = () => {
+        const only = $("voc-empty").checked;
+        box().forEach((el) => {
+          el.hidden = only && !!el.querySelector("input").value.trim();
+        });
+        const missing = box().filter((el) => !el.querySelector("input").value.trim()).length;
+        $("voc-count").textContent = `Bez oslovení: ${missing} z ${box().length} · neuložené změny: ${changed().length}`;
+      };
+      main.addEventListener("input", refresh);
+      $("voc-empty").addEventListener("change", refresh);
+      $("voc-fill").addEventListener("click", () => {
+        box().forEach((el) => {
+          const input = el.querySelector("input");
+          if (!input.value.trim() && el.dataset.suggest) input.value = el.dataset.suggest;
+        });
+        refresh();
+      });
+      $("voc-back").addEventListener("click", (event) => {
+        event.preventDefault();
+        pageUsers();
+      });
+      $("voc-save").addEventListener("click", async () => {
+        const items = changed().map((el) => ({ id: el.dataset.id, vocative: el.querySelector("input").value.trim() }));
+        if (!items.length) return;
+        const btn = $("voc-save");
+        btn.disabled = true;
+        try {
+          const r = await api("/api/admin/users/vocatives", { method: "POST", body: JSON.stringify({ items }) });
+          items.forEach((it) => {
+            const el = main.querySelector(`.ad-voc-row[data-id="${CSS.escape(it.id)}"]`);
+            if (el) el.dataset.orig = it.vocative;
+            const row = rows.find((x) => x.id === it.id);
+            if (row) row.vocative = it.vocative;
+          });
+          refresh();
+          $("voc-count").textContent += ` · uloženo (${r.changed ?? items.length})`;
+        } catch (err) {
+          $("voc-count").textContent = err.message || "Uložení se nepodařilo.";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+      refresh();
+    };
+    $("u-voc")?.addEventListener("click", openVocatives);
 
     const applyFilter = () => {
       const q = ($("u-q").value || "").trim().toLowerCase();
