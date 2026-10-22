@@ -30,6 +30,7 @@ STALE_KEYS = ("alert_new_listing", "alert_digest")
 _pause_until = 0.0
 _throttle_lock = threading.Lock()
 _last_send = 0.0
+_last_campaign_send = -1e9
 
 # Per-template check run right before delivery of a delayed mail: returns a skip reason or None.
 Guard = Callable[[dict[str, Any]], "str | None"]
@@ -427,12 +428,19 @@ def process_now(log_id: int) -> str:
 
 
 def process_queue(limit: int = 50) -> int:
+    global _last_campaign_send
     if paused_for() > 0:
         return 0
+    gap = config.EMAIL_CAMPAIGN_GAP_SEC
     done = 0
-    for log_id in estore.due_ids(limit):
+    for log_id in estore.due_ids(limit, campaign=False if gap > 0 else None):
         process_now(log_id)
         done += 1
+    if gap > 0 and time.monotonic() - _last_campaign_send >= gap:
+        for log_id in estore.due_ids(1, campaign=True):
+            _last_campaign_send = time.monotonic()
+            process_now(log_id)
+            done += 1
     return done
 
 
@@ -471,4 +479,4 @@ async def run_email_loop(store_for: Callable[[str], Any] | None = None, global_s
             raise
         except Exception as exc:
             print(f"[email] loop error: {exc}", flush=True)
-        await asyncio.sleep(15)
+        await asyncio.sleep(min(5, config.EMAIL_CAMPAIGN_GAP_SEC) if config.EMAIL_CAMPAIGN_GAP_SEC > 0 else 15)

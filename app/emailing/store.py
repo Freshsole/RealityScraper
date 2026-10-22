@@ -291,7 +291,8 @@ def claim(log_id: int, store: "Store | None" = None) -> bool:
         return cur.rowcount == 1
 
 
-def due_ids(limit: int = 50, store: "Store | None" = None) -> list[int]:
+def due_ids(limit: int = 50, store: "Store | None" = None, campaign: bool | None = None) -> list[int]:
+    """Queued rows that are due; campaign=True/False narrows to campaign / non-campaign rows."""
     now = now_iso()
     with db(store) as conn:
         # a crashed sender leaves 'sending' rows behind: put them back after 10 minutes
@@ -300,7 +301,9 @@ def due_ids(limit: int = 50, store: "Store | None" = None) -> list[int]:
             (iso_in(-600),),
         )
         rows = conn.execute(
-            "SELECT id FROM email_log WHERE status = 'queued' AND COALESCE(scheduled_at, created_at) <= ? ORDER BY id LIMIT ?",
+            "SELECT id FROM email_log WHERE status = 'queued' AND COALESCE(scheduled_at, created_at) <= ?"
+            + ("" if campaign is None else " AND campaign_id IS NOT NULL" if campaign else " AND campaign_id IS NULL")
+            + " ORDER BY id LIMIT ?",
             (now, int(limit)),
         ).fetchall()
     return [int(r["id"]) for r in rows]
@@ -520,3 +523,23 @@ def count_suppressed(store: "Store | None" = None) -> int:
 def sent_since(iso: str, store: "Store | None" = None) -> int:
     with db(store) as conn:
         return int(conn.execute("SELECT COUNT(*) FROM email_log WHERE status = 'sent' AND sent_at >= ?", (iso,)).fetchone()[0])
+
+
+def requeue_failed_campaign(campaign_id: int, store: "Store | None" = None) -> int:
+    """Failed rows of one campaign back to the queue (alerts and other mail are untouched)."""
+    with db(store) as conn:
+        cur = conn.execute(
+            "UPDATE email_log SET status = 'queued', error = NULL, attempts = 0, scheduled_at = ? "
+            "WHERE campaign_id = ? AND status = 'failed'",
+            (now_iso(), int(campaign_id)),
+        )
+        return cur.rowcount
+
+
+def dismiss_failed_alerts(store: "Store | None" = None) -> int:
+    """Failed alert e-mails are stale news: mark them skipped so they leave the error list and never resend."""
+    with db(store) as conn:
+        cur = conn.execute(
+            "UPDATE email_log SET status = 'skipped', error = 'dismissed' WHERE status = 'failed' AND stream = 'alerts'",
+        )
+        return cur.rowcount

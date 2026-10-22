@@ -281,6 +281,16 @@ def build_router(admin_user: AdminUser, store_for: StoreFor) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(404, str(exc)) from exc
 
+    @router.post("/campaigns/{cid}/retry-failed")
+    async def campaign_retry_failed(cid: int, realitify_admin: str | None = Cookie(default=None)) -> dict:
+        auth(realitify_admin)
+        return {"ok": True, "requeued": await asyncio.to_thread(estore.requeue_failed_campaign, cid)}
+
+    @router.post("/log/dismiss-failed-alerts")
+    async def dismiss_failed_alerts(realitify_admin: str | None = Cookie(default=None)) -> dict:
+        auth(realitify_admin)
+        return {"ok": True, "dismissed": await asyncio.to_thread(estore.dismiss_failed_alerts)}
+
     # --------------------------------------------------------------- status --
     @router.get("/status")
     async def status(realitify_admin: str | None = Cookie(default=None)) -> dict:

@@ -239,6 +239,8 @@ def _env_float(name: str, default: float) -> float:
 
 EMAIL_MAX_PER_SEC = _env_float("EMAIL_MAX_PER_SEC", 10.0)
 EMAIL_MAX_PER_HOUR = int(_env_float("EMAIL_MAX_PER_HOUR", 0))
+# Minimum seconds between two campaign e-mails (0 = off); other mail is not held back.
+EMAIL_CAMPAIGN_GAP_SEC = _env_float("EMAIL_CAMPAIGN_GAP_SEC", 0.0)
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip()
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
 WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
