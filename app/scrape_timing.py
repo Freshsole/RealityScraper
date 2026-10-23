@@ -16,6 +16,7 @@ _buf_lock = threading.Lock()
 _buffer: deque[dict[str, Any]] = deque(maxlen=20_000)
 _lags: deque[float] = deque(maxlen=600)
 _lag_max = 0.0
+_last_stall_at = 0.0
 _watchdog_events: deque[dict[str, Any]] = deque(maxlen=80)
 
 
@@ -93,11 +94,12 @@ async def watchdog_sample(sleep_s: float = 0.1) -> float:
     await asyncio.sleep(sleep_s)
     lag = time.monotonic() - t1 - sleep_s
     worst = max(spin, lag)
-    global _lag_max
+    global _lag_max, _last_stall_at
     _lags.append(worst)
     if worst > _lag_max:
         _lag_max = worst
     if worst >= 2.0:
+        _last_stall_at = time.monotonic()
         ev = {
             "at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
             "lag_ms": round(worst * 1000, 1),
@@ -107,6 +109,13 @@ async def watchdog_sample(sleep_s: float = 0.1) -> float:
 
         emit(f"scrape watchdog lag_ms={ev['lag_ms']} at={ev['at']}")
     return worst
+
+
+def stalled_within(seconds: float) -> bool:
+    """True when the event loop froze (watchdog lag >= 2 s) in the last `seconds`.
+
+    Timeouts during or right after such a freeze say nothing about the portal."""
+    return _last_stall_at > 0.0 and (time.monotonic() - _last_stall_at) <= seconds
 
 
 def watchdog_snapshot() -> dict[str, Any]:

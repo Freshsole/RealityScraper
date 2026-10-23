@@ -20,6 +20,7 @@ HARD_FAIL_CODES = {403, 500, 502, 503, 504}
 # not evidence that each portal is dead. 403/500 still trip the breaker.
 _STALL_WINDOW_SEC = 2.0
 _STALL_PORTAL_COUNT = 3
+_STALL_RECENT_SEC = 30.0
 
 
 @dataclass
@@ -92,6 +93,12 @@ def _loop_stall(now: float, portal: str, reason: str) -> bool:
     """True when several portals time out together — the loop was frozen."""
     if (reason or "").strip().lower() != "timeout":
         return False
+    from app import scrape_timing
+
+    # The watchdog saw the loop freeze (lag in the seconds): timeouts then come from our process,
+    # not from the portal, even when they are spread over more than _STALL_WINDOW_SEC.
+    if scrape_timing.stalled_within(_STALL_RECENT_SEC):
+        return True
     key = _key(portal)
     _recent_timeouts.append((now, key))
     cutoff = now - _STALL_WINDOW_SEC

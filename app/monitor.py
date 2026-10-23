@@ -21,6 +21,7 @@ from app.catalog_sync import daily_shards, listing_is_new_for_monitor, recent_sh
 from app.store import Store, _listing_from_catalog_dict, local_day_start, utc_now
 from app.version import current_version
 from app.billing import billing_state, settle_pending_if_due
+from app.live_share import shared_live
 
 
 def _is_notify_config_noise(message: object) -> bool:
@@ -89,6 +90,8 @@ class Hub:
         self._owner_sync_at = 0.0
         self._recent_shard_idx = 0
         self._discovery_ticks = 0
+        # Discovery results whose catalog write was deferred (lock busy); retried on the next tick.
+        self._discovery_backlog: OrderedDict[int, Listing] = OrderedDict()
         self._live_inflight: dict[str, asyncio.Task] = {}
         self._deep_windows: dict[str, int] = {}
         self._deep_shard_idx = 0
@@ -515,7 +518,7 @@ class Hub:
         await asyncio.sleep(1)
         paused = False
         while self.running:
-            if self.catalog_running:
+            if self.catalog_running and config.SCRAPE_PAUSE_PRIORITY_DURING_CATALOG:
                 if not paused:
                     print("monitor_priority paused (catalog_sync running)", flush=True)
                     paused = True
@@ -697,18 +700,29 @@ class Hub:
         phase_t0 = time.monotonic()
         phases: dict[str, int] = {}
         try:
-            fetched = await self._monitor_engine.fetch_shards(
-                [
-                    {
-                        "shard_key": f"priority:{job['id']}",
-                        "search_url": job["search_url"],
-                    }
-                ],
-                client_factory=self.client_for,
-                # Portals with big pages (Bezrealitky/Realingo 100, UlovDomov 50) already return the newest
-                # listings on page 1; a second page only doubles the rows written per poll.
-                max_pages=1 if int(getattr(client, "PAGE_SIZE", 0) or 0) >= 40 else config.POLL_PAGES,
-                deadline_sec=float(config.SCRAPE_MONITOR_DEADLINE_SEC),
+            poll_pages = 1 if int(getattr(client, "PAGE_SIZE", 0) or 0) >= 40 else config.POLL_PAGES
+
+            async def _fetch_live() -> list[Any]:
+                return await self._monitor_engine.fetch_shards(
+                    [
+                        {
+                            "shard_key": f"priority:{job['id']}",
+                            "search_url": job["search_url"],
+                        }
+                    ],
+                    client_factory=self.client_for,
+                    # Portals with big pages (Bezrealitky/Realingo 100, UlovDomov 50) already return the newest
+                    # listings on page 1; a second page only doubles the rows written per poll.
+                    max_pages=poll_pages,
+                    deadline_sec=float(config.SCRAPE_MONITOR_DEADLINE_SEC),
+                )
+
+            # Hubs of other users watching the same search URL join this fetch instead of repeating it.
+            fetched = await shared_live.get(
+                (job["search_url"], poll_pages),
+                config.SCRAPE_LIVE_SHARE_TTL_SEC,
+                _fetch_live,
+                cacheable=lambda res: bool(res) and not getattr(res[0], "error", None),
             )
             result = fetched[0]
             listings, total = result.listings, result.total
@@ -1027,7 +1041,7 @@ class Hub:
         await asyncio.sleep(2)
         paused = False
         while self.running:
-            if self.catalog_running:
+            if self.catalog_running and config.SCRAPE_PAUSE_PRIORITY_DURING_CATALOG:
                 if not paused:
                     print("new_discovery paused (catalog_sync running)", flush=True)
                     paused = True
@@ -1322,12 +1336,17 @@ class Hub:
                 store_path = str(self.store.path)
                 if scrape_fast.peek(store_path) is not None:
                     known_fn = lambda item: scrape_fast.is_known(store_path, listing_key(item.url), item)
-            results = await engine.fetch_shards(
-                recent,
-                client_factory=self.client_for,
-                max_pages=config.SCRAPE_RECENT_PAGES,
-                deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
-                known_fn=known_fn,
+            # Hard bound: a tick measured 518 s although the per-shard deadline is 50 s (waits at the limiter
+            # are not covered by it). A stuck tick must end so the next one can start.
+            results = await asyncio.wait_for(
+                engine.fetch_shards(
+                    recent,
+                    client_factory=self.client_for,
+                    max_pages=config.SCRAPE_RECENT_PAGES,
+                    deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
+                    known_fn=known_fn,
+                ),
+                timeout=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC) + 40.0,
             )
             seen: set[int] = set()
             for item in results:
@@ -1338,6 +1357,12 @@ class Hub:
                         continue
                     seen.add(listing.id)
                     disc_listings.append(listing)
+            # Listings from earlier ticks whose write was deferred go first; fresh ones replace stale copies.
+            if self._discovery_backlog:
+                merged = {item.id: item for item in self._discovery_backlog.values()}
+                merged.update({item.id: item for item in disc_listings})
+                disc_listings = list(merged.values())
+                self._discovery_backlog.clear()
             if disc_listings:
                 written, write_note = await self._try_catalog_upsert(
                     disc_listings,
@@ -1350,6 +1375,12 @@ class Hub:
                     disc_deferred += int(written.get("deferred_write") or 0)
                 else:
                     disc_deferred += len(disc_listings)
+                    # Do not drop them: the catalog lock is only busy while a sync chunk is written.
+                    for item in disc_listings[-config.SCRAPE_DISCOVERY_BACKLOG_MAX:] if config.SCRAPE_DISCOVERY_BACKLOG_MAX else []:
+                        self._discovery_backlog[item.id] = item
+        except asyncio.TimeoutError:
+            error = "discovery-timeout: fetch exceeded its hard bound"
+            self.last_error = f"recent-catalog: {error}"
         except Exception as exc:
             error = str(exc)[:240]
             self.last_error = f"recent-catalog: {error}"

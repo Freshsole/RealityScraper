@@ -320,6 +320,16 @@ CATALOG_STALE_GRACE_SEC = max(0, int(os.getenv("CATALOG_STALE_GRACE_SEC", str(3 
 # A shard counts as fully crawled at this share of the portal-reported total.
 CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float(os.getenv("CATALOG_COMPLETE_RATIO", "0.96"))))
 
+# Monitors (monitor_priority) and new_discovery used to stop completely while any daily catalog sync ran.
+# With ~14 portals synced one after another that is most of the day, so users saw no new listings.
+# They now keep running alongside the sync (priority 0/1 at the limiters, one page per poll).
+# SCRAPE_PAUSE_PRIORITY_DURING_CATALOG=1 restores the old behaviour without a redeploy of code.
+SCRAPE_PAUSE_PRIORITY_DURING_CATALOG = os.getenv("SCRAPE_PAUSE_PRIORITY_DURING_CATALOG", "0").strip().lower() in {"1", "true", "yes", "on"}
+# Many users watch the same portal search URL. Identical live polls issued within this window by
+# different hubs of one process share a single fetch (0 disables sharing).
+SCRAPE_LIVE_SHARE_TTL_SEC = max(0.0, float(os.getenv("SCRAPE_LIVE_SHARE_TTL_SEC", "10") or 0))
+# Discovery results whose write was deferred (catalog lock busy) are kept and retried, up to this many.
+SCRAPE_DISCOVERY_BACKLOG_MAX = max(0, int(os.getenv("SCRAPE_DISCOVERY_BACKLOG_MAX", "4000") or 0))
 # How long one monitor tick waits for live polls before reporting; slower ones continue in the background.
 SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float(os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC", "20")))
 

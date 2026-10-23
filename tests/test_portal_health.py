@@ -39,6 +39,24 @@ class PortalHealthTests(unittest.TestCase):
         self.assertEqual(snap["cooldown_sec"], 30 * 60)
         self.assertTrue(snap["disabled"])
 
+    def test_timeouts_after_event_loop_freeze_do_not_trip_breaker(self) -> None:
+        from app import scrape_timing
+
+        with patch.object(scrape_timing, "_last_stall_at", time.monotonic() - 5.0):
+            for _ in range(6):
+                self.assertFalse(portal_health.record_fail("sreality", "timeout"))
+            self.assertFalse(portal_health.is_disabled("sreality"))
+        # Real portal errors still count during a freeze, and timeouts count once the loop is healthy.
+        with patch.object(scrape_timing, "_last_stall_at", time.monotonic() - 5.0):
+            portal_health.record_fail("sreality", "403")
+            portal_health.record_fail("sreality", "403")
+            self.assertTrue(portal_health.record_fail("sreality", "403"))
+        portal_health.reset()
+        with patch.object(scrape_timing, "_last_stall_at", time.monotonic() - 120.0):
+            portal_health.record_fail("sreality", "timeout")
+            portal_health.record_fail("sreality", "timeout")
+            self.assertTrue(portal_health.record_fail("sreality", "timeout"))
+
     def test_ok_resets_consecutive(self) -> None:
         portal_health.record_fail("idnes", "timeout")
         portal_health.record_ok("idnes")
