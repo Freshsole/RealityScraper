@@ -28,6 +28,21 @@
     });
   }
 
+  var devForm = document.getElementById('vr-dev');
+  var devCode = document.getElementById('vr-dev-code');
+  me().then(function (profile) {
+    if (profile && profile.dev_verify_code && !profile.email_verified) { devForm.hidden = false; devForm.style.display = 'flex'; }
+  });
+  devForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    fetch('/api/auth/verify?token=' + encodeURIComponent(devCode.value.trim()))
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { lead.textContent = res.d.detail || 'Kód nesedí.'; return; }
+        location.href = '/registrace?resume=1';
+      });
+  });
+
   if (!token) { fail('V odkazu chybí potvrzovací kód. Otevřete odkaz z e-mailu znovu.'); }
   else {
     fetch('/api/auth/verify?token=' + encodeURIComponent(token))

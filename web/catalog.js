@@ -2092,6 +2092,8 @@
     }
   }
 
+  let catalogRetries = 0;
+
   async function loadCatalog(append = false) {
     if (catalogBusy) {
       if (!append) catalogQueued = true;
@@ -2149,6 +2151,13 @@
         finishCatalogLoad(seq, { keepCount: true });
         return;
       }
+      if (!append && catalogRetries < 2) {
+        // Slow cold query or a busy database: the server keeps computing and caches the result, so try again.
+        catalogRetries += 1;
+        finishCatalogLoad(seq, { keepCount: true });
+        window.setTimeout(() => loadCatalog(), 1500);
+        return;
+      }
       $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
       finishCatalogLoad(seq, { keepCount: true });
       return;
@@ -2157,6 +2166,7 @@
       window.clearTimeout(timeout);
       return;
     }
+    catalogRetries = 0;
     try {
       applyPlaceGeoms(data.places);
       const items = uniqueOffers(data.items || []);

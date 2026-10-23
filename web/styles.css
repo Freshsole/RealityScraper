@@ -2639,6 +2639,7 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 }
 .watch-create {
   width: 100%;
+  margin-top: 32px;
   border: 2px dashed #d0d4cd;
   background: transparent;
   border-radius: 24px;
@@ -3219,3 +3220,101 @@ body.is-settings .nav-tabs .tab { font-size: 14px; }
 }
 .mail-pause[hidden] { display: none; }
 #view-overview > .mail-pause { margin: 16px 0 0; }
+
+/* Overview: same canvas, cards, type and spacing as the settings workspace */
+html[data-page="overview"] body { background: #f7f9f6; }
+html[data-page="overview"] .nav { background: #fff; }
+html[data-page="overview"] .nav-tabs .tab { font-size: 14px; }
+html[data-page="overview"] .footer { background: transparent; }
+#view-overview > .mail-pause { max-width: 1240px; margin: 24px auto 0; }
+.ov-shell { max-width: 1240px; margin: 0 auto; padding: 40px 28px 80px; }
+.ov-head { margin-bottom: 32px; }
+.ov-head p { max-width: 640px; }
+.ov-shell > .error { margin: 0 0 32px; }
+.ov-card {
+  background: #fff;
+  border-radius: 24px;
+  padding: 32px;
+  box-shadow: 0 16px 16px rgba(14, 15, 12, 0.03);
+}
+.ov-stats { display: grid; grid-template-columns: 1fr 2fr; gap: 32px; margin-bottom: 32px; }
+.ov-hero-stat { display: flex; flex-direction: column; justify-content: center; }
+.ov-hero-stat .ov-label { font-size: 16px; }
+.ov-hero-stat .ov-unit { font-size: 18px; margin-top: 12px; }
+.ov-label { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #888e87; }
+.ov-big {
+  font-family: Manrope, Inter, sans-serif;
+  font-weight: 800;
+  font-size: 120px;
+  line-height: 1;
+  letter-spacing: -3px;
+  font-variant-numeric: tabular-nums;
+  color: var(--forest);
+}
+.ov-unit { margin: 8px 0 0; font-size: 14px; color: #555b54; }
+.ov-hero-stat .mint { margin: 24px 0 0; font-size: 13px; }
+.ov-facts { display: grid; grid-template-columns: repeat(2, 1fr); grid-auto-rows: 1fr; gap: 0 32px; }
+.ov-fact { display: flex; flex-direction: column; justify-content: center; gap: 4px; border-top: 1px solid #e8ebe6; }
+.ov-fact:nth-child(-n+2) { border-top: 0; }
+.ov-fact span { font-size: 12px; font-weight: 600; color: #888e87; }
+.ov-fact strong { font-size: 18px; font-weight: 700; color: var(--forest); font-variant-numeric: tabular-nums; }
+.ov-block { margin-bottom: 32px; }
+.ov-block .carousel-head { align-items: center; margin-bottom: 24px; }
+.ov-block .carousel-head h2 {
+  margin: 0;
+  font-family: Manrope, Inter, sans-serif;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+  font-weight: 800;
+  text-transform: none;
+  color: var(--forest);
+}
+.ov-block .carousel-all { margin-top: 0; }
+.ov-block .carousel { padding: 0; }
+.ov-block .carousel-pager { margin-top: 16px; }
+.ov-map .map-card { margin-top: 0; box-shadow: none; border-radius: 16px; }
+.ov-map { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .ov-shell { padding: 32px 20px 64px; }
+  .ov-stats { grid-template-columns: 1fr; gap: 24px; }
+  .ov-card { padding: 24px; }
+  .ov-facts { grid-template-columns: 1fr 1fr; gap: 16px; }
+  .ov-block { margin-bottom: 24px; }
+  #hits-map { height: 360px; }
+}
+
+/* Overview empty states: ghost cards with a call to action */
+.ov-empty { position: relative; }
+.ov-empty[hidden] { display: none; }
+.ov-skel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; opacity: 0.55; }
+.ov-skel-card { border: 1.5px solid #e8ebe6; border-radius: 24px; padding: 0 0 22px; display: flex; flex-direction: column; gap: 12px; overflow: hidden; }
+.ov-skel-photo { height: 140px; background: #eef1ec; }
+.ov-skel-card i { display: block; height: 12px; margin: 0 20px; border-radius: 6px; background: #eef1ec; }
+.ov-skel-card i.w60 { width: 60%; height: 16px; }
+.ov-skel-card i.w40 { width: 40%; }
+.ov-skel-card i.w80 { width: 80%; }
+.ov-empty-msg {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(440px, calc(100% - 32px));
+  background: #fff;
+  border-radius: 24px;
+  box-shadow: 0 16px 40px rgba(14, 15, 12, 0.10);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+.ov-empty-msg .btn { text-decoration: none; }
+.ov-empty-msg strong { font-family: Manrope, Inter, sans-serif; font-size: 20px; font-weight: 800; letter-spacing: -0.5px; color: var(--forest); }
+.ov-empty-msg p { margin: 0 0 8px; font-size: 14px; color: #555b54; }
+@media (max-width: 900px) {
+  .ov-skel { grid-template-columns: 1fr; }
+  .ov-skel-card:nth-child(n+2) { display: none; }
+}

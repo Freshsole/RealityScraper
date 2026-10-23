@@ -474,7 +474,7 @@ async def _send_verification_email(request: Request, user: dict[str, Any]) -> bo
     return False
 
 
-_VERIFY_EXEMPT = ("/api/auth/", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
+_VERIFY_EXEMPT = ("/api/auth/", "/api/admin/login", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
 
 
 @app.middleware("http")
@@ -1655,7 +1655,16 @@ async def auth_verify_resend(request: Request, realitify_session: str | None = C
 
 
 @app.get("/api/auth/verify")
-async def auth_verify_email(token: str = "") -> dict:
+async def auth_verify_email(
+    token: str = "",
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> dict:
+    if config.DEV_VERIFY_CODE and token.strip() == config.DEV_VERIFY_CODE:
+        current = await _auth_db(user_account.user_from_session, hub.store, realitify_session)
+        if not current:
+            raise HTTPException(400, "Nejdřív se přihlaste, pak zadejte kód.")
+        await _auth_db(user_registry.mark_email_verified, hub.store, str(current["id"]))
+        return {"ok": True}
     user = await _auth_db(user_registry.verify_email_with_token, hub.store, token)
     if not user:
         raise HTTPException(400, "Ověřovací odkaz je neplatný nebo vypršel")
@@ -1697,6 +1706,7 @@ async def auth_me(realitify_session: str | None = Cookie(default=None, alias="re
         **user,
         "email_alerts_paused": bool(config.EMAIL_ONLY_TRANSACTIONAL or config.EMAIL_ALERTS_PAUSED),
         "email_verification_required": required,
+        "dev_verify_code": bool(config.DEV_VERIFY_CODE),
     }
 
 
@@ -3453,6 +3463,12 @@ _CATALOG_STALE_S = 3600.0
 _CATALOG_CACHE_MAX = 400
 
 
+def _drop_user_catalog_cache(ustore: Store) -> None:
+    prefix = f"{ustore.path}|"
+    for key in [k for k in _CATALOG_CACHE if k.startswith(prefix)]:
+        _CATALOG_CACHE.pop(key, None)
+
+
 async def _refresh_catalog_cache(key: str, payload: dict[str, Any], store: Store) -> dict[str, Any]:
     data = await _run_catalog_query(payload, store)
     if len(_CATALOG_CACHE) >= _CATALOG_CACHE_MAX:
@@ -3465,8 +3481,8 @@ async def _refresh_catalog_cache(key: str, payload: dict[str, Any], store: Store
     return data
 
 
-async def _run_catalog_query_cached(payload: dict[str, Any], store: Store) -> dict[str, Any]:
-    key = f"{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
+async def _run_catalog_query_cached(payload: dict[str, Any], store: Store, scope: str = "") -> dict[str, Any]:
+    key = f"{scope}|{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
     entry = _CATALOG_CACHE.get(key)
     now = time.time()
     if entry and entry.get("data") is not None:
@@ -3567,7 +3583,7 @@ async def catalog(
         )
     )
     reader = _catalog_reader(cuser, ustore, payload)
-    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, reader)
+    return await _run_catalog_query_cached(payload, reader, scope="" if cuser is None else str(ustore.path))
 
 
 @app.get("/api/catalog/pins")
@@ -3642,7 +3658,7 @@ async def catalog_pins(
         )
     )
     reader = _catalog_reader(cuser, ustore, payload)
-    return await (_run_catalog_query_cached if cuser is None else _run_catalog_query)(payload, reader)
+    return await _run_catalog_query_cached(payload, reader, scope="" if cuser is None else str(ustore.path))
 
 
 @app.get("/api/catalog/stats")
@@ -3726,11 +3742,13 @@ async def save_listing_user(
 ) -> dict:
     _, ustore = _user_store(realitify_session)
     try:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             ustore.set_listing_user, payload.get("url") or "", payload.get("status"), payload.get("note")
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    _drop_user_catalog_cache(ustore)
+    return result
 
 
 @app.get("/api/settings")

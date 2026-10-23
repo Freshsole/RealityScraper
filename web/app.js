@@ -2,9 +2,6 @@ const $ = (id) => document.getElementById(id);
 
 const livePill = $("live-pill");
 const liveLabel = $("live-label");
-const toggleBtn = $("toggle");
-const checkBtn = $("check");
-const testBtn = $("test");
 const errorEl = $("error");
 
 let hitsMap = null;
@@ -292,11 +289,7 @@ function listingCardHtml(item, { compact = false } = {}) {
   `;
 }
 
-function setBusy(busy) {
-  [toggleBtn, checkBtn, testBtn].forEach((btn) => {
-    if (btn) btn.disabled = busy;
-  });
-}
+function setBusy() {}
 
 function toast(message, kind = "ok") {
   const host = $("toasts");
@@ -541,7 +534,6 @@ function renderStatus(status) {
   const running = Boolean(status.running);
   livePill.dataset.state = status.last_error ? "error" : running ? "on" : "off";
   liveLabel.textContent = status.last_error ? "Chyba" : running ? "Hlídám" : "Zastaveno";
-  setLabeled(toggleBtn, running ? "Zastavit hlídání" : "Spustit hlídání", running ? "pause" : "play");
   $("new-today").textContent = status.new_today ?? 0;
   $("tracked").textContent = status.tracked ?? 0;
   $("total").textContent = status.search_total || "–";
@@ -550,9 +542,6 @@ function renderStatus(status) {
   if (status.version) {
     if ($("footer-version")) $("footer-version").textContent = `v${status.version}`;
   }
-  $("mint").textContent = status.seeded
-    ? "Monitory berou unikátní hledání. Nové byty jdou na Discord, katalog se doplňuje denně."
-    : "Nový monitor se nasadí z katalogu, bez stahování celé nabídky.";
   if (status.last_error) {
     console.error("Status error:", status.last_error);
     errorEl.hidden = false;
@@ -567,7 +556,6 @@ function renderStatus(status) {
   renderMap(uniqueListings(status.recent || []));
   renderMonitors(status.monitors || []);
   renderBilling(status.billing);
-  renderCatalogSync(status.catalog_sync, status.catalog_running);
   fillTemplateSelects(status.templates || []);
 }
 
@@ -888,20 +876,6 @@ function openMonitorEditor(id, draft = null) {
         : `<p class="monitor-preview-empty">Zatím žádné nabídky v tomto monitoru.</p>`;
     })
     .catch(() => {});
-}
-
-function renderCatalogSync(sync, running) {
-  const host = $("catalog-sync-status");
-  if (!host) return;
-  const data = sync || {};
-  const jobs = Number(data.jobs || 0);
-  const done = Number(data.done || 0);
-  const listings = Number(data.listings || 0).toLocaleString("cs-CZ");
-  const shard = data.running ? `Probíhá část ${data.running}.` : jobs ? `Hotovo ${done} z ${jobs} částí.` : "Noční sync zatím neběžel.";
-  const last = data.last_run ? `Poslední běh ${formatTime(data.last_run)}.` : "Zatím bez dokončeného běhu.";
-  const err = data.last_error ? ` Chyba: ${data.last_error}` : "";
-  const state = running || data.status === "running" ? "Probíhá sync." : data.status === "partial" ? "Poslední běh byl neúplný." : data.status === "done" ? "Katalog je aktuální." : "Čeká na denní sync.";
-  host.textContent = `${state} ${shard} V katalogu ${listings} inzerátů. ${last}${err}`;
 }
 
 function labelFromCatalog(catalog, key, ids) {
@@ -2486,63 +2460,6 @@ async function post(url, body, okMessage) {
   }
 }
 
-toggleBtn.addEventListener("click", async () => {
-  const status = await refresh();
-  await post(
-    status.running ? "/api/monitor/stop" : "/api/monitor/start",
-    undefined,
-    status.running ? "Hlídání zastaveno" : "Hlídání spuštěno",
-  );
-});
-checkBtn.addEventListener("click", () => post("/api/monitor/check", undefined, "Kontrola dokončena"));
-testBtn.addEventListener("click", async () => {
-  const data = await post("/api/discord/test");
-  if (!data) return;
-  if (data.push && data.discord && data.email) toast("Test odeslán na Discord, e-mail i push");
-  else if (data.email && data.discord) toast("Test odeslán na Discord i e-mail");
-  else if (data.email && data.push) toast("Test odeslán na e-mail i do push notifikací");
-  else if (data.push && data.discord) toast("Test odeslán na Discord i do push notifikací");
-  else if (data.email) toast("Test odeslán na e-mail");
-  else if (data.push) toast("Test odeslán do push notifikací");
-  else if ($("notify-push")?.checked) toast("Discord prošel, push se neodeslal. Zkontrolujte oprávnění oznámení v macOS.", "error");
-  else toast("Test odeslán na Discord");
-});
-
-async function checkUpdates() {
-  try {
-    const info = await fetch("/api/version").then((res) => res.json());
-    const btn = $("update-btn");
-    if (!btn) return info;
-    if (info.update_available) {
-      btn.hidden = false;
-      setLabeled(btn, `Aktualizovat na ${info.latest}`, "download");
-      toast(`Je nová verze ${info.latest}`, "info");
-    } else {
-      btn.hidden = true;
-    }
-    return info;
-  } catch {
-    return null;
-  }
-}
-
-$("update-btn")?.addEventListener("click", async () => {
-  toast("Stahuji aktualizaci…", "info");
-  const result = await post("/api/update", undefined, "Aktualizace se instaluje, aplikace se restartuje");
-  if (result?.restarting) toast("Za chvíli se okno zavře a spustí nová verze", "info");
-});
-
-function downloadBackup(url, label) {
-  const link = document.createElement("a");
-  link.href = url;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  toast(label);
-}
-
-$("export-pack")?.addEventListener("click", () => downloadBackup("/api/backup/pack", "Stahuji zip balíček"));
-$("export-json")?.addEventListener("click", () => downloadBackup("/api/backup/json", "Stahuji JSON"));
 function commutePlaceholder(index) {
   return index === 0 ? "Práce" : "Metro";
 }
@@ -2986,10 +2903,6 @@ async function loadAppSettings() {
   updatePushHint();
 }
 
-$("catalog-sync-now")?.addEventListener("click", () =>
-  post("/api/catalog/sync", {}, "Denní sync katalogu běží na pozadí"),
-);
-
 $("digest-test")?.addEventListener("click", async () => {
   const data = await post(
     "/api/digest/test",
@@ -3157,47 +3070,6 @@ document.addEventListener("click", (event) => {
     if (row) closeCommuteSuggest(row);
   });
 });
-
-$("export-db")?.addEventListener("click", () => downloadBackup("/api/backup/sqlite", "Stahuji databázi"));
-
-async function importBackup(file) {
-  if (!file) return;
-  if (!confirm("Nahrát zálohu? Přepíše monitory a případně databázi na tomto počítači.")) return;
-  const body = new FormData();
-  body.append("file", file);
-  try {
-    const response = await fetch("/api/backup/import", { method: "POST", body });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.detail || "Import selhal");
-    if (data.status) renderStatus(data.status);
-    toast("Záloha je nahraná");
-  } catch (err) {
-    toast(err.message, "error");
-  }
-}
-
-$("import-file")?.addEventListener("change", (event) => {
-  const file = event.target.files?.[0];
-  importBackup(file);
-  event.target.value = "";
-});
-
-const drop = $("import-drop");
-if (drop) {
-  ["dragenter", "dragover"].forEach((type) => {
-    drop.addEventListener(type, (event) => {
-      event.preventDefault();
-      drop.classList.add("over");
-    });
-  });
-  ["dragleave", "drop"].forEach((type) => {
-    drop.addEventListener(type, (event) => {
-      event.preventDefault();
-      drop.classList.remove("over");
-    });
-  });
-  drop.addEventListener("drop", (event) => importBackup(event.dataTransfer?.files?.[0]));
-}
 
 $("watch-create")?.addEventListener("click", () => {
   const limit = currentBilling().watch_limit;
@@ -3373,7 +3245,6 @@ async function boot() {
     applyRoute();
     if (wantedPlan !== (currentBilling().plan || "free")) await pickBillingPlan(wantedPlan);
   }
-  checkUpdates();
   const params = new URLSearchParams(location.search);
   const drafted = params.get("url");
   const draftedName = params.get("name");

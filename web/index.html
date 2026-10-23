@@ -55,7 +55,6 @@
         </a>
       </div>
       <div class="nav-end">
-        <button id="update-btn" class="btn" type="button" hidden data-icon="download">Aktualizovat</button>
         <div id="live-pill" class="live-pill nav-sr" data-state="off">
           <span class="dot"></span>
           <span id="live-label">Načítám…</span>
@@ -72,58 +71,74 @@
 
     <div id="view-overview">
       <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
-      <header class="hero">
-        <div>
-          <p class="kicker">Víc hledání najednou · nový byt i změna ceny · Discord</p>
-          <h1 class="display">Hlídám<br />pražské<br />pronájmy</h1>
-          <p class="lead">
-            Každý monitor má vlastní URL a šablonu Discord zprávy. Nový byt nebo změna ceny jde rovnou do kanálu.
-          </p>
-          <div class="actions">
-            <button id="toggle" class="btn" type="button" data-icon="pause">Zastavit hlídání</button>
-            <button id="check" class="btn btn-ghost" type="button" data-icon="refresh">Zkontrolovat teď</button>
-            <button id="test" class="btn btn-ghost" type="button" data-icon="send">Odeslat test</button>
+      <div class="ov-shell">
+        <header class="set-head ov-head">
+          <h1>PŘEHLED</h1>
+          <p>Nové nabídky a změny cen z vašich hlídacích profilů. Každý profil hlídá své hledání 24/7 a upozornění jde na Discord, e-mail nebo push.</p>
+        </header>
+        <p id="error" class="error" hidden></p>
+        <section class="ov-stats">
+          <article class="ov-card ov-hero-stat">
+            <p class="ov-label">Nové dnes</p>
+            <div id="new-today" class="ov-big">0</div>
+            <p class="ov-unit">notifikací</p>
+          </article>
+          <article class="ov-card ov-facts">
+            <div class="ov-fact"><span>Sledovaných ID</span><strong id="tracked">–</strong></div>
+            <div class="ov-fact"><span>V katalogu</span><strong id="total">–</strong></div>
+            <div class="ov-fact"><span>Poslední kontrola</span><strong id="last-check">ještě ne</strong></div>
+            <div class="ov-fact"><span>Interval</span><strong id="interval">60 s</strong></div>
+          </article>
+        </section>
+        <section class="ov-card ov-block">
+          <div class="carousel-head">
+            <h2>NOVÉ DNES</h2>
+            <a class="carousel-all" href="/nabidka?hits=today">Zobrazit vše</a>
           </div>
-          <p id="error" class="error" hidden></p>
-        </div>
-        <aside class="card">
-          <p class="card-label">Nové dnes</p>
-          <div id="new-today" class="stat-num">0</div>
-          <p class="stat-unit">notifikací na Discord</p>
-          <div class="mint" id="mint">První běh každého monitoru si uloží aktuální nabídku potichu.</div>
-          <div class="rows">
-            <div class="row"><span>Sledovaných ID</span><strong id="tracked">–</strong></div>
-            <div class="row"><span>V katalogu</span><strong id="total">–</strong></div>
-            <div class="row"><span>Poslední kontrola</span><strong id="last-check">ještě ne</strong></div>
-            <div class="row"><span>Interval</span><strong id="interval">60 s</strong></div>
-          </div>
-        </aside>
-      </header>
-      <section class="section section-white">
-        <div class="section-inner">
-          <div class="carousel-block">
-            <div class="carousel-head">
-              <h2>Nové dnes</h2>
-              <a class="carousel-all" href="/nabidka?hits=today">Zobrazit vše</a>
+          <div id="carousel-today" class="carousel"></div>
+          <div class="carousel-pager" id="pager-today" hidden></div>
+          <div id="empty-today" class="ov-empty" hidden>
+            <div class="ov-skel" aria-hidden="true">
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
             </div>
-            <div id="carousel-today" class="carousel"></div>
-            <div class="carousel-pager" id="pager-today" hidden></div>
-            <p id="empty-today" class="empty" hidden>Dnes ještě žádný zásah.</p>
-          </div>
-          <div class="carousel-block">
-            <div class="carousel-head">
-              <h2>Všechny zásahy</h2>
-              <a class="carousel-all" href="/nabidka?hits=notified">Zobrazit vše</a>
+            <div class="ov-empty-msg">
+              <strong>Zatím tady nic není</strong>
+              <p>Nastavte si hlídací psy, ať vám žádná nabídka neuteče.</p>
+              <a class="btn" href="/nastaveni/profily">Nastavit hlídacího psa</a>
             </div>
-            <div id="carousel-all" class="carousel"></div>
-            <div class="carousel-pager" id="pager-all" hidden></div>
-            <p id="empty-all" class="empty" hidden>Zatím žádný zásah z monitorů.</p>
+          </div>
+        </section>
+        <section class="ov-card ov-block">
+          <div class="carousel-head">
+            <h2>VŠECHNY ZÁSAHY</h2>
+            <a class="carousel-all" href="/nabidka?hits=notified">Zobrazit vše</a>
+          </div>
+          <div id="carousel-all" class="carousel"></div>
+          <div class="carousel-pager" id="pager-all" hidden></div>
+          <div id="empty-all" class="ov-empty" hidden>
+            <div class="ov-skel" aria-hidden="true">
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
+              <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
+            </div>
+            <div class="ov-empty-msg">
+              <strong>Zatím tady nic není</strong>
+              <p>Nastavte si hlídací psy, ať vám žádná nabídka neuteče.</p>
+              <a class="btn" href="/nastaveni/profily">Nastavit hlídacího psa</a>
+            </div>
+          </div>
+        </section>
+        <section class="ov-card ov-block ov-map">
+          <div class="carousel-head">
+            <h2>MAPA ZÁSAHŮ</h2>
           </div>
           <div class="map-card">
             <div id="hits-map" role="img" aria-label="Mapa zásahů"></div>
           </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
 
     <div id="view-catalog" hidden>
@@ -257,22 +272,6 @@
               <div id="commute-points"></div>
               <button class="btn btn-ghost" id="commute-add" type="button" data-icon="pin">+ Přidat bod</button>
               <p class="set-hint">Limit 2 body v tarifu Start. Upgradujte na Pro pro až 5 bodů.</p>
-            </article>
-            <article class="set-card">
-              <h2>DATA A ZÁLOHA</h2>
-              <p class="set-copy">Jednou denně se doplní sdílený katalog inzerátů. Zip obsahuje JSON (monitory, šablony, webhook) i SQLite databázi.</p>
-              <p id="catalog-sync-status" class="set-copy">Zatím bez běhu.</p>
-              <div class="set-actions">
-                <button class="btn" id="catalog-sync-now" type="button" data-icon="refresh">Spustit synchronizaci</button>
-                <button class="btn btn-ghost" id="export-pack" type="button" data-icon="download">Stáhnout balíček</button>
-                <button class="btn btn-ghost" id="export-json" type="button" data-icon="file">Jen JSON</button>
-                <button class="btn btn-ghost" id="export-db" type="button" data-icon="database">Jen databáze</button>
-              </div>
-              <label class="drop" id="import-drop">
-                <input id="import-file" type="file" accept=".zip,.json,.sqlite,.db" hidden />
-                <strong data-icon="upload">Vyber soubor</strong>
-                <span>sreality-backup.zip, config.json nebo monitor.sqlite</span>
-              </label>
             </article>
             <article class="set-card set-danger">
               <h2>NEBEZPEČNÁ ZÓNA</h2>

@@ -186,6 +186,10 @@ SOLD_INVENTORY_SEC = max(120, int(os.getenv("SOLD_INVENTORY_SEC", "600")))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
 PORT = int(os.getenv("PORT", "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
+# Local development only (PUBLIC_BASE_URL points at localhost): the code 000000 confirms an e-mail without a mailbox.
+DEV_VERIFY_CODE = (
+    "000000" if any(h in PUBLIC_BASE_URL for h in ("://localhost", "://127.0.0.1", "://[::1]")) else ""
+)
 STRIPE_PUBLISHABLE_KEY = _api_key_env("STRIPE_PUBLISHABLE_KEY")
 STRIPE_SECRET_KEY = _api_key_env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = _api_key_env("STRIPE_WEBHOOK_SECRET")

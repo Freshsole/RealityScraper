@@ -43,9 +43,13 @@
         </div>
         <a class="auth-btn" id="vr-action" href="/" hidden>Pokračovat</a>
         <button class="auth-ghost" id="vr-resend" type="button" hidden>Poslat nový odkaz</button>
+        <form id="vr-dev" hidden style="margin-top:16px;gap:8px">
+          <input id="vr-dev-code" inputmode="numeric" maxlength="6" placeholder="Kód (dev: 000000)" autocomplete="off" style="flex:1;padding:10px;border:1px solid #ccc;border-radius:8px">
+          <button class="auth-btn" type="submit">Potvrdit</button>
+        </form>
       </div>
     </div>
-    <script src="/static/site/verify.js?v=1"></script>
+    <script src="/static/site/verify.js?v=2"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>
