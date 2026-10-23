@@ -1023,7 +1023,7 @@ def top_localities_html(store: Store, limit: int = 10) -> str:
         '<section class="market-top">'
         '<div class="section-head">'
         '<p class="eyebrow">PŘEHLED TRHU</p>'
-        '<h2 class="display">NEJHLEDANĚJŠÍ LOKALITY K PRONÁJMU</h2>'
+        '<h2 class="display is-caps">Nejhledanější lokality k pronájmu</h2>'
         "</div>"
         f'<div class="loc-grid">{cards}</div>'
         '<a class="pill pill-lg" href="/hledat">Procházet všechny nabídky</a>'

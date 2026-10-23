@@ -26,6 +26,8 @@
     <link rel="stylesheet" href="/static/site/site.css?v=28" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
     <link rel="stylesheet" href="/static/site/pages.css?v=11" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+    <script src="/static/site/mobile.js?v=1" defer></script>
     <link rel="preload" as="image" href="/static/site/assets/room/dum.webp" fetchpriority="high" />
     <style>
       html, body { overflow-x: clip; }
@@ -167,7 +169,7 @@
     <section class="sold-section">
       <div class="section-head">
         <p class="eyebrow">PŘÍKLADY Z TRHU</p>
-        <h2 class="display">TYTO BYTY BYLY PRYČ ZA PÁR HODIN</h2>
+        <h2 class="display is-caps">Tyto byty byly pryč za pár hodin</h2>
       </div>
       <div class="sold-cards" id="sold-cards">
         <article class="sold-card">
@@ -239,7 +241,7 @@
     <section class="how-section" id="jak-to-funguje">
       <div class="section-head">
         <p class="eyebrow">JAK REALITIFY FUNGUJE</p>
-        <h2 class="display">ZÍSKEJTE UNIKÁTNÍ NÁSKOK PŘED OSTATNÍMI ZÁJEMCI</h2>
+        <h2 class="display is-caps">Získejte unikátní náskok před ostatními zájemci</h2>
       </div>
       <div class="steps">
         <article class="step-card">
@@ -278,7 +280,7 @@
     <section class="fomo">
       <div class="fomo-copy">
         <p class="eyebrow">ČAS HRAJE PROTI VÁM</p>
-        <h2 class="display">ZATÍMCO VY RUČNĚ HLEDÁTE, NĚKDO JINÝ UŽ KUPUJE.</h2>
+        <h2 class="display is-caps">Zatímco vy ručně hledáte, někdo jiný už kupuje.</h2>
         <p class="lead">Nejlepší byty v Praze a krajských městech jsou často zarezervované do několika hodin. Spoléhat na ruční prohledávání portálů jednou denně znamená sbírat zbytky. Realitify vám dává technologický náskok, který rozhoduje o vašem budoucím bydlení.</p>
       </div>
       <div class="fomo-actions">
@@ -293,7 +295,7 @@
     <section class="db-section" id="databaze">
       <div class="section-head">
         <p class="eyebrow">KOMPLETNÍ TRH NA JEDNOM MÍSTĚ</p>
-        <h2 class="display">VŠECHNY BYTY V ČR ZDARMA K PROHLÍŽENÍ</h2>
+        <h2 class="display is-caps">Všechny byty v ČR zdarma k prohlížení</h2>
         <p class="lead" style="max-width:680px">První hledání je bez registrace. Neomezené prohlížení celé databáze máte po bezplatné registraci — bez placených účtů na portálech.</p>
       </div>
       <div class="db-stage">
@@ -394,7 +396,7 @@
     <section class="compare-section" id="srovnani">
       <div class="section-head">
         <p class="eyebrow">UŠETŘETE ČAS I PENÍZE</p>
-        <h2 class="display">JEDNA SLUŽBA MÍSTO PĚTI HLÍDACÍCH PSŮ</h2>
+        <h2 class="display is-caps">Jedna služba místo pěti hlídacích psů</h2>
         <p class="lead" style="max-width:680px">Už nemusíte platit prémiové hlídače na každém webu samostatně. Realitify vše sjednocuje pod jedno přehledné rozhraní s bezkonkurenční rychlostí.</p>
       </div>
       <div class="table-wrap">
@@ -408,47 +410,45 @@
           </div>
           <div class="cmp-row">
             <div class="feat">Měsíční cena</div>
-            <div class="col">Základní zdarma / SMS placené</div>
-            <div class="col">79 Kč / profil</div>
-            <div class="col">Zdarma (e-mail)</div>
-            <p class="flex-[1_0_0] font-['Inter:Bold'] font-bold min-w-px relative text-[#163300] text-center" data-node-id="6:218">
-              Od 149 Kč (všechny portály)
-            </p>
+            <div class="col" data-label="Sreality">Základní zdarma / SMS placené</div>
+            <div class="col" data-label="Bezrealitky">79 Kč / profil</div>
+            <div class="col" data-label="Reality.cz">Zdarma (e-mail)</div>
+            <div class="col is-us" data-label="Realitify">Od 149 Kč (všechny portály)</div>
           </div>
           <div class="cmp-row">
             <div class="feat">Sledované portály</div>
-            <div class="col">Pouze Sreality.cz (1)</div>
-            <div class="col">Pouze Bezrealitky (1)</div>
-            <div class="col">Pouze Reality.cz (1)</div>
-            <div class="col is-us">Všech 12+ portálů v ČR</div>
+            <div class="col" data-label="Sreality">Pouze Sreality.cz (1)</div>
+            <div class="col" data-label="Bezrealitky">Pouze Bezrealitky (1)</div>
+            <div class="col" data-label="Reality.cz">Pouze Reality.cz (1)</div>
+            <div class="col is-us" data-label="Realitify">Všech __PORTALS_COUNT__ portálů v ČR</div>
           </div>
           <div class="cmp-row hi">
             <div class="feat">Rychlost notifikace</div>
-            <div class="col">15 minut až hodiny</div>
-            <div class="col">Často s velkým zpožděním</div>
-            <div class="col">Několikrát denně (e-mail)</div>
-            <div class="col is-us xl">Start do 60 s · PRO do 30 s</div>
+            <div class="col" data-label="Sreality">15 minut až hodiny</div>
+            <div class="col" data-label="Bezrealitky">Často s velkým zpožděním</div>
+            <div class="col" data-label="Reality.cz">Několikrát denně (e-mail)</div>
+            <div class="col is-us xl" data-label="Realitify">Start do 60 s · PRO do 30 s</div>
           </div>
           <div class="cmp-row">
             <div class="feat">Vlastní filtry</div>
-            <div class="col">Základní</div>
-            <div class="col">Základní</div>
-            <div class="col">Žádné</div>
-            <div class="col is-us">Pokročilé (vyloučení RK, klíčová slova)</div>
+            <div class="col" data-label="Sreality">Základní</div>
+            <div class="col" data-label="Bezrealitky">Základní</div>
+            <div class="col" data-label="Reality.cz">Žádné</div>
+            <div class="col is-us" data-label="Realitify">Pokročilé (vyloučení RK, klíčová slova)</div>
           </div>
           <div class="cmp-row">
             <div class="feat">Sjednocená databáze</div>
-            <div class="col">Ne</div>
-            <div class="col">Ne</div>
-            <div class="col">Ne</div>
-            <div class="col is-us">Ano — kompletně zdarma</div>
+            <div class="col" data-label="Sreality">Ne</div>
+            <div class="col" data-label="Bezrealitky">Ne</div>
+            <div class="col" data-label="Reality.cz">Ne</div>
+            <div class="col is-us" data-label="Realitify">Ano — kompletně zdarma</div>
           </div>
           <div class="cmp-row">
             <div class="feat">Mobilní SMS / Push notifikace</div>
-            <div class="col">Jen placené SMS</div>
-            <div class="col">Pouze v appce</div>
-            <div class="col">Pouze e-mail</div>
-            <div class="col"><span class="icon" style="width:20px;height:20px;margin:0 auto"><img src="/static/site/assets/check-green.svg" width="20" height="20" alt="" /></span></div>
+            <div class="col" data-label="Sreality">Jen placené SMS</div>
+            <div class="col" data-label="Bezrealitky">Pouze v appce</div>
+            <div class="col" data-label="Reality.cz">Pouze e-mail</div>
+            <div class="col is-us" data-label="Realitify">Ano — push, e-mail i Discord</div>
           </div>
         </div>
       </div>
@@ -461,7 +461,7 @@
     <section class="pricing-section" id="cenik">
       <div class="section-head">
         <p class="eyebrow">CENOVÉ PLÁNY</p>
-        <h2 class="display">FLEXIBILNÍ TARIFY PRO KAŽDÉHO</h2>
+        <h2 class="display is-caps">Flexibilní tarify pro každého</h2>
       </div>
       <div class="pricing-grid">
         <article class="tier">
@@ -520,7 +520,7 @@
     <section class="quotes-section">
       <div class="section-head">
         <p class="eyebrow">ZKUŠENOSTI NAŠICH UŽIVATELŮ</p>
-        <h2 class="display">NAŠLI SVÉ BYDLENÍ DÍKY RYCHLOSTI</h2>
+        <h2 class="display is-caps">Našli své bydlení díky rychlosti</h2>
       </div>
       <div class="quotes">
         <article class="quote">
@@ -583,14 +583,14 @@
     <section class="faq-section" id="faq">
       <div class="section-head">
         <p class="eyebrow">MÁTE OTÁZKY?</p>
-        <h2 class="display">ČASTO KLADENÉ DOTAZY</h2>
+        <h2 class="display is-caps">Často kladené dotazy</h2>
       </div>
       <div class="qa-list"><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Jak rychle dostanu notifikaci o novém bytu?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>U tarifu Start odesíláme upozornění do 60 sekund od zveřejnění inzerátu. PRO má prioritu a stihne to do 30 sekund. Tarif Zdarma hlídá do 5 minut na 4 hlavních portálech.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Které české portály systém aktuálně hlídá?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Sledujeme Sreality, Bezrealitky, Reality.cz, Idnes Reality, UlovDomov, Reality.iDNES, a řadu dalších menších regionálních serverů včetně inzerátů na sociálních sítích.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Můžu předplatné kdykoliv zrušit?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano, předplatné je zcela bez závazků. Můžete ho kdykoliv zrušit v nastavení svého profilu jedním kliknutím. Žádné skryté poplatky.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Je prohlížení sjednocené databáze opravdu zdarma?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano. Prohlížení a ruční vyhledávání všech aktivních inzerátů v ČR je pro všechny uživatele zcela zdarma. Platíte pouze za automatické real-time hlídání a rychlé notifikace.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>V čem se Realitify liší od klasického hlídacího psa na Sreality?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Sreality vám hlídají pouze své vlastní stránky. Realitify hlídá přes 12 různých portálů najednou, filtruje duplicity, odstraňuje RK a doručuje notifikace okamžitě, zatímco standardní hlídací psi mívají zpoždění 15 minut až několik hodin.</p></div></div></div></div>
     </section>
 
     <section class="final-cta">
       <div class="final-copy">
-        <h2 class="display">PŘESTAŇTE PŘICHÁZET O NEJLEPŠÍ BYTY.</h2>
+        <h2 class="display is-caps">Přestaňte přicházet o nejlepší byty.</h2>
         <p class="lead">Založte si bezplatný účet a začněte sledovat kompletní český realitní trh na jednom místě ještě dnes. První notifikaci můžete dostat už za minutu.</p>
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;gap:16px">

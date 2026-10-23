@@ -28,6 +28,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/site/site.css?v=28" />
     <link rel="stylesheet" href="/static/site/auth.css?v=4" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+    <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
   <body class="auth-page">
     <div class="auth-glow auth-glow-1"><img src="/static/site/assets/auth-glow-1.svg" width="400" height="400" alt="" /></div>
@@ -39,7 +41,7 @@
       </a>
       <form class="auth-card" id="forgot-form">
         <div class="auth-head">
-          <h1 class="auth-h">OBNOVTE SI HESLO</h1>
+          <h1 class="auth-h is-caps">Obnovte si heslo</h1>
           <p class="auth-lead">Zadejte e-mail spojený s vaším účtem a pošleme vám odkaz pro obnovení hesla.</p>
         </div>
         <div class="field">
@@ -54,7 +56,7 @@
       </form>
       <form class="auth-card" id="reset-form" hidden>
         <div class="auth-head">
-          <h1 class="auth-h">NOVÉ HESLO</h1>
+          <h1 class="auth-h is-caps">Nové heslo</h1>
           <p class="auth-lead">Zvolte nové heslo k účtu. Po uložení budete rovnou přihlášeni.</p>
         </div>
         <div class="auth-fields">
@@ -93,7 +95,7 @@
           <span class="icon" style="width:24px;height:24px"><img src="/static/site/assets/check-circle.svg" width="24" height="24" alt="" /></span>
         </div>
         <div class="auth-head">
-          <h1 class="auth-h">ODKAZ ODESLÁN!</h1>
+          <h1 class="auth-h is-caps">Odkaz odeslán!</h1>
           <p class="auth-lead">Pokud účet s e-mailem <strong data-email></strong> existuje, pošleme odkaz během několika sekund.</p>
         </div>
         <div class="info-alert">

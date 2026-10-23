@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/static/mobile-app.css?v=__ASSET_VERSION__" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -73,7 +74,7 @@
       <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
       <div class="ov-shell">
         <header class="set-head ov-head">
-          <h1>PŘEHLED</h1>
+          <h1 class="is-caps">Přehled</h1>
           <p>Nové nabídky a změny cen z vašich hlídacích profilů. Každý profil hlídá své hledání 24/7 a upozornění jde na Discord, e-mail nebo push.</p>
         </header>
         <p id="error" class="error" hidden></p>
@@ -92,7 +93,7 @@
         </section>
         <section class="ov-card ov-block">
           <div class="carousel-head">
-            <h2>NOVÉ DNES</h2>
+            <h2 class="is-caps">Nové dnes</h2>
             <a class="carousel-all" href="/nabidka?hits=today">Zobrazit vše</a>
           </div>
           <div id="carousel-today" class="carousel"></div>
@@ -112,7 +113,7 @@
         </section>
         <section class="ov-card ov-block">
           <div class="carousel-head">
-            <h2>VŠECHNY ZÁSAHY</h2>
+            <h2 class="is-caps">Všechny zásahy</h2>
             <a class="carousel-all" href="/nabidka?hits=notified">Zobrazit vše</a>
           </div>
           <div id="carousel-all" class="carousel"></div>
@@ -132,7 +133,7 @@
         </section>
         <section class="ov-card ov-block ov-map">
           <div class="carousel-head">
-            <h2>MAPA ZÁSAHŮ</h2>
+            <h2 class="is-caps">Mapa zásahů</h2>
           </div>
           <div class="map-card">
             <div id="hits-map" role="img" aria-label="Mapa zásahů"></div>
@@ -246,11 +247,11 @@
         <div class="set-main">
           <section class="set-panel" id="panel-profile" hidden>
             <header class="set-head">
-              <h1>NASTAVENÍ ÚČTU</h1>
+              <h1 class="is-caps">Nastavení účtu</h1>
               <p>Spravujte své osobní údaje a předvolby hlídání realit.</p>
             </header>
             <article class="set-card">
-              <h2>OSOBNÍ ÚDAJE</h2>
+              <h2 class="is-caps">Osobní údaje</h2>
               <div class="set-grid-2">
                 <label>Jméno<input id="profile-first" /></label>
                 <label>Příjmení<input id="profile-last" /></label>
@@ -267,14 +268,14 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>BODY DOJEZDU</h2>
+              <h2 class="is-caps">Body dojezdu</h2>
               <p class="set-copy">Až dva body (práce, metro). Napište ulici a vyberte adresu z nápovědy. V detailu nabídky se spočítá čas autem a pěšky.</p>
               <div id="commute-points"></div>
               <button class="btn btn-ghost" id="commute-add" type="button" data-icon="pin">+ Přidat bod</button>
               <p class="set-hint">Limit 2 body v tarifu Start. Upgradujte na Pro pro až 5 bodů.</p>
             </article>
             <article class="set-card set-danger">
-              <h2>NEBEZPEČNÁ ZÓNA</h2>
+              <h2 class="is-caps">Nebezpečná zóna</h2>
               <div class="set-danger-row">
                 <p>Tato akce je nevratná. Všechny vaše data, včetně nastavených hlídacích profilů a historie vyhledávání, budou trvale smazána.</p>
                 <button class="btn btn-danger-outline" id="profile-wipe" type="button">Smazat účet</button>
@@ -285,7 +286,7 @@
           <section class="set-panel" id="panel-watch" hidden>
             <div id="watch-home">
               <header class="set-head">
-                <h1>HLÍDACÍ PROFILY</h1>
+                <h1 class="is-caps">Hlídací profily</h1>
                 <p>Spravujte své hlídací profily. Každý profil monitoruje nabídky podle vašich kritérií 24/7.</p>
               </header>
               <div class="set-limit">
@@ -301,12 +302,12 @@
             <div id="watch-editor" hidden>
               <header class="set-head">
                 <button class="set-back" id="watch-back" type="button">← Zpět na profily</button>
-                <h1 id="watch-editor-title">NOVÝ HLÍDACÍ PROFIL</h1>
+                <h1 id="watch-editor-title" class="is-caps">Nový hlídací profil</h1>
                 <p>Jeden hlídací pes může sledovat všechny portály. Filtry nastavíte jednou; omezení na jeden portál je volitelné.</p>
               </header>
               <form id="monitor-form" class="set-card form-card">
                 <input type="hidden" id="monitor-id" />
-                <h2>PROFIL A ODESÍLÁNÍ</h2>
+                <h2 class="is-caps">Profil a odesílání</h2>
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
                 <div class="url-stack" id="monitor-urls"></div>
@@ -327,7 +328,7 @@
                 </div>
               </form>
               <article class="set-card" id="view-filters">
-                <h2>KRITÉRIA HLEDÁNÍ</h2>
+                <h2 class="is-caps">Kritéria hledání</h2>
                 <p class="set-copy">Filtry zadáte jednou. Výchozí je hlídání napříč portály; tady můžete omezit jen na jeden.</p>
                 <div class="filter-group">
                   <h3>Hlídané portály</h3>
@@ -431,7 +432,7 @@
                 </div>
               </article>
               <article class="set-card" id="view-message">
-                <h2>DISCORD ZPRÁVA</h2>
+                <h2 class="is-caps">Discord zpráva</h2>
                 <p class="set-copy">Náhled vypadá jako zpráva na Discordu. Do polí dáte text nebo {{proměnnou}} a šablonu přiřadíte profilu.</p>
                 <div class="message-layout">
                   <div>
@@ -473,12 +474,12 @@
 
           <section class="set-panel" id="panel-notify" hidden>
             <header class="set-head">
-              <h1>NASTAVENÍ NOTIFIKACÍ</h1>
+              <h1 class="is-caps">Nastavení notifikací</h1>
               <p>Zvolte jak a kdy vás chceme upozorňovat na nové nabídky. Nastavení běží 24/7 na pozadí.</p>
             </header>
             <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
             <article class="set-card">
-              <h2>KANÁLY NOTIFIKACÍ</h2>
+              <h2 class="is-caps">Kanály notifikací</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Discord notifikace</p>
@@ -543,7 +544,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>FREKVENCE A ČASOVÁNÍ</h2>
+              <h2 class="is-caps">Frekvence a časování</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Okamžité notifikace</p>
@@ -588,7 +589,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>TYPY UPOZORNĚNÍ</h2>
+              <h2 class="is-caps">Typy upozornění</h2>
               <label class="set-type"><input type="checkbox" id="nt-new" checked /><span class="switch-ui" aria-hidden="true"></span>Nová nabídka odpovídající aktivnímu hlídacímu profilu</label>
               <label class="set-type"><input type="checkbox" id="nt-price" checked /><span class="switch-ui" aria-hidden="true"></span>Změna ceny u sledované nabídky bytů</label>
               <label class="set-type"><input type="checkbox" id="nt-expire" checked /><span class="switch-ui" aria-hidden="true"></span>Nabídka brzy expiruje nebo se zdá neaktivní</label>
@@ -603,12 +604,12 @@
 
           <section class="set-panel" id="panel-billing" hidden>
             <header class="set-head">
-              <h1>PŘEDPLATNÉ A FAKTURACE</h1>
+              <h1 class="is-caps">Předplatné a fakturace</h1>
               <p>Spravujte svůj tarif a platební údaje.</p>
             </header>
             <article class="set-card">
               <div class="set-card-top">
-                <h2>AKTUÁLNÍ TARIF</h2>
+                <h2 class="is-caps">Aktuální tarif</h2>
                 <span class="set-pill-outline" id="billing-plan-pill">Aktivní plán: Zdarma</span>
               </div>
               <div class="set-plan">
@@ -690,7 +691,7 @@
               </div>
             </div>
             <article class="set-card" id="billing-payment-card" hidden>
-              <h2>PLATEBNÍ METODA</h2>
+              <h2 class="is-caps">Platební metoda</h2>
               <div class="set-card-row">
                 <div class="set-visa"><span id="billing-card-brand">KARTA</span><div><strong id="billing-card-label">Žádná karta</strong><p id="billing-card-exp"></p></div></div>
                 <span class="set-chip-on">Výchozí</span>
@@ -700,7 +701,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>HISTORIE FAKTUR</h2>
+              <h2 class="is-caps">Historie faktur</h2>
               <table class="set-table">
                 <thead><tr><th>Datum</th><th>Částka</th><th>Tarif</th><th>Stav</th><th>Faktura</th></tr></thead>
                 <tbody id="billing-invoices">
@@ -709,7 +710,7 @@
               </table>
             </article>
             <article class="set-card set-danger" id="billing-cancel-card" hidden>
-              <h2>ZRUŠENÍ PŘEDPLATNÉHO</h2>
+              <h2 class="is-caps">Zrušení předplatného</h2>
               <div class="set-danger-row">
                 <p>Po zrušení se účet vrátí na tarif Zdarma. Databáze bytů zůstane dostupná.</p>
                 <button class="btn btn-danger-outline" id="billing-cancel" type="button">Zrušit předplatné</button>
@@ -719,7 +720,7 @@
 
           <section class="set-panel" id="panel-agents" hidden>
             <header class="set-head">
-              <h1>AI AGENTI A MCP</h1>
+              <h1 class="is-caps">AI agenti a MCP</h1>
               <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů. Vyžaduje tarif PRO.</p>
             </header>
             <div id="agents-locked" class="set-limit" hidden>
@@ -736,7 +737,7 @@
             <div id="agents-live">
             <article class="set-card">
               <div class="set-card-top">
-                <h2>API KLÍČE</h2>
+                <h2 class="is-caps">API klíče</h2>
                 <span class="set-pill-outline" id="agents-plan-pill">PRO</span>
               </div>
               <p class="set-copy">Klíč se ukáže jen jednou. Vložte ho do Cursor, Claude Desktop, ChatGPT Custom GPT nebo Grok jako Bearer token.</p>
@@ -752,7 +753,7 @@
               <div id="agent-key-list" class="agent-keys"></div>
             </article>
             <article class="set-card">
-              <h2>PŘIPOJENÍ</h2>
+              <h2 class="is-caps">Připojení</h2>
               <p class="set-copy" id="agents-url-copy">MCP endpoint a OpenAPI se doplní po načtení.</p>
               <div class="agent-snips">
                 <div>
@@ -783,11 +784,11 @@
 
           <section class="set-panel" id="panel-security" hidden>
             <header class="set-head">
-              <h1>BEZPEČNOST ÚČTU</h1>
+              <h1 class="is-caps">Bezpečnost účtu</h1>
               <p>Chraňte svůj účet pomocí silného hesla a dvoufaktorového ověření.</p>
             </header>
             <article class="set-card">
-              <h2>ZMĚNA HESLA</h2>
+              <h2 class="is-caps">Změna hesla</h2>
               <div class="set-grid-2">
                 <label>Současné heslo<input id="pw-current" type="password" autocomplete="current-password" /></label>
                 <div>
@@ -814,7 +815,7 @@
             </article>
             <article class="set-card">
               <div class="set-card-top">
-                <h2>DVOUFAKTOROVÉ OVĚŘENÍ (2FA)</h2>
+                <h2 class="is-caps">Dvoufaktorové ověření (2FA)</h2>
                 <span class="set-pill-warn">Neaktivní</span>
               </div>
               <p class="set-copy">Přidejte další vrstvu zabezpečení svého účtu. Po přihlášení budete muset zadat bezpečnostní kód z vaší mobilní autentifikační aplikace.</p>
@@ -823,7 +824,7 @@
               <button class="btn" id="sec-2fa" type="button">Aktivovat 2FA</button>
             </article>
             <article class="set-card">
-              <h2>AKTIVNÍ RELACE</h2>
+              <h2 class="is-caps">Aktivní relace</h2>
               <div class="set-session is-now">
                 <img src="/static/assets/settings/icon-device-desktop.svg" alt="" />
                 <div>
@@ -834,7 +835,7 @@
               <button class="btn btn-ghost" id="sec-logout-all" type="button">Odhlásit všechna ostatní zařízení</button>
             </article>
             <article class="set-card">
-              <h2>OCHRANA ÚČTU</h2>
+              <h2 class="is-caps">Ochrana účtu</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Upozornění na přihlášení z nového zařízení</p>
@@ -1055,6 +1056,7 @@
     <script src="/static/icons.js?v=__ASSET_VERSION__"></script>
     <script src="/static/app.js?v=__ASSET_VERSION__"></script>
     <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/mobile-app.js?v=__ASSET_VERSION__"></script>
     <script src="/static/t.js?v=7"></script>
   </body>
 </html>

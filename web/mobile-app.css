@@ -1,0 +1,129 @@
+/* Phone layer for the logged-in app (loaded after styles.css).
+   - top bar slims down, the three sections move to a bottom tab bar
+   - settings sections become a sticky swipeable pill row
+   - catalog filters scroll sideways instead of wrapping into a wall
+   - 16px inputs (no iOS zoom on focus), 44px+ tap targets */
+
+.is-caps{text-transform:uppercase}
+.m-filter-btn{display:none}
+
+@media (max-width:900px){
+  .is-caps{text-transform:none}
+  html{-webkit-text-size-adjust:100%}
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+
+  /* ---- top bar + bottom tabs ---- */
+  .nav,html[data-page="settings"] .nav,body.is-settings .nav{height:56px;padding:0 16px;gap:12px}
+  .brand{font-size:19px}
+  .nav-end{gap:8px;margin-left:auto}
+  .nav-user{gap:0}
+  .nav-user .nav-chevron,.nav-user-name{display:none}
+  .nav-avatar{width:36px;height:36px;flex-basis:36px}
+  .nav-tabs{
+    position:fixed;left:0;right:0;bottom:0;z-index:60;
+    display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0;align-self:auto;
+    height:calc(64px + env(safe-area-inset-bottom));padding:0 8px env(safe-area-inset-bottom);
+    background:rgba(255,255,255,.96);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    border-top:1px solid var(--surface);box-shadow:0 -10px 28px rgba(14,15,12,.06)}
+  .nav-tabs .tab{position:relative;display:flex;align-items:center;justify-content:center;padding:0;min-width:0;height:64px;font-size:11px}
+  .nav-tabs .tab::before{display:none}
+  .nav-tabs .tab::after{position:absolute;top:0;left:50%;width:32px;height:3px;transform:translateX(-50%);border-radius:0 0 4px 4px}
+  .nav-tabs .tab-row{flex-direction:column;gap:3px;font-size:11px;line-height:1.2}
+  .nav-tabs .tab-icon{width:22px;height:22px;flex-basis:22px;-webkit-mask-size:22px 22px;mask-size:22px 22px}
+  html[data-page="overview"] .nav-tabs .tab{font-size:11px}
+
+  /* ---- shared controls ---- */
+  input,select,textarea{font-size:16px!important}
+  .btn,.set-card .btn,.chip{min-height:44px}
+  .chip{height:40px}
+  .mail-pause{font-size:13px}
+
+  /* ---- overview ---- */
+  .ov-shell{padding:20px 16px 32px}
+  .ov-head{margin-bottom:20px}
+  .ov-stats{grid-template-columns:1fr;gap:12px;margin-bottom:16px}
+  .ov-card{padding:20px;border-radius:20px}
+  .ov-hero-stat{flex-direction:row;align-items:baseline;flex-wrap:wrap;gap:4px 16px}
+  .ov-hero-stat .ov-label{flex:1 0 100%;margin:0}
+  .ov-big{font-size:64px;letter-spacing:-2px}
+  .ov-hero-stat .ov-unit{margin:0}
+  .ov-hero-stat .mint{margin:8px 0 0;flex:1 0 100%}
+  .ov-facts{gap:0 16px}
+  .ov-fact{padding:12px 0}
+  .ov-block{margin-bottom:16px}
+  .ov-block .carousel-head{margin-bottom:16px;gap:12px}
+  .ov-block .carousel-head h2{font-size:18px}
+  #hits-map{height:260px}
+
+  /* ---- catalog ---- */
+  #view-catalog{padding:12px 12px 16px}
+  .catalog-shell{height:auto;gap:12px;grid-template-columns:minmax(0,1fr)}
+  .catalog-side{min-width:0}
+  /* guest catalog: the sign-up banner should cover about a third of the map, not most of it */
+  .catalog-map-wrap:has(.map-banner) #catalog-map{height:380px;min-height:380px}
+  .m-filter-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:44px;margin-top:10px;border:1.5px solid var(--surface);border-radius:999px;background:#fff;color:var(--forest);font:700 14px Inter,sans-serif}
+  .m-filter-btn svg{transition:transform .2s}
+  .catalog-filters.m-open .m-filter-btn svg{transform:rotate(180deg)}
+  .m-filter-count{min-width:20px;height:20px;padding:0 6px;border-radius:99px;background:var(--green);font-size:12px;line-height:20px;text-align:center}
+  .catalog-filters:not(.m-open) :is(#cat-hits,#catalog-views,.catalog-row,.catalog-subrow,#cat-toggle){display:none}
+  .catalog-map-wrap{border-radius:20px}
+  #catalog-map{min-height:200px;height:200px;border-radius:20px}
+  .catalog-side{border-radius:20px;overflow:visible}
+  .catalog-filters{padding:16px 16px 8px}
+  .catalog-head .kicker{display:none}
+  .catalog-head h2{font-size:26px}
+  .catalog-filters .chip-row,.catalog-subrow .chip-row{flex-wrap:nowrap;overflow-x:auto;margin:10px -16px 0;padding:0 16px 2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .catalog-filters .chip-row::-webkit-scrollbar{display:none}
+  .catalog-filters .chip{flex:none;white-space:nowrap}
+  .catalog-search{height:48px}
+  .catalog-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .catalog-row input{height:48px}
+  .catalog-subrow{gap:8px}
+  .catalog-sort{align-self:stretch;justify-content:space-between}
+  .catalog-sort select{width:auto;flex:1;height:44px}
+  .catalog-toggle,#cat-search{width:100%;min-height:48px}
+  .catalog-list{padding:8px 12px 12px;gap:12px}
+  .catalog-load{margin:0 12px 12px;width:calc(100% - 24px)}
+  .map-tools{max-width:calc(100% - 24px)}
+
+  /* offer cards: compact row (photo left) so several fit per screen */
+  .offer-card{flex-direction:row;height:auto;min-height:0;max-height:none;border-radius:18px}
+  .offer-photo{width:116px;flex:0 0 116px;height:auto;min-height:132px}
+  .offer-photo>img:not(.offer-portal),.offer-photo-empty{width:100%;height:100%;min-height:132px}
+  .offer-nav{display:none}
+  .offer-body{padding:10px 12px}
+  .offer-body h3{font-size:15px}
+  .offer-specs{gap:10px;margin-top:6px;padding-top:6px;font-size:13px}
+  .offer-amenities{display:none}
+  .offer-tools{flex-wrap:nowrap;gap:6px;margin-top:6px}
+  .offer-tool{width:44px;height:44px;padding:0;justify-content:center;gap:0}
+  .offer-tool span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+  .offer-price strong{font-size:20px}
+
+  /* ---- settings ---- */
+  html[data-page="settings"] .nav{position:sticky}
+  .set-side{position:sticky;top:56px;z-index:30;width:100%;height:auto;padding:8px 12px;flex-direction:row;align-items:center;gap:8px;border-bottom:1px solid #e8ebe6;box-shadow:0 8px 20px rgba(14,15,12,.04)}
+  .set-side-top{flex-direction:row;gap:0;flex:1;min-width:0;overflow:visible}
+  .set-user{display:none}
+  .set-navs{flex-direction:row;gap:6px;overflow-x:auto;padding:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+  .set-navs::-webkit-scrollbar{display:none}
+  .set-nav{flex:none;width:auto;gap:8px;padding:0 16px;height:44px;border-radius:999px;background:var(--surface);white-space:nowrap;font-size:14px;scroll-snap-align:center}
+  .set-nav.on{background:var(--forest);color:#fff}
+  .set-nav-out{flex:none;width:44px;height:44px;padding:0;margin:0;justify-content:center;gap:0;font-size:0;border-radius:50%;background:#fde8e8}
+  .set-main{padding:20px 16px 32px}
+  .set-head{margin-bottom:20px}
+  .set-head h1{font-size:26px;letter-spacing:-.5px}
+  .set-head p{font-size:14px}
+  .set-card{padding:20px;gap:18px;margin-bottom:16px;border-radius:20px}
+  .set-card h2,.set-card .form-card h2{font-size:18px}
+  .set-grid-2{gap:14px}
+  .filters-card{padding:20px 16px 0}
+  .filters-card h2{font-size:24px;line-height:1.15;text-transform:none;font-weight:800}
+  .bill-table,.set-card table{display:block;overflow-x:auto;max-width:100%}
+  .monitor-list{gap:12px}
+}
+
+@media (max-width:380px){
+  .brand{font-size:17px}
+  .ov-big{font-size:56px}
+}

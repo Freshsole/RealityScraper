@@ -597,7 +597,7 @@ def _asset_version() -> str:
     když se změní obsah JS/CSS, nezávisle na git metadatech v buildu."""
     try:
         digest = hashlib.sha256()
-        for name in ("app.js", "catalog.js", "styles.css", "icons.js"):
+        for name in ("app.js", "catalog.js", "styles.css", "mobile-app.css", "mobile-app.js", "icons.js"):
             path = config.WEB_DIR / name
             if path.exists():
                 digest.update(path.read_bytes())

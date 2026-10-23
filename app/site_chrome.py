@@ -11,7 +11,7 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "28", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1"}
+ASSET_V = {"site": "28", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1", "mobile": "1"}
 
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
@@ -139,7 +139,9 @@ def page(
     {FONTS_LINK}
     <link rel="stylesheet" href="/static/site/site.css?v={ASSET_V['site']}" />
     <link rel="stylesheet" href="/static/site/nav.css?v={ASSET_V['nav']}" />
-    <link rel="stylesheet" href="/static/site/pages.css?v={ASSET_V['pages']}" />{extra_head}
+    <link rel="stylesheet" href="/static/site/pages.css?v={ASSET_V['pages']}" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v={ASSET_V['mobile']}" />
+    <script src="/static/site/mobile.js?v={ASSET_V['mobile']}" defer></script>{extra_head}
   </head>
   <body class="{html.escape(body_class)}">
     {HEADER_HTML}
