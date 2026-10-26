@@ -77,11 +77,11 @@ DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
 DISCORD_SERVER_INVITE = os.getenv("DISCORD_SERVER_INVITE", "").strip()
 EXTENSION_IDS = os.getenv("EXTENSION_IDS", "").strip()  # CSV povolených chrome-extension ID pro CORS
 SEARCH_URL = os.getenv("SEARCH_URL", DEFAULT_SEARCH_URL).strip()
-POLL_INTERVAL_SEC = max(20, int(os.getenv("POLL_INTERVAL_SEC", "60")))
-POLL_PAGES = max(1, int(os.getenv("POLL_PAGES", "2")))
-SCRAPE_MONITOR_LOOP_SEC = max(2, int(os.getenv("SCRAPE_MONITOR_LOOP_SEC", "5")))
-SCRAPE_DISCOVERY_LOOP_SEC = max(10, int(os.getenv("SCRAPE_DISCOVERY_LOOP_SEC", "30")))
-SCRAPE_DEEP_LOOP_SEC = max(1, int(os.getenv("SCRAPE_DEEP_LOOP_SEC", "2")))
+POLL_INTERVAL_SEC = max(20, int((os.getenv("POLL_INTERVAL_SEC") or "60")))
+POLL_PAGES = max(1, int((os.getenv("POLL_PAGES") or "2")))
+SCRAPE_MONITOR_LOOP_SEC = max(2, int((os.getenv("SCRAPE_MONITOR_LOOP_SEC") or "5")))
+SCRAPE_DISCOVERY_LOOP_SEC = max(10, int((os.getenv("SCRAPE_DISCOVERY_LOOP_SEC") or "30")))
+SCRAPE_DEEP_LOOP_SEC = max(1, int((os.getenv("SCRAPE_DEEP_LOOP_SEC") or "2")))
 # all = single-process local; web/worker = supervisord split (Railway).
 SCRAPE_ROLE = (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower()
 if SCRAPE_ROLE not in {"all", "web", "worker"}:
@@ -91,37 +91,37 @@ if SCRAPE_ROLE not in {"all", "web", "worker"}:
 # behaviour (every user scrapes and stores a private copy of the whole catalog).
 # Parse scraped HTML/JSON in worker processes instead of GIL-bound threads (see app/parse_pool.py).
 # Default: 3 processes in the scrape worker, 0 (threads) everywhere else.
-SCRAPE_PARSE_PROCS = max(0, int(os.getenv("SCRAPE_PARSE_PROCS", "3" if SCRAPE_ROLE == "worker" else "0") or 0))
-SCRAPE_PARSE_TIMEOUT_SEC = max(5.0, float(os.getenv("SCRAPE_PARSE_TIMEOUT_SEC", "60") or 60))
+SCRAPE_PARSE_PROCS = max(0, int((os.getenv("SCRAPE_PARSE_PROCS") or "3" if SCRAPE_ROLE == "worker" else "0") or 0))
+SCRAPE_PARSE_TIMEOUT_SEC = max(5.0, float((os.getenv("SCRAPE_PARSE_TIMEOUT_SEC") or "60") or 60))
 SHARED_CATALOG = (os.getenv("SHARED_CATALOG", "1") or "1").strip().lower() not in {"0", "false", "no", "off"}
-SCRAPE_CONCURRENCY = max(4, min(64, int(os.getenv("SCRAPE_CONCURRENCY", "16"))))
-SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int(os.getenv("SCRAPE_CONCURRENCY_FLOOR", "4"))))
+SCRAPE_CONCURRENCY = max(4, min(64, int((os.getenv("SCRAPE_CONCURRENCY") or "16"))))
+SCRAPE_CONCURRENCY_FLOOR = max(1, min(SCRAPE_CONCURRENCY, int((os.getenv("SCRAPE_CONCURRENCY_FLOOR") or "4"))))
 # Hard cap across all portals. Per-portal ceilings cannot exceed this in aggregate.
 SCRAPE_GLOBAL_CONCURRENCY = max(
     SCRAPE_CONCURRENCY,
-    min(128, int(os.getenv("SCRAPE_GLOBAL_CONCURRENCY", str(SCRAPE_CONCURRENCY + 8)))),
+    min(128, int((os.getenv("SCRAPE_GLOBAL_CONCURRENCY") or str(SCRAPE_CONCURRENCY + 8)))),
 )
 SCRAPE_FAST_TOUCH = os.getenv("SCRAPE_FAST_TOUCH", "1") != "0"
 SCRAPE_DISCOVERY_EARLY_STOP = os.getenv("SCRAPE_DISCOVERY_EARLY_STOP", "1") != "0"
-SCRAPE_DISCOVERY_FULL_EVERY = max(1, int(os.getenv("SCRAPE_DISCOVERY_FULL_EVERY", "10")))
-SCRAPE_RECENT_PAGES = max(1, min(10, int(os.getenv("SCRAPE_RECENT_PAGES", "4"))))
-SCRAPE_DISCOVERY_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DISCOVERY_DEADLINE_SEC", "50")))
-SCRAPE_MONITOR_DEADLINE_SEC = max(20, int(os.getenv("SCRAPE_MONITOR_DEADLINE_SEC", "55")))
-SCRAPE_FULL_MARKET_DEADLINE_SEC = max(30, int(os.getenv("SCRAPE_FULL_MARKET_DEADLINE_SEC", "70")))
-SCRAPE_FULL_MARKET_URLS = max(10, int(os.getenv("SCRAPE_FULL_MARKET_URLS", "80")))
+SCRAPE_DISCOVERY_FULL_EVERY = max(1, int((os.getenv("SCRAPE_DISCOVERY_FULL_EVERY") or "10")))
+SCRAPE_RECENT_PAGES = max(1, min(10, int((os.getenv("SCRAPE_RECENT_PAGES") or "4"))))
+SCRAPE_DISCOVERY_DEADLINE_SEC = max(15, int((os.getenv("SCRAPE_DISCOVERY_DEADLINE_SEC") or "50")))
+SCRAPE_MONITOR_DEADLINE_SEC = max(20, int((os.getenv("SCRAPE_MONITOR_DEADLINE_SEC") or "55")))
+SCRAPE_FULL_MARKET_DEADLINE_SEC = max(30, int((os.getenv("SCRAPE_FULL_MARKET_DEADLINE_SEC") or "70")))
+SCRAPE_FULL_MARKET_URLS = max(10, int((os.getenv("SCRAPE_FULL_MARKET_URLS") or "80")))
 # Rolling deep list crawl: cover ~all Sreality shards over time (not just newest 2k).
-SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int(os.getenv("SCRAPE_DEEP_SHARDS_PER_TICK", "10"))))
-SCRAPE_DEEP_PAGES = max(1, min(40, int(os.getenv("SCRAPE_DEEP_PAGES", "25"))))
-SCRAPE_DEEP_DEADLINE_SEC = max(15, int(os.getenv("SCRAPE_DEEP_DEADLINE_SEC", "40")))
-SCRAPE_BATCH_COMMIT = max(50, int(os.getenv("SCRAPE_BATCH_COMMIT", "500")))
+SCRAPE_DEEP_SHARDS_PER_TICK = max(2, min(40, int((os.getenv("SCRAPE_DEEP_SHARDS_PER_TICK") or "10"))))
+SCRAPE_DEEP_PAGES = max(1, min(40, int((os.getenv("SCRAPE_DEEP_PAGES") or "25"))))
+SCRAPE_DEEP_DEADLINE_SEC = max(15, int((os.getenv("SCRAPE_DEEP_DEADLINE_SEC") or "40")))
+SCRAPE_BATCH_COMMIT = max(50, int((os.getenv("SCRAPE_BATCH_COMMIT") or "500")))
 # 1 = refresh also writes listings/events/photos (legacy). 0 = catalog_listings + listing_links only.
 REFRESH_WRITES_FULL_ROW = os.getenv("REFRESH_WRITES_FULL_ROW", "1").strip().lower() in {"1", "true", "yes"}
-EVENTS_TTL_DAYS = max(7, int(os.getenv("EVENTS_TTL_DAYS", "30")))
-LISTING_PHOTOS_CAP = max(1, min(40, int(os.getenv("LISTING_PHOTOS_CAP", "8"))))
-FACETS_CACHE_SEC = max(30, int(os.getenv("FACETS_CACHE_SEC", "600")))
+EVENTS_TTL_DAYS = max(7, int((os.getenv("EVENTS_TTL_DAYS") or "30")))
+LISTING_PHOTOS_CAP = max(1, min(40, int((os.getenv("LISTING_PHOTOS_CAP") or "8"))))
+FACETS_CACHE_SEC = max(30, int((os.getenv("FACETS_CACHE_SEC") or "600")))
 PRUNE_APPLY = os.getenv("PRUNE_APPLY", "0").strip().lower() in {"1", "true", "yes"}
-SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int(os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD", "8")))
-SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float(os.getenv("SCRAPE_ERROR_RATE_ALERT", "0.10"))))
+SCRAPE_DEFERRED_MAX_PER_SHARD = max(1, int((os.getenv("SCRAPE_DEFERRED_MAX_PER_SHARD") or "8")))
+SCRAPE_ERROR_RATE_ALERT = max(0.01, min(1.0, float((os.getenv("SCRAPE_ERROR_RATE_ALERT") or "0.10"))))
 # Per-page scrape_metrics_log + parse/fetch split. Off in production.
 SCRAPE_METRICS_DETAIL = os.getenv("SCRAPE_METRICS_DETAIL", "0").strip().lower() in {"1", "true", "yes"}
 # JSON dict of portal → concurrency ceiling, e.g. '{"sreality":24,"mmreality":4}'.
@@ -144,13 +144,13 @@ except (json.JSONDecodeError, TypeError, ValueError):
 SCRAPE_CONCURRENCY_OVERRIDES = {**_DEFAULT_CONCURRENCY_OVERRIDES, **_env_overrides}
 # Split connect/read so they cannot stack into 50s+ zombie waits.
 # Successful Sreality/Bazos fetches are typically <1s; 8s is ~10× that p95.
-SCRAPE_HTTP_CONNECT_TIMEOUT = max(1.0, min(15.0, float(os.getenv("SCRAPE_HTTP_CONNECT_TIMEOUT", "5"))))
-SCRAPE_HTTP_TIMEOUT = max(2.0, min(60.0, float(os.getenv("SCRAPE_HTTP_TIMEOUT", "15"))))
+SCRAPE_HTTP_CONNECT_TIMEOUT = max(1.0, min(15.0, float((os.getenv("SCRAPE_HTTP_CONNECT_TIMEOUT") or "5"))))
+SCRAPE_HTTP_TIMEOUT = max(2.0, min(60.0, float((os.getenv("SCRAPE_HTTP_TIMEOUT") or "15"))))
 # List-crawl attempts per request (1 = no retry). 403/500 will not improve on retry.
-SCRAPE_HTTP_RETRIES = max(1, min(5, int(os.getenv("SCRAPE_HTTP_RETRIES", "3"))))
-SCRAPE_PORTAL_FAILS_TO_DISABLE = max(2, min(30, int(os.getenv("SCRAPE_PORTAL_FAILS_TO_DISABLE", "10"))))
-SCRAPE_PORTAL_COOLDOWN_SEC = max(30, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_SEC", str(5 * 60))))
-SCRAPE_PORTAL_COOLDOWN_CAP_SEC = max(SCRAPE_PORTAL_COOLDOWN_SEC, int(os.getenv("SCRAPE_PORTAL_COOLDOWN_CAP_SEC", str(30 * 60))))
+SCRAPE_HTTP_RETRIES = max(1, min(5, int((os.getenv("SCRAPE_HTTP_RETRIES") or "3"))))
+SCRAPE_PORTAL_FAILS_TO_DISABLE = max(2, min(30, int((os.getenv("SCRAPE_PORTAL_FAILS_TO_DISABLE") or "10"))))
+SCRAPE_PORTAL_COOLDOWN_SEC = max(30, int((os.getenv("SCRAPE_PORTAL_COOLDOWN_SEC") or str(5 * 60))))
+SCRAPE_PORTAL_COOLDOWN_CAP_SEC = max(SCRAPE_PORTAL_COOLDOWN_SEC, int((os.getenv("SCRAPE_PORTAL_COOLDOWN_CAP_SEC") or str(30 * 60))))
 
 
 def _hour_env(name: str, default: int) -> int:
@@ -180,11 +180,11 @@ CATALOG_NEWEST_HOURS = [int(h) for h in os.getenv("CATALOG_NEWEST_HOURS", "6,12,
 CATALOG_NEWEST_PORTALS = [p.strip() for p in os.getenv("CATALOG_NEWEST_PORTALS", "sreality,bezrealitky,idnes,eurobydleni,realitymix").split(",") if p.strip()]
 IDNES_WEBHOOK_URL = _webhook_env("IDNES_WEBHOOK_URL")
 BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")
-NEW_MAX_AGE_DAYS = max(1, int(os.getenv("NEW_MAX_AGE_DAYS", "2")))
+NEW_MAX_AGE_DAYS = max(1, int((os.getenv("NEW_MAX_AGE_DAYS") or "2")))
 NOTIFY_REFRESHES = os.getenv("NOTIFY_REFRESHES", "0").strip() in {"1", "true", "yes"}
-SOLD_INVENTORY_SEC = max(120, int(os.getenv("SOLD_INVENTORY_SEC", "600")))
+SOLD_INVENTORY_SEC = max(120, int((os.getenv("SOLD_INVENTORY_SEC") or "600")))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
-PORT = int(os.getenv("PORT", "8080"))
+PORT = int((os.getenv("PORT") or "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
 # Local development only (PUBLIC_BASE_URL points at localhost): the code 000000 confirms an e-mail without a mailbox.
 DEV_VERIFY_CODE = (
@@ -201,7 +201,7 @@ VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip()
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 VAPID_MAILTO = os.getenv("VAPID_MAILTO", "mailto:ahoj@realitify.cz").strip() or "mailto:ahoj@realitify.cz"
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
+SMTP_PORT = int((os.getenv("SMTP_PORT") or "587") or "587")
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER
@@ -230,8 +230,8 @@ SES_SNS_TOPIC_ARN = os.getenv("SES_SNS_TOPIC_ARN", "").strip()
 # Google Form "měsíc PRO zdarma": odpovědi jdou do Google Sheets publikovaného jako CSV (Soubor > Sdílet > Publikovat na webu)
 FREE_PRO_SHEET_CSV_URL = os.getenv("FREE_PRO_SHEET_CSV_URL", "").strip()
 FREE_PRO_DISCORD_WEBHOOK_URL = _webhook_env("FREE_PRO_DISCORD_WEBHOOK_URL")
-FREE_PRO_DAYS = int(os.getenv("FREE_PRO_DAYS", "30") or 30)
-FREE_PRO_POLL_SECONDS = int(os.getenv("FREE_PRO_POLL_SECONDS", "300") or 300)
+FREE_PRO_DAYS = int((os.getenv("FREE_PRO_DAYS") or "30") or 30)
+FREE_PRO_POLL_SECONDS = int((os.getenv("FREE_PRO_POLL_SECONDS") or "300") or 300)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -316,9 +316,9 @@ WEB_DIR = resource_root() / "web"
 
 # Stale sweep only marks `gone` rows unseen for this long, so listings that a (partial) crawl
 # missed but rolling-deep / discovery saw recently are not flagged sold.
-CATALOG_STALE_GRACE_SEC = max(0, int(os.getenv("CATALOG_STALE_GRACE_SEC", str(3 * 3600))))
+CATALOG_STALE_GRACE_SEC = max(0, int((os.getenv("CATALOG_STALE_GRACE_SEC") or str(3 * 3600))))
 # A shard counts as fully crawled at this share of the portal-reported total.
-CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float(os.getenv("CATALOG_COMPLETE_RATIO", "0.96"))))
+CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float((os.getenv("CATALOG_COMPLETE_RATIO") or "0.96"))))
 
 # Monitors (monitor_priority) and new_discovery used to stop completely while any daily catalog sync ran.
 # With ~14 portals synced one after another that is most of the day, so users saw no new listings.
@@ -327,21 +327,21 @@ CATALOG_COMPLETE_RATIO = min(1.0, max(0.5, float(os.getenv("CATALOG_COMPLETE_RAT
 SCRAPE_PAUSE_PRIORITY_DURING_CATALOG = os.getenv("SCRAPE_PAUSE_PRIORITY_DURING_CATALOG", "0").strip().lower() in {"1", "true", "yes", "on"}
 # Many users watch the same portal search URL. Identical live polls issued within this window by
 # different hubs of one process share a single fetch (0 disables sharing).
-SCRAPE_LIVE_SHARE_TTL_SEC = max(0.0, float(os.getenv("SCRAPE_LIVE_SHARE_TTL_SEC", "10") or 0))
+SCRAPE_LIVE_SHARE_TTL_SEC = max(0.0, float((os.getenv("SCRAPE_LIVE_SHARE_TTL_SEC") or "10") or 0))
 # Discovery results whose write was deferred (catalog lock busy) are kept and retried, up to this many.
-SCRAPE_DISCOVERY_BACKLOG_MAX = max(0, int(os.getenv("SCRAPE_DISCOVERY_BACKLOG_MAX", "4000") or 0))
+SCRAPE_DISCOVERY_BACKLOG_MAX = max(0, int((os.getenv("SCRAPE_DISCOVERY_BACKLOG_MAX") or "4000") or 0))
 # How long one monitor tick waits for live polls before reporting; slower ones continue in the background.
-SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float(os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC", "20")))
+SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float((os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC") or "20")))
 
 # Cached portal clients per Hub (LRU). Each keeps one keep-alive socket open.
-CLIENT_CACHE_MAX = max(8, int(os.getenv("CLIENT_CACHE_MAX", "96")))
+CLIENT_CACHE_MAX = max(8, int((os.getenv("CLIENT_CACHE_MAX") or "96")))
 
 # Threads for every Hub's DB work in one process. In the worker ALL user hubs (+ the catalog owner's
 # discovery/deep/sync) share one pool; with 4 threads a minute's ~100 live polls queued for 60-80 s.
-JOB_POOL_WORKERS = max(2, int(os.getenv("JOB_POOL_WORKERS", "16" if (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower() == "worker" else "4")))
+JOB_POOL_WORKERS = max(2, int((os.getenv("JOB_POOL_WORKERS") or "16" if (os.getenv("SCRAPE_ROLE", "all") or "all").strip().lower() == "worker" else "4")))
 
 # Monitor-poll fast touch: how long an "unchanged" verdict is trusted before the row is fully re-upserted.
-SCRAPE_FAST_TOUCH_TTL_SEC = max(30, int(os.getenv("SCRAPE_FAST_TOUCH_TTL_SEC", "900")))
+SCRAPE_FAST_TOUCH_TTL_SEC = max(30, int((os.getenv("SCRAPE_FAST_TOUCH_TTL_SEC") or "900")))
 
 # Max. registrací z jedné IP za hodinu (anti-abuse; sdílené IP jako mobilní sítě potřebují víc než 5)
-REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "20") or "20")
+REGISTER_LIMIT_PER_HOUR = int((os.getenv("REGISTER_LIMIT_PER_HOUR") or "20") or "20")
