@@ -93,6 +93,9 @@ class Hub:
         # portal -> {"last_ok_at", "last_new_at", "fails", "last_ms"} for freshness monitoring (admin/ops).
         self.discovery_state: dict[str, dict[str, Any]] = {}
         self._discovery_recorded_at: dict[str, float] = {}
+        # listing_key -> monotonic time of the last write of an unchanged listing (see _discovery_changes_only)
+        self._discovery_touched: dict[str, float] = {}
+        self._discovery_boot = time.monotonic()  # unknown keys count as "touched at process start"
         # Discovery results whose catalog write was deferred (lock busy); retried on the next tick.
         self._discovery_backlog: OrderedDict[int, Listing] = OrderedDict()
         self._live_inflight: dict[str, asyncio.Task] = {}
@@ -1101,6 +1104,36 @@ class Hub:
             for task in tasks:
                 task.cancel()
 
+    def _discovery_changes_only(self, listings: list[Listing]) -> tuple[list[Listing], int]:
+        """Drop listings the catalog already holds unchanged (and touched recently); returns (to_write, skipped_count).
+
+        Without a fingerprint cache everything is written, as before."""
+        if not config.SCRAPE_FAST_TOUCH:
+            return listings, 0
+        from app import scrape_fast
+        from app.identity import listing_key
+
+        store_path = str(self.store.path)
+        if scrape_fast.peek(store_path) is None:
+            return listings, 0
+        now = time.monotonic()
+        keep: list[Listing] = []
+        for item in listings:
+            key = listing_key(item.url)
+            if scrape_fast.is_known(store_path, key, item) and now - self._discovery_touched.get(key, self._discovery_boot) < config.SCRAPE_DISCOVERY_TOUCH_SEC:
+                continue
+            keep.append(item)
+        return keep, len(listings) - len(keep)
+
+    def _discovery_mark_touched(self, written: list[Listing]) -> None:
+        from app.identity import listing_key
+
+        if len(self._discovery_touched) > 300_000:
+            self._discovery_touched.clear()
+        now = time.monotonic()
+        for item in written:
+            self._discovery_touched[listing_key(item.url)] = now
+
     async def _warm_fast_cache(self, timeout_sec: float = 180.0) -> None:
         """Load the catalog fingerprints before the first poll.
 
@@ -1320,6 +1353,7 @@ class Hub:
         kind: str = "seeded",
         write_deadline_sec: float | None = None,
         chunk_timeout_sec: float | None = None,
+        yield_sec: float | None = None,
     ) -> dict[str, int]:
         """Upsert in lock-scoped chunks so minute discovery can interleave."""
         if not listings:
@@ -1375,8 +1409,8 @@ class Hub:
             )
             for key in ("n", "new", "updated", "same"):
                 totals[key] += int(part.get(key) or 0)
-            # Let pending minute ticks acquire the write lock.
-            await asyncio.sleep(0)
+            # Let pending minute ticks acquire the write lock, and (real pause) other processes the SQLite one.
+            await asyncio.sleep(config.SCRAPE_WRITE_YIELD_SEC if yield_sec is None else yield_sec)
         return totals
 
     async def _try_catalog_upsert(
@@ -1387,6 +1421,7 @@ class Hub:
         timeout_sec: float = 4.0,
         write_deadline_sec: float | None = 20.0,
         chunk_timeout_sec: float | None = None,
+        yield_sec: float | None = None,
     ) -> tuple[dict[str, int] | None, str | None]:
         """Prefer minute cadence: skip write if catalog sync holds the lock too long."""
         if not listings:
@@ -1398,7 +1433,11 @@ class Hub:
         # Probe only — chunked upsert re-acquires so catalog sync can interleave.
         self._catalog_write.release()
         return await self._catalog_upsert(
-            listings, kind=kind, write_deadline_sec=write_deadline_sec, chunk_timeout_sec=chunk_timeout_sec
+            listings,
+            kind=kind,
+            write_deadline_sec=write_deadline_sec,
+            chunk_timeout_sec=chunk_timeout_sec,
+            yield_sec=yield_sec,
         ), None
 
     def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
@@ -1431,6 +1470,7 @@ class Hub:
         disc_listings: list[Listing] = []
         disc_pages = 0
         disc_deferred = 0
+        disc_skipped = 0
         error: str | None = None
         write_note: str | None = None
         try:
@@ -1475,21 +1515,31 @@ class Hub:
                 merged.update({item.id: item for item in disc_listings})
                 disc_listings = list(merged.values())
                 self._discovery_backlog.clear()
-            if disc_listings:
+            to_write, skipped = self._discovery_changes_only(disc_listings)
+            disc_skipped = skipped
+            if to_write:
                 written, write_note = await self._try_catalog_upsert(
-                    disc_listings,
+                    to_write,
                     kind="refresh",
                     timeout_sec=3.0,
                     write_deadline_sec=12.0,
                     chunk_timeout_sec=config.SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC,
+                    yield_sec=0.0,
                 )
+                backlog: list[Listing] = []
                 if written is not None:
                     disc_stats = written
-                    disc_deferred += int(written.get("deferred_write") or 0)
+                    unwritten = int(written.get("deferred_write") or 0)
+                    disc_deferred += unwritten
+                    if unwritten:
+                        backlog = to_write[len(to_write) - unwritten :]
+                    self._discovery_mark_touched(to_write[: len(to_write) - unwritten])
                 else:
-                    disc_deferred += len(disc_listings)
-                    # Do not drop them: the catalog lock is only busy while a sync chunk is written.
-                    for item in disc_listings[-config.SCRAPE_DISCOVERY_BACKLOG_MAX:] if config.SCRAPE_DISCOVERY_BACKLOG_MAX else []:
+                    disc_deferred += len(to_write)
+                    backlog = to_write
+                # Do not drop what could not be written: it is retried on the next tick.
+                if config.SCRAPE_DISCOVERY_BACKLOG_MAX:
+                    for item in backlog[-config.SCRAPE_DISCOVERY_BACKLOG_MAX :]:
                         self._discovery_backlog[item.id] = item
         except asyncio.TimeoutError:
             error = "discovery-timeout: fetch exceeded its hard bound"
@@ -1529,6 +1579,7 @@ class Hub:
             "discovery": {
                 "shards": len(recent),
                 "listings": len(disc_listings),
+                "skipped_known": disc_skipped,
                 "pages_ok": disc_pages,
                 "early_stops": engine.metrics.early_stops,
                 "deferred": disc_deferred,
@@ -1545,7 +1596,7 @@ class Hub:
             from app.scrape_console import emit
 
             emit(
-                f"new_discovery portal={portal or '*'} listings={len(disc_listings)} new={disc_stats.get('new')} "
+                f"new_discovery portal={portal or '*'} listings={len(disc_listings)} skipped={disc_skipped} new={disc_stats.get('new')} "
                 f"ms={ms}" + (f" note={write_note}" if write_note else "") + (f" error={error}" if error else "")
             )
         except Exception as exc:

@@ -265,6 +265,77 @@ class ChunkedStaleSweepTests(unittest.TestCase):
             self.assertGreaterEqual(len(statements), 4)  # 100+100+100+50 (+ NULL pass)
 
 
+class DiscoveryWritesOnlyChangesTests(unittest.IsolatedAsyncioTestCase):
+    def _listing(self, i, price=1000):
+        from app.monitor import Listing
+
+        return Listing(id=i, name="n", url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{i}", price_czk=price,
+                       price_label=f"{price} Kč", disposition="2+kk", area_m2=40, locality="Praha", image_url="")
+
+    async def test_known_unchanged_listings_are_not_written_but_new_and_changed_are(self):
+        from app import scrape_fast
+        from app.identity import listing_key
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            path = str(hub.store.path)
+            known, changed, new = self._listing(1), self._listing(2), self._listing(3)
+            cache = scrape_fast.cache_for(path, _EmptyConn())
+            cache[listing_key(known.url)] = scrape_fast.listing_fingerprint(known)
+            cache[listing_key(changed.url)] = scrape_fast.listing_fingerprint(self._listing(2, price=900))  # price differs
+            to_write, skipped = hub._discovery_changes_only([known, changed, new])
+            self.assertEqual([item.id for item in to_write], [2, 3])
+            self.assertEqual(skipped, 1)
+
+    async def test_known_listing_is_touched_again_after_the_ttl(self):
+        from app import scrape_fast
+        from app.identity import listing_key
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            known = self._listing(1)
+            cache = scrape_fast.cache_for(str(hub.store.path), _EmptyConn())
+            cache[listing_key(known.url)] = scrape_fast.listing_fingerprint(known)
+            self.assertEqual(hub._discovery_changes_only([known])[1], 1)
+            hub._discovery_touched[listing_key(known.url)] = time.monotonic() - config.SCRAPE_DISCOVERY_TOUCH_SEC - 1
+            self.assertEqual([i.id for i in hub._discovery_changes_only([known])[0]], [1])
+            hub._discovery_mark_touched([known])
+            self.assertEqual(hub._discovery_changes_only([known])[1], 1)
+
+    async def test_without_a_cache_everything_is_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            items = [self._listing(1), self._listing(2)]
+            self.assertEqual(hub._discovery_changes_only(items), (items, 0))
+
+    async def test_partially_written_batch_keeps_its_tail_in_the_backlog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            batch = [self._listing(i) for i in range(1, 6)]
+
+            async def fake_fetch(self_engine, shards, **_kw):  # noqa: ANN001
+                from app.scrape_engine import ShardFetchResult
+
+                return [ShardFetchResult(shard_key="s", search_url="https://www.sreality.cz/x", listings=batch, total=5,
+                                         pages_ok=1, deferred_pages=[], error=None, portal="sreality")]
+
+            async def fake_upsert(listings, **_kw):
+                return {"n": 3, "new": 3, "updated": 0, "same": 0, "deferred_write": 2}, None
+
+            shard = [{"shard_key": "s", "search_url": "https://www.sreality.cz/x", "kind": "recent", "portal": "sreality"}]
+            with patch("app.monitor.recent_shards", return_value=shard), \
+                 patch("app.scrape_engine.ScrapeEngine.fetch_shards", new=fake_fetch), \
+                 patch.object(hub, "_try_catalog_upsert", new=fake_upsert), \
+                 patch.object(hub, "_record_tick_background", new=lambda tick: None):
+                await hub._recent_catalog_tick("sreality")
+            self.assertEqual(sorted(hub._discovery_backlog), [4, 5])  # the two that were not written
+
+
+class _EmptyConn:
+    def execute(self, *_a, **_k):
+        return []
+
+
 class BoundedFingerprintCacheTests(unittest.TestCase):
     def test_limit_loads_only_the_newest_rows(self):
         from app import scrape_fast

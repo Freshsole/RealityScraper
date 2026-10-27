@@ -359,6 +359,14 @@ SCRAPE_DISCOVERY_CACHE_ROWS = max(1000, int(_env_float("SCRAPE_DISCOVERY_CACHE_R
 # One catalog write chunk of discovery may take this long; then it is deferred (kept in the backlog) so a locked
 # database can never freeze the per-portal loops.
 SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC = max(3.0, _env_float("SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC", 15.0))
+# Discovery writes only new/changed listings. A listing it already knows (same fingerprint) is only "touched"
+# (last_seen) at most this often: touching every re-seen row of every poll was thousands of rows per tick fighting
+# the other worker process for SQLite's single write lock. Stale sweep needs last_seen within 72 h, deep sync also
+# refreshes it, so this can be generous.
+SCRAPE_DISCOVERY_TOUCH_SEC = max(30.0, _env_float("SCRAPE_DISCOVERY_TOUCH_SEC", 900.0))
+# Real pause between two committed write chunks of the deep/sync pipelines, so other processes (discovery) can
+# take the SQLite write lock in between. Discovery itself does not pause.
+SCRAPE_WRITE_YIELD_SEC = _env_float("SCRAPE_WRITE_YIELD_SEC", 0.1)
 # Hard bound of one per-portal discovery poll (fetch + write is flushed as soon as this one portal finishes).
 SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC = max(8.0, _env_float("SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC", 20.0))
 # Comma list restricting discovery to some portals (empty = all). Lets one container per portal group run.
