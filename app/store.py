@@ -3607,29 +3607,40 @@ class Store:
                 from app import scrape_fast
 
                 rc = scrape_fast.results_cache(str(self.path))
+                # Catalog-wide fingerprints, when this process has loaded them (a batch write or discovery warm-up
+                # does). They cover the cold start and the TTL expiry of `rc`, which otherwise rewrote every
+                # unchanged listing row by row (~36x the cost of a touch, measured).
+                known = scrape_fast.peek(str(self.path))
                 todo = []
                 same_keys: list[str] = []
                 same_urls: list[str] = []
                 for index, listing in enumerate(listings):
-                    hit = rc.get(listing_key(listing.url))
+                    url_key = listing_key(listing.url)
+                    fingerprint = scrape_fast.listing_fingerprint(listing)
+                    hit = rc.get(url_key)
                     # Entries expire so a row removed meanwhile (dedupe merge, sweep) is re-inserted.
                     if (
                         hit is not None
                         and time.monotonic() - hit[2] < config.SCRAPE_FAST_TOUCH_TTL_SEC
-                        and hit[0] == scrape_fast.listing_fingerprint(listing)
+                        and hit[0] == fingerprint
                     ):
-                        same_keys.append(hit[1])
-                        same_urls.append(listing.url)
-                        results[index] = {
-                            "listing_key": hit[1],
-                            "url_key": listing_key(listing.url),
-                            "canonical_key": hit[1],
-                            "new": False,
-                            "changed": False,
-                            "prev": {"price_czk": listing.price_czk, "price_label": listing.price_label},
-                        }
+                        row_key = hit[1]
+                    elif known is not None and known.get(url_key) == fingerprint:
+                        row_key = url_key  # batch upserts store the row under host+path, i.e. the url key
+                        rc[url_key] = (fingerprint, row_key, time.monotonic())
                     else:
                         todo.append(index)
+                        continue
+                    same_keys.append(row_key)
+                    same_urls.append(listing.url)
+                    results[index] = {
+                        "listing_key": row_key,
+                        "url_key": url_key,
+                        "canonical_key": row_key,
+                        "new": False,
+                        "changed": False,
+                        "prev": {"price_czk": listing.price_czk, "price_label": listing.price_label},
+                    }
                 if same_keys:
                     self._touch_rows(conn, same_keys, same_urls, listings_by_url=True)
             for index in todo:

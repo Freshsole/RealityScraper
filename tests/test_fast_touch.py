@@ -181,3 +181,29 @@ class PriceAndCoordsTests(unittest.TestCase):
             self.assertEqual(store.catalog_missing_coords(("idnes",), 10, {rows[0]["listing_key"]}), [])
             store.set_catalog_location(rows[0]["listing_key"], rows[0]["url"], 50.1, 14.4)
             self.assertEqual(store.catalog_missing_coords(("idnes",), 10), [])
+
+
+def test_monitor_path_uses_catalog_fingerprints_when_its_own_cache_is_cold(tmp_path):
+    """After a restart / TTL expiry unchanged listings must be touched, not rewritten row by row."""
+    from unittest.mock import patch
+
+    from app import scrape_fast
+    from app.monitor import Listing
+    from app.store import Store
+
+    store = Store(tmp_path / "m.sqlite")
+    listings = [
+        Listing(id=i, name=f"Byt {i}", url=f"https://www.sreality.cz/detail/pronajem/byt/2+kk/praha/{i}", price_czk=20000,
+                price_label="20 000 Kč", disposition="2+kk", area_m2=40, locality="Praha", image_url="")
+        for i in range(1, 6)
+    ]
+    store.upsert_catalog_listings_batch(listings, kind="seeded")
+    with store.connect(readonly=True) as conn:
+        scrape_fast.cache_for(str(store.path), conn)  # what discovery's warm-up / the first batch write does
+    scrape_fast._RESULTS.clear()  # cold monitor cache
+
+    with patch.object(store, "upsert_catalog_listing", side_effect=AssertionError("row-by-row rewrite")):
+        results = store.upsert_catalog_listings_results(listings, kind="refresh")
+    assert len(results) == 5
+    assert all(item["changed"] is False and item["new"] is False for item in results)
+    assert all(item["prev"]["price_czk"] == 20000 for item in results)
