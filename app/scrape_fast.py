@@ -47,9 +47,10 @@ def _row_fingerprint(row: Any) -> Fingerprint:
 def cache_for(path: str, conn: Any, limit: int | None = None) -> dict[str, Fingerprint]:
     """Fingerprints of live catalog rows, loaded once per DB file.
 
-    `limit` loads only the newest rows (by first_seen): enough for discovery, which only compares the newest
-    pages of every portal, at a fraction of the memory/time of the whole catalog. Rows missing from a partial
-    cache are simply treated as changed, i.e. written normally.
+    `limit` loads only the most recently seen rows: enough for discovery, which only compares the newest pages of
+    every portal, at a fraction of the memory/time of the whole catalog. Rows missing from a partial cache are
+    simply treated as changed, i.e. written normally. Ordered by last_seen because (gone, last_seen) is indexed;
+    ordering by first_seen made SQLite walk every gone row of the table (130 s for 26k live rows).
     """
     with _LOCK:
         cache = _CACHES.get(path)
@@ -61,7 +62,7 @@ def cache_for(path: str, conn: Any, limit: int | None = None) -> dict[str, Finge
         " old_price_czk, lat, image_url FROM catalog_listings WHERE gone = 0"
     )
     if limit:
-        sql += f" ORDER BY first_seen DESC LIMIT {int(limit)}"
+        sql += f" ORDER BY last_seen DESC LIMIT {int(limit)}"
     for row in conn.execute(sql):
         loaded[str(row[0])] = _row_fingerprint(row)
     with _LOCK:

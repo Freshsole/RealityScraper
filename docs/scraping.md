@@ -163,7 +163,8 @@ Další izolace: zkopírovat službu `discovery` a nastavit `DISCOVERY_PORTALS` 
 - **`container.LoopGuard`**: vlákno kontroluje „beat“ z loopu; když je starší než `WORKER_HARD_STALL_SEC` (60 s, discovery 45 s), vypíše stacky všech vláken a ukončí proces (`exit 75`). Docker `unhealthy` kontejner nerestartuje, `restart: unless-stopped` ano.
 - `pending_sold_pings` prochází primární klíč `(monitor_id, id)` jen reálných monitorů (katalogový pseudo-monitor má miliony `gone` řádků). Žádný nový index: stavba indexu na produkční DB drží write lock minuty a blokuje zápisy ostatních procesů.
 - Discovery se nesmí nechat zablokovat zamčenou DB: zápis jednoho chunku má timeout (`SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC`, 15 s) a při vypršení se inzeráty odloží do backlogu; zápis ticků do historie běží na pozadí (single-flight) a smyčky na něj nečekají.
-- Samostatný discovery proces předehřeje otisky jen nejnovějších `SCRAPE_DISCOVERY_CACHE_ROWS` (150 000) listingů, ne celého katalogu, aby fungoval early-stop od prvního pollu.
+- Samostatný discovery proces předehřeje otisky jen posledních `SCRAPE_DISCOVERY_CACHE_ROWS` (150 000) viděných listingů (řazeno podle `last_seen`, které je v indexu `(gone, last_seen)`), ne celého katalogu, aby fungoval early-stop od prvního pollu.
+- `sweep_catalog_stale_gone` pracuje v malých dávkách s commitem a pauzou. Po výpadku scrapingu je zastaralá většina katalogu a jeden `UPDATE` přes všechno držel write lock minuty (`database is locked` pro všechny ostatní zapisovače).
 
 ### 4.3 Rolling deep (`_deep_catalog_tick`)
 

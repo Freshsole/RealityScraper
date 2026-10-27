@@ -195,6 +195,76 @@ class DiscoveryNeverFreezesTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(calls), 2)
 
 
+class ChunkedStaleSweepTests(unittest.TestCase):
+    def test_sweep_marks_only_stale_rows_in_small_commits(self):
+        from datetime import datetime, timedelta, timezone
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "m.sqlite")
+            old = (datetime.now(timezone.utc) - timedelta(hours=200)).isoformat()
+            fresh = datetime.now(timezone.utc).isoformat()
+            with store.connect() as conn:
+                for i in range(25):
+                    conn.execute(
+                        "INSERT INTO catalog_listings(listing_key, id, name, url, first_seen, last_seen, gone)"
+                        " VALUES (?, ?, 'n', 'u', '2026-01-01', ?, 0)",
+                        (f"k{i}", i, old if i < 20 else fresh),
+                    )
+                conn.execute(
+                    "INSERT INTO catalog_listings(listing_key, id, name, url, first_seen, last_seen, gone)"
+                    " VALUES ('knull', 99, 'n', 'u', '2026-01-01', NULL, 0)"
+                )
+            commits: list[int] = []
+            real_connect = store.connect
+
+            def counting_connect(*a, **k):
+                commits.append(1)
+                return real_connect(*a, **k)
+
+            with patch.object(store, "connect", counting_connect):
+                n = store.sweep_catalog_stale_gone(72, chunk=100, pause_sec=0)
+            self.assertEqual(n, 21)  # 20 old + the NULL last_seen row
+            with real_connect() as conn:
+                live = {row[0] for row in conn.execute("SELECT listing_key FROM catalog_listings WHERE gone = 0")}
+            self.assertEqual(live, {f"k{i}" for i in range(20, 25)})
+            self.assertGreaterEqual(len(commits), 3)  # several separate transactions, not one giant UPDATE
+
+    def test_chunking_splits_a_large_backlog(self):
+        from datetime import datetime, timedelta, timezone
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "m.sqlite")
+            old = (datetime.now(timezone.utc) - timedelta(hours=200)).isoformat()
+            with store.connect() as conn:
+                conn.executemany(
+                    "INSERT INTO catalog_listings(listing_key, id, name, url, first_seen, last_seen, gone)"
+                    " VALUES (?, ?, 'n', 'u', '2026-01-01', ?, 0)",
+                    [(f"k{i}", i, old) for i in range(350)],
+                )
+            statements: list[str] = []
+            real_connect = store.connect
+
+            class Spy:
+                def __init__(self, conn):
+                    self._conn = conn
+
+                def __enter__(self):
+                    self._conn.__enter__()
+                    return self
+
+                def __exit__(self, *exc):
+                    return self._conn.__exit__(*exc)
+
+                def execute(self, sql, params=()):
+                    if sql.startswith("UPDATE catalog_listings"):
+                        statements.append(sql)
+                    return self._conn.execute(sql, params)
+
+            with patch.object(store, "connect", lambda *a, **k: Spy(real_connect(*a, **k))):
+                self.assertEqual(store.sweep_catalog_stale_gone(72, chunk=100, pause_sec=0), 350)
+            self.assertGreaterEqual(len(statements), 4)  # 100+100+100+50 (+ NULL pass)
+
+
 class BoundedFingerprintCacheTests(unittest.TestCase):
     def test_limit_loads_only_the_newest_rows(self):
         from app import scrape_fast
@@ -202,7 +272,7 @@ class BoundedFingerprintCacheTests(unittest.TestCase):
         conn = sqlite3.connect(":memory:")
         conn.execute(
             "CREATE TABLE catalog_listings(listing_key, price_czk, name, disposition, area_m2, locality, edited_on,"
-            " old_price_czk, lat, image_url, gone, first_seen)"
+            " old_price_czk, lat, image_url, gone, last_seen)"
         )
         for i in range(10):
             conn.execute(

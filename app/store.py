@@ -4033,39 +4033,49 @@ class Store:
             self._fanout_catalog_gone(key)
         return len(gone_keys)
 
-    def sweep_catalog_stale_gone(self, max_age_hours: int = 72) -> int:
+    def sweep_catalog_stale_gone(self, max_age_hours: int = 72, *, chunk: int = 2000, pause_sec: float = 0.05) -> int:
         """Mark live catalog rows gone when last_seen is older than max_age_hours.
 
         Independent of portal sync completion — stuck/error syncs must not leave
         stale gone=0 rows in the 'current market' forever.
 
-        Bulk path skips per-row sold fanout (would lock SQLite for minutes on
-        100k+ rows); rolling deep / monitors will reconcile individually.
+        Bulk path skips per-row sold fanout; rolling deep / monitors will reconcile individually.
+        Runs in small committed chunks with a pause between them: after a scraping outage most of the catalog
+        is stale, and one UPDATE over all of it held the SQLite write lock for minutes (every other writer,
+        discovery included, got "database is locked").
         """
         from datetime import datetime, timedelta, timezone
 
         hours = max(24, int(max_age_hours or 72))
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        chunk = max(100, int(chunk))
+        n = 0
+        # `gone = 0 AND last_seen < ?` is served by idx_catalog_gone_last_seen; NULL last_seen is a rare extra pass.
+        for stale in ("last_seen < ?", "last_seen IS NULL"):
+            params: tuple[Any, ...] = (cutoff,) if "?" in stale else ()
+            while True:
+                with self.connect() as conn:
+                    cur = conn.execute(
+                        "UPDATE catalog_listings SET gone = 1 WHERE listing_key IN ("
+                        f" SELECT listing_key FROM catalog_listings WHERE gone = 0 AND {stale} LIMIT ?)",
+                        (*params, chunk),
+                    )
+                done = int(cur.rowcount or 0)
+                n += done
+                if done < chunk:
+                    break
+                time.sleep(pause_sec)
         with self.connect() as conn:
-            cur = conn.execute(
-                """
-                UPDATE catalog_listings
-                SET gone = 1
-                WHERE IFNULL(gone, 0) = 0
-                  AND (last_seen IS NULL OR last_seen < ?)
-                """,
-                (cutoff,),
-            )
-            n = int(cur.rowcount or 0)
-            conn.execute(
-                """
-                UPDATE listing_links
-                SET gone = 1
-                WHERE IFNULL(gone, 0) = 0
-                  AND (last_seen IS NULL OR last_seen < ?)
-                """,
-                (cutoff,),
-            )
+            top = conn.execute("SELECT IFNULL(MAX(rowid), 0) FROM listing_links").fetchone()[0]
+        window = chunk * 25
+        for start in range(0, int(top) + 1, window):
+            with self.connect() as conn:
+                conn.execute(
+                    "UPDATE listing_links SET gone = 1 WHERE rowid >= ? AND rowid < ? AND gone = 0"
+                    " AND (last_seen IS NULL OR last_seen < ?)",
+                    (start, start + window, cutoff),
+                )
+            time.sleep(pause_sec)
         self.set_meta("catalog_stale_sweep_last", utc_now())
         self.set_meta("catalog_stale_sweep_count", str(n))
         return n
