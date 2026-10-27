@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app import config
+from app import admin_oauth, config
 from app import users as user_registry
 from app.store import Store
 from app.version import current_version
@@ -33,7 +33,15 @@ MAX_RESPONSE_CHARS = 200_000
 ADMIN_COOKIE = "realitify_admin"
 
 # The AI must not be able to mint or read its own credentials: key management stays a human action in the UI.
-_BLOCKED_PREFIXES = ("/api/admin/mcp-key", "/mcp-admin", "/api/admin/login", "/api/admin/logout")
+_BLOCKED_PREFIXES = (
+    "/api/admin/mcp-key",
+    "/api/admin/mcp-oauth",
+    "/mcp-admin",
+    "/oauth/admin",
+    "/admin-oauth",
+    "/api/admin/login",
+    "/api/admin/logout",
+)
 
 _calls: dict[str, deque[float]] = {}
 
@@ -116,6 +124,12 @@ def authenticate(store: Store, authorization: str | None) -> dict[str, Any]:
     """Return the admin user row for a valid key, else raise PermissionError."""
     header = (authorization or "").strip()
     token = header[7:].strip() if header.lower().startswith("bearer ") else header
+    if token.startswith(admin_oauth.ACCESS_PREFIX):
+        grant = admin_oauth.authenticate_token(store, token)
+        admin = user_registry.get_user_by_id(store, str(grant.get("admin_id"))) if grant else None
+        if not grant or not admin or (admin.get("role") or "") != "admin":
+            raise PermissionError("Neplatný nebo vypršený přístup (přihlaste konektor znovu)")
+        return {**admin, "_key_id": f"oauth:{grant['id']}", "_client": str(grant.get("client_name") or "OAuth")}
     if not token.startswith(TOKEN_PREFIX):
         raise PermissionError("Neplatný nebo chybějící admin klíč")
     digest = _hash(token)
@@ -283,7 +297,8 @@ def _audit(store: Store, admin: dict[str, Any], text: str) -> None:
     try:
         from app import admin as admin_panel
 
-        admin_panel._audit(store, text[:300], str(admin.get("email") or "Admin"))
+        client = str(admin.get("_client") or "")
+        admin_panel._audit(store, (f"[{client}] " if client else "") + text[:300], str(admin.get("email") or "Admin"))
     except Exception:
         pass
 
@@ -339,6 +354,7 @@ async def handle(app: Any, store: Store, admin: dict[str, Any], message: dict[st
 def connector_snippets(token: str = "rf_admin_VÁŠ_KLÍČ") -> dict[str, str]:
     url = mcp_url()
     return {
+        "claude_ai": f"Nastavení → Konektory → Přidat vlastní konektor → URL {url} → přihlásit se admin e-mailem a heslem (bez klíče).",
         "claude_code": f'claude mcp add --transport http realitify-admin {url} --header "Authorization: Bearer {token}"',
         "json": json.dumps(
             {"mcpServers": {"realitify-admin": {"url": url, "headers": {"Authorization": f"Bearer {token}"}}}},

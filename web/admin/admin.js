@@ -2861,9 +2861,11 @@
         <button class="ad-btn soft" type="button" data-copy="${id}">Kopírovat</button>
       </div>`;
     const bind = () => {
-      main.querySelectorAll("[data-copy]").forEach((btn) =>
-        btn.addEventListener("click", () => copy($(btn.dataset.copy).textContent)),
-      );
+      main.querySelectorAll("[data-copy]").forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", () => copy($(btn.dataset.copy).textContent));
+      });
     };
     const renderKey = (created) => {
       const host = $("mcp-key-host");
@@ -2917,9 +2919,47 @@
         <p class="ad-lead">Admin MCP: AI klient (Claude Code, Cursor…) dostane tvoje admin pravomoci: čte všechna data, volá každý API endpoint a může cokoli vytvářet, přepisovat i mazat. Každý admin má jeden přístup. Spojení jde jen přes HTTPS, token je uložen jako otisk a změny se zapisují do auditu.</p>
       </header>
       <section class="ad-nsec">
-        <h2 class="ad-kicker">Admin MCP přístup</h2>
+        <h2 class="ad-kicker">Konektor přes URL (přihlášení)</h2>
+        <article class="ad-card" style="padding:20px"><div id="mcp-oauth-host"></div></article>
+      </section>
+      <section class="ad-nsec">
+        <h2 class="ad-kicker">Admin MCP přístup (statický klíč)</h2>
         <article class="ad-card" style="padding:20px"><div id="mcp-key-host"></div></article>
       </section>`;
+    const renderOauth = async () => {
+      const host = $("mcp-oauth-host");
+      let grants = [];
+      try {
+        grants = (await api("/api/admin/mcp-oauth")).grants || [];
+      } catch {
+        /* the list is optional; the URL below still works */
+      }
+      const when = (sec) => (sec ? new Date(sec * 1000).toLocaleString("cs-CZ") : "nikdy");
+      host.innerHTML = `
+        <p class="ad-lead">V Claude (Nastavení → Konektory → Přidat vlastní konektor) vlož URL níže a přihlas se admin e-mailem a heslem. Žádný klíč se nekopíruje. Přístup platí 1 hodinu a sám se obnovuje, bez použití vyprší po 30 dnech.</p>
+        ${snippetBlock("URL konektoru", data.mcp_url, "mcp-oauth-url")}
+        <div class="ad-field"><label>Propojení klienti</label>
+          ${
+            grants.length
+              ? grants
+                  .map(
+                    (g) => `<p class="ad-lead" style="margin:6px 0"><strong>${esc(g.client_name)}</strong> · propojen ${esc(when(g.created_at))} · naposledy použit ${esc(when(g.last_used_at))}
+                      <button class="ad-btn ghost" type="button" data-oauth-revoke="${esc(g.id)}">Odpojit</button></p>`,
+                  )
+                  .join("")
+              : '<p class="ad-lead">Zatím nikdo.</p>'
+          }
+        </div>`;
+      host.querySelectorAll("[data-oauth-revoke]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          if (!confirm("Odpojit tohoto klienta? Přestane mít přístup do administrace.")) return;
+          await api("/api/admin/mcp-oauth/" + encodeURIComponent(btn.dataset.oauthRevoke), { method: "DELETE" });
+          renderOauth();
+        }),
+      );
+      bind();
+    };
+    renderOauth();
     renderKey(null);
   }
 

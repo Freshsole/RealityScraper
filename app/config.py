@@ -333,6 +333,37 @@ SCRAPE_DISCOVERY_BACKLOG_MAX = max(0, int((os.getenv("SCRAPE_DISCOVERY_BACKLOG_M
 # How long one monitor tick waits for live polls before reporting; slower ones continue in the background.
 SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float((os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC") or "20")))
 
+# New-listing discovery runs as one independent loop per portal, so a slow or dead portal can never delay
+# the others. Seconds between two polls of the same portal (pacing/limiters still apply on top).
+SCRAPE_DISCOVERY_PORTAL_LOOP_SEC = max(1.0, _env_float("SCRAPE_DISCOVERY_PORTAL_LOOP_SEC", 3.0))
+# A portal with many discovery shards (Sreality: one per disposition) is polled at most every
+# shards * this many seconds, so a 3 s base interval cannot turn into a request flood. 0 disables.
+SCRAPE_DISCOVERY_SEC_PER_SHARD = _env_float("SCRAPE_DISCOVERY_SEC_PER_SHARD", 0.4)
+# Explicit per-portal interval overrides, "sreality=8,idnes=10" (seconds).
+def _portal_intervals(raw: str) -> dict[str, float]:
+    out: dict[str, float] = {}
+    for part in raw.split(","):
+        name, _, value = part.partition("=")
+        try:
+            if name.strip() and value.strip():
+                out[name.strip().lower()] = max(1.0, float(value))
+        except ValueError:
+            continue
+    return out
+
+
+SCRAPE_DISCOVERY_PORTAL_INTERVALS = _portal_intervals(os.getenv("SCRAPE_DISCOVERY_PORTAL_INTERVALS") or "")
+# Hard bound of one per-portal discovery poll (fetch + write is flushed as soon as this one portal finishes).
+SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC = max(8.0, _env_float("SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC", 20.0))
+# Comma list restricting discovery to some portals (empty = all). Lets one container per portal group run.
+DISCOVERY_PORTALS = tuple(p.strip().lower() for p in (os.getenv("DISCOVERY_PORTALS") or "").split(",") if p.strip())
+# Pipelines this worker process runs: "all" or a comma list of discovery,monitors,deep,sold,coords,dedupe,maint.
+# A dedicated discovery container (WORKER_PIPELINES=discovery) keeps fresh-listing latency independent of the
+# heavy catalog work; the main worker then runs the rest.
+WORKER_PIPELINES = frozenset(p.strip().lower() for p in (os.getenv("WORKER_PIPELINES") or "all").split(",") if p.strip()) or frozenset({"all"})
+# The scrape worker exits (restart policy relaunches it) when its event loop is frozen this long; 0 disables.
+WORKER_HARD_STALL_SEC = _env_float("WORKER_HARD_STALL_SEC", 60.0)
+
 # Cached portal clients per Hub (LRU). Each keeps one keep-alive socket open.
 CLIENT_CACHE_MAX = max(8, int((os.getenv("CLIENT_CACHE_MAX") or "96")))
 

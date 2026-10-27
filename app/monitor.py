@@ -89,7 +89,10 @@ class Hub:
         self.catalog_reader_fn: Any = None
         self._owner_sync_at = 0.0
         self._recent_shard_idx = 0
-        self._discovery_ticks = 0
+        self._discovery_tick_counts: dict[str, int] = {}
+        # portal -> {"last_ok_at", "last_new_at", "fails", "last_ms"} for freshness monitoring (admin/ops).
+        self.discovery_state: dict[str, dict[str, Any]] = {}
+        self._discovery_recorded_at: dict[str, float] = {}
         # Discovery results whose catalog write was deferred (lock busy); retried on the next tick.
         self._discovery_backlog: OrderedDict[int, Listing] = OrderedDict()
         self._live_inflight: dict[str, asyncio.Task] = {}
@@ -99,7 +102,9 @@ class Hub:
         self.dedupe_scanning = False
         self.catalog_quality_running = False
         self.last_error: str | None = None
-        if config.SCRAPE_ROLE != "web":
+        # Only the process that owns catalog sync/dedupe state may reset it; a discovery-only worker starting
+        # next to the main one must not flip its running sync back to idle.
+        if config.SCRAPE_ROLE != "web" and ("all" in config.WORKER_PIPELINES or "deep" in config.WORKER_PIPELINES):
             self._recover_stuck_catalog_meta()
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
@@ -508,11 +513,11 @@ class Hub:
 
     async def _prune_tick(self) -> None:
         dry = await asyncio.to_thread(self.store.prune_perf_data, dry_run=True)
-        self.store.set_meta("prune_perf_dry", json.dumps(dry))
+        await self._job_db(self.store.set_meta, "prune_perf_dry", json.dumps(dry))
         if config.PRUNE_APPLY:
             applied = await asyncio.to_thread(self.store.prune_perf_data, dry_run=False)
-            self.store.set_meta("prune_perf_last", utc_now())
-            self.store.set_meta("prune_perf_applied", json.dumps(applied))
+            await self._job_db(self.store.set_meta, "prune_perf_last", utc_now())
+            await self._job_db(self.store.set_meta, "prune_perf_applied", json.dumps(applied))
 
     async def _loop(self) -> None:
         await asyncio.sleep(1)
@@ -665,7 +670,7 @@ class Hub:
             return {"ok": False, "reason": "already-checking"}
         self.checking = True
         try:
-            monitors = self.store.list_monitors()
+            monitors = await self._job_db(self.store.list_monitors)
             if monitor_id:
                 monitors = [item for item in monitors if item["id"] == monitor_id]
             groups: dict[str, dict[str, Any]] = {}
@@ -673,9 +678,9 @@ class Hub:
                 if not monitor.get("enabled"):
                     continue
                 if not monitor.get("seeded"):
-                    self.store.seed_monitor_from_catalog(monitor)
-                    self.store.set_monitor_seeded(monitor["id"], True)
-                for job in self.store.attach_monitor_live_jobs(monitor):
+                    await self._job_db(self.store.seed_monitor_from_catalog, monitor)
+                    await self._job_db(self.store.set_monitor_seeded, monitor["id"], True)
+                for job in (await self._job_db(self.store.attach_monitor_live_jobs, monitor)):
                     bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
                     bucket["monitors"].append(monitor)
             results = []
@@ -687,9 +692,9 @@ class Hub:
 
     async def check_monitor(self, monitor: dict[str, Any]) -> dict[str, Any]:
         if not monitor.get("seeded"):
-            self.store.seed_monitor_from_catalog(monitor)
-            self.store.set_monitor_seeded(monitor["id"], True)
-        jobs = self.store.attach_monitor_live_jobs(monitor)
+            await self._job_db(self.store.seed_monitor_from_catalog, monitor)
+            await self._job_db(self.store.set_monitor_seeded, monitor["id"], True)
+        jobs = await self._job_db(self.store.attach_monitor_live_jobs, monitor)
         results = [await self.check_live_job(job, [monitor]) for job in jobs]
         return results[0] if results else {"ok": True, "scanned": 0}
 
@@ -764,32 +769,30 @@ class Hub:
                         if alert.kind == "refresh" and not config.NOTIFY_REFRESHES:
                             continue
                         if alert.kind == "new" and not listing_is_new_for_monitor(listing, monitor, None):
-                            self.store.upsert_seen(monitor["id"], listing, notified=False, kind="seeded")
+                            await self._job_db(self.store.upsert_seen, monitor["id"], listing, notified=False, kind="seeded")
                             continue
-                        prefs = self.store.notify_prefs()
+                        prefs = await self._job_db(self.store.notify_prefs)
                         kind = alert.kind or "new"
                         if kind == "new" and not prefs.get("ntNew", True):
-                            self.store.upsert_seen(monitor["id"], alert, notified=False)
+                            await self._job_db(self.store.upsert_seen, monitor["id"], alert, notified=False)
                             continue
                         if kind == "changed" and not prefs.get("ntPrice", True):
-                            self.store.upsert_seen(monitor["id"], alert, notified=False)
+                            await self._job_db(self.store.upsert_seen, monitor["id"], alert, notified=False)
                             continue
-                        webhook = self.store.notify_webhook(monitor.get("search_url") or "", monitor.get("webhook_url"))
-                        template = self.store.get_template(monitor.get("template_id") or "default")
+                        webhook = await self._job_db(self.store.notify_webhook, monitor.get("search_url") or "", monitor.get("webhook_url"))
+                        template = await self._job_db(self.store.get_template, monitor.get("template_id") or "default")
                         template_config = (template or {}).get("config")
                         queued = False
                         if prefs.get("discord") is not False:
                             if webhook:
-                                queued = self.store.enqueue_listing_ping(
-                                    alert,
+                                queued = (await self._job_db(self.store.enqueue_listing_ping, alert,
                                     webhook,
                                     monitor_id=monitor["id"],
                                     template_config=template_config,
-                                    monitor_name=monitor.get("name") or "",
-                                )
+                                    monitor_name=monitor.get("name") or "",))
                         pushed = await self._notify_push(alert, kind, monitor.get("name") or "")
                         mailed = await self._notify_email(alert, kind, monitor.get("name") or "")
-                        self.store.upsert_seen(monitor["id"], alert, notified=bool(queued or pushed or mailed))
+                        await self._job_db(self.store.upsert_seen, monitor["id"], alert, notified=bool(queued or pushed or mailed))
                         if queued or pushed or mailed:
                             notified.append(alert)
                             try:
@@ -934,7 +937,7 @@ class Hub:
         mid = (monitor or {}).get("id") or monitor_id
         if not mid:
             return
-        row = self.store.mark_gone(mid, listing_id)
+        row = await self._job_db(self.store.mark_gone, mid, listing_id)
         if not row:
             return
         await self._send_sold_ping(row, (monitor or {}).get("name") or row.get("monitor_name") or "")
@@ -943,20 +946,20 @@ class Hub:
         if row.get("sold_notified"):
             return
         if not self._should_ping_sold(row):
-            self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
+            await self._job_db(self.store.mark_sold_notified, row["monitor_id"], int(row["id"]))
             return
-        webhook = self.store.notify_webhook(sold=True)
-        prefs = self.store.notify_prefs()
+        webhook = await self._job_db(self.store.notify_webhook, sold=True)
+        prefs = await self._job_db(self.store.notify_prefs)
         pushed = 0
         if prefs.get("ntExpire", True):
             pushed = await self._notify_push(row, "sold", monitor_name)
         queued = False
         if webhook and prefs.get("discord") is not False:
-            queued = bool(self.store.enqueue_sold_ping(row, webhook, monitor_name=monitor_name))
+            queued = bool((await self._job_db(self.store.enqueue_sold_ping, row, webhook, monitor_name=monitor_name)))
         wa = False
         mailed = await self._notify_email(row, "sold", monitor_name)
         if queued or pushed or mailed:
-            self.store.mark_sold_notified(row["monitor_id"], int(row["id"]))
+            await self._job_db(self.store.mark_sold_notified, row["monitor_id"], int(row["id"]))
 
     def _should_ping_sold(self, row: dict[str, Any]) -> bool:
         if row.get("notified"):
@@ -1036,50 +1039,93 @@ class Hub:
             monitor_name=payload.get("monitor_name") or "",
         )
 
+    def _discovery_portals(self) -> list[str]:
+        """Portals with a NewDiscovery shard (optionally narrowed by DISCOVERY_PORTALS), in stable order."""
+        portals: list[str] = []
+        for shard in recent_shards():
+            portal = str(shard.get("portal") or "").lower()
+            if portal and portal not in portals:
+                portals.append(portal)
+        if config.DISCOVERY_PORTALS:
+            portals = [portal for portal in portals if portal in config.DISCOVERY_PORTALS]
+        return portals
+
     async def _recent_catalog_loop(self) -> None:
-        """Continuously discover new listings, independent of monitors and deep crawl."""
+        """Discover new listings, independent of monitors and deep crawl.
+
+        One loop per portal: a slow, banned or timing-out portal only delays itself, and every portal writes
+        its fresh listings the moment its own poll finishes (they used to wait for the slowest portal of the
+        whole tick plus a 30 s sleep).
+        """
         await asyncio.sleep(2)
-        paused = False
+        portals = self._discovery_portals()
+        interval = float(config.SCRAPE_DISCOVERY_PORTAL_LOOP_SEC)
+        print(
+            "new_discovery start portals="
+            + str({portal: round(self._discovery_interval(portal), 1) for portal in portals}),
+            flush=True,
+        )
+        tasks = [
+            asyncio.create_task(
+                self._portal_discovery_loop(portal, start_delay=interval * index / max(1, len(portals))),
+                name=f"discovery:{portal}",
+            )
+            for index, portal in enumerate(portals)
+        ]
+        tasks.append(asyncio.create_task(self._schedules_loop(), name="discovery:schedules"))
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                task.cancel()
+
+    async def _schedules_loop(self) -> None:
         while self.running:
-            if self.catalog_running and config.SCRAPE_PAUSE_PRIORITY_DURING_CATALOG:
-                if not paused:
-                    print("new_discovery paused (catalog_sync running)", flush=True)
-                    paused = True
-                try:
-                    await asyncio.sleep(0.5)
-                except asyncio.CancelledError:
-                    raise
-                continue
-            if paused:
-                print("new_discovery resumed", flush=True)
-                paused = False
-            tick_started = time.monotonic()
             try:
                 await self.run_due_scrape_schedules()
-                await self._recent_catalog_tick()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.last_error = f"recent-catalog: {exc}"
-                try:
-                    await self._record_tick(
-                        {
-                            "at": utc_now(),
-                            "kind": "minute_discovery",
-                            "role": config.SCRAPE_ROLE,
-                            "error": str(exc)[:240],
-                            "discovery": {"shards": 0, "listings": 0, "new": 0, "updated": 0},
-                            "refresh": {},
-                        }
-                    )
-                except Exception:
-                    pass
-            elapsed = time.monotonic() - tick_started
-            sleep_for = max(0.5, float(config.SCRAPE_DISCOVERY_LOOP_SEC) - elapsed)
+                self.last_error = f"scrape-schedules: {exc}"
+            await asyncio.sleep(30)
+
+    def _discovery_interval(self, portal: str) -> float:
+        """Seconds between two polls of `portal`: the base interval, stretched for portals with many shards."""
+        override = config.SCRAPE_DISCOVERY_PORTAL_INTERVALS.get(portal)
+        if override:
+            return override
+        shards = sum(1 for shard in recent_shards() if str(shard.get("portal") or "").lower() == portal)
+        return max(float(config.SCRAPE_DISCOVERY_PORTAL_LOOP_SEC), shards * float(config.SCRAPE_DISCOVERY_SEC_PER_SHARD))
+
+    async def _portal_discovery_loop(self, portal: str, *, start_delay: float = 0.0) -> None:
+        interval = self._discovery_interval(portal)
+        if start_delay > 0:
+            await asyncio.sleep(start_delay)
+        paused = False
+        failures = 0
+        while self.running:
+            if self.catalog_running and config.SCRAPE_PAUSE_PRIORITY_DURING_CATALOG:
+                if not paused:
+                    print(f"new_discovery paused (catalog_sync running) portal={portal}", flush=True)
+                    paused = True
+                await asyncio.sleep(0.5)
+                continue
+            if paused:
+                print(f"new_discovery resumed portal={portal}", flush=True)
+                paused = False
+            tick_started = time.monotonic()
+            ok = False
             try:
-                await asyncio.sleep(sleep_for)
+                ok = await self._recent_catalog_tick(portal)
             except asyncio.CancelledError:
                 raise
+            except Exception as exc:
+                self.last_error = f"recent-catalog[{portal}]: {exc}"
+                print(f"new_discovery error portal={portal}: {exc}", flush=True)
+            failures = 0 if ok else failures + 1
+            # A failing portal backs off (2x per failure, max 60 s) instead of hammering it; healthy ones poll fast.
+            wait = interval if ok else min(60.0, interval * (2 ** min(failures, 6)))
+            await asyncio.sleep(max(0.05, wait - (time.monotonic() - tick_started)))
 
     async def _deep_catalog_loop(self) -> None:
         """Continuously consume low-priority full-market shards."""
@@ -1306,13 +1352,17 @@ class Hub:
             self._deep_shard_idx = (self._deep_shard_idx + 1) % len(deep)
         return picked
 
-    async def _recent_catalog_tick(self) -> None:
-        """High-priority NewDiscovery; never waits for rolling deep."""
+    async def _recent_catalog_tick(self, portal: str | None = None) -> bool:
+        """High-priority NewDiscovery of one portal (all portals when None); never waits for rolling deep.
+
+        Returns True when at least one page of the portal was fetched successfully."""
         from app.scrape_engine import ScrapeEngine
 
         recent = recent_shards()
+        if portal:
+            recent = [shard for shard in recent if str(shard.get("portal") or "").lower() == portal]
         if not recent:
-            return
+            return True
 
         started = time.monotonic()
         engine = ScrapeEngine(registry=self._scrape_registry, priority=1, pipeline="discovery")
@@ -1323,12 +1373,12 @@ class Hub:
         error: str | None = None
         write_note: str | None = None
         try:
-            self._discovery_ticks += 1
+            ticks = self._discovery_tick_counts[portal or "*"] = self._discovery_tick_counts.get(portal or "*", 0) + 1
             known_fn = None
             if (
                 config.SCRAPE_DISCOVERY_EARLY_STOP
                 and config.SCRAPE_FAST_TOUCH
-                and self._discovery_ticks % config.SCRAPE_DISCOVERY_FULL_EVERY != 0
+                and ticks % config.SCRAPE_DISCOVERY_FULL_EVERY != 0
             ):
                 from app import scrape_fast
                 from app.identity import listing_key
@@ -1338,15 +1388,16 @@ class Hub:
                     known_fn = lambda item: scrape_fast.is_known(store_path, listing_key(item.url), item)
             # Hard bound: a tick measured 518 s although the per-shard deadline is 50 s (waits at the limiter
             # are not covered by it). A stuck tick must end so the next one can start.
+            deadline = float(config.SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC if portal else config.SCRAPE_DISCOVERY_DEADLINE_SEC)
             results = await asyncio.wait_for(
                 engine.fetch_shards(
                     recent,
                     client_factory=self.client_for,
                     max_pages=config.SCRAPE_RECENT_PAGES,
-                    deadline_sec=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC),
+                    deadline_sec=deadline,
                     known_fn=known_fn,
                 ),
-                timeout=float(config.SCRAPE_DISCOVERY_DEADLINE_SEC) + 40.0,
+                timeout=deadline + 10.0,
             )
             seen: set[int] = set()
             for item in results:
@@ -1385,11 +1436,32 @@ class Hub:
             error = str(exc)[:240]
             self.last_error = f"recent-catalog: {error}"
 
+        ok = error is None and disc_pages > 0
+        ms = int((time.monotonic() - started) * 1000)
+        state = self.discovery_state.setdefault(portal or "*", {"fails": 0})
+        state["last_ms"] = ms
+        if ok:
+            state["last_ok_at"] = utc_now()
+            state["fails"] = 0
+            if int(disc_stats.get("new") or 0):
+                state["last_new_at"] = state["last_ok_at"]
+        else:
+            state["fails"] = int(state.get("fails") or 0) + 1
+            state["last_error"] = error or "no-page-fetched"
+        # Polls run every few seconds per portal: persist/log only what matters (new listings, errors) plus
+        # a periodic heartbeat, otherwise the tick table and the log drown in empty rows.
+        now_mono = time.monotonic()
+        key = portal or "*"
+        noteworthy = bool(error) or not ok or int(disc_stats.get("new") or 0) > 0 or bool(write_note)
+        if not noteworthy and now_mono - self._discovery_recorded_at.get(key, 0.0) < 30.0:
+            return ok
+        self._discovery_recorded_at[key] = now_mono
         tick = {
             "at": utc_now(),
             "kind": "new_discovery",
             "role": config.SCRAPE_ROLE,
-            "ms": int((time.monotonic() - started) * 1000),
+            "portal": portal,
+            "ms": ms,
             "error": error,
             "note": write_note,
             "discovery": {
@@ -1411,13 +1483,13 @@ class Hub:
             from app.scrape_console import emit
 
             emit(
-                f"new_discovery listings={len(disc_listings)} new={disc_stats.get('new')} "
-                f"ms={tick['ms']}"
-                + (f" note={write_note}" if write_note else "")
+                f"new_discovery portal={portal or '*'} listings={len(disc_listings)} new={disc_stats.get('new')} "
+                f"ms={ms}" + (f" note={write_note}" if write_note else "") + (f" error={error}" if error else "")
             )
         except Exception as exc:
             self.last_error = f"scrape-tick: {exc}"
             print(f"record_scrape_tick failed: {exc}", flush=True)
+        return ok
 
     async def _deep_catalog_tick(self) -> None:
         """Low-priority rolling crawl; monitor and discovery requests preempt its queue."""
@@ -1585,9 +1657,7 @@ class Hub:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.store.patch_dedupe_meta(
-                    {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()}
-                )
+                await self._job_db(self.store.patch_dedupe_meta, {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()})
             try:
                 await asyncio.sleep(300)
             except asyncio.CancelledError:
@@ -1670,14 +1740,12 @@ class Hub:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         self.dedupe_running = True
-        self.store.patch_dedupe_meta({"status": "running", "error": "", "last_attempt": utc_now()})
+        await self._job_db(self.store.patch_dedupe_meta, {"status": "running", "error": "", "last_attempt": utc_now()})
         try:
             stats = await asyncio.to_thread(lambda: self.store.merge_duplicate_listings(force=True))
             return {"ok": True, "stats": stats}
         except Exception as exc:
-            self.store.patch_dedupe_meta(
-                {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()}
-            )
+            await self._job_db(self.store.patch_dedupe_meta, {"status": "error", "error": str(exc)[:300], "last_attempt": utc_now()})
             print(f"Sloučení duplicit selhalo: {exc}", flush=True)
             return {"ok": False, "error": str(exc)}
         finally:
@@ -1687,12 +1755,12 @@ class Hub:
         if self.dedupe_running or self.dedupe_scanning:
             return {"ok": False, "reason": "already-running"}
         self.dedupe_scanning = True
-        self.store.patch_dedupe_meta({"status": "scanning", "error": ""})
+        await self._job_db(self.store.patch_dedupe_meta, {"status": "scanning", "error": ""})
         try:
             result = await asyncio.to_thread(self.store.preview_duplicate_listings)
             return {"ok": True, **result}
         except Exception as exc:
-            self.store.patch_dedupe_meta({"status": "error", "error": str(exc)[:300]})
+            await self._job_db(self.store.patch_dedupe_meta, {"status": "error", "error": str(exc)[:300]})
             print(f"Kontrola duplicit selhala: {exc}", flush=True)
             return {"ok": False, "error": str(exc)}
         finally:
@@ -2178,7 +2246,7 @@ class Hub:
                 raise
 
     async def _sold_tick(self) -> None:
-        for pending in self.store.pending_sold_pings(limit=10):
+        for pending in (await self._job_db(self.store.pending_sold_pings, limit=10)):
             await self._send_sold_ping(pending, pending.get("monitor_name") or "")
         if not self.catalog_owner:
             # Consumer of the shared catalog: its own catalog copy is not refreshed here, so sold
@@ -2188,24 +2256,24 @@ class Hub:
                 self._owner_sync_at = time.monotonic()
                 await self._job_db(self.store.sync_gone_from_catalog, owner)
             if owner is not None:
-                for pending in self.store.pending_sold_pings(limit=10):
+                for pending in (await self._job_db(self.store.pending_sold_pings, limit=10)):
                     await self._send_sold_ping(pending, pending.get("monitor_name") or "")
             return
-        due = [item for item in self.store.list_monitors() if item.get("enabled") and self._inventory_due(item)]
+        due = [item for item in (await self._job_db(self.store.list_monitors)) if item.get("enabled") and self._inventory_due(item)]
         if not due:
             return
-        for row in self.store.stale_catalog_listings(days=1, limit=8):
+        for row in (await self._job_db(self.store.stale_catalog_listings, days=1, limit=8)):
             listing = _listing_from_catalog_dict(row)
             try:
                 listing = await self.detail_client_for(row.get("url") or "").fetch_detail(listing)
-                self.store.upsert_catalog_listing(listing, kind="refresh")
+                await self._job_db(self.store.upsert_catalog_listing, listing, kind="refresh")
             except ListingGone:
-                self.store.mark_catalog_listing_gone(row.get("listing_key") or "")
+                await self._job_db(self.store.mark_catalog_listing_gone, row.get("listing_key") or "")
             except Exception:
                 continue
             await asyncio.sleep(0.2)
-        self.store.update_monitor_stats(due[0]["id"], last_inventory=utc_now(), last_error=None)
-        for pending in self.store.pending_sold_pings(limit=10):
+        await self._job_db(self.store.update_monitor_stats, due[0]["id"], last_inventory=utc_now(), last_error=None)
+        for pending in (await self._job_db(self.store.pending_sold_pings, limit=10)):
             await self._send_sold_ping(pending, pending.get("monitor_name") or "")
 
     async def _probe_sold(self, monitor: dict[str, Any], client, rows: list[dict[str, Any]]) -> None:
@@ -2213,7 +2281,7 @@ class Hub:
             listing = self._listing_from_row(row)
             try:
                 listing = await client.fetch_detail(listing)
-                self.store.upsert_seen(monitor["id"], listing, notified=False, kind="refresh")
+                await self._job_db(self.store.upsert_seen, monitor["id"], listing, notified=False, kind="refresh")
             except ListingGone:
                 await self.notify_sold(monitor, int(row["id"]))
             except Exception:
@@ -2221,7 +2289,7 @@ class Hub:
             await asyncio.sleep(0.2)
 
     async def maybe_send_digest(self) -> None:
-        settings = self.store.app_settings()
+        settings = await self._job_db(self.store.app_settings)
         hour = int(settings.get("digest_hour") or 8)
         now = datetime.now().astimezone()
         if now.hour != hour:
@@ -2231,9 +2299,9 @@ class Hub:
         if str(last).startswith(today):
             return
         since = last or now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        items = self.store.digest_items(since)
-        webhook = self.store.digest_webhook()
-        prefs = self.store.notify_prefs()
+        items = await self._job_db(self.store.digest_items, since)
+        webhook = await self._job_db(self.store.digest_webhook)
+        prefs = await self._job_db(self.store.notify_prefs)
         if webhook and items and prefs.get("discord") is not False:
             await send_digest(webhook, items)
         if items:
@@ -2242,17 +2310,17 @@ class Hub:
                 await mail_notify.notify_digest(self.store, items)
             except Exception:
                 pass
-        self.store.set_meta("digest_last", utc_now())
+        await self._job_db(self.store.set_meta, "digest_last", utc_now())
 
     async def send_digest_test(self, webhook_url: str | None = None) -> dict[str, Any]:
-        if webhook_url and not self.store.discord_webhook_url():
-            self.store.save_app_settings({"digest_webhook": str(webhook_url).strip()})
-        settings = self.store.app_settings()
+        if webhook_url and not (await self._job_db(self.store.discord_webhook_url)):
+            await self._job_db(self.store.save_app_settings, {"digest_webhook": str(webhook_url).strip()})
+        settings = await self._job_db(self.store.app_settings)
         last = settings.get("digest_last") or ""
         since = last or datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-        items = self.store.digest_items(since)
-        webhook = self.store.digest_webhook()
-        prefs = self.store.notify_prefs()
+        items = await self._job_db(self.store.digest_items, since)
+        webhook = await self._job_db(self.store.digest_webhook)
+        prefs = await self._job_db(self.store.notify_prefs)
         sent_discord = False
         if webhook and prefs.get("discord") is not False:
             await send_digest(webhook, items, test=True)
@@ -2268,16 +2336,16 @@ class Hub:
         return {"ok": True, "count": len(items), "push": bool(sent_push), "discord": sent_discord, "email": sent_mail}
 
     async def send_test(self, monitor_id: str | None = None) -> dict[str, Any]:
-        monitors = self.store.list_monitors()
+        monitors = await self._job_db(self.store.list_monitors)
         monitor = next((item for item in monitors if item["id"] == monitor_id), None) if monitor_id else None
         monitor = monitor or next((item for item in monitors if item.get("enabled")), None) or (monitors[0] if monitors else None)
         if not monitor:
             raise RuntimeError("Žádný monitor")
         client = self.client_for(monitor["search_url"])
         listings, _ = await client.fetch_pages(1, newest=True)
-        webhook = self.store.notify_webhook(monitor.get("search_url") or "", monitor.get("webhook_url"))
-        template = self.store.get_template(monitor.get("template_id") or "default")
-        prefs = self.store.notify_prefs()
+        webhook = await self._job_db(self.store.notify_webhook, monitor.get("search_url") or "", monitor.get("webhook_url"))
+        template = await self._job_db(self.store.get_template, monitor.get("template_id") or "default")
+        prefs = await self._job_db(self.store.notify_prefs)
         sent_discord = False
         sent_push = 0
         if not listings:
@@ -2323,7 +2391,7 @@ class Hub:
         return {"ok": True, "listing": listing.to_dict(), "monitor_id": monitor["id"], "discord": sent_discord, "push": bool(sent_push), "email": sent_mail}
 
     async def backfill_missing_coords(self) -> None:
-        rows = self.store.missing_coords(notified_only=True)
+        rows = await self._job_db(self.store.missing_coords, notified_only=True)
         for row in rows:
             listing = Listing(
                 id=int(row["id"]),
@@ -2336,11 +2404,11 @@ class Hub:
                 url=row.get("url") or "",
                 image_url=row.get("image_url"),
             )
-            monitor = self.store.get_monitor(row.get("monitor_id") or "default")
+            monitor = await self._job_db(self.store.get_monitor, row.get("monitor_id") or "default")
             search_url = (monitor or {}).get("search_url") or config.SEARCH_URL
             try:
                 listing = await self.detail_client_for(search_url).fetch_detail(listing)
-                self.store.update_location(listing, row.get("monitor_id"))
+                await self._job_db(self.store.update_location, listing, row.get("monitor_id"))
             except Exception:
                 continue
             await asyncio.sleep(0.2)

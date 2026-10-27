@@ -5202,6 +5202,10 @@ class Store:
         # Finding the (normally zero) rows without a canonical key must not scan the wide table.
         "CREATE INDEX IF NOT EXISTS idx_catalog_no_canonical ON catalog_listings(listing_key)"
         " WHERE IFNULL(canonical_key, '') = ''",
+        # pending_sold_pings: gone rows of the catalog pseudo-monitor outnumber everything else by orders of
+        # magnitude, so (gone, last_seen) walked all of them (minutes). Must match the query's WHERE literally.
+        "CREATE INDEX IF NOT EXISTS idx_listings_sold_pending ON listings(last_seen DESC)"
+        " WHERE IFNULL(gone, 0) = 1 AND IFNULL(sold_notified, 0) = 0 AND monitor_id != '__catalog__'",
     )
 
     def ensure_background_indexes(self) -> None:
@@ -7471,11 +7475,11 @@ class Store:
                 LEFT JOIN monitors ON monitors.id = listings.monitor_id
                 WHERE IFNULL(listings.gone, 0) = 1
                   AND IFNULL(listings.sold_notified, 0) = 0
-                  AND listings.monitor_id != ?
+                  AND listings.monitor_id != '__catalog__'
                 ORDER BY listings.last_seen DESC
                 LIMIT ?
                 """,
-                (CATALOG_MONITOR_ID, limit),
+                (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
 

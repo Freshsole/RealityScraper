@@ -54,6 +54,7 @@ from app import agent_discovery
 from app import agents as agent_hub
 from app import mcp_oauth
 from app import admin_mcp
+from app import admin_oauth
 from app import free_pro
 
 install_stdout_tee()
@@ -576,6 +577,8 @@ async def agent_cors(request: Request, call_next):
         or path.startswith("/api/v1")
         or path.startswith("/api/agents/openapi")
         or path.startswith("/.well-known/oauth")
+        or path.startswith("/.well-known/openid-configuration/admin-oauth")
+        or path.startswith("/admin-oauth/.well-known")
         or path.startswith("/oauth/")
         or path.startswith("/agent/identity")
     ):
@@ -4699,6 +4702,141 @@ async def admin_mcp_key_delete(realitify_admin: str | None = Cookie(default=None
         raise HTTPException(404, str(exc)) from exc
 
 
+@app.get("/.well-known/oauth-protected-resource/mcp-admin")
+async def admin_oauth_protected_resource() -> dict:
+    return admin_oauth.protected_resource_metadata()
+
+
+@app.get("/.well-known/oauth-authorization-server/admin-oauth")
+@app.get("/.well-known/openid-configuration/admin-oauth")
+@app.get("/admin-oauth/.well-known/oauth-authorization-server")
+@app.get("/admin-oauth/.well-known/openid-configuration")
+async def admin_oauth_authorization_server() -> dict:
+    return admin_oauth.authorization_server_metadata()
+
+
+@app.post("/oauth/admin/register")
+async def admin_oauth_register(request: Request, payload: dict[str, Any] | None = Body(None)):
+    _require_https(request)
+    _rate_limit_or_429(request, "admin_oauth_register", "", 20, 3600)
+    try:
+        created = await asyncio.get_running_loop().run_in_executor(
+            _ADMIN_POOL, admin_oauth.register_client, hub.store, payload or {}
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": "invalid_redirect_uri", "error_description": str(exc)}, status_code=400)
+    return JSONResponse(created, status_code=201)
+
+
+_ADMIN_CONSENT_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Referrer-Policy": "no-referrer",
+}
+
+
+async def _admin_consent_page(params: dict[str, str], *, error: str = "", status: int = 200, email: str = "") -> HTMLResponse:
+    name = ""
+    try:
+        name = (await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, admin_oauth.validate_authorize, hub.store, params))["client_name"]
+    except ValueError as exc:
+        error, status = error or str(exc), 400
+    # An invalid request (unknown client, bad redirect_uri) gets an error page, never a password form.
+    page = admin_oauth.consent_html(params, client_name=name, error=error, email=email, show_form=bool(name))
+    return HTMLResponse(page, status_code=status, headers=_ADMIN_CONSENT_HEADERS)
+
+
+@app.get("/oauth/admin/authorize")
+async def admin_oauth_authorize_get(request: Request):
+    _require_https(request)
+    return await _admin_consent_page({key: str(value) for key, value in request.query_params.items()})
+
+
+@app.post("/oauth/admin/authorize")
+async def admin_oauth_authorize_post(request: Request):
+    _require_https(request)
+    # Password guessing: per IP, and per e-mail so a botnet cannot spread over addresses either.
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    email = str(form.get("email") or "").strip().lower()
+    _rate_limit_or_429(request, "admin_oauth_authorize", "", 10, 600)
+    if email:
+        _rate_limit_or_429(request, "admin_oauth_authorize_email", email, 6, 600)
+    try:
+        target, admin = await asyncio.get_running_loop().run_in_executor(
+            _ADMIN_POOL, admin_oauth.complete_authorize, hub.store, form, email, str(form.get("password") or "")
+        )
+    except ValueError as exc:
+        return await _admin_consent_page(form, error=str(exc), status=403, email=email)
+    admin_mcp._audit(hub.store, admin, f"OAuth přístup do Admin MCP povolen klientovi {admin.get('_client_name')}")
+    return RedirectResponse(target, status_code=303, headers=_ADMIN_CONSENT_HEADERS)
+
+
+@app.post("/oauth/admin/token")
+async def admin_oauth_token(request: Request):
+    _require_https(request)
+    _rate_limit_or_429(request, "admin_oauth_token", "", 120, 600)
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    grant = str(form.get("grant_type") or "")
+    loop = asyncio.get_running_loop()
+    headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+    try:
+        if grant == "authorization_code":
+            data = await loop.run_in_executor(
+                _ADMIN_POOL,
+                lambda: admin_oauth.exchange_code(
+                    hub.store,
+                    code=str(form.get("code") or ""),
+                    redirect_uri=str(form.get("redirect_uri") or ""),
+                    client_id=str(form.get("client_id") or ""),
+                    code_verifier=str(form.get("code_verifier") or ""),
+                ),
+            )
+        elif grant == "refresh_token":
+            data = await loop.run_in_executor(
+                _ADMIN_POOL,
+                admin_oauth.refresh_tokens,
+                hub.store,
+                str(form.get("refresh_token") or ""),
+                str(form.get("client_id") or ""),
+            )
+        else:
+            return JSONResponse({"error": "unsupported_grant_type"}, status_code=400, headers=headers)
+    except ValueError:
+        return JSONResponse({"error": "invalid_grant"}, status_code=400, headers=headers)
+    return JSONResponse(data, headers=headers)
+
+
+@app.post("/oauth/admin/revoke")
+async def admin_oauth_revoke(request: Request) -> dict:
+    _require_https(request)
+    _rate_limit_or_429(request, "admin_oauth_revoke", "", 60, 600)
+    form = {str(key): str(value) for key, value in (await request.form()).items()}
+    await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, admin_oauth.revoke, hub.store, str(form.get("token") or ""))
+    return {"ok": True}
+
+
+@app.get("/api/admin/mcp-oauth")
+async def admin_mcp_oauth_list(realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")) -> dict:
+    admin = await _admin_user_async(realitify_admin)
+    grants = await asyncio.get_running_loop().run_in_executor(_ADMIN_POOL, admin_oauth.list_grants, hub.store, str(admin.get("id")))
+    return {"grants": grants, "mcp_url": admin_mcp.mcp_url()}
+
+
+@app.delete("/api/admin/mcp-oauth/{grant_id}")
+async def admin_mcp_oauth_revoke(
+    grant_id: str, realitify_admin: str | None = Cookie(default=None, alias="realitify_admin")
+) -> dict:
+    admin = await _admin_user_async(realitify_admin)
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            _ADMIN_POOL, admin_oauth.revoke_grant, hub.store, str(admin.get("id")), grant_id
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"ok": True}
+
+
 @app.api_route("/mcp-admin", methods=["GET", "POST", "HEAD"])
 async def admin_mcp_endpoint(request: Request):
     _require_https(request)
@@ -4707,7 +4845,8 @@ async def admin_mcp_endpoint(request: Request):
             _ADMIN_POOL, admin_mcp.authenticate, hub.store, request.headers.get("authorization")
         )
     except PermissionError as exc:
-        raise HTTPException(401, str(exc)) from exc
+        # The WWW-Authenticate header is what lets a client (claude.ai) discover the OAuth login for this URL.
+        raise HTTPException(401, str(exc), headers={"WWW-Authenticate": admin_oauth.www_authenticate()}) from exc
     if not admin_mcp.rate_ok(str(admin.get("_key_id"))):
         raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
     if request.method != "POST":

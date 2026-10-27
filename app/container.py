@@ -12,9 +12,11 @@ CLI: python -m app.container healthcheck web|worker (Docker HEALTHCHECK)
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import os
 import sqlite3
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -95,6 +97,66 @@ async def heartbeat_loop() -> None:
         except OSError:
             pass
         await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+
+
+class LoopGuard:
+    """Hard stall watchdog for the scrape worker.
+
+    Docker never restarts an *unhealthy* container, and a blocked asyncio loop cannot fix itself (a single
+    sync SQLite call froze the worker for 7 minutes while every portal looked "down"). A daemon thread
+    watches a beat the loop writes every second; when it goes stale it dumps every thread's stack to
+    stderr and exits, so the restart policy brings up a clean worker within seconds.
+    """
+
+    EXIT_CODE = 75
+
+    def __init__(self, max_stall_s: float, *, exit_fn: Callable[[int], None] = os._exit) -> None:
+        self.max_stall_s = float(max_stall_s)
+        self._exit_fn = exit_fn
+        self._beat = time.monotonic()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def beat(self) -> None:
+        self._beat = time.monotonic()
+
+    def stalled_for(self) -> float:
+        return time.monotonic() - self._beat
+
+    def check(self) -> bool:
+        """True (after dumping stacks and calling exit_fn) when the loop has been silent too long."""
+        stalled = self.stalled_for()
+        if stalled < self.max_stall_s:
+            return False
+        print(f"loop_guard: event loop stalled {stalled:.0f}s (limit {self.max_stall_s:.0f}s) - dumping stacks and exiting", flush=True)
+        try:
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        except Exception:
+            pass
+        self._exit_fn(self.EXIT_CODE)
+        return True
+
+    def start(self) -> None:
+        if self.max_stall_s <= 0 or self._thread is not None:
+            return
+        self.beat()
+
+        def _run() -> None:
+            interval = min(5.0, max(0.5, self.max_stall_s / 4))
+            while not self._stop.wait(interval):
+                if self.check():
+                    return
+
+        self._thread = threading.Thread(target=_run, name="loop-guard", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    async def beat_loop(self) -> None:
+        while True:
+            self.beat()
+            await asyncio.sleep(1.0)
 
 
 def worker_healthy() -> bool:

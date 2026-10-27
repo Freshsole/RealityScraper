@@ -131,13 +131,37 @@ flowchart TB
 - Jen když se **změnila cena** nebo je inzerát **nový**: `matching_monitors` → `add_monitor_hit` → `_classify` (detail request) → Discord / push / e-mail.
 - Nezměněné položky skončí po `last_seen` update. Bez detailu, bez matchování.
 
-### 4.2 NewDiscovery (`_recent_catalog_tick`)
+### 4.2 NewDiscovery (`_recent_catalog_loop` → `_portal_discovery_loop` → `_recent_catalog_tick(portal)`)
 
-- Každých **60 s** (`SCRAPE_DISCOVERY_LOOP_SEC`).
-- Shardy: `recent_shards()` = Sreality newest-first **po dispozici** (26 URL) + nationwide newest byty **každého** dalšího portálu (`extra_portal_recent_shards`).
-- `max_pages=SCRAPE_RECENT_PAGES` (4), deadline 50 s, engine **priority 1**.
-- Upsert `kind=refresh` přes `_try_catalog_upsert` (čeká na lock max 3 s, jinak `write-deferred:catalog-busy`).
-- Log: `new_discovery listings=… new=… ms=…`
+Cíl: nový inzerát je v katalogu **během několika sekund** od zveřejnění na portálu.
+
+- **Jedna nezávislá smyčka na portál** (`discovery:<portal>`), každá každé `SCRAPE_DISCOVERY_PORTAL_LOOP_SEC` (3 s). Smyčky jsou rozložené v čase (stagger). Pomalý, zaseknutý nebo banující portál zdržuje jen sám sebe; inzeráty každého portálu se zapíšou hned po dokončení jeho vlastního pollu (dřív jeden tick čekal na nejpomalejší portál + 30 s pauzu).
+- Chyba portálu (žádná stránka se nestáhla) → exponenciální backoff 2× až 60 s, po úspěchu zpět na rychlý interval.
+- Shardy: `recent_shards()` filtrované na daný portál (Sreality newest-first **po dispozici** + nationwide newest byty dalších portálů). `max_pages=SCRAPE_RECENT_PAGES`, tvrdý deadline `SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC` (20 s), engine **priority 1**.
+- Early-stop přes `scrape_fast` (stránka bez novinek ukončí paginaci); každý `SCRAPE_DISCOVERY_FULL_EVERY`-tý poll portálu je plný.
+- Upsert `kind=refresh` přes `_try_catalog_upsert` (lock max 3 s, jinak `write-deferred:catalog-busy` a inzeráty jdou do `_discovery_backlog` a zkusí se znovu).
+- Čerstvost: `Hub.discovery_state[portal]` = `last_ok_at`, `last_new_at`, `fails`, `last_ms`.
+- Tick do mety/logu jen když je co hlásit (nový inzerát, chyba) + heartbeat max po 30 s na portál: `new_discovery portal=… listings=… new=… ms=…`
+- `DISCOVERY_PORTALS=a,b` omezí proces na vybrané portály (viz 4.6).
+
+### 4.6 Dělení workeru na procesy (`WORKER_PIPELINES`)
+
+`python -m app.scrape_worker` spouští jen pipeline z `WORKER_PIPELINES` (default `all`): `discovery`, `monitors`, `deep`, `sold`, `coords`, `dedupe`, `maint` (WAL checkpoint, stale sweep, SSR rebuild, e-mail loop, background indexy).
+
+V `docker-compose.yml` běží:
+
+| služba | `WORKER_PIPELINES` | proč |
+|---|---|---|
+| `worker` | `monitors,deep,sold,coords,dedupe,maint` | těžká práce nad katalogem |
+| `discovery` | `discovery` | jen čerstvé inzeráty, vlastní proces/CPU, nic ho nezdrží |
+
+Další izolace: zkopírovat službu `discovery` a nastavit `DISCOVERY_PORTALS` (např. jeden kontejner na Sreality, druhý na ostatní). Procesy sdílejí SQLite soubor (WAL, krátké zápisy); `_recover_stuck_catalog_meta` spouští jen proces s pipeline `deep`/`all`.
+
+### 4.7 Ochrana před zamrzlým event loopem
+
+- **Žádné synchronní `store.*` volání v `async def`** — vždy `await self._job_db(self.store.x, …)` (thread pool + retry na `database is locked`). Hlídá to `tests/test_scrape_resilience.py` (AST test nad `monitor.py`). Důvod: jeden pomalý dotaz (`pending_sold_pings`) v `_sold_tick` zablokoval loop na ~7 min, všechny HTTP fetche portálů vypršely (`ReadTimeout: wall-clock`) a `error_rate_5m=1.0` vypadalo jako výpadek všech portálů.
+- **`container.LoopGuard`**: vlákno kontroluje „beat“ z loopu; když je starší než `WORKER_HARD_STALL_SEC` (60 s, discovery 45 s), vypíše stacky všech vláken a ukončí proces (`exit 75`). Docker `unhealthy` kontejner nerestartuje, `restart: unless-stopped` ano.
+- Částečný index `idx_listings_sold_pending` (background index, staví ho proces s `maint`).
 
 ### 4.3 Rolling deep (`_deep_catalog_tick`)
 
@@ -415,6 +439,11 @@ Při restartu: `_recover_stuck_catalog_meta` shodí visící `catalog_sync_statu
 | Proměnná | Default | Význam |
 |---|---|---|
 | `SCRAPE_ROLE` | `all` | web / worker / all (`make dev` nastaví web+worker) |
+| `WORKER_PIPELINES` | `all` | které pipeline worker proces spouští (4.6) |
+| `DISCOVERY_PORTALS` | (všechny) | omezí discovery na vybrané portály |
+| `SCRAPE_DISCOVERY_PORTAL_LOOP_SEC` | 3 | interval pollu jednoho portálu |
+| `SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC` | 20 | tvrdý limit jednoho pollu portálu |
+| `WORKER_HARD_STALL_SEC` | 60 | zamrzlý loop déle než X s → dump + exit (0 = vypnuto) |
 | `SCRAPE_CONCURRENCY` | 16 | strop paralelních HTTP na portál |
 | `SCRAPE_CONCURRENCY_FLOOR` | 4 | podlaha po 403/429 |
 | `SCRAPE_GLOBAL_CONCURRENCY` | 24 | tvrdý strop napříč portály |

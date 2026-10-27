@@ -5,7 +5,9 @@ import json
 import os
 import signal
 import sys
+import threading
 import traceback
+from typing import Any
 
 from app import config
 from app import container
@@ -38,6 +40,14 @@ class ScrapeWorker:
         self._ssr_task: asyncio.Task[None] | None = None
         self._stall_task: asyncio.Task[None] | None = None
         self._email_task: asyncio.Task[None] | None = None
+        self._guard = container.LoopGuard(config.WORKER_HARD_STALL_SEC)
+        self._guard_task: asyncio.Task[None] | None = None
+
+    @staticmethod
+    def runs(pipeline: str) -> bool:
+        """True when this process is configured to run `pipeline` (WORKER_PIPELINES, default all)."""
+        pipelines = config.WORKER_PIPELINES
+        return "all" in pipelines or pipeline in pipelines
 
     # Grace period after (re)deploy: keep the worker idle while Coolify
     # healthchecks the new container (60s start + 3x30s attempts). Scraping
@@ -49,6 +59,9 @@ class ScrapeWorker:
     async def run(self) -> None:
         self.running = True
         self._heartbeat_task = asyncio.create_task(container.heartbeat_loop(), name="worker-heartbeat")
+        self._guard.start()
+        self._guard_task = asyncio.create_task(self._guard.beat_loop(), name="worker-loop-guard")
+        print(f"scrape_worker pipelines={sorted(config.WORKER_PIPELINES)} hard_stall={config.WORKER_HARD_STALL_SEC}s", flush=True)
         print(
             f"scrape_worker start concurrency={config.SCRAPE_CONCURRENCY} "
             f"overrides={config.SCRAPE_CONCURRENCY_OVERRIDES or '{}'} "
@@ -64,15 +77,17 @@ class ScrapeWorker:
         await self._rescan_users()
         self._rescan_task = asyncio.create_task(self._rescan_loop(), name="worker-rescan-users")
         self._watch_task = asyncio.create_task(self._watchdog_loop(), name="worker-watchdog")
-        self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
-        self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
+        if self.runs("maint"):
+            self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
+            self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
         self._stall_task = asyncio.create_task(self._stall_dump_loop(), name="worker-stall-dump")
-        from app.emailing import service as email_service, store as email_store
+        if self.runs("maint"):
+            from app.emailing import service as email_service, store as email_store
 
-        email_store.bind(self.hub.store)
-        self._email_task = asyncio.create_task(
-            email_service.run_email_loop(self.hub.store_for, self.hub.store), name="worker-email-loop"
-        )
+            email_store.bind(self.hub.store)
+            self._email_task = asyncio.create_task(
+                email_service.run_email_loop(self.hub.store_for, self.hub.store), name="worker-email-loop"
+            )
         # Ping/discord stay on web process so notifications dequeue once.
         try:
             while self.running:
@@ -101,13 +116,14 @@ class ScrapeWorker:
                 await asyncio.sleep(10)
         finally:
             self.running = False
+            self._guard.stop()
             try:
                 from app import parse_pool
 
                 parse_pool.close()
             except Exception:
                 pass
-            for task in (self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task, self._email_task):
+            for task in (self._guard_task, self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task, self._email_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -143,36 +159,53 @@ class ScrapeWorker:
     async def _spawn_user(self, user_id: str) -> None:
         if user_id in self.user_hubs:
             return
+        owner = self._is_catalog_owner(user_id)
+        # (pipeline, runs-for-everybody?, factory) - the catalog pipelines run once, on the owner's store only.
+        plan: list[tuple[str, bool, str, Any]] = [
+            ("monitors", False, "monitor-priority", lambda h: h._loop()),
+            ("sold", False, "sold", lambda h: h._sold_loop()),
+            ("coords", False, "coords", lambda h: h.backfill_missing_coords()),
+            ("discovery", True, "new-discovery", lambda h: h._recent_catalog_loop()),
+            ("deep", True, "rolling-deep", lambda h: h._deep_catalog_loop()),
+            ("dedupe", True, "dedupe", lambda h: h._dedupe_loop()),
+            ("coords", True, "catalog-coords", lambda h: h.catalog_coords_loop()),
+            ("maint", True, "stale-sweep", lambda h: self._stale_sweep_loop(h)),
+        ]
+        wanted = [
+            (label, factory)
+            for pipeline, owner_only, label, factory in plan
+            if self.runs(pipeline) and (owner or not owner_only)
+        ]
+        if not wanted:
+            return  # e.g. a discovery-only process has nothing to do for a catalog consumer
         # Building a Hub opens + migrates the user's SQLite store (seconds for a big one): never on the loop.
         user_hub = await asyncio.to_thread(Hub, store_path=user_registry.user_store_path(user_id), shared=self.hub)
         if user_id in self.user_hubs:  # spawned concurrently meanwhile
             await user_hub.close()
             return
         user_hub.running = True
-        owner = self._is_catalog_owner(user_id)
         user_hub.catalog_owner = owner
         user_hub.catalog_owner_store_fn = self._owner_store
         tasks = [
-            # Every user: their own monitors (search URLs, matching, notifications), sold pings, coords.
-            asyncio.create_task(user_hub._loop(), name=f"worker-monitor-priority:{user_id}"),
-            asyncio.create_task(user_hub._sold_loop(), name=f"worker-sold:{user_id}"),
-            asyncio.create_task(user_hub.backfill_missing_coords(), name=f"worker-coords:{user_id}"),
+            asyncio.create_task(factory(user_hub), name=f"worker-{label}:{user_id}")
+            for label, factory in wanted
         ]
-        if owner:
-            # Catalog maintenance runs once, on the owner's store (shared by everybody).
-            tasks += [
-                asyncio.create_task(user_hub._recent_catalog_loop(), name=f"worker-new-discovery:{user_id}"),
-                asyncio.create_task(user_hub._deep_catalog_loop(), name=f"worker-rolling-deep:{user_id}"),
-                asyncio.create_task(user_hub._dedupe_loop(), name=f"worker-dedupe:{user_id}"),
-                asyncio.create_task(user_hub.catalog_coords_loop(), name=f"worker-catalog-coords:{user_id}"),
-                asyncio.create_task(self._stale_sweep_loop(user_hub), name=f"worker-stale-sweep:{user_id}"),
-            ]
         self.user_hubs[user_id] = user_hub
         self._user_tasks[user_id] = tasks
+        # Read-path indexes of this user's store (the web only builds them on the global store).
+        if self.runs("maint"):
+            threading.Thread(target=self._build_indexes, args=(user_hub.store,), name=f"store-indexes:{user_id}", daemon=True).start()
         print(
             f"scrape_worker: spawned {'catalog-owner' if owner else 'monitor-only'} pipelines for user {user_id}",
             flush=True,
         )
+
+    @staticmethod
+    def _build_indexes(store: Any) -> None:
+        try:
+            store.ensure_background_indexes()
+        except Exception as exc:  # an index that cannot be built must never take a pipeline down
+            print(f"scrape_worker: background indexes failed: {exc}", flush=True)
 
     async def _stop_user(self, user_id: str) -> None:
         for task in self._user_tasks.pop(user_id, []):
@@ -227,6 +260,8 @@ class ScrapeWorker:
                 print(f"scrape_worker: rescan loop error: {exc}", flush=True)
 
     async def _user_tick(self, user_hub: Hub) -> None:
+        if not self.runs("deep"):
+            return  # discovery-only (or monitors-only) process: catalog sync / manual scrapes belong to the deep worker
         await self._maybe_scrape_url_request(user_hub)
         if user_hub.catalog_owner:
             await self._maybe_forced_catalog(user_hub)

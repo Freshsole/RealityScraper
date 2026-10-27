@@ -108,6 +108,9 @@ services:
       SCRAPE_ROLE: worker
       # No shared CPU with the web anymore; keep a short idle window at boot.
       WORKER_BOOT_GRACE_SEC: "30"
+      # New-listing discovery runs in the `discovery` service below, so the heavy catalog work here
+      # (deep crawl, sold checks, dedupe, ...) can never delay fresh listings.
+      WORKER_PIPELINES: ${WORKER_PIPELINES:-monitors,deep,sold,coords,dedupe,maint}
     volumes:
       - realitify-data:/data
     restart: unless-stopped
@@ -128,6 +131,41 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+
+  # Dedicated process for fresh listings: one independent poll loop per portal, nothing else.
+  # To isolate portals further, copy this service and set DISCOVERY_PORTALS (e.g. "sreality").
+  discovery:
+    build: .
+    init: true
+    command: ["python", "-m", "app.scrape_worker"]
+    environment:
+      <<: *common-env
+      SCRAPE_ROLE: worker
+      WORKER_PIPELINES: discovery
+      DISCOVERY_PORTALS: ${DISCOVERY_PORTALS:-}
+      WORKER_BOOT_GRACE_SEC: "10"
+      JOB_POOL_WORKERS: "8"
+      # Frozen loop for longer than this = dump stacks + exit; restart policy relaunches within seconds.
+      WORKER_HARD_STALL_SEC: "45"
+    volumes:
+      - realitify-data:/data
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "${DISCOVERY_CPUS:-2}"
+          memory: ${DISCOVERY_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.container", "healthcheck", "worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 volumes:
   realitify-data:
