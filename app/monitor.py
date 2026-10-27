@@ -26,11 +26,15 @@ from app.live_share import shared_live
 
 def _is_notify_config_noise(message: object) -> bool:
     raw = str(message or "")
-    return raw.startswith("Monitor search timeout") or "chybí Discord webhook" in raw
+    return raw.startswith(("Monitor search timeout", "Catalog write busy")) or "chybí Discord webhook" in raw
 
 
 def _is_restart_noise(message: object) -> bool:
     return "Obnoveno po restartu" in str(message or "")
+
+
+class CatalogWriteBusy(Exception):
+    """The catalog write gate or SQLite did not free up in time; the poll is retried next cycle."""
 
 
 class _ClientScope:
@@ -383,7 +387,7 @@ class Hub:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"record_scrape_tick failed: {exc}", flush=True)
+                print(f"record_scrape_tick failed: {type(exc).__name__}: {exc}", flush=True)
 
         self._tick_task = asyncio.ensure_future(_run())
 
@@ -400,10 +404,9 @@ class Hub:
                         raise
                     time.sleep(0.1 * (attempt + 1))
 
-        # Coordinate with all in-process catalog writers. Without this gate a
-        # tick could lose every retry while deep batches continuously rotated.
-        async with self._catalog_write:
-            await asyncio.get_running_loop().run_in_executor(self.ui_pool, _call)
+        # Deliberately NOT under self._catalog_write: tick history is best-effort telemetry, and holding the
+        # gate through SQLite lock retries made every monitor poll queue behind it (measured lock_ms 4-9 s).
+        await asyncio.get_running_loop().run_in_executor(self.ui_pool, _call)
 
     async def start(self) -> None:
         if self.running:
@@ -762,16 +765,28 @@ class Hub:
             # All catalog writers share one lock. Monitor batches queue first at the
             # network limiter and then serialize here instead of fighting SQLite.
             lock_t0 = time.monotonic()
-            async with self._catalog_write:
-                phases["lock_ms"] = int((time.monotonic() - lock_t0) * 1000)
-                db_t0 = time.monotonic()
-                upserts = await self._job_db(
-                    self.store.upsert_catalog_listings_results,
-                    listings,
-                    kind="refresh",
-                    fast=True,
-                )
-                phases["db_ms"] = int((time.monotonic() - db_t0) * 1000)
+
+            async def _write_batch() -> list[dict[str, Any]]:
+                async with self._catalog_write:
+                    phases["lock_ms"] = int((time.monotonic() - lock_t0) * 1000)
+                    db_t0 = time.monotonic()
+                    try:
+                        return await self._job_db(
+                            self.store.upsert_catalog_listings_results,
+                            listings,
+                            kind="refresh",
+                            fast=True,
+                        )
+                    finally:
+                        phases["db_ms"] = int((time.monotonic() - db_t0) * 1000)
+
+            try:
+                upserts = await asyncio.wait_for(_write_batch(), timeout=config.SCRAPE_MONITOR_WRITE_TIMEOUT_SEC)
+            except asyncio.TimeoutError:
+                raise CatalogWriteBusy(
+                    f"Catalog write busy portal={portal_of(job['search_url'])} "
+                    f"waited={time.monotonic() - lock_t0:.0f}s; další cyklus ho zkusí znovu."
+                ) from None
             for index, (listing, upsert) in enumerate(zip(listings, upserts)):
                 try:
                     # The common unchanged case only needs last_seen from the batch write.
@@ -868,6 +883,9 @@ class Hub:
                 "errors": errors,
                 "phases": phases,
             }
+        except CatalogWriteBusy as exc:
+            print(str(exc), flush=True)
+            return {"job_id": job["id"], "scanned": 0, "new": [], "errors": [str(exc)], "phases": phases}
         except Exception as exc:
             for monitor in monitors:
                 await self._job_db(
@@ -1601,7 +1619,7 @@ class Hub:
             )
         except Exception as exc:
             self.last_error = f"scrape-tick: {exc}"
-            print(f"record_scrape_tick failed: {exc}", flush=True)
+            print(f"record_scrape_tick failed: {type(exc).__name__}: {exc}", flush=True)
         return ok
 
     async def _deep_catalog_tick(self) -> None:

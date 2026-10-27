@@ -332,6 +332,9 @@ SCRAPE_LIVE_SHARE_TTL_SEC = max(0.0, float((os.getenv("SCRAPE_LIVE_SHARE_TTL_SEC
 SCRAPE_DISCOVERY_BACKLOG_MAX = max(0, int((os.getenv("SCRAPE_DISCOVERY_BACKLOG_MAX") or "4000") or 0))
 # How long one monitor tick waits for live polls before reporting; slower ones continue in the background.
 SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float((os.getenv("SCRAPE_MONITOR_TICK_WAIT_SEC") or "20")))
+# One monitor poll waits at most this long for the catalog write gate plus the SQLite write; past that it gives
+# the gate back and the search is polled again next cycle, so a locked DB cannot stall every other poll behind it.
+SCRAPE_MONITOR_WRITE_TIMEOUT_SEC = max(5.0, _env_float("SCRAPE_MONITOR_WRITE_TIMEOUT_SEC", 25.0))
 
 # New-listing discovery runs as one independent loop per portal, so a slow or dead portal can never delay
 # the others. Seconds between two polls of the same portal (pacing/limiters still apply on top).
