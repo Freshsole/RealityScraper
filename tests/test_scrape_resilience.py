@@ -330,6 +330,35 @@ class DiscoveryWritesOnlyChangesTests(unittest.IsolatedAsyncioTestCase):
                 await hub._recent_catalog_tick("sreality")
             self.assertEqual(sorted(hub._discovery_backlog), [4, 5])  # the two that were not written
 
+    async def test_one_tick_writes_a_bounded_slice_fresh_listings_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            hub._discovery_backlog[100] = self._listing(100)  # leftover from an earlier deferred write
+            hub._discovery_backlog[101] = self._listing(101)
+            batch = [self._listing(i) for i in range(1, 4)]
+            written: list[int] = []
+
+            async def fake_fetch(self_engine, shards, **_kw):  # noqa: ANN001
+                from app.scrape_engine import ShardFetchResult
+
+                return [ShardFetchResult(shard_key="s", search_url="https://www.sreality.cz/x", listings=batch, total=3,
+                                         pages_ok=1, deferred_pages=[], error=None, portal="sreality")]
+
+            async def fake_upsert(listings, **_kw):
+                written.extend(item.id for item in listings)
+                return {"n": len(listings), "new": len(listings), "updated": 0, "same": 0, "deferred_write": 0}, None
+
+            shard = [{"shard_key": "s", "search_url": "https://www.sreality.cz/x", "kind": "recent", "portal": "sreality"}]
+            with patch("app.monitor.recent_shards", return_value=shard), \
+                 patch("app.scrape_engine.ScrapeEngine.fetch_shards", new=fake_fetch), \
+                 patch.object(config, "SCRAPE_DISCOVERY_WRITE_MAX_ROWS", 4), \
+                 patch.object(hub, "_try_catalog_upsert", new=fake_upsert), \
+                 patch.object(hub, "_record_tick_background", new=lambda tick: None):
+                await hub._recent_catalog_tick("sreality")
+            self.assertEqual(written, [1, 2, 3, 100])  # fresh first, then the backlog, capped at 4
+            self.assertEqual(sorted(hub._discovery_backlog), [101])
+            self.assertTrue(hub.discovery_state["sreality"]["write_busy"])
+
 
 class _EmptyConn:
     def execute(self, *_a, **_k):

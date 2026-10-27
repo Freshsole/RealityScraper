@@ -1243,6 +1243,9 @@ class Hub:
             failures = 0 if ok else failures + 1
             # A failing portal backs off (2x per failure, max 60 s) instead of hammering it; healthy ones poll fast.
             wait = interval if ok else min(60.0, interval * (2 ** min(failures, 6)))
+            if self.discovery_state.get(portal, {}).get("write_busy"):
+                # Writes are backing up: polling faster only grows the backlog and the lock pressure.
+                wait = max(wait, config.SCRAPE_DISCOVERY_WRITE_BUSY_WAIT_SEC)
             await asyncio.sleep(max(0.05, wait - (time.monotonic() - tick_started)))
 
     async def _deep_catalog_loop(self) -> None:
@@ -1506,6 +1509,7 @@ class Hub:
         disc_skipped = 0
         error: str | None = None
         write_note: str | None = None
+        write_busy = False
         try:
             ticks = self._discovery_tick_counts[portal or "*"] = self._discovery_tick_counts.get(portal or "*", 0) + 1
             known_fn = None
@@ -1543,13 +1547,22 @@ class Hub:
                     seen.add(listing.id)
                     disc_listings.append(listing)
             # Listings from earlier ticks whose write was deferred go first; fresh ones replace stale copies.
+            # Fresh listings go first: they are what alerts are about, the backlog is catch-up.
             if self._discovery_backlog:
-                merged = {item.id: item for item in self._discovery_backlog.values()}
-                merged.update({item.id: item for item in disc_listings})
+                merged = {item.id: item for item in disc_listings}
+                for item in self._discovery_backlog.values():
+                    merged.setdefault(item.id, item)
                 disc_listings = list(merged.values())
                 self._discovery_backlog.clear()
             to_write, skipped = self._discovery_changes_only(disc_listings)
             disc_skipped = skipped
+            # A deferred write used to come back as one ever-growing batch from every portal loop at once, each
+            # holding the write gate and SQLite for tens of seconds, which kept everyone's next write deferred.
+            # Write a bounded slice per tick; the rest waits in the backlog.
+            write_cap = config.SCRAPE_DISCOVERY_WRITE_MAX_ROWS
+            overflow: list[Listing] = []
+            if write_cap and len(to_write) > write_cap:
+                to_write, overflow = to_write[:write_cap], to_write[write_cap:]
             if to_write:
                 written, write_note = await self._try_catalog_upsert(
                     to_write,
@@ -1571,9 +1584,13 @@ class Hub:
                     disc_deferred += len(to_write)
                     backlog = to_write
                 # Do not drop what could not be written: it is retried on the next tick.
+                backlog = backlog + overflow
                 if config.SCRAPE_DISCOVERY_BACKLOG_MAX:
-                    for item in backlog[-config.SCRAPE_DISCOVERY_BACKLOG_MAX :]:
+                    for item in backlog[: config.SCRAPE_DISCOVERY_BACKLOG_MAX]:
                         self._discovery_backlog[item.id] = item
+                write_busy = bool(write_note) or bool(backlog)
+            else:
+                write_busy = False
         except asyncio.TimeoutError:
             error = "discovery-timeout: fetch exceeded its hard bound"
             self.last_error = f"recent-catalog: {error}"
@@ -1585,6 +1602,7 @@ class Hub:
         ms = int((time.monotonic() - started) * 1000)
         state = self.discovery_state.setdefault(portal or "*", {"fails": 0})
         state["last_ms"] = ms
+        state["write_busy"] = write_busy
         if ok:
             state["last_ok_at"] = utc_now()
             state["fails"] = 0
