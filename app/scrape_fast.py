@@ -44,17 +44,25 @@ def _row_fingerprint(row: Any) -> Fingerprint:
     )
 
 
-def cache_for(path: str, conn: Any) -> dict[str, Fingerprint]:
-    """Fingerprints of live catalog rows, loaded once per DB file."""
+def cache_for(path: str, conn: Any, limit: int | None = None) -> dict[str, Fingerprint]:
+    """Fingerprints of live catalog rows, loaded once per DB file.
+
+    `limit` loads only the newest rows (by first_seen): enough for discovery, which only compares the newest
+    pages of every portal, at a fraction of the memory/time of the whole catalog. Rows missing from a partial
+    cache are simply treated as changed, i.e. written normally.
+    """
     with _LOCK:
         cache = _CACHES.get(path)
         if cache is not None:
             return cache
     loaded: dict[str, Fingerprint] = {}
-    for row in conn.execute(
+    sql = (
         "SELECT listing_key, price_czk, name, disposition, area_m2, locality, edited_on,"
         " old_price_czk, lat, image_url FROM catalog_listings WHERE gone = 0"
-    ):
+    )
+    if limit:
+        sql += f" ORDER BY first_seen DESC LIMIT {int(limit)}"
+    for row in conn.execute(sql):
         loaded[str(row[0])] = _row_fingerprint(row)
     with _LOCK:
         return _CACHES.setdefault(path, loaded)

@@ -363,6 +363,27 @@ class Hub:
         if rows:
             await self._job_db(self.store.insert_scrape_metrics, rows)
 
+    def _record_tick_background(self, tick: dict[str, Any]) -> None:
+        """Persist a discovery tick without making the polling loop wait for it.
+
+        Tick history is best-effort telemetry: recording waits for the catalog write gate and for SQLite, and a
+        portal loop that waited here stalled for minutes while another process held the database lock.
+        One recording at a time; ticks that arrive meanwhile are dropped (the next one carries fresh numbers).
+        """
+        task = getattr(self, "_tick_task", None)
+        if task is not None and not task.done():
+            return
+
+        async def _run() -> None:
+            try:
+                await asyncio.wait_for(self._record_tick(tick), timeout=30.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"record_scrape_tick failed: {exc}", flush=True)
+
+        self._tick_task = asyncio.ensure_future(_run())
+
     async def _record_tick(self, tick: dict[str, Any]) -> None:
         """Serialize tick metadata off the event loop and retry transient writers."""
         await self._flush_scrape_metrics()
@@ -1058,6 +1079,7 @@ class Hub:
         whole tick plus a 30 s sleep).
         """
         await asyncio.sleep(2)
+        await self._warm_fast_cache()
         portals = self._discovery_portals()
         interval = float(config.SCRAPE_DISCOVERY_PORTAL_LOOP_SEC)
         print(
@@ -1078,6 +1100,36 @@ class Hub:
         finally:
             for task in tasks:
                 task.cancel()
+
+    async def _warm_fast_cache(self, timeout_sec: float = 180.0) -> None:
+        """Load the catalog fingerprints before the first poll.
+
+        Discovery's early-stop (stop paginating once a page holds nothing new) needs them, and they are otherwise
+        loaded by the first catalog write of the process. A dedicated discovery process has no deep sync that does
+        it, so without this its first polls fetch every page and the first write loads the whole catalog inside
+        the write path while all portal loops queue behind it.
+        """
+        if not (config.SCRAPE_DISCOVERY_EARLY_STOP and config.SCRAPE_FAST_TOUCH):
+            return
+        from app import scrape_fast
+
+        path = str(self.store.path)
+
+        # A process without the deep pipeline (dedicated discovery) only needs the newest listings.
+        limit = None if ("all" in config.WORKER_PIPELINES or "deep" in config.WORKER_PIPELINES) else config.SCRAPE_DISCOVERY_CACHE_ROWS
+
+        def _load() -> int:
+            with self.store.connect(readonly=True) as conn:
+                return len(scrape_fast.cache_for(path, conn, limit=limit))
+
+        started = time.monotonic()
+        try:
+            count = await asyncio.wait_for(self._job_db(_load), timeout=timeout_sec)
+            print(f"new_discovery fingerprint cache ready: {count} listings in {time.monotonic() - started:.1f}s", flush=True)
+        except asyncio.TimeoutError:
+            print(f"new_discovery fingerprint cache not ready after {timeout_sec:.0f}s, starting without early-stop", flush=True)
+        except Exception as exc:
+            print(f"new_discovery fingerprint cache failed: {exc}", flush=True)
 
     async def _schedules_loop(self) -> None:
         while self.running:
@@ -1267,6 +1319,7 @@ class Hub:
         *,
         kind: str = "seeded",
         write_deadline_sec: float | None = None,
+        chunk_timeout_sec: float | None = None,
     ) -> dict[str, int]:
         """Upsert in lock-scoped chunks so minute discovery can interleave."""
         if not listings:
@@ -1287,13 +1340,20 @@ class Hub:
             chunk = listings[offset : offset + chunk_size]
             t_up = time.monotonic()
             async with self._catalog_write:
-                part = await self._job_db(
+                write = self._job_db(
                     self.store.upsert_catalog_listings_batch,
                     chunk,
                     kind=kind,
                     commit_every=chunk_size,
                     fast=True,
                 )
+                try:
+                    part = await (asyncio.wait_for(write, timeout=chunk_timeout_sec) if chunk_timeout_sec else write)
+                except asyncio.TimeoutError:
+                    # SQLite is locked by another process (index build, deep sync...). Release the write gate and
+                    # let the caller keep these listings in its backlog instead of freezing every portal loop.
+                    totals["deferred_write"] = len(listings) - offset
+                    break
             from app.scrape_timing import log_row
 
             log_row(
@@ -1326,6 +1386,7 @@ class Hub:
         kind: str = "refresh",
         timeout_sec: float = 4.0,
         write_deadline_sec: float | None = 20.0,
+        chunk_timeout_sec: float | None = None,
     ) -> tuple[dict[str, int] | None, str | None]:
         """Prefer minute cadence: skip write if catalog sync holds the lock too long."""
         if not listings:
@@ -1337,7 +1398,7 @@ class Hub:
         # Probe only — chunked upsert re-acquires so catalog sync can interleave.
         self._catalog_write.release()
         return await self._catalog_upsert(
-            listings, kind=kind, write_deadline_sec=write_deadline_sec
+            listings, kind=kind, write_deadline_sec=write_deadline_sec, chunk_timeout_sec=chunk_timeout_sec
         ), None
 
     def next_deep_shards(self, take: int | None = None) -> list[dict[str, str]]:
@@ -1420,6 +1481,7 @@ class Hub:
                     kind="refresh",
                     timeout_sec=3.0,
                     write_deadline_sec=12.0,
+                    chunk_timeout_sec=config.SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC,
                 )
                 if written is not None:
                     disc_stats = written
@@ -1479,7 +1541,7 @@ class Hub:
             "metrics": engine.metrics_snapshot(),
         }
         try:
-            await self._record_tick(tick)
+            self._record_tick_background(tick)
             from app.scrape_console import emit
 
             emit(

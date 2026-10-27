@@ -5202,10 +5202,6 @@ class Store:
         # Finding the (normally zero) rows without a canonical key must not scan the wide table.
         "CREATE INDEX IF NOT EXISTS idx_catalog_no_canonical ON catalog_listings(listing_key)"
         " WHERE IFNULL(canonical_key, '') = ''",
-        # pending_sold_pings: gone rows of the catalog pseudo-monitor outnumber everything else by orders of
-        # magnitude, so (gone, last_seen) walked all of them (minutes). Must match the query's WHERE literally.
-        "CREATE INDEX IF NOT EXISTS idx_listings_sold_pending ON listings(last_seen DESC)"
-        " WHERE IFNULL(gone, 0) = 1 AND IFNULL(sold_notified, 0) = 0 AND monitor_id != '__catalog__'",
     )
 
     def ensure_background_indexes(self) -> None:
@@ -7467,15 +7463,17 @@ class Store:
             return bool(conn.execute(sql, params).fetchone())
 
     def pending_sold_pings(self, limit: int = 10) -> list[dict[str, Any]]:
+        # Walk the primary key (monitor_id, id) of the real monitors only. The catalog pseudo-monitor owns millions
+        # of gone rows; filtering them out with `monitor_id != ?` made SQLite scan all of them (minutes, on the loop).
         with self.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT listings.*, monitors.name AS monitor_name
                 FROM listings
                 LEFT JOIN monitors ON monitors.id = listings.monitor_id
-                WHERE IFNULL(listings.gone, 0) = 1
+                WHERE listings.monitor_id IN (SELECT id FROM monitors WHERE id != '__catalog__')
+                  AND IFNULL(listings.gone, 0) = 1
                   AND IFNULL(listings.sold_notified, 0) = 0
-                  AND listings.monitor_id != '__catalog__'
                 ORDER BY listings.last_seen DESC
                 LIMIT ?
                 """,

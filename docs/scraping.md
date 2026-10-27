@@ -161,7 +161,9 @@ Další izolace: zkopírovat službu `discovery` a nastavit `DISCOVERY_PORTALS` 
 
 - **Žádné synchronní `store.*` volání v `async def`** — vždy `await self._job_db(self.store.x, …)` (thread pool + retry na `database is locked`). Hlídá to `tests/test_scrape_resilience.py` (AST test nad `monitor.py`). Důvod: jeden pomalý dotaz (`pending_sold_pings`) v `_sold_tick` zablokoval loop na ~7 min, všechny HTTP fetche portálů vypršely (`ReadTimeout: wall-clock`) a `error_rate_5m=1.0` vypadalo jako výpadek všech portálů.
 - **`container.LoopGuard`**: vlákno kontroluje „beat“ z loopu; když je starší než `WORKER_HARD_STALL_SEC` (60 s, discovery 45 s), vypíše stacky všech vláken a ukončí proces (`exit 75`). Docker `unhealthy` kontejner nerestartuje, `restart: unless-stopped` ano.
-- Částečný index `idx_listings_sold_pending` (background index, staví ho proces s `maint`).
+- `pending_sold_pings` prochází primární klíč `(monitor_id, id)` jen reálných monitorů (katalogový pseudo-monitor má miliony `gone` řádků). Žádný nový index: stavba indexu na produkční DB drží write lock minuty a blokuje zápisy ostatních procesů.
+- Discovery se nesmí nechat zablokovat zamčenou DB: zápis jednoho chunku má timeout (`SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC`, 15 s) a při vypršení se inzeráty odloží do backlogu; zápis ticků do historie běží na pozadí (single-flight) a smyčky na něj nečekají.
+- Samostatný discovery proces předehřeje otisky jen nejnovějších `SCRAPE_DISCOVERY_CACHE_ROWS` (150 000) listingů, ne celého katalogu, aby fungoval early-stop od prvního pollu.
 
 ### 4.3 Rolling deep (`_deep_catalog_tick`)
 

@@ -96,23 +96,13 @@ class NoBlockingStoreCallsTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
 
-class PendingSoldIndexTests(unittest.TestCase):
-    def test_background_index_exists_and_query_still_works(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store = Store(Path(tmp) / "m.sqlite")
-            store.ensure_background_indexes()
-            conn = sqlite3.connect(store.path)
-            try:
-                names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-            finally:
-                conn.close()
-            self.assertIn("idx_listings_sold_pending", names)
-            self.assertEqual(store.pending_sold_pings(limit=10), [])
+class PendingSoldQueryTests(unittest.TestCase):
+    """pending_sold_pings must walk the primary key of real monitors, never scan the millions of catalog rows
+    (no extra index: building one on the production DB holds the write lock for minutes)."""
 
-    def test_query_plan_uses_the_partial_index(self):
+    def test_query_plan_searches_by_primary_key_without_full_scan(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(Path(tmp) / "m.sqlite")
-            store.ensure_background_indexes()
             seen: list[str] = []
             real_connect = store.connect
 
@@ -134,8 +124,93 @@ class PendingSoldIndexTests(unittest.TestCase):
                     return self._conn.execute(sql, params)
 
             with patch.object(store, "connect", lambda *a, **k: Spy(real_connect(*a, **k))):
-                store.pending_sold_pings(limit=10)
-            self.assertTrue(any("idx_listings_sold_pending" in line for line in seen), seen)
+                self.assertEqual(store.pending_sold_pings(limit=10), [])
+            plan = " ".join(seen)
+            self.assertIn("SEARCH listings USING", plan)
+            self.assertNotIn("SCAN listings", plan)
+
+    def test_returns_only_real_monitor_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "m.sqlite")
+            with store.connect() as conn:
+                cols = [row[1] for row in conn.execute("PRAGMA table_info(listings)")]
+                monitor = conn.execute("SELECT id FROM monitors LIMIT 1").fetchone()
+                self.assertIsNotNone(monitor)
+                base = {"name": "x", "url": "u", "first_seen": "2026-01-01", "last_seen": "2026-01-02", "gone": 1, "sold_notified": 0}
+                for mid, lid in ((monitor[0], 1), ("__catalog__", 2)):
+                    row = {**base, "monitor_id": mid, "id": lid, "url": f"u{lid}"}
+                    keys = [k for k in row if k in cols]
+                    conn.execute(
+                        f"INSERT INTO listings({','.join(keys)}) VALUES ({','.join('?' * len(keys))})", [row[k] for k in keys]
+                    )
+            ids = {row["id"] for row in store.pending_sold_pings(limit=10)}
+            self.assertEqual(ids, {1})
+
+
+class DiscoveryNeverFreezesTests(unittest.IsolatedAsyncioTestCase):
+    async def test_locked_database_defers_the_write_instead_of_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+
+            async def hung_job(fn, *args, **kwargs):
+                await asyncio.sleep(3600)  # another process holds the SQLite write lock
+
+            from app.monitor import Listing
+
+            listings = [
+                Listing(id=i, name="n", url=f"https://x/{i}", price_czk=1, price_label="1 Kč", disposition="2+kk",
+                        area_m2=40, locality="Praha", image_url="")
+                for i in range(3)
+            ]
+            with patch.object(hub, "_job_db", new=hung_job):
+                started = time.monotonic()
+                totals = await hub._catalog_upsert(listings, kind="refresh", chunk_timeout_sec=0.2)
+                elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 2.0)
+            self.assertEqual(totals["deferred_write"], len(listings))
+            # the write gate is free again, so the next portal is not stuck behind the hung write
+            self.assertFalse(hub._catalog_write.locked())
+
+    async def test_tick_recording_does_not_block_the_poll_loop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            release = asyncio.Event()
+            calls: list[int] = []
+
+            async def slow_record(tick):
+                calls.append(1)
+                await release.wait()
+
+            with patch.object(hub, "_record_tick", new=slow_record):
+                started = time.monotonic()
+                hub._record_tick_background({"at": "now"})
+                hub._record_tick_background({"at": "dropped while one is in flight"})
+                self.assertLess(time.monotonic() - started, 0.1)
+                await asyncio.sleep(0.05)
+                self.assertEqual(len(calls), 1)  # single flight
+                release.set()
+                await asyncio.sleep(0.05)
+                hub._record_tick_background({"at": "next"})
+                await asyncio.sleep(0.05)
+            self.assertEqual(len(calls), 2)
+
+
+class BoundedFingerprintCacheTests(unittest.TestCase):
+    def test_limit_loads_only_the_newest_rows(self):
+        from app import scrape_fast
+
+        conn = sqlite3.connect(":memory:")
+        conn.execute(
+            "CREATE TABLE catalog_listings(listing_key, price_czk, name, disposition, area_m2, locality, edited_on,"
+            " old_price_czk, lat, image_url, gone, first_seen)"
+        )
+        for i in range(10):
+            conn.execute(
+                "INSERT INTO catalog_listings VALUES (?,?,?,?,?,?,?,?,?,?,0,?)",
+                (f"k{i}", 1, "n", "2+kk", 1, "l", None, None, None, "", f"2026-01-{i + 1:02d}"),
+            )
+        cache = scrape_fast.cache_for("bounded-test", conn, limit=3)
+        self.assertEqual(set(cache), {"k9", "k8", "k7"})
 
 
 class PerPortalDiscoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -200,6 +275,38 @@ class PerPortalDiscoveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(hub._discovery_portals(), ["slow", "fast"])
                 with patch.object(config, "DISCOVERY_PORTALS", ("fast",)):
                     self.assertEqual(hub._discovery_portals(), ["fast"])
+
+    async def test_discovery_warms_the_fingerprint_cache_before_polling(self):
+        from app import scrape_fast
+
+        with tempfile.TemporaryDirectory() as tmp:
+            hub = Hub(Path(tmp) / "m.sqlite")
+            path = str(hub.store.path)
+            self.assertIsNone(scrape_fast.peek(path))
+            order: list[str] = []
+            real_warm = hub._warm_fast_cache
+
+            async def warm_then_note():
+                await real_warm()
+                order.append("warm")
+
+            async def fake_tick(portal=None):
+                order.append("tick")
+                hub.running = False
+                return True
+
+            hub.running = True
+            with patch("app.monitor.recent_shards", return_value=self._shards()), \
+                 patch.object(hub, "_warm_fast_cache", new=warm_then_note), \
+                 patch.object(hub, "_recent_catalog_tick", new=fake_tick), \
+                 patch.object(hub, "run_due_scrape_schedules", new=lambda: asyncio.sleep(0)):
+                task = asyncio.ensure_future(hub._recent_catalog_loop())
+                await asyncio.sleep(2.6)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertEqual(order[0], "warm")
+            self.assertIsNotNone(scrape_fast.peek(path))
 
     async def test_interval_stretches_with_shard_count_and_honours_override(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -353,6 +353,12 @@ def _portal_intervals(raw: str) -> dict[str, float]:
 
 
 SCRAPE_DISCOVERY_PORTAL_INTERVALS = _portal_intervals(os.getenv("SCRAPE_DISCOVERY_PORTAL_INTERVALS") or "")
+# A discovery-only process keeps fingerprints of this many newest listings for early-stop (the whole catalog is
+# millions of rows: minutes to load and gigabytes of strings).
+SCRAPE_DISCOVERY_CACHE_ROWS = max(1000, int(_env_float("SCRAPE_DISCOVERY_CACHE_ROWS", 150000)))
+# One catalog write chunk of discovery may take this long; then it is deferred (kept in the backlog) so a locked
+# database can never freeze the per-portal loops.
+SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC = max(3.0, _env_float("SCRAPE_DISCOVERY_WRITE_TIMEOUT_SEC", 15.0))
 # Hard bound of one per-portal discovery poll (fetch + write is flushed as soon as this one portal finishes).
 SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC = max(8.0, _env_float("SCRAPE_DISCOVERY_PORTAL_DEADLINE_SEC", 20.0))
 # Comma list restricting discovery to some portals (empty = all). Lets one container per portal group run.
