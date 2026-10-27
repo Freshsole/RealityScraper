@@ -38,3 +38,16 @@ class BatchUpsertTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_store_connections_do_not_fsync_every_commit(tmp_path):
+    """synchronous defaults to FULL per connection; on a slow volume that made every commit cost an fsync."""
+    from app.store import Store
+
+    store = Store(tmp_path / "m.sqlite")
+    for kwargs in ({}, {"readonly": True}, {"quick": True}):
+        conn = store.connect(**kwargs)
+        try:
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+        finally:
+            conn.close()

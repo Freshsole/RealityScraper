@@ -555,6 +555,11 @@ class Store:
             conn = sqlite3.connect(self.path, timeout=30)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA busy_timeout=30000")
+        # synchronous is per connection and defaults to FULL: every commit then fsyncs the WAL. On the production
+        # volume that is ~22 ms each (measured with dd oflag=dsync), which made a 100-row batch take seconds.
+        # NORMAL is the WAL setting the schema bootstrap already uses: no corruption, only the last commits can be
+        # lost on an OS crash or power loss (never on an application crash).
+        conn.execute("PRAGMA synchronous=NORMAL")
         if self._scope_user_path:
             self._apply_user_scope(conn)
         try:
@@ -3649,6 +3654,7 @@ class Store:
         conn = sqlite3.connect(self.path, timeout=3)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=3000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         try:
             with conn:
                 conn.execute("BEGIN IMMEDIATE")
@@ -3686,6 +3692,7 @@ class Store:
             return 0
         conn = sqlite3.connect(self.path, timeout=8)
         conn.execute("PRAGMA busy_timeout=8000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         try:
             with conn:
                 conn.executemany(
