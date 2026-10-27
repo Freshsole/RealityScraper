@@ -337,6 +337,8 @@ SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float((os.getenv("SCRAPE_MONITOR_TICK_WA
 SCRAPE_MONITOR_WRITE_TIMEOUT_SEC = max(5.0, _env_float("SCRAPE_MONITOR_WRITE_TIMEOUT_SEC", 25.0))
 # Monitor writes that may be running in pool threads at once (timed-out ones keep running); more are refused.
 SCRAPE_MONITOR_WRITES_MAX_INFLIGHT = max(1, int(_env_float("SCRAPE_MONITOR_WRITES_MAX_INFLIGHT", 2)))
+# A monitor's live-poll jobs are re-attached in the DB at most this often (and whenever its search targets change).
+SCRAPE_MONITOR_JOBS_REATTACH_SEC = max(5.0, _env_float("SCRAPE_MONITOR_JOBS_REATTACH_SEC", 600.0))
 
 # New-listing discovery runs as one independent loop per portal, so a slow or dead portal can never delay
 # the others. Seconds between two polls of the same portal (pacing/limiters still apply on top).

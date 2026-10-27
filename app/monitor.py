@@ -116,6 +116,7 @@ class Hub:
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
+        self._monitor_jobs_cache: dict[str, tuple[tuple, list[dict[str, Any]], float]] = {}
         self._monitor_writes_running = 0  # pool threads inside a monitor catalog write (abandoned ones included)
         self._monitor_writes_lock = threading.Lock()
         from app.scrape_engine import LimiterRegistry, ScrapeEngine
@@ -614,6 +615,32 @@ class Hub:
             return True
         return (datetime.now(timezone.utc) - seen).total_seconds() >= interval
 
+    async def _monitor_live_jobs(self, monitor: dict[str, Any]) -> list[dict[str, Any]]:
+        """Live-poll jobs of a monitor, re-attached in the DB only when its search targets change.
+
+        attach_monitor_live_jobs rewrites the monitor_jobs rows, and the monitor loop used to call it for every
+        enabled monitor of every user hub every few seconds: one write transaction each, which kept the shared
+        job pool permanently backlogged (thousands of queued DB calls)."""
+        try:
+            from app.catalog_sync import monitor_search_targets
+
+            signature = tuple((t["portal"], t["search_url"]) for t in monitor_search_targets(monitor))
+        except Exception:
+            signature = None
+        now = time.monotonic()
+        cached = self._monitor_jobs_cache.get(monitor["id"])
+        if (
+            signature is not None
+            and cached is not None
+            and cached[0] == signature
+            and now - cached[2] < config.SCRAPE_MONITOR_JOBS_REATTACH_SEC
+        ):
+            return cached[1]
+        jobs = await self._job_db(self.store.attach_monitor_live_jobs, monitor)
+        if signature is not None:
+            self._monitor_jobs_cache[monitor["id"]] = (signature, jobs, now)
+        return jobs
+
     async def check_due(self) -> dict[str, Any]:
         if self.checking:
             return {"ok": False, "reason": "already-checking"}
@@ -627,10 +654,12 @@ class Hub:
                 if not monitor.get("seeded"):
                     await self._job_db(self.store.seed_monitor_from_catalog, monitor)
                     await self._job_db(self.store.set_monitor_seeded, monitor["id"], True)
-                jobs = await self._job_db(self.store.attach_monitor_live_jobs, monitor)
+                jobs = await self._monitor_live_jobs(monitor)
                 for job in jobs:
                     bucket = groups.setdefault(job["id"], {"job": job, "monitors": []})
                     bucket["monitors"].append(monitor)
+            for stale_id in set(self._monitor_jobs_cache) - {item["id"] for item in monitors}:
+                self._monitor_jobs_cache.pop(stale_id, None)
             pending: list[asyncio.Task] = []
             for job_id, bucket in groups.items():
                 if not any(self._monitor_due(item) for item in bucket["monitors"]):

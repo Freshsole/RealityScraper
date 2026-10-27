@@ -44,6 +44,29 @@ class InflightTests(unittest.IsolatedAsyncioTestCase):
             await hub.stop()
 
 
+class MonitorJobsCacheTests(unittest.IsolatedAsyncioTestCase):
+    async def test_live_jobs_are_attached_once_not_every_tick(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(config, "DB_PATH", Path(tmp) / "m.sqlite"), \
+                patch.object(config, "SCRAPE_ROLE", "worker"):
+            hub = Hub()
+            calls: list[str] = []
+
+            def attach(monitor):
+                calls.append(monitor["id"])
+                return [{"id": "job1", "search_url": "https://www.sreality.cz/x"}]
+
+            monitor = {"id": "m1", "search_url": "https://www.sreality.cz/hledani/pronajem/byty", "portals": "sreality"}
+            with patch.object(hub.store, "attach_monitor_live_jobs", attach):
+                first = await hub._monitor_live_jobs(monitor)
+                second = await hub._monitor_live_jobs(monitor)
+                self.assertEqual(calls, ["m1"])
+                self.assertEqual(first, second)
+                changed = {**monitor, "search_url": "https://www.sreality.cz/hledani/prodej/byty/brno"}
+                await hub._monitor_live_jobs(changed)
+                self.assertEqual(calls, ["m1", "m1"])  # new search targets are re-attached
+            await hub.stop()
+
+
 if __name__ == "__main__":
     unittest.main()
 
