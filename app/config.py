@@ -335,6 +335,8 @@ SCRAPE_MONITOR_TICK_WAIT_SEC = max(1.0, float((os.getenv("SCRAPE_MONITOR_TICK_WA
 # One monitor poll waits at most this long for the catalog write gate plus the SQLite write; past that it gives
 # the gate back and the search is polled again next cycle, so a locked DB cannot stall every other poll behind it.
 SCRAPE_MONITOR_WRITE_TIMEOUT_SEC = max(5.0, _env_float("SCRAPE_MONITOR_WRITE_TIMEOUT_SEC", 25.0))
+# Monitor writes that may be running in pool threads at once (timed-out ones keep running); more are refused.
+SCRAPE_MONITOR_WRITES_MAX_INFLIGHT = max(1, int(_env_float("SCRAPE_MONITOR_WRITES_MAX_INFLIGHT", 2)))
 
 # New-listing discovery runs as one independent loop per portal, so a slow or dead portal can never delay
 # the others. Seconds between two polls of the same portal (pacing/limiters still apply on top).

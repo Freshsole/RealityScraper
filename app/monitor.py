@@ -116,6 +116,8 @@ class Hub:
         self._portal_gate = asyncio.Semaphore(2)
         self._bazos_gate = asyncio.Semaphore(24)
         self._catalog_write = asyncio.Lock()
+        self._monitor_writes_running = 0  # pool threads inside a monitor catalog write (abandoned ones included)
+        self._monitor_writes_lock = threading.Lock()
         from app.scrape_engine import LimiterRegistry, ScrapeEngine
         from app.perf_diag import CountedPool
 
@@ -766,17 +768,30 @@ class Hub:
             # network limiter and then serialize here instead of fighting SQLite.
             lock_t0 = time.monotonic()
 
+            # wait_for only abandons the wait: the pool thread keeps hammering the locked SQLite file. Count those
+            # threads and refuse to queue more while earlier writes are still running, or they pile up in the
+            # job pool and starve every other DB call.
+            if self._monitor_writes_running >= config.SCRAPE_MONITOR_WRITES_MAX_INFLIGHT:
+                raise CatalogWriteBusy(
+                    f"Catalog write busy portal={portal_of(job['search_url'])} "
+                    f"inflight={self._monitor_writes_running}; další cyklus ho zkusí znovu."
+                )
+
+            def _counted_write() -> list[dict[str, Any]]:
+                with self._monitor_writes_lock:
+                    self._monitor_writes_running += 1
+                try:
+                    return self.store.upsert_catalog_listings_results(listings, kind="refresh", fast=True)
+                finally:
+                    with self._monitor_writes_lock:
+                        self._monitor_writes_running -= 1
+
             async def _write_batch() -> list[dict[str, Any]]:
                 async with self._catalog_write:
                     phases["lock_ms"] = int((time.monotonic() - lock_t0) * 1000)
                     db_t0 = time.monotonic()
                     try:
-                        return await self._job_db(
-                            self.store.upsert_catalog_listings_results,
-                            listings,
-                            kind="refresh",
-                            fast=True,
-                        )
+                        return await self._job_db(_counted_write)
                     finally:
                         phases["db_ms"] = int((time.monotonic() - db_t0) * 1000)
 
