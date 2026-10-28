@@ -112,6 +112,7 @@ async def _background_startup() -> None:
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
+    asyncio.create_task(_catalog_warm_loop(), name="catalog-warm")
 
     def _warm_seo_sitemap() -> None:
         try:
@@ -3503,6 +3504,30 @@ async def _run_catalog_query_cached(payload: dict[str, Any], store: Store, scope
     if task is None or task.done():
         task = entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
     return await asyncio.shield(task)
+
+
+async def _catalog_warm_loop() -> None:
+    """Keep the default (unfiltered) catalog hot so a restart or a quiet hour never leaves visitors
+    waiting for a cold full-table query. Errors are swallowed; the next round retries."""
+    await asyncio.sleep(15)
+    while True:
+        try:
+            store = _public_store() or hub.store
+            for limit, pins in ((36, "1"), (20, "0")):
+                payload = await place_geo.attach_geoms(
+                    _catalog_filters(limit=limit, offset=0, include_pins=pins, facets="1", sort="newest")
+                )
+                key = f"|{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
+                entry = _CATALOG_CACHE.setdefault(key, {"at": 0.0, "data": None, "task": None})
+                task = entry.get("task")
+                if task is None or task.done():
+                    task = entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
+                await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"catalog warm failed: {exc!r}", flush=True)
+        await asyncio.sleep(75)
 
 
 @app.get("/api/catalog")

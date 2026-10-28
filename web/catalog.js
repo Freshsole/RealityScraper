@@ -2093,6 +2093,9 @@
   }
 
   let catalogRetries = 0;
+  let catalogFailed = false;
+  // Waits between automatic retries. The server keeps a slow query running and caches its result, so a later attempt picks it up.
+  const CATALOG_RETRY_DELAYS = [1500, 3000, 5000, 8000, 12000, 15000, 15000, 15000];
 
   async function loadCatalog(append = false) {
     if (catalogBusy) {
@@ -2117,7 +2120,7 @@
     catalogAbort?.abort();
     const ac = new AbortController();
     catalogAbort = ac;
-    const timeout = window.setTimeout(() => ac.abort(), 25000);
+    const timeout = window.setTimeout(() => ac.abort(), 45000);
     if (!append) {
       setCatalogLoading(true, true);
       const countEl = $("catalog-count");
@@ -2151,14 +2154,25 @@
         finishCatalogLoad(seq, { keepCount: true });
         return;
       }
-      if (!append && catalogRetries < 2) {
-        // Slow cold query or a busy database: the server keeps computing and caches the result, so try again.
+      if (!append && catalogRetries < CATALOG_RETRY_DELAYS.length) {
+        const wait = CATALOG_RETRY_DELAYS[catalogRetries];
         catalogRetries += 1;
+        const countEl = $("catalog-count");
+        if (countEl) countEl.textContent = `Načítání trvá déle než obvykle, zkouším znovu… (${catalogRetries}/${CATALOG_RETRY_DELAYS.length})`;
         finishCatalogLoad(seq, { keepCount: true });
-        window.setTimeout(() => loadCatalog(), 1500);
+        window.setTimeout(() => loadCatalog(), wait);
         return;
       }
-      $("catalog-count").textContent = "Načtení selhalo, zkus znovu Vyhledat.";
+      catalogFailed = true;
+      const failEl = $("catalog-count");
+      if (failEl) {
+        failEl.innerHTML = 'Načtení selhalo. <button type="button" id="catalog-retry" class="link-btn">Zkusit znovu</button>';
+        $("catalog-retry")?.addEventListener("click", () => {
+          catalogRetries = 0;
+          catalogFailed = false;
+          loadCatalog();
+        });
+      }
       finishCatalogLoad(seq, { keepCount: true });
       return;
     }
@@ -2167,6 +2181,7 @@
       return;
     }
     catalogRetries = 0;
+    catalogFailed = false;
     try {
       applyPlaceGeoms(data.places);
       const items = uniqueOffers(data.items || []);
@@ -2201,11 +2216,26 @@
       syncStatusChips();
     } catch (err) {
       console.warn("catalog render failed", err);
+      // A render error must never leave the list empty: load the page again a couple of times.
+      if (!append && !lastItems.length && catalogRetries < 3) {
+        catalogRetries += 1;
+        window.setTimeout(() => loadCatalog(), 1500);
+      }
     } finally {
       window.clearTimeout(timeout);
       finishCatalogLoad(seq, { keepCount: true });
     }
   }
+
+  const retryAfterFailure = () => {
+    if (catalogFailed && document.visibilityState !== "hidden") {
+      catalogRetries = 0;
+      catalogFailed = false;
+      loadCatalog();
+    }
+  };
+  window.addEventListener("online", retryAfterFailure);
+  document.addEventListener("visibilitychange", retryAfterFailure);
 
   let ignoreCardClick = false;
   listEl.addEventListener("click", (event) => {

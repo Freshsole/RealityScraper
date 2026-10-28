@@ -335,6 +335,20 @@ def channel_key(webhook_url: str) -> str:
     return f"{host}{path}" or (webhook_url or "").strip()
 
 
+_INDEX_COLUMNS = {"lat", "lon", "first_seen", "monitor_id"}
+
+
+def _covered_by_identity_index(where: list[str]) -> bool:
+    """True when every WHERE term only touches columns the identity indexes carry."""
+    for term in where:
+        for column in re.findall(r"listings\.(\w+)", term):
+            if column not in _INDEX_COLUMNS:
+                return False
+        if "SELECT" in term.upper():
+            return False
+    return True
+
+
 def listing_identity_sql(alias: str = "listings") -> str:
     return (
         f"COALESCE(NULLIF({alias}.canonical_key, ''), NULLIF({alias}.listing_key, ''), {alias}.url, "
@@ -5223,7 +5237,12 @@ class Store:
             conn.execute("ALTER TABLE monitors ADD COLUMN portals TEXT NOT NULL DEFAULT 'all'")
             conn.execute("UPDATE monitors SET portals = 'all' WHERE IFNULL(portals, '') = ''")
 
+    _IDENTITY_EXPR = "COALESCE(NULLIF(canonical_key, ''), NULLIF(listing_key, ''), url, monitor_id || ':' || id)"
     _BACKGROUND_INDEXES = (
+        # The unfiltered catalog (total, pin count, map grid, newest page) is answered from these covering
+        # indexes alone: a full-table GROUP BY used to take seconds locally and tens of seconds in production.
+        f"CREATE INDEX IF NOT EXISTS idx_listings_identity ON listings({_IDENTITY_EXPR}, lat, lon, first_seen)",
+        f"CREATE INDEX IF NOT EXISTS idx_listings_identity_monitor ON listings(monitor_id, {_IDENTITY_EXPR}, lat, lon, first_seen)",
         # Admin ops/catalog-quality aggregates (price_czk = 0 counts, duplicate groups) were full table scans.
         "CREATE INDEX IF NOT EXISTS idx_catalog_price ON catalog_listings(price_czk)",
         "CREATE INDEX IF NOT EXISTS idx_listings_monitor_canonical ON listings(monitor_id, canonical_key)",
@@ -6102,7 +6121,11 @@ class Store:
     ) -> dict[str, Any]:
         """Viewport / circle / unrestricted catalog: one deduplicated set computed in SQL."""
         clause = " AND ".join(where)
-        identity = listing_identity_sql()
+        covered = _covered_by_identity_index(where)
+        # A covered query reads only the identity indexes. Anything else must not be tempted into walking
+        # them (row lookups per listing are far slower than the plain scan), so its grouping expression
+        # is made opaque to the planner.
+        identity = listing_identity_sql() if covered else f"({listing_identity_sql()} || '')"
         located = bbox is not None or circle_active
         with self.connect(readonly=True) as conn:
             total = int(
@@ -6113,15 +6136,7 @@ class Store:
             )
             rows: list[dict[str, Any]] = []
             if not pins_only:
-                page_sql = f"""
-                    SELECT {self._LIGHT_COLS}
-                    FROM listings
-                    WHERE {clause}
-                    GROUP BY {identity}
-                    ORDER BY {order}
-                    LIMIT ? OFFSET ?
-                """
-                rows = [dict(row) for row in conn.execute(page_sql, (*params, limit, offset)).fetchall()]
+                rows = self._catalog_page_rows(conn, clause, params, identity, order, limit, offset, covered)
             pins: list[dict[str, Any]] = []
             pinned = 0
             if want_pins:
@@ -6148,6 +6163,56 @@ class Store:
             "pins": pins,
             "pinned": pinned,
         }
+
+    def _catalog_page_rows(
+        self,
+        conn: sqlite3.Connection,
+        clause: str,
+        params: list[Any],
+        identity: str,
+        order: str,
+        limit: int,
+        offset: int,
+        covered: bool,
+    ) -> list[dict[str, Any]]:
+        """One page of the deduplicated catalog, newest/oldest first."""
+        direction = {"listings.first_seen DESC": "DESC", "listings.first_seen ASC": "ASC"}.get(order)
+        if covered and direction:
+            # Pick the page's identities from the covering index, then fetch just those rows.
+            agg = "MAX" if direction == "DESC" else "MIN"
+            idents = [
+                row[0]
+                for row in conn.execute(
+                    f"""
+                    SELECT ident FROM (
+                        SELECT {identity} AS ident, {agg}(listings.first_seen) AS fs
+                        FROM listings WHERE {clause} GROUP BY {identity}
+                    )
+                    ORDER BY fs {direction}
+                    LIMIT ? OFFSET ?
+                    """,
+                    (*params, limit, offset),
+                )
+            ]
+            rows: list[dict[str, Any]] = []
+            for ident in idents:
+                row = conn.execute(
+                    f"SELECT {self._LIGHT_COLS} FROM listings WHERE {identity} = ? AND {clause} "
+                    f"ORDER BY listings.first_seen {direction} LIMIT 1",
+                    (ident, *params),
+                ).fetchone()
+                if row is not None:
+                    rows.append(dict(row))
+            return rows
+        page_sql = f"""
+            SELECT {self._LIGHT_COLS}
+            FROM listings
+            WHERE {clause}
+            GROUP BY {identity}
+            ORDER BY {order}
+            LIMIT ? OFFSET ?
+        """
+        return [dict(row) for row in conn.execute(page_sql, (*params, limit, offset)).fetchall()]
 
     def _grid_pins_sql(
         self,

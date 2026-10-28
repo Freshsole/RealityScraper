@@ -1,3 +1,81 @@
+/* Homepage hero: the paper plane flies its route on load, drawing the dashed trail behind it.
+   The route is derived from the laid-out elements (tab notch -> loop beside the photos -> top of the collage). */
+(function () {
+  'use strict';
+  var svg = document.getElementById('hs-route');
+  var path = document.getElementById('hs-route-path');
+  var reveal = document.getElementById('hs-route-reveal');
+  var plane = document.getElementById('hs-plane');
+  var hero = document.querySelector('.hero-search');
+  if (!svg || !path || !reveal || !plane || !hero) return;
+  var len = 0, progress = 0, running = false, done = false;
+
+  function rel(el) {
+    var h = hero.getBoundingClientRect(), r = el.getBoundingClientRect();
+    return { l: r.left - h.left, t: r.top - h.top, r: r.right - h.left, b: r.bottom - h.top, w: r.width, h: r.height };
+  }
+  function build() {
+    var tabs = document.querySelector('.hs-tabs'), photo = document.querySelector('.hs-photo-2');
+    if (!tabs || !photo || !svg.getBoundingClientRect().width) return false;
+    var hr = hero.getBoundingClientRect();
+    svg.setAttribute('viewBox', '0 0 ' + hr.width + ' ' + hr.height);
+    var t = rel(tabs), p = rel(photo);
+    var S = { x: t.r + 14, y: t.b - 24 };
+    var k = Math.min(1, p.w / 380);
+    var rx = 135 * k, ry = 100 * k;
+    var cx = p.l - 60 + rx, cy = p.t + p.h * 0.5;
+    var nav = document.querySelector('.navbar');
+    var E = { x: p.l - 5, y: 58 + (nav ? nav.offsetHeight : 0) };
+    var pts = [S, { x: cx - rx - 70 * k, y: cy + 150 * k }];
+    for (var a = 180; a <= 540; a += 20) {
+      var r = a * Math.PI / 180;
+      pts.push({ x: cx + rx * Math.cos(r), y: cy + ry * Math.sin(r) });
+    }
+    pts.push({ x: cx - rx - 8 * k, y: cy - ry * 1.35 }, E);
+    var d = 'M' + pts[0].x.toFixed(1) + ' ' + pts[0].y.toFixed(1);
+    for (var i = 0; i < pts.length - 1; i++) {
+      var p0 = pts[Math.max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+      d += ' C ' + (p1.x + (p2.x - p0.x) / 6).toFixed(1) + ' ' + (p1.y + (p2.y - p0.y) / 6).toFixed(1) + ' ' +
+        (p2.x - (p3.x - p1.x) / 6).toFixed(1) + ' ' + (p2.y - (p3.y - p1.y) / 6).toFixed(1) + ' ' + p2.x.toFixed(1) + ' ' + p2.y.toFixed(1);
+    }
+    path.setAttribute('d', d);
+    reveal.setAttribute('d', d);
+    len = path.getTotalLength();
+    reveal.style.strokeDasharray = String(len);
+    return true;
+  }
+  function place(t) {
+    progress = t;
+    var l = len * t, p = path.getPointAtLength(l);
+    var q = path.getPointAtLength(Math.min(len, l + 2)), back = path.getPointAtLength(Math.max(0, l - 2));
+    var ang = Math.atan2(q.y - back.y, q.x - back.x) * 180 / Math.PI;
+    plane.setAttribute('transform', 'translate(' + p.x + ' ' + p.y + ') rotate(' + (ang + 45) + ')');
+    reveal.style.strokeDashoffset = String(len * (1 - t));
+  }
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function ease(x) { return x < .5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; }
+  function run() {
+    if (!build()) return;
+    if (still) { done = true; place(1); return; }
+    place(0);
+    var dur = 3600, start = 0;
+    running = true;
+    function tick(now) {
+      if (!start) start = now;
+      var t = Math.min(1, (now - start) / dur);
+      place(ease(t));
+      if (t < 1) requestAnimationFrame(tick); else { running = false; done = true; svg.classList.add('is-landed'); }
+    }
+    setTimeout(function () { requestAnimationFrame(tick); }, 350);
+  }
+  var rt = 0;
+  window.addEventListener('resize', function () {
+    clearTimeout(rt);
+    rt = setTimeout(function () { if (!running && done && build()) place(1); }, 150);
+  });
+  if (document.readyState === 'complete') run(); else window.addEventListener('load', run);
+})();
+
 /* Homepage hero: short catalog search that leads into a free account. */
 (function () {
   'use strict';
@@ -27,6 +105,8 @@
         t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
       price.placeholder = offer === 'prodej' ? 'např. 6 000 000' : 'např. 25 000';
+      var cur = price.value.replace(/\s/g, '');
+      if (cur === (offer === 'prodej' ? '25000' : '6000000')) price.value = offer === 'prodej' ? '6 000 000' : '25 000';
     });
   });
 
@@ -34,12 +114,17 @@
   form.querySelectorAll('.hs-chip').forEach(function (chip) {
     chip.addEventListener('click', function () {
       q.value = chip.getAttribute('data-q') || '';
-      price.value = chip.getAttribute('data-price') || '';
+      price.value = chip.getAttribute('data-price') ? fmt(chip.getAttribute('data-price')) : '';
       areaFrom.value = chip.getAttribute('data-from') || '';
       areaTo.value = '';
       hideSuggest();
       q.focus();
     });
+  });
+
+  price.addEventListener('input', function () {
+    var d = price.value.replace(/\D/g, '');
+    price.value = d ? fmt(d) : '';
   });
 
   /* locality suggestions */
@@ -77,7 +162,8 @@
     var p = new URLSearchParams();
     if (q.value.trim()) p.set('q', q.value.trim());
     p.set('offer', offer);
-    if (price.value) p.set('price_to', price.value);
+    var priceNum = price.value.replace(/\D/g, '');
+    if (priceNum) p.set('price_to', priceNum);
     if (areaFrom.value) p.set('area_from', areaFrom.value);
     if (areaTo.value) p.set('area_to', areaTo.value);
     return p;

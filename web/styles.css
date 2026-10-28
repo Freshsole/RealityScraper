@@ -3318,3 +3318,5 @@ html[data-page="overview"] .footer { background: transparent; }
   .ov-skel { grid-template-columns: 1fr; }
   .ov-skel-card:nth-child(n+2) { display: none; }
 }
+
+.link-btn{padding:0;margin-left:6px;font:inherit;font-weight:700;color:inherit;text-decoration:underline;background:none;border:0;cursor:pointer}
