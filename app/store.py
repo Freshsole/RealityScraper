@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from app import config, localities, places
+from app import catalog_snap, config, localities, places
 from app.identity import (
     fingerprint,
     link_payload,
@@ -5995,11 +5995,12 @@ class Store:
         offset = max(int(filters.get("offset") or 0), 0)
         pins_only = bool(filters.get("pins_only"))
         want_pins = pins_only or str(filters.get("include_pins") or "0").strip().lower() not in {"0", "false", "no"}
+        snap = self._snap_usable(filters, where)
         if place_geoms:
-            resolved = self._resolve_in_places(where, params, place_geoms, order, offset, limit, want_pins)
+            resolved = self._resolve_in_places(where, params, place_geoms, order, offset, limit, want_pins, snap=snap)
         else:
             bbox = filters.get("_bbox") if isinstance(filters.get("_bbox"), tuple) else None
-            resolved = self._resolve_in_sql(where, params, bbox, circle_active, order, offset, limit, want_pins, pins_only)
+            resolved = self._resolve_in_sql(where, params, bbox, circle_active, order, offset, limit, want_pins, pins_only, snap=snap)
         total, rows, pins = resolved["total"], resolved["rows"], resolved["pins"]
         if pins_only:
             return {"items": pins, "total": total, "pinned": resolved["pinned"]}
@@ -6052,6 +6053,26 @@ class Store:
         "listings.canonical_key, listings.url"
     )
 
+    # Filters whose data the snapshot does not carry (full extras, per-user state, other tables).
+    _SNAP_BLOCKERS = (
+        "portal", "monitor_id", "amenities", "roommate", "pets", "short_term", "ownership", "condition",
+        "building", "equipped", "status", "discounted", "hits",
+    )
+
+    def _snap_usable(self, filters: dict[str, Any], where: list[str]) -> bool:
+        """True when this query can be answered from the read snapshot instead of the live table."""
+        if self._scope_user_path or self._has_hidden_users or not catalog_snap.ready_for(self.path):
+            return False
+        if any(str(filters.get(key) or "").strip() for key in self._SNAP_BLOCKERS):
+            return False
+        allowed = set(catalog_snap.COLUMNS)
+        for term in where:
+            if "SELECT" in term.upper():
+                return False
+            if any(col not in allowed for col in re.findall(r"listings\.(\w+)", term)):
+                return False
+        return True
+
     def _resolve_in_places(
         self,
         where: list[str],
@@ -6061,6 +6082,7 @@ class Store:
         offset: int,
         limit: int,
         want_pins: bool,
+        snap: bool = False,
     ) -> dict[str, Any]:
         """Offers whose stored coordinates lie inside the selected place(s).
 
@@ -6072,7 +6094,7 @@ class Store:
             WHERE {" AND ".join(where)}
             ORDER BY {order}
         """
-        with self.connect(readonly=True) as conn:
+        with (catalog_snap.connect(getattr(QUERY_DEADLINE, 'at', None)) if snap else self.connect(readonly=True)) as conn:
             fetched = [dict(row) for row in conn.execute(sql, params).fetchall()]
         seen: set[str] = set()
         matched: list[dict[str, Any]] = []
@@ -6111,12 +6133,14 @@ class Store:
         limit: int,
         want_pins: bool,
         pins_only: bool,
+        snap: bool = False,
     ) -> dict[str, Any]:
         """Viewport / circle / unrestricted catalog: one deduplicated set computed in SQL."""
         clause = " AND ".join(where)
-        identity = listing_identity_sql()
+        # The snapshot is already one row per offer, with an indexed identity column.
+        identity = "listings.ident" if snap else listing_identity_sql()
         located = bbox is not None or circle_active
-        with self.connect(readonly=True) as conn:
+        with (catalog_snap.connect(getattr(QUERY_DEADLINE, 'at', None)) if snap else self.connect(readonly=True)) as conn:
             total = int(
                 conn.execute(
                     f"SELECT COUNT(*) FROM (SELECT 1 FROM listings WHERE {clause} GROUP BY {identity})",

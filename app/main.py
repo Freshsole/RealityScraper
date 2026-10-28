@@ -113,6 +113,11 @@ async def _background_startup() -> None:
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
+    if config.SCRAPE_ROLE != "worker":
+        from app import catalog_snap
+
+        # Read snapshot of the catalog: keeps catalog queries off the busy, wide live table.
+        catalog_snap.start(lambda: (_public_store() or hub.store).path)
 
     def _warm_seo_sitemap() -> None:
         try:
