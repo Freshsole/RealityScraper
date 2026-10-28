@@ -5,6 +5,7 @@ import re
 import hashlib
 import io
 import json
+import math
 import logging
 import os
 import sqlite3
@@ -3466,11 +3467,21 @@ def _catalog_read(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
         store_module.QUERY_DEADLINE.at = None
 
 
+_catalog_waiting = 0
+
+
 async def _run_catalog_query(payload: dict[str, Any], store: Store) -> dict[str, Any]:
+    global _catalog_waiting
+    if _catalog_waiting >= _CATALOG_MAX_WAITING:
+        # Load shedding: a long queue only holds sockets and memory. Fail fast, the client retries.
+        raise HTTPException(status_code=503, detail="catalog-busy")
+    _catalog_waiting += 1
     try:
         await asyncio.wait_for(_CATALOG_SLOTS.acquire(), _CATALOG_QUEUE_TIMEOUT_S)
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=503, detail="catalog-busy") from exc
+    finally:
+        _catalog_waiting -= 1
     try:
         return await asyncio.get_running_loop().run_in_executor(hub.ui_pool, _catalog_read, store, payload)
     except sqlite3.OperationalError as exc:
@@ -3485,7 +3496,31 @@ async def _run_catalog_query(payload: dict[str, Any], store: Store) -> dict[str,
 _CATALOG_CACHE: dict[str, dict[str, Any]] = {}
 _CATALOG_FRESH_S = 90.0
 _CATALOG_STALE_S = 3600.0
-_CATALOG_CACHE_MAX = 400
+_CATALOG_CACHE_MAX = 600
+_CATALOG_MAX_WAITING = 40
+
+
+def _snap_bbox(payload: dict[str, Any]) -> dict[str, Any]:
+    """Snap the map viewport outward to a grid relative to its size.
+
+    Panning a map produces a new, unique bbox on every move; without this nobody ever shares a cache
+    entry. The grid is ~1/4 of the viewport, so the cached set is only slightly larger than the view.
+    """
+    try:
+        south, north = float(payload["south"]), float(payload["north"])
+        west, east = float(payload["west"]), float(payload["east"])
+    except (KeyError, TypeError, ValueError):
+        return payload
+    span = max(north - south, east - west)
+    if not (0 < span <= 20):
+        return payload
+    step = 10 ** math.floor(math.log10(span / 4))
+    snapped = dict(payload)
+    snapped["south"] = f"{max(-90.0, math.floor(south / step) * step):.6f}"
+    snapped["north"] = f"{min(90.0, math.ceil(north / step) * step):.6f}"
+    snapped["west"] = f"{max(-180.0, math.floor(west / step) * step):.6f}"
+    snapped["east"] = f"{min(180.0, math.ceil(east / step) * step):.6f}"
+    return snapped
 
 
 def _drop_user_catalog_cache(ustore: Store) -> None:
@@ -3495,7 +3530,14 @@ def _drop_user_catalog_cache(ustore: Store) -> None:
 
 
 async def _refresh_catalog_cache(key: str, payload: dict[str, Any], store: Store) -> dict[str, Any]:
-    data = await _run_catalog_query(payload, store)
+    try:
+        data = await _run_catalog_query(payload, store)
+    except BaseException:
+        # A failed or shed query must not leave an empty entry behind (the cache would fill with them).
+        entry = _CATALOG_CACHE.get(key)
+        if entry is not None and entry.get("data") is None:
+            _CATALOG_CACHE.pop(key, None)
+        raise
     if len(_CATALOG_CACHE) >= _CATALOG_CACHE_MAX:
         oldest = sorted(_CATALOG_CACHE.items(), key=lambda kv: kv[1].get("at") or 0)[: _CATALOG_CACHE_MAX // 4]
         for old_key, _ in oldest:
@@ -3507,6 +3549,7 @@ async def _refresh_catalog_cache(key: str, payload: dict[str, Any], store: Store
 
 
 async def _run_catalog_query_cached(payload: dict[str, Any], store: Store, scope: str = "") -> dict[str, Any]:
+    payload = _snap_bbox(payload)
     key = f"{scope}|{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
     entry = _CATALOG_CACHE.get(key)
     now = time.time()
