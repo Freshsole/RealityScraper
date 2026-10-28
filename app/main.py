@@ -112,7 +112,6 @@ async def _background_startup() -> None:
             flush=True,
         )
     asyncio.create_task(maybe_auto_update())
-    asyncio.create_task(_catalog_warm_loop(), name="catalog-warm")
 
     def _warm_seo_sitemap() -> None:
         try:
@@ -3450,12 +3449,34 @@ def _catalog_filters(
     return payload
 
 
+# At most this many catalog reads run at once; the rest wait their turn instead of all fighting for the
+# CPU, the disk and the GIL (which made even /health miss its deadline).
+_CATALOG_SLOTS = asyncio.Semaphore(2)
+_CATALOG_QUERY_TIMEOUT_S = 25.0
+_CATALOG_QUEUE_TIMEOUT_S = 20.0
+
+
+def _catalog_read(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
+    from app import store as store_module
+
+    store_module.QUERY_DEADLINE.at = time.monotonic() + _CATALOG_QUERY_TIMEOUT_S
+    try:
+        return store.catalog(payload)
+    finally:
+        store_module.QUERY_DEADLINE.at = None
+
+
 async def _run_catalog_query(payload: dict[str, Any], store: Store) -> dict[str, Any]:
     try:
-        result = await asyncio.get_running_loop().run_in_executor(hub.ui_pool, store.catalog, payload)
+        await asyncio.wait_for(_CATALOG_SLOTS.acquire(), _CATALOG_QUEUE_TIMEOUT_S)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=503, detail="catalog-busy") from exc
+    try:
+        return await asyncio.get_running_loop().run_in_executor(hub.ui_pool, _catalog_read, store, payload)
     except sqlite3.OperationalError as exc:
         raise HTTPException(status_code=503, detail="catalog-busy") from exc
-    return result
+    finally:
+        _CATALOG_SLOTS.release()
 
 
 # Guest/public catalog results are identical for every visitor, but a query scans the whole
@@ -3504,30 +3525,6 @@ async def _run_catalog_query_cached(payload: dict[str, Any], store: Store, scope
     if task is None or task.done():
         task = entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
     return await asyncio.shield(task)
-
-
-async def _catalog_warm_loop() -> None:
-    """Keep the default (unfiltered) catalog hot so a restart or a quiet hour never leaves visitors
-    waiting for a cold full-table query. Errors are swallowed; the next round retries."""
-    await asyncio.sleep(15)
-    while True:
-        try:
-            store = _public_store() or hub.store
-            for limit, pins in ((36, "1"), (20, "0")):
-                payload = await place_geo.attach_geoms(
-                    _catalog_filters(limit=limit, offset=0, include_pins=pins, facets="1", sort="newest")
-                )
-                key = f"|{store.path}|{json.dumps(payload, sort_keys=True, default=str)}"
-                entry = _CATALOG_CACHE.setdefault(key, {"at": 0.0, "data": None, "task": None})
-                task = entry.get("task")
-                if task is None or task.done():
-                    task = entry["task"] = asyncio.create_task(_refresh_catalog_cache(key, payload, store))
-                await asyncio.shield(task)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            print(f"catalog warm failed: {exc!r}", flush=True)
-        await asyncio.sleep(75)
 
 
 @app.get("/api/catalog")
