@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import json
 import threading
 import time
@@ -1085,12 +1086,18 @@ class Hub:
         return (datetime.now(timezone.utc) - seen).total_seconds() >= config.SOLD_INVENTORY_SEC
 
     async def _ping_loop(self) -> None:
+        # Every user's Hub runs this loop. Polling the queue 4x a second opened a SQLite connection per
+        # user per poll in the shared thread pool and starved the web requests (/api/status took 12+ s).
+        # An empty queue backs off to a few seconds; a ping resets it.
+        idle = 0.25
         while self.running:
             try:
                 item = await asyncio.to_thread(self.store.claim_next_ping)
                 if not item:
-                    await asyncio.sleep(0.25)
+                    await asyncio.sleep(idle * (0.8 + 0.4 * random.random()))
+                    idle = min(idle * 1.6, 4.0)
                     continue
+                idle = 0.25
                 try:
                     await self._dispatch_ping(item)
                     await asyncio.to_thread(self.store.mark_ping_sent, item)

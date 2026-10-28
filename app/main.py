@@ -120,6 +120,8 @@ async def _background_startup() -> None:
         catalog_snap.start(lambda: (_public_store() or hub.store).path)
 
     def _warm_seo_sitemap() -> None:
+        # Thousands of catalog counts: let startup and the catalog snapshot finish first.
+        time.sleep(300)
         try:
             from app import market_seo
 
