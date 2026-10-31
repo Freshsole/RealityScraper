@@ -175,6 +175,8 @@ def refresh_delta(source_path: str) -> None:
 
 def run_loop(source_path_fn) -> None:
     """Background thread: keep the snapshot fresh. Errors never leave the loop."""
+    # Adopting the previous process's snapshot scans it: do that here, never on the startup path.
+    adopt_existing(str(source_path_fn()))
     adopted = bool(_state["built_at"])
     last_full = time.monotonic() if adopted else 0.0
     if not adopted:
@@ -221,7 +223,6 @@ def adopt_existing(source_path: str) -> bool:
 
 
 def start(source_path_fn) -> threading.Thread:
-    adopt_existing(str(source_path_fn()))
     thread = threading.Thread(target=run_loop, args=(source_path_fn,), name="catalog-snap", daemon=True)
     thread.start()
     return thread
