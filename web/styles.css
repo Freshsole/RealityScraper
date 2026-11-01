@@ -370,6 +370,13 @@ a { color: var(--forest); }
   background: #c9ccc6;
   cursor: pointer;
 }
+.carousel-count {
+  min-width: 64px;
+  text-align: center;
+  font: 600 14px Inter, sans-serif;
+  color: var(--forest);
+  font-variant-numeric: tabular-nums;
+}
 .carousel-dot.on {
   width: 22px;
   background: var(--forest);

@@ -155,11 +155,11 @@ function renderCarouselPager(viewport) {
   pager.hidden = viewport.hidden || pages <= 1;
   pager.innerHTML = `
     <button type="button" class="carousel-nav" data-dir="-1" aria-label="Předchozí" ${page === 0 ? "disabled" : ""}>‹</button>
-    <div class="carousel-dots">
-      ${Array.from({ length: pages }, (_, index) =>
+    ${pages > 7
+      ? `<div class="carousel-count" aria-live="polite">${page + 1} / ${pages}</div>`
+      : `<div class="carousel-dots">${Array.from({ length: pages }, (_, index) =>
         `<button type="button" class="carousel-dot${index === page ? " on" : ""}" data-page="${index}" aria-label="Strana ${index + 1}"></button>`,
-      ).join("")}
-    </div>
+      ).join("")}</div>`}
     <button type="button" class="carousel-nav" data-dir="1" aria-label="Další" ${page >= pages - 1 ? "disabled" : ""}>›</button>
   `;
 }
