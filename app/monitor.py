@@ -2445,6 +2445,50 @@ class Hub:
             except asyncio.CancelledError:
                 raise
 
+    async def _liveness_loop(self) -> None:
+        """Re-check catalog listings that no sync touched for a while: fetch the detail and retire the
+        ones the portal says are gone. Runs continuously on the catalog owner, whatever monitors exist."""
+        await asyncio.sleep(60)
+        skip: dict[str, float] = {}  # listing_key -> monotonic time before which a failed fetch is not retried
+        while self.running:
+            checked = 0
+            try:
+                now = time.monotonic()
+                for key in [k for k, until in skip.items() if until <= now]:
+                    skip.pop(key, None)
+                rows = await self._job_db(
+                    self.store.stale_catalog_listings,
+                    days=config.LIVENESS_MIN_AGE_HOURS / 24,
+                    limit=config.LIVENESS_BATCH,
+                    skip_keys=list(skip),
+                )
+                gone = 0
+                for row in rows:
+                    if not self.running:
+                        break
+                    key = row.get("listing_key") or ""
+                    listing = _listing_from_catalog_dict(row)
+                    try:
+                        listing = await self.detail_client_for(row.get("url") or "").fetch_detail(listing)
+                        await self._job_db(self.store.upsert_catalog_listing, listing, kind="refresh")
+                    except ListingGone:
+                        await self._job_db(self.store.mark_catalog_listing_gone, key)
+                        gone += 1
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        skip[key] = time.monotonic() + 3600  # blocked/transient: try again in an hour
+                    checked += 1
+                    await asyncio.sleep(0.3)
+                if gone:
+                    print(f"liveness recheck gone={gone} of {checked}", flush=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"liveness loop error: {exc}", flush=True)
+            # Backlog left -> keep going quickly; nothing stale -> idle.
+            await asyncio.sleep(2 if checked >= config.LIVENESS_BATCH else config.LIVENESS_IDLE_SEC)
+
     async def _sold_tick(self) -> None:
         for pending in (await self._job_db(self.store.pending_sold_pings, limit=10)):
             await self._send_sold_ping(pending, pending.get("monitor_name") or "")

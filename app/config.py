@@ -183,6 +183,10 @@ BAZOS_WEBHOOK_URL = _webhook_env("BAZOS_WEBHOOK_URL")
 NEW_MAX_AGE_DAYS = max(1, int((os.getenv("NEW_MAX_AGE_DAYS") or "2")))
 NOTIFY_REFRESHES = os.getenv("NOTIFY_REFRESHES", "0").strip() in {"1", "true", "yes"}
 SOLD_INVENTORY_SEC = max(120, int((os.getenv("SOLD_INVENTORY_SEC") or "600")))
+# Continuous availability re-check of catalog listings (independent of monitors): oldest last_seen first.
+LIVENESS_MIN_AGE_HOURS = max(1.0, float(os.getenv("LIVENESS_MIN_AGE_HOURS") or "12"))
+LIVENESS_BATCH = max(1, int(os.getenv("LIVENESS_BATCH") or "20"))
+LIVENESS_IDLE_SEC = max(5, int(os.getenv("LIVENESS_IDLE_SEC") or "30"))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
 PORT = int((os.getenv("PORT") or "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")

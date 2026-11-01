@@ -4499,19 +4499,23 @@ class Store:
             self.upsert_seen(monitor_id, listing, notified=False, kind="sold")
             self.mark_gone(monitor_id, listing.id)
 
-    def stale_catalog_listings(self, days: int = 1, limit: int = 8) -> list[dict[str, Any]]:
+    def stale_catalog_listings(
+        self, days: float = 1, limit: int = 8, skip_keys: Any = ()
+    ) -> list[dict[str, Any]]:
         cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+        skip = [str(k) for k in skip_keys if k][:500]
+        skip_sql = f" AND listing_key NOT IN ({','.join('?' * len(skip))})" if skip else ""
         cutoff_iso = datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat()
         with self.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM catalog_listings
                 WHERE IFNULL(gone, 0) = 0
-                  AND (last_seen IS NULL OR last_seen < ?)
+                  AND (last_seen IS NULL OR last_seen < ?)""" + skip_sql + """
                 ORDER BY last_seen IS NULL DESC, last_seen ASC
                 LIMIT ?
                 """,
-                (cutoff_iso, limit),
+                (cutoff_iso, *skip, limit),
             ).fetchall()
         return [dict(row) for row in rows]
 

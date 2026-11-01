@@ -298,6 +298,9 @@ class _FakeHub:
     async def _dedupe_loop(self):
         self.calls.append("dedupe")
 
+    async def _liveness_loop(self):
+        self.calls.append("liveness")
+
     async def _stale_sweep_noop(self):
         self.calls.append("stale")
 
@@ -331,7 +334,7 @@ class WorkerRolesTests(unittest.TestCase):
         scrape_worker, worker = self._worker()
         with mock.patch.object(scrape_worker, "Hub", _FakeHub), mock.patch.object(config, "SHARED_CATALOG", True):
             calls = self._spawn(worker, ["admin", "u1", "u2"], "admin")
-        self.assertEqual(calls["admin"], sorted(["monitor", "sold", "coords", "catalog_coords", "discovery", "deep", "dedupe", "stale"]))
+        self.assertEqual(calls["admin"], sorted(["monitor", "sold", "coords", "catalog_coords", "discovery", "deep", "dedupe", "stale", "liveness"]))
         for uid in ("u1", "u2"):
             self.assertEqual(calls[uid], sorted(["monitor", "sold", "coords"]), uid)
             self.assertFalse(worker.user_hubs[uid].catalog_owner)
@@ -343,7 +346,7 @@ class WorkerRolesTests(unittest.TestCase):
         scrape_worker, worker = self._worker()
         with mock.patch.object(scrape_worker, "Hub", _FakeHub), mock.patch.object(config, "SHARED_CATALOG", False):
             calls = self._spawn(worker, ["admin", "u1"], "admin")
-        full = sorted(["monitor", "sold", "coords", "catalog_coords", "discovery", "deep", "dedupe", "stale"])
+        full = sorted(["monitor", "sold", "coords", "catalog_coords", "discovery", "deep", "dedupe", "stale", "liveness"])
         self.assertEqual(calls["admin"], full)
         self.assertEqual(calls["u1"], full)
 

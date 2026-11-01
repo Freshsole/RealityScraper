@@ -172,6 +172,7 @@ class ScrapeWorker:
             ("dedupe", True, "dedupe", lambda h: h._dedupe_loop()),
             ("coords", True, "catalog-coords", lambda h: h.catalog_coords_loop()),
             ("maint", True, "stale-sweep", lambda h: self._stale_sweep_loop(h)),
+            ("sold", True, "liveness", lambda h: h._liveness_loop()),
         ]
         wanted = [
             (label, factory)
