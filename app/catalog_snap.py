@@ -27,7 +27,8 @@ from app import config
 log = logging.getLogger("realitify.catalog_snap")
 
 SNAP_PATH = config.DATA_DIR / "catalog_snap.sqlite"
-SNAP_FULL_EVERY_S = 60 * 60
+SNAP_FULL_EVERY_S = 60 * 60  # the delta refresh cannot see `gone` flips (they do not touch last_seen): keep this short
+SNAP_ADOPT_MAX_AGE_S = 7 * 24 * 60 * 60  # a restart (or an outage) must never mean a cold snapshot
 SNAP_DELTA_EVERY_S = 45
 SNAP_MAX_AGE_S = 15 * 60  # older than this and readers fall back to the live table
 
@@ -179,6 +180,9 @@ def run_loop(source_path_fn) -> None:
     adopt_existing(str(source_path_fn()))
     adopted = bool(_state["built_at"])
     last_full = time.monotonic() if adopted else 0.0
+    if adopted and _state.get("adopted_age", 0.0) > SNAP_FULL_EVERY_S:
+        # Serve the old snapshot right away, but rebuild it soon: it may have missed `gone` flips while we were down.
+        last_full = time.monotonic() - (SNAP_FULL_EVERY_S - 600)
     if not adopted:
         time.sleep(90)  # let the web finish starting before the first full pass over the live table
     while True:
@@ -207,9 +211,10 @@ def adopt_existing(source_path: str) -> bool:
             row = conn.execute("SELECT MAX(first_seen), MAX(last_seen) FROM listings").fetchone()
         finally:
             conn.close()
-        if not src or src[0] != source_path or age > SNAP_MAX_AGE_S * 4:
+        if not src or src[0] != source_path or age > SNAP_ADOPT_MAX_AGE_S:
             return False
         with _lock:
+            _state["adopted_age"] = age
             _state.update(
                 source=source_path,
                 built_at=time.monotonic() - age,

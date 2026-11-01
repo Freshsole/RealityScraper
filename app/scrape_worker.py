@@ -38,6 +38,7 @@ class ScrapeWorker:
         self.owner_id: str | None = None
         self._checkpoint_task: asyncio.Task[None] | None = None
         self._ssr_task: asyncio.Task[None] | None = None
+        self._seo_task: asyncio.Task[None] | None = None
         self._stall_task: asyncio.Task[None] | None = None
         self._email_task: asyncio.Task[None] | None = None
         self._guard = container.LoopGuard(config.WORKER_HARD_STALL_SEC)
@@ -80,6 +81,7 @@ class ScrapeWorker:
         if self.runs("maint"):
             self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(), name="worker-wal-checkpoint")
             self._ssr_task = asyncio.create_task(self._ssr_rebuild_loop(), name="worker-ssr-rebuild")
+            self._seo_task = asyncio.create_task(self._seo_inventory_loop(), name="worker-seo-inventory")
         self._stall_task = asyncio.create_task(self._stall_dump_loop(), name="worker-stall-dump")
         if self.runs("maint"):
             from app.emailing import service as email_service, store as email_store
@@ -123,7 +125,7 @@ class ScrapeWorker:
                 parse_pool.close()
             except Exception:
                 pass
-            for task in (self._guard_task, self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._stall_task, self._email_task):
+            for task in (self._guard_task, self._rescan_task, self._watch_task, self._heartbeat_task, self._checkpoint_task, self._ssr_task, self._seo_task, self._stall_task, self._email_task):
                 if task is not None:
                     task.cancel()
             for tasks in self._user_tasks.values():
@@ -299,6 +301,20 @@ class ScrapeWorker:
             except Exception as exc:
                 print(f"catalog stale sweep error: {exc}", flush=True)
             await asyncio.sleep(3600)
+
+    async def _seo_inventory_loop(self) -> None:
+        """Recompute the /trh SEO page inventory (many full-table counts) away from the web process."""
+        await asyncio.sleep(600)
+        while self.running:
+            try:
+                from app import market_seo
+
+                await asyncio.to_thread(market_seo.refresh_market_seo_inventory, self.hub.store)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"scrape_worker: seo inventory error: {exc}", flush=True)
+            await asyncio.sleep(6 * 3600)
 
     async def _ssr_rebuild_loop(self) -> None:
         """Rebuild the public SSR cache in a separate low-priority process (the web only reads it)."""

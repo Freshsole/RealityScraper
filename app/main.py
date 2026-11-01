@@ -119,20 +119,8 @@ async def _background_startup() -> None:
         # Read snapshot of the catalog: keeps catalog queries off the busy, wide live table.
         catalog_snap.start(lambda: (_public_store() or hub.store).path)
 
-    def _warm_seo_sitemap() -> None:
-        # Thousands of catalog counts: let startup and the catalog snapshot finish first.
-        time.sleep(300)
-        try:
-            from app import market_seo
-
-            store = hub.store
-            market_seo.refresh_market_seo_inventory(store)
-            market_seo.cached_sitemap_xml(store, SEO_PAGES)
-        except Exception as exc:
-            print(f"seo sitemap warm failed: {exc}", flush=True)
-
-    threading.Thread(target=hub.store.ensure_background_indexes, name="store-indexes", daemon=True).start()
-    threading.Thread(target=_warm_seo_sitemap, name="seo-sitemap-warm", daemon=True).start()
+    # The SEO inventory (thousands of full-table counts) runs in the worker, never in the web process:
+    # it starved the event loop and pushed the catalog out of the page cache.
     threading.Thread(target=_diag_localhost_health, name="localhost-diag", daemon=True).start()
     try:
         from app import ssr_cache

@@ -170,7 +170,7 @@ def worker_healthy() -> bool:
 def web_healthy() -> bool:
     port = os.getenv("PORT") or "8000"
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5) as resp:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=15) as resp:
             return resp.status == 200
     except Exception:
         return False

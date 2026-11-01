@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import zlib
@@ -337,6 +338,7 @@ def channel_key(webhook_url: str) -> str:
 
 # Per-thread monotonic deadline for read queries (set by the web layer around catalog reads).
 QUERY_DEADLINE = threading.local()
+_SCHEMA_SIG: str | None = None
 
 
 def listing_identity_sql(alias: str = "listings") -> str:
@@ -606,16 +608,59 @@ class Store:
         if last:
             raise last
 
+    @staticmethod
+    def _schema_signature() -> str:
+        """Fingerprint of the code that defines/migrates the schema (store.py + users.py)."""
+        global _SCHEMA_SIG
+        if _SCHEMA_SIG is None:
+            digest = hashlib.sha1()
+            here = Path(__file__).resolve().parent
+            for name in ("store.py", "users.py"):
+                try:
+                    digest.update((here / name).read_bytes())
+                except OSError:
+                    return ""
+            _SCHEMA_SIG = digest.hexdigest()
+        return _SCHEMA_SIG
+
+    def _schema_is_current(self, signature: str) -> bool:
+        """True when this database was already migrated by exactly this code: nothing to do, take no locks."""
+        if not signature or not self.path.is_file():
+            return False
+        try:
+            conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=2)
+            try:
+                row = conn.execute("SELECT value FROM meta WHERE key = 'schema_sig'").fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+        return bool(row) and row[0] == signature
+
     def _init(self) -> None:
-        """Serialize schema init across supervisord web + worker on one volume."""
+        """Serialize schema init across supervisord web + worker on one volume.
+
+        A restart of unchanged code must not re-run the migrations: they take write locks on the whole
+        database, fight the scrapers for them and kept the web from listening for up to an hour.
+        """
         self._wait_volume_ready()
+        signature = self._schema_signature()
+        if self._schema_is_current(signature):
+            return
         lock_path = self.path.parent / ".store_init.lock"
         lock_fh = open(lock_path, "a+", encoding="utf-8")
         try:
             import fcntl
 
             fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            if self._schema_is_current(signature):  # another process finished it while we waited for the lock
+                return
             self._init_unlocked()
+            if signature:
+                try:
+                    self.set_meta("schema_sig", signature)
+                except Exception:  # noqa: BLE001 - only an optimisation; the next start just migrates again
+                    pass
         finally:
             try:
                 import fcntl
