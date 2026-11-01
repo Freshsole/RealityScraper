@@ -186,6 +186,19 @@ SOLD_INVENTORY_SEC = max(120, int((os.getenv("SOLD_INVENTORY_SEC") or "600")))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
 PORT = int((os.getenv("PORT") or "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
+DEBUG = os.getenv("DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
+POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "").strip()
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "").strip()
+if DEBUG and not POSTHOG_API_KEY:
+    raise RuntimeError(
+        "POSTHOG_API_KEY variable required by PostHog is missing or un-configured, this causes events to be silently missed. "
+        "This error stops appearing once POSTHOG_API_KEY is configured"
+    )
+if DEBUG and not POSTHOG_HOST:
+    raise RuntimeError(
+        "POSTHOG_HOST variable required by PostHog is missing or un-configured, this causes events to be silently missed. "
+        "This error stops appearing once POSTHOG_HOST is configured"
+    )
 # Local development only (PUBLIC_BASE_URL points at localhost): the code 000000 confirms an e-mail without a mailbox.
 DEV_VERIFY_CODE = (
     "000000" if any(h in PUBLIC_BASE_URL for h in ("://localhost", "://127.0.0.1", "://[::1]")) else ""

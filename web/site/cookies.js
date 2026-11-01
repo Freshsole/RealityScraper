@@ -23,6 +23,7 @@
   function writeConsent(consent) {
     const payload = encodeURIComponent(JSON.stringify({ a: consent.analytics ? 1 : 0, m: consent.marketing ? 1 : 0, f: consent.functional ? 1 : 0 }));
     document.cookie = `${KEY}=${payload}; path=/; max-age=${YEAR}; SameSite=Lax`;
+    if (window.rfGtagConsent) window.rfGtagConsent(consent.analytics, consent.marketing);
   }
 
   function applyToggle(button, on) {

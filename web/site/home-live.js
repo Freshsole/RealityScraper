@@ -21,6 +21,8 @@
     .then(function (d) {
       var heading = document.getElementById('db-title');
       if (heading && d.title) heading.textContent = d.title;
+      var more = document.querySelector('.live-head .search-btn');
+      if (more && d.city) more.setAttribute('href', '/hledat?q=' + encodeURIComponent(d.city) + '&offer=pronajem&price_to=22000');
       var items = (d.items || []).slice(0, 3);
       if (!items.length) {
         results.innerHTML = '<p class="live-empty">Aktuální nabídky najdete v <a href="/hledat">katalogu</a>.</p>';

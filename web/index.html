@@ -2,6 +2,7 @@
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
+    <script src="/static/site/gtag.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -14,7 +15,7 @@
     <meta name="apple-mobile-web-app-title" content="Realitify" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
@@ -60,13 +61,20 @@
           <span class="dot"></span>
           <span id="live-label">Načítám…</span>
         </div>
-        <a class="nav-user" href="/nastaveni/profily">
-          <span class="nav-user-profile">
-            <span id="nav-avatar" class="nav-avatar">?</span>
-            <span id="nav-user-name" class="nav-user-name"></span>
-          </span>
-          <img class="nav-chevron" src="/static/assets/nav/chevron.svg" width="14" height="14" alt="" />
-        </a>
+        <div class="nav-user-wrap">
+          <button class="nav-user" id="nav-user-btn" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="nav-user-profile">
+              <span id="nav-avatar" class="nav-avatar">?</span>
+              <span id="nav-user-name" class="nav-user-name"></span>
+            </span>
+            <img class="nav-chevron" src="/static/assets/nav/chevron.svg" width="14" height="14" alt="" />
+          </button>
+          <div class="nav-user-menu" id="nav-user-menu" role="menu" hidden>
+            <a role="menuitem" href="/nastaveni/profily"><svg class="nav-mi" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Nastavení</a>
+            <a role="menuitem" id="nav-upgrade" href="/nastaveni/predplatne"><svg class="nav-mi" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>Upgrade</a>
+            <button role="menuitem" type="button" id="nav-logout"><svg class="nav-mi" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>Odhlásit se</button>
+          </div>
+        </div>
       </div>
     </nav>
 
@@ -235,8 +243,8 @@
             </div>
             <nav class="set-navs">
               <a class="set-nav" href="/nastaveni" data-panel="profile"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>Můj profil</a>
-              <a class="set-nav" href="/nastaveni/profily" data-panel="watch"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>Hlídací profily</a>
-              <a class="set-nav" href="/nastaveni/notifikace" data-panel="notify"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v3"/><path d="m6.6 6.6 2.1 2.1"/><path d="M3 12h3"/><path d="m6.6 17.4 2.1-2.1"/><path d="M12 18v3"/><path d="m17.4 17.4-2.1-2.1"/><path d="M18 12h3"/><path d="m17.4 6.6-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg></span>Notifikace</a>
+              <a class="set-nav" href="/nastaveni/profily" data-panel="watch"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/></svg></span>Hlídací profily</a>
+              <a class="set-nav" href="/nastaveni/notifikace" data-panel="notify"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>Notifikace</a>
               <a class="set-nav" href="/nastaveni/predplatne" data-panel="billing"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/></svg></span>Předplatné a fakturace</a>
               <a class="set-nav" href="/nastaveni/agenti" data-panel="agents"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>AI agenti a MCP</a>
               <a class="set-nav" href="/nastaveni/bezpecnost" data-panel="security"><span class="set-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></span>Bezpečnost</a>
@@ -247,11 +255,11 @@
         <div class="set-main">
           <section class="set-panel" id="panel-profile" hidden>
             <header class="set-head">
-              <h1 class="is-caps">Nastavení účtu</h1>
-              <p>Spravujte své osobní údaje a předvolby hlídání realit.</p>
+              <h1>Nastavení účtu</h1>
+              <p>Osobní údaje a body dojezdu</p>
             </header>
             <article class="set-card">
-              <h2 class="is-caps">Osobní údaje</h2>
+              <h2>Osobní údaje</h2>
               <div class="set-grid-2">
                 <label>Jméno<input id="profile-first" /></label>
                 <label>Příjmení<input id="profile-last" /></label>
@@ -268,16 +276,16 @@
               </div>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Body dojezdu</h2>
-              <p class="set-copy">Až dva body (práce, metro). Napište ulici a vyberte adresu z nápovědy. V detailu nabídky se spočítá čas autem a pěšky.</p>
+              <h2>Body dojezdu</h2>
+              <p class="set-copy">Až dva body, třeba práce nebo metro. V detailu nabídky uvidíte čas autem a pěšky.</p>
               <div id="commute-points"></div>
-              <button class="btn btn-ghost" id="commute-add" type="button" data-icon="pin">+ Přidat bod</button>
-              <p class="set-hint">Limit 2 body v tarifu Start. Upgradujte na Pro pro až 5 bodů.</p>
+              <button class="btn btn-ghost" id="commute-add" type="button" data-icon="plus">Přidat bod</button>
+              <p class="set-hint">Tarif Start: 2 body, Pro: až 5 bodů</p>
             </article>
             <article class="set-card set-danger">
-              <h2 class="is-caps">Nebezpečná zóna</h2>
+              <h2>Nebezpečná zóna</h2>
               <div class="set-danger-row">
-                <p>Tato akce je nevratná. Všechny vaše data, včetně nastavených hlídacích profilů a historie vyhledávání, budou trvale smazána.</p>
+                <p>Smazání je nevratné. Odstraní se účet, hlídací profily i historie vyhledávání.</p>
                 <button class="btn btn-danger-outline" id="profile-wipe" type="button">Smazat účet</button>
               </div>
             </article>
@@ -286,35 +294,31 @@
           <section class="set-panel" id="panel-watch" hidden>
             <div id="watch-home">
               <header class="set-head">
-                <h1 class="is-caps">Hlídací profily</h1>
-                <p>Spravujte své hlídací profily. Každý profil monitoruje nabídky podle vašich kritérií 24/7.</p>
+                <h1>Hlídací profily</h1>
+                <p>Každý profil hlídá nabídky podle vašich kritérií</p>
               </header>
               <div class="set-limit">
-                <p><img class="set-ico-inline" src="/static/assets/settings/icon-check.svg" alt="" /><span id="watch-limit-copy">Načítám…</span></p>
-                <a class="btn" href="/nastaveni/predplatne">Upgradovat na Pro pro neomezené profily</a>
+                <p><img class="set-ico-inline" src="/static/assets/settings/icon-tick.svg" alt="" /><span id="watch-limit-copy"></span></p>
+                <a class="btn" href="/nastaveni/predplatne">Přejít na Pro</a>
               </div>
               <div id="monitor-list" class="watch-list"></div>
               <button class="watch-create" id="watch-create" type="button">
-                <span><img src="/static/assets/settings/icon-plus.svg" alt="" />VYTVOŘIT NOVÝ HLÍDACÍ PROFIL</span>
-                <small id="watch-create-hint">Načítám…</small>
+                <span><img src="/static/assets/settings/icon-add.svg" alt="" />Vytvořit hlídací profil</span>
+                <small id="watch-create-hint"></small>
               </button>
             </div>
             <div id="watch-editor" hidden>
               <header class="set-head">
                 <button class="set-back" id="watch-back" type="button">← Zpět na profily</button>
-                <h1 id="watch-editor-title" class="is-caps">Nový hlídací profil</h1>
-                <p>Jeden hlídací pes může sledovat všechny portály. Filtry nastavíte jednou; omezení na jeden portál je volitelné.</p>
+                <h1 id="watch-editor-title">Nový hlídací profil</h1>
+                <p>Filtry nastavíte jednou, portál můžete volitelně omezit</p>
               </header>
               <form id="monitor-form" class="set-card form-card">
                 <input type="hidden" id="monitor-id" />
-                <h2 class="is-caps">Profil a odesílání</h2>
+                <h2>Profil a odesílání</h2>
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
-                <p class="set-copy">URL se generují pro všechny hlídané portály. Primární adresa určuje jazyk filtrů.</p>
-                <div class="url-stack" id="monitor-urls"></div>
-                <label>Hlavní URL hledání<textarea id="monitor-url" rows="3" placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea></label>
-                <label>Šablona notifikace<select id="monitor-template"></select></label>
-                <label>Interval kontroly (s)<input id="monitor-interval" type="number" min="20" placeholder="výchozí 60" /></label>
-                <label class="switch-field">
+                <textarea id="monitor-url" rows="3" hidden placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea>
+                                <label class="switch-field">
                   <span class="switch-copy">
                     <span class="switch-title">Stav</span>
                     <span class="switch-state"></span>
@@ -328,28 +332,49 @@
                 </div>
               </form>
               <article class="set-card" id="view-filters">
-                <h2 class="is-caps">Kritéria hledání</h2>
-                <p class="set-copy">Filtry zadáte jednou. Výchozí je hlídání napříč portály; tady můžete omezit jen na jeden.</p>
+                <h2>Kritéria hledání</h2>
+                <div class="filter-group locality-picker">
+                  <h3>Lokalita</h3>
+                  <div class="locality-search">
+                    <span data-icon="pin" aria-hidden="true"></span>
+                    <input id="f-locality-q" class="locality-input" placeholder="Začněte psát město nebo městskou část" autocomplete="off" />
+                    <div id="f-locality-suggest" class="commute-suggest locality-suggest" hidden></div>
+                  </div>
+                  <div id="f-locality-chips" class="chip-row"></div>
+                </div>
+                <div id="filter-groups"></div>
+                <div class="range-grid">
+                    <label>Cena od<input id="f-price-from" type="number" /></label>
+                    <label>Cena do<input id="f-price-to" type="number" /></label>
+                    <label>Plocha od<input id="f-area-from" type="number" /></label>
+                    <label>Plocha do<input id="f-area-to" type="number" /></label>
+                </div>
+                <div class="actions" style="margin-bottom: 20px">
+                  <button class="btn btn-ghost" id="filters-sample" type="button" data-icon="download">Načíst ukázkové filtry</button>
+                  <button class="btn btn-ghost" id="filters-clear" type="button" data-icon="x">Vyčistit</button>
+                </div>
+                <details class="more-filters" id="more-filters">
+                  <summary>Další filtry</summary>
                 <div class="filter-group">
                   <h3>Hlídané portály</h3>
                   <div class="chip-row" id="monitor-portals">
                     <button type="button" class="chip on" data-portals="all" data-icon="grid">Všechny</button>
-                    <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Jen Sreality</button>
-                    <button type="button" class="chip" data-portals="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Jen Reality.iDNES</button>
-                    <button type="button" class="chip" data-portals="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Jen Bazoš</button>
-                    <button type="button" class="chip" data-portals="ceskereality"><img class="chip-logo" src="/static/icons/ceskereality.svg" alt="" />Jen ČeskéReality</button>
-                    <button type="button" class="chip" data-portals="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Jen Bezrealitky</button>
-                    <button type="button" class="chip" data-portals="annonce"><img class="chip-logo" src="/static/icons/annonce.svg" alt="" />Jen Annonce</button>
-                    <button type="button" class="chip" data-portals="mmreality"><img class="chip-logo" src="/static/icons/mmreality.svg" alt="" />Jen M&amp;M Reality</button>
-                    <button type="button" class="chip" data-portals="ulovdomov"><img class="chip-logo" src="/static/icons/ulovdomov.svg" alt="" />Jen UlovDomov</button>
-                    <button type="button" class="chip" data-portals="remax"><img class="chip-logo" src="/static/icons/remax.svg" alt="" />Jen RE/MAX</button>
-                    <button type="button" class="chip" data-portals="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Jen Reality.cz</button>
+                    <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
+                    <button type="button" class="chip" data-portals="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Reality.iDNES</button>
+                    <button type="button" class="chip" data-portals="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
+                    <button type="button" class="chip" data-portals="ceskereality"><img class="chip-logo" src="/static/icons/ceskereality.svg" alt="" />ČeskéReality</button>
+                    <button type="button" class="chip" data-portals="bezrealitky"><img class="chip-logo" src="/static/icons/bezrealitky.svg" alt="" />Bezrealitky</button>
+                    <button type="button" class="chip" data-portals="annonce"><img class="chip-logo" src="/static/icons/annonce.svg" alt="" />Annonce</button>
+                    <button type="button" class="chip" data-portals="mmreality"><img class="chip-logo" src="/static/icons/mmreality.svg" alt="" />M&amp;M Reality</button>
+                    <button type="button" class="chip" data-portals="ulovdomov"><img class="chip-logo" src="/static/icons/ulovdomov.svg" alt="" />UlovDomov</button>
+                    <button type="button" class="chip" data-portals="remax"><img class="chip-logo" src="/static/icons/remax.svg" alt="" />RE/MAX</button>
+                    <button type="button" class="chip" data-portals="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Reality.cz</button>
                   </div>
                 </div>
+                <div id="nb-filters"></div>
+                <div hidden>
                 <div class="filter-group">
-                  <h3>Jazyk filtrů</h3>
-                  <p class="set-copy">Určuje podobu vygenerované URL, ne to, kde pes hlídá.</p>
-                  <div class="chip-row" id="filter-source">
+                                    <div class="chip-row" id="filter-source">
                     <button type="button" class="chip on" data-source="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
                     <button type="button" class="chip" data-source="idnes"><img class="chip-logo" src="/static/icons/idnes.svg" alt="" />Reality.iDNES</button>
                     <button type="button" class="chip" data-source="bazos"><img class="chip-logo" src="/static/icons/bazos.svg" alt="" />Bazoš</button>
@@ -362,29 +387,8 @@
                     <button type="button" class="chip" data-source="realitycz"><img class="chip-logo" src="/static/icons/realitycz.svg" alt="" />Reality.cz</button>
                   </div>
                 </div>
-                <div class="actions" style="margin-bottom: 20px">
-                  <button class="btn btn-ghost" id="filters-sample" type="button" data-icon="download">Načíst ukázkové filtry</button>
-                  <button class="btn btn-ghost" id="filters-clear" type="button" data-icon="x">Vyčistit</button>
-                </div>
-                <div class="filter-group locality-picker">
-                  <h3>Lokalita</h3>
-                  <div class="locality-search">
-                    <span data-icon="pin" aria-hidden="true"></span>
-                    <input id="f-locality-q" class="locality-input" placeholder="Začněte psát město nebo městskou část" autocomplete="off" />
-                    <div id="f-locality-suggest" class="commute-suggest locality-suggest" hidden></div>
-                  </div>
-                  <div id="f-locality-chips" class="chip-row"></div>
-                </div>
-                <div id="filter-groups"></div>
-                <div class="form-card">
-                  <p class="card-label">Vygenerované URL</p>
-                  <div class="url-stack" id="generated-urls"></div>
-                  <textarea id="generated-url" rows="4" readonly hidden></textarea>
+                  <div id="filter-groups-more"></div>
                   <div class="range-grid">
-                    <label>Cena od<input id="f-price-from" type="number" /></label>
-                    <label>Cena do<input id="f-price-to" type="number" /></label>
-                    <label>Plocha od<input id="f-area-from" type="number" /></label>
-                    <label>Plocha do<input id="f-area-to" type="number" /></label>
                     <label class="sreality-only">Patro od<input id="f-floor-from" type="number" /></label>
                     <label class="sreality-only">Patro do<input id="f-floor-to" type="number" /></label>
                     <label class="sreality-only">Vzdálenost k bodům zájmu (km)<input id="f-poi-km" type="number" /></label>
@@ -402,6 +406,7 @@
                     <label class="br-only" hidden>Předzahrádka od m²<input id="f-garden-from" type="number" /></label>
                     <label class="br-only" hidden>Předzahrádka do m²<input id="f-garden-to" type="number" /></label>
                   </div>
+
                   <div id="br-extra" class="br-only" hidden>
                     <div class="range-grid">
                       <label>Měna
@@ -426,14 +431,17 @@
                     </div>
                     <label>Vložit URL z Bezrealitky<textarea id="f-br-paste" rows="3" placeholder="https://www.bezrealitky.cz/vyhledat?..."></textarea></label>
                   </div>
-                  <div class="actions">
-                    <button class="btn" id="filters-to-monitor" type="button" data-icon="plus">Použít URL v profilu</button>
+                  <div class="actions" hidden>
+                    <button class="btn" id="filters-to-monitor" type="button" data-icon="check">Použít URL v profilu</button>
                   </div>
-                </div>
+                                </div>
+                </details>
+                  <textarea id="generated-url" rows="4" readonly hidden></textarea>
               </article>
-              <article class="set-card" id="view-message">
-                <h2 class="is-caps">Discord zpráva</h2>
-                <p class="set-copy">Náhled vypadá jako zpráva na Discordu. Do polí dáte text nebo {{proměnnou}} a šablonu přiřadíte profilu.</p>
+              <details class="set-card msg-drop" id="view-message">
+                <summary><h2>Discord zpráva</h2></summary>
+                <p class="set-copy">Do polí vložte text nebo {{proměnnou}} a šablonu přiřaďte profilu</p>
+                <label>Šablona notifikace<select id="monitor-template"></select></label>
                 <div class="message-layout">
                   <div>
                     <label>Šablona
@@ -468,24 +476,24 @@
                     <div id="discord-preview" class="discord"></div>
                   </div>
                 </div>
-              </article>
+              </details>
             </div>
           </section>
 
           <section class="set-panel" id="panel-notify" hidden>
             <header class="set-head">
-              <h1 class="is-caps">Nastavení notifikací</h1>
-              <p>Zvolte jak a kdy vás chceme upozorňovat na nové nabídky. Nastavení běží 24/7 na pozadí.</p>
+              <h1>Nastavení notifikací</h1>
+              <p>Kudy a kdy vás upozorníme na nové nabídky</p>
             </header>
             <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
             <article class="set-card">
-              <h2 class="is-caps">Kanály notifikací</h2>
+              <h2>Kanály notifikací</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Discord notifikace</p>
                   <p class="set-row-sub">Soukromý kanál jen pro vás. Všechny hlídací profily chodí na jeden webhook.</p>
                   <div id="discord-link-box" class="discord-link">
-                    <p id="discord-link-hint" class="set-row-sub">Načítám stav propojení…</p>
+                    <p id="discord-link-hint" class="set-row-sub">Kontrola propojení</p>
                     <div id="discord-link-setup" hidden>
                       <p class="set-row-sub">Na Realitify Discord serveru napište tento příkaz:</p>
                       <code id="discord-link-cmd">/link …</code>
@@ -530,21 +538,21 @@
               </div>
               <div class="set-row is-muted">
                 <div>
-                  <p class="set-row-title">SMS notifikace <span class="set-chip-pro">PRO</span></p>
+                  <p class="set-row-title">SMS notifikace <span class="set-chip-pro">Pro</span></p>
                   <p class="set-row-sub">Notifikace o nových nabídkách přes SMS</p>
                 </div>
-                <a class="set-link" href="/nastaveni/predplatne">Aktivovat v Pro</a>
+                <a class="set-link" href="/nastaveni/predplatne">Zapnout v Pro</a>
               </div>
               <div class="set-row is-muted">
                 <div>
-                  <p class="set-row-title">WhatsApp notifikace <span class="set-chip-soon">PŘIPRAVUJEME</span></p>
+                  <p class="set-row-title">WhatsApp notifikace <span class="set-chip-soon">Připravujeme</span></p>
                   <p class="set-row-sub">Zasílání nejnovějších bytů přes WhatsApp chat</p>
                 </div>
                 <span class="set-soon">Brzy k dispozici</span>
               </div>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Frekvence a časování</h2>
+              <h2>Frekvence a časování</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Okamžité notifikace</p>
@@ -589,7 +597,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Typy upozornění</h2>
+              <h2>Typy upozornění</h2>
               <label class="set-type"><input type="checkbox" id="nt-new" checked /><span class="switch-ui" aria-hidden="true"></span>Nová nabídka odpovídající aktivnímu hlídacímu profilu</label>
               <label class="set-type"><input type="checkbox" id="nt-price" checked /><span class="switch-ui" aria-hidden="true"></span>Změna ceny u sledované nabídky bytů</label>
               <label class="set-type"><input type="checkbox" id="nt-expire" checked /><span class="switch-ui" aria-hidden="true"></span>Nabídka brzy expiruje nebo se zdá neaktivní</label>
@@ -604,12 +612,12 @@
 
           <section class="set-panel" id="panel-billing" hidden>
             <header class="set-head">
-              <h1 class="is-caps">Předplatné a fakturace</h1>
-              <p>Spravujte svůj tarif a platební údaje.</p>
+              <h1>Předplatné a fakturace</h1>
+              <p>Tarif, platby a faktury</p>
             </header>
             <article class="set-card">
               <div class="set-card-top">
-                <h2 class="is-caps">Aktuální tarif</h2>
+                <h2>Aktuální tarif</h2>
                 <span class="set-pill-outline" id="billing-plan-pill">Aktivní plán: Zdarma</span>
               </div>
               <div class="set-plan">
@@ -618,7 +626,7 @@
                   <p class="set-row-sub" id="billing-next" hidden></p>
                 </div>
                 <div>
-                  <p class="set-row-title">Zahrnuto ve vašem plánu:</p>
+                  <p class="set-row-title">Zahrnuto v plánu</p>
                   <ul class="set-checks" id="billing-features"></ul>
                 </div>
               </div>
@@ -628,14 +636,14 @@
                   <input id="billing-promo" type="text" placeholder="např. TEST20" autocomplete="off" />
                   <button class="btn btn-ghost" type="button" id="billing-promo-apply">Použít</button>
                 </div>
-                <p class="bill-promo-hint">Platí jen na první objednávku. Při kódu se neuplatní 3denní zkušební doba — sleva jde na první platbu.</p>
+                <p class="bill-promo-hint">Platí na první objednávku. Se slevovým kódem odpadá 3denní zkušební doba</p>
                 <p class="bill-promo-status" id="billing-promo-status" hidden></p>
               </div>
               <div class="bill-tiers">
                 <article class="bill-tier" data-plan="free">
                   <p class="bill-tier-name">Zdarma</p>
                   <p class="bill-tier-price">0 Kč<span>/měsíc</span></p>
-                  <p class="bill-tier-desc">1 hlídací pes na 4 hlavních portálech, bez zkušební doby.</p>
+                  <p class="bill-tier-desc">1 hlídací pes na 4 hlavních portálech</p>
                   <div class="bill-hr"><img src="/static/site/assets/line-gray.svg" width="280" height="2" alt="" /></div>
                   <div class="bill-feats">
                     <p>1 hlídací pes</p>
@@ -647,10 +655,10 @@
                   <button class="bill-cta bill-cta-outline" type="button" data-billing="free"><span>Přepnout na Zdarma</span></button>
                 </article>
                 <article class="bill-tier bill-tier-pro" data-plan="pro">
-                  <span class="bill-pop">PRO NÁROČNÉ</span>
-                  <p class="bill-tier-name">PRO</p>
+                  <span class="bill-pop">Pro náročné</span>
+                  <p class="bill-tier-name">Pro</p>
                   <p class="bill-tier-price" data-price="349">349 Kč<span>/měsíc</span></p>
-                  <p class="bill-tier-desc">Neomezené hlídání, AI filtry a MCP. 3 dny zdarma.</p>
+                  <p class="bill-tier-desc">Neomezené hlídání, AI filtry a MCP, 3 dny zdarma</p>
                   <div class="bill-hr"><img src="/static/site/assets/line-dark.svg" width="280" height="2" alt="" /></div>
                   <div class="bill-feats">
                     <p>Neomezeně hlídacích psů</p>
@@ -659,13 +667,13 @@
                     <p>AI filtry a MCP (ChatGPT, Claude, Grok)</p>
                     <p>Telefon + chat, Excel/CSV neomezeně</p>
                   </div>
-                  <button class="bill-cta bill-cta-fill" type="button" data-billing="pro"><span>Objednat PRO</span></button>
+                  <button class="bill-cta bill-cta-fill" type="button" data-billing="pro"><span>Objednat Pro</span></button>
                 </article>
                 <article class="bill-tier" data-plan="start">
-                  <span class="bill-pop">NEJLEPŠÍ POMĚR</span>
+                  <span class="bill-pop">Nejlepší poměr</span>
                   <p class="bill-tier-name">Start</p>
                   <p class="bill-tier-price" data-price="149">149 Kč<span>/měsíc</span></p>
-                  <p class="bill-tier-desc">10 psů na 12+ portálech. 3 dny zdarma.</p>
+                  <p class="bill-tier-desc">10 psů na 12+ portálech, 3 dny zdarma</p>
                   <div class="bill-hr"><img src="/static/site/assets/line-light.svg" width="280" height="2" alt="" /></div>
                   <div class="bill-feats">
                     <p>10 hlídacích psů</p>
@@ -691,9 +699,9 @@
               </div>
             </div>
             <article class="set-card" id="billing-payment-card" hidden>
-              <h2 class="is-caps">Platební metoda</h2>
+              <h2>Platební metoda</h2>
               <div class="set-card-row">
-                <div class="set-visa"><span id="billing-card-brand">KARTA</span><div><strong id="billing-card-label">Žádná karta</strong><p id="billing-card-exp"></p></div></div>
+                <div class="set-visa"><span id="billing-card-brand">Karta</span><div><strong id="billing-card-label">Žádná karta</strong><p id="billing-card-exp"></p></div></div>
                 <span class="set-chip-on">Výchozí</span>
               </div>
               <div class="set-actions">
@@ -701,18 +709,18 @@
               </div>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Historie faktur</h2>
+              <h2>Historie faktur</h2>
               <table class="set-table">
                 <thead><tr><th>Datum</th><th>Částka</th><th>Tarif</th><th>Stav</th><th>Faktura</th></tr></thead>
                 <tbody id="billing-invoices">
-                  <tr><td colspan="5" class="set-muted">Zatím žádné faktury. Tarif Zdarma se neúčtuje.</td></tr>
+                  <tr><td colspan="5" class="set-muted">Zatím žádné faktury, tarif Zdarma se neúčtuje</td></tr>
                 </tbody>
               </table>
             </article>
             <article class="set-card set-danger" id="billing-cancel-card" hidden>
-              <h2 class="is-caps">Zrušení předplatného</h2>
+              <h2>Zrušení předplatného</h2>
               <div class="set-danger-row">
-                <p>Po zrušení se účet vrátí na tarif Zdarma. Databáze bytů zůstane dostupná.</p>
+                <p>Po zrušení se účet vrátí na tarif Zdarma, databáze bytů zůstane dostupná</p>
                 <button class="btn btn-danger-outline" id="billing-cancel" type="button">Zrušit předplatné</button>
               </div>
             </article>
@@ -720,27 +728,27 @@
 
           <section class="set-panel" id="panel-agents" hidden>
             <header class="set-head">
-              <h1 class="is-caps">AI agenti a MCP</h1>
-              <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů. Vyžaduje tarif PRO.</p>
+              <h1>AI agenti a MCP</h1>
+              <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů, vyžaduje tarif Pro</p>
             </header>
             <div id="agents-locked" class="set-limit" hidden>
               <div class="set-list-wrap">
-              <p><span class="set-chip-pro">PRO</span> MCP a AI konektory jsou v tarifu PRO a v individuálním tarifu.</p>
+              <p><span class="set-chip-pro">Pro</span> MCP a AI konektory jsou v tarifu Pro a v individuálním tarifu</p>
               <ul class="set-list">
                 <li>API klíče pro Cursor, Claude Desktop, ChatGPT a Grok</li>
                 <li>MCP endpoint s vaším katalogem inzerátů</li>
                 <li>Ptejte se AI na nabídky ve vašem hlídaném katalogu</li>
               </ul>
               </div>
-              <a class="btn" href="/nastaveni/predplatne">Upgradovat na PRO</a>
+              <a class="btn" href="/nastaveni/predplatne">Přejít na Pro</a>
             </div>
             <div id="agents-live">
             <article class="set-card">
               <div class="set-card-top">
-                <h2 class="is-caps">API klíče</h2>
-                <span class="set-pill-outline" id="agents-plan-pill">PRO</span>
+                <h2>API klíče</h2>
+                <span class="set-pill-outline" id="agents-plan-pill">Pro</span>
               </div>
-              <p class="set-copy">Klíč se ukáže jen jednou. Vložte ho do Cursor, Claude Desktop, ChatGPT Custom GPT nebo Grok jako Bearer token.</p>
+              <p class="set-copy">Klíč se zobrazí jen jednou. Vložte ho do Cursoru, Claude Desktopu, ChatGPT nebo Groku jako Bearer token</p>
               <div class="agent-create">
                 <label>Název klíče<input id="agent-key-name" placeholder="např. Cursor, Claude, ChatGPT" /></label>
                 <button class="btn" id="agent-key-create" type="button">Vygenerovat klíč</button>
@@ -753,8 +761,8 @@
               <div id="agent-key-list" class="agent-keys"></div>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Připojení</h2>
-              <p class="set-copy" id="agents-url-copy">MCP endpoint a OpenAPI se doplní po načtení.</p>
+              <h2>Připojení</h2>
+              <p class="set-copy" id="agents-url-copy">MCP endpoint a OpenAPI se doplní po načtení</p>
               <div class="agent-snips">
                 <div>
                   <div class="agent-snip-head"><p class="set-row-title">Cursor</p><button class="btn btn-ghost" type="button" data-copy-snip="cursor">Kopírovat</button></div>
@@ -784,23 +792,25 @@
 
           <section class="set-panel" id="panel-security" hidden>
             <header class="set-head">
-              <h1 class="is-caps">Bezpečnost účtu</h1>
-              <p>Chraňte svůj účet pomocí silného hesla a dvoufaktorového ověření.</p>
+              <h1>Bezpečnost účtu</h1>
+              <p>Silné heslo a dvoufaktorové ověření</p>
             </header>
             <article class="set-card">
-              <h2 class="is-caps">Změna hesla</h2>
-              <div class="set-grid-2">
-                <label>Současné heslo<input id="pw-current" type="password" autocomplete="current-password" /></label>
-                <div>
-                  <label>Nové heslo<input id="pw-new" type="password" autocomplete="new-password" /></label>
-                  <div class="pw-meter" id="pw-meter" data-score="0">
-                    <span></span><span></span><span></span><span></span>
-                    <em id="pw-meter-label"></em>
+              <h2>Změna hesla</h2>
+              <div class="pw-layout">
+                <div class="pw-fields">
+                  <label>Současné heslo<input id="pw-current" type="password" autocomplete="current-password" /></label>
+                  <div>
+                    <label>Nové heslo<input id="pw-new" type="password" autocomplete="new-password" /></label>
+                    <div class="pw-meter" id="pw-meter" data-score="0">
+                      <span></span><span></span><span></span><span></span>
+                      <em id="pw-meter-label"></em>
+                    </div>
                   </div>
+                  <label>Potvrzení nového hesla<input id="pw-confirm" type="password" autocomplete="new-password" /></label>
                 </div>
-                <label>Potvrzení nového hesla<input id="pw-confirm" type="password" autocomplete="new-password" /></label>
-                <div>
-                  <p class="set-row-title">Požadavky na heslo:</p>
+                <div class="pw-rules">
+                  <p class="set-row-title">Heslo musí mít</p>
                   <ul class="pw-reqs" id="pw-reqs">
                     <li data-rule="len">Alespoň 8 znaků</li>
                     <li data-rule="upper">Alespoň 1 velké písmeno</li>
@@ -815,16 +825,16 @@
             </article>
             <article class="set-card">
               <div class="set-card-top">
-                <h2 class="is-caps">Dvoufaktorové ověření (2FA)</h2>
+                <h2>Dvoufaktorové ověření (2FA)</h2>
                 <span class="set-pill-warn">Neaktivní</span>
               </div>
-              <p class="set-copy">Přidejte další vrstvu zabezpečení svého účtu. Po přihlášení budete muset zadat bezpečnostní kód z vaší mobilní autentifikační aplikace.</p>
-              <p class="set-kicker">PODPOROVANÉ APLIKACE:</p>
+              <p class="set-copy">Po přihlášení zadáte kód z autentifikační aplikace v mobilu</p>
+              <p class="set-kicker">Podporované aplikace</p>
               <p class="set-copy">Google Authenticator, Authy, Microsoft Authenticator a další kompatibilní aplikace.</p>
               <button class="btn" id="sec-2fa" type="button">Aktivovat 2FA</button>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Aktivní relace</h2>
+              <h2>Aktivní relace</h2>
               <div class="set-session is-now">
                 <img src="/static/assets/settings/icon-device-desktop.svg" alt="" />
                 <div>
@@ -835,7 +845,7 @@
               <button class="btn btn-ghost" id="sec-logout-all" type="button">Odhlásit všechna ostatní zařízení</button>
             </article>
             <article class="set-card">
-              <h2 class="is-caps">Ochrana účtu</h2>
+              <h2>Ochrana účtu</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Upozornění na přihlášení z nového zařízení</p>
@@ -1057,6 +1067,6 @@
     <script src="/static/app.js?v=__ASSET_VERSION__"></script>
     <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>
     <script src="/static/mobile-app.js?v=__ASSET_VERSION__"></script>
-    <script src="/static/t.js?v=7"></script>
+    <script src="/static/t.js?v=9"></script>
   </body>
 </html>

@@ -14,6 +14,16 @@ OFFERS = [
 
 CATEGORIES = [("byty", "Byty")]
 
+# Stejný výběr jako na /nabidka (filtr "estate" v katalogu).
+ESTATE_TYPES = [
+    ("byt", "Byt"),
+    ("dum", "Dům"),
+    ("pozemek", "Pozemek"),
+    ("projekt", "Projekt"),
+    ("komercni", "Komerční"),
+    ("ostatni", "Ostatní"),
+]
+
 SIZES = [
     ("1+1", "1+1"),
     ("1+kk", "1+kk"),
@@ -101,10 +111,15 @@ SORTS = [
 ]
 
 
+_NB_LISTS = ("ownership", "condition", "building", "equipped", "amenities", "disp")
+_NB_TRI = ("roommate", "pets", "short_term")
+
+
 def catalog() -> dict:
     return {
         "offers": OFFERS,
         "categories": CATEGORIES,
+        "estate_types": ESTATE_TYPES,
         "sizes": SIZES,
         "districts": DISTRICTS,
         "ownership": OWNERSHIP,
@@ -119,9 +134,11 @@ def catalog() -> dict:
 
 def default_filters() -> dict:
     return {
+        **{f"nb_{key}": ([] if key in _NB_LISTS else "") for key in _NB_LISTS + _NB_TRI},
         "source": "sreality",
         "offers": ["pronajem"],
         "category": "byty",
+        "estate": [],
         "sizes": ["2+kk", "2+1", "3+kk", "3+1", "4+kk", "4+1", "5+kk", "5+1"],
         "districts": ["praha"],
         "ownership": [],
@@ -194,6 +211,16 @@ def build_url(filters: dict) -> str:
     ownership = _selected(filters.get("ownership"), [k for k, _ in OWNERSHIP])
     if ownership:
         query.append(("vlastnictvi", ",".join(ownership)))
+    estate = _selected(filters.get("estate"), [k for k, _ in ESTATE_TYPES])
+    if estate:
+        query.append(("estate", ",".join(estate)))
+    for key in _NB_LISTS:
+        values = [str(v) for v in (filters.get(f"nb_{key}") or []) if str(v) and "," not in str(v)]
+        if values:
+            query.append((f"nb_{key}", ",".join(values)))
+    for key in _NB_TRI:
+        if filters.get(f"nb_{key}") in ("s", "bez"):
+            query.append((f"nb_{key}", filters[f"nb_{key}"]))
     sort = filters.get("sort") or "nejlevnejsi"
     query.append(("razeni", sort))
     _add_num(query, "cena-od", filters.get("price_from"))
@@ -228,6 +255,12 @@ def parse_url(url: str) -> dict:
     filters["extras"] = _split_csv(query.get("navic", [""])[0])
     filters["buildings"] = _split_csv(query.get("stavba", [""])[0])
     filters["ownership"] = _split_csv(query.get("vlastnictvi", [""])[0])
+    for key in _NB_LISTS:
+        filters[f"nb_{key}"] = _split_csv(query.get(f"nb_{key}", [""])[0])
+    for key in _NB_TRI:
+        value = query.get(f"nb_{key}", [""])[0]
+        filters[f"nb_{key}"] = value if value in ("s", "bez") else ""
+    filters["estate"] = _selected(_split_csv(query.get("estate", [""])[0]), [k for k, _ in ESTATE_TYPES])
     filters["energy"] = _split_pipe(query.get("energy_efficiency_rating_search", [""])[0])
     filters["pois"] = _split_pipe(query.get("pois_in_place", [""])[0])
     filters["sort"] = query.get("razeni", ["nejlevnejsi"])[0]

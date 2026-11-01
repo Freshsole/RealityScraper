@@ -265,6 +265,33 @@
     history.replaceState(null, "", query ? `/nabidka?${query}` : "/nabidka");
   }
 
+  // Odkaz z homepage / hero hledání nese jen název místa (?q=Brno). Změníme ho na skutečný filtr
+  // lokality, aby seznam i mapa ukazovaly právě to místo (a ne výchozí Prahu).
+  let pendingQueryPlace = "";
+  async function resolveQueryPlace() {
+    const q = pendingQueryPlace;
+    pendingQueryPlace = "";
+    if (q.length < 2 || selectedPlaces.length) return;
+    try {
+      const response = await fetch(`/api/places/search?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(6000) });
+      const data = await response.json();
+      const hit = (data.items || []).find((row) => row.id && row.kind !== "street");
+      if (!hit) return;
+      const place = { id: hit.id, label: hit.label || hit.id, kind: "area", lat: hit.lat, lon: hit.lon, buffer_m: 0 };
+      if (Array.isArray(hit.extent) && hit.extent.length >= 4) place.extent = hit.extent;
+      if (hit.geojson && hit.geojson.type !== "Point") place.geojson = hit.geojson;
+      selectedPlaces.push(place);
+      const slug = slugForPlace(hit.id);
+      if (slug) selected.districts.add(slug);
+      if ($("cat-q")) $("cat-q").value = "";
+      needPlaceFit = true;
+      renderPlaceChips();
+      syncFilterUi();
+    } catch {
+      /* zůstane textové hledání */
+    }
+  }
+
   function readUrlState(params) {
     if (!(params instanceof URLSearchParams)) params = new URLSearchParams(location.search);
     selected.portal = params.get("portal") || "";
@@ -288,6 +315,8 @@
     selected.pets = params.get("pets") || "";
     selected.short_term = params.get("short_term") || "";
     if ($("cat-q")) $("cat-q").value = params.get("q") || "";
+    pendingQueryPlace =
+      !params.get("places") && !params.get("district") && !params.get("lat") ? (params.get("q") || "").trim() : "";
     if ($("cat-price-from")) $("cat-price-from").value = params.get("price_from") || "";
     if ($("cat-price-to")) $("cat-price-to").value = params.get("price_to") || "";
     if ($("cat-area-from")) $("cat-area-from").value = params.get("area_from") || "";
@@ -869,10 +898,116 @@
     })[flag] || flag;
   }
 
+  const PRO_FEATURES = [
+    "Neomezeně hlídacích psů",
+    "Všechny agregované portály (9), notifikace do 30 s",
+    "Email + Push + Discord (10 SMS/měs)",
+    "AI filtry a MCP (ChatGPT, Claude, Grok)",
+    "Telefon + chat, Excel/CSV neomezeně",
+  ];
+
+  function proPlan() {
+    let billing = null;
+    try {
+      billing = typeof statusCache !== "undefined" ? statusCache?.billing : null;
+    } catch {
+      billing = null;
+    }
+    const plan = billing?.plan || "free";
+    const pro = (billing?.plans || []).find((item) => item.id === "pro");
+    return {
+      owned: plan === "pro" || plan === "individual",
+      guest: document.body.classList.contains("guest") || !billing,
+      price: pro?.price_czk || 349,
+      features: pro?.features?.length ? pro.features : PRO_FEATURES,
+    };
+  }
+
+  function upsellHtml() {
+    const pro = proPlan();
+    if (pro.owned) return "";
+    const href = pro.guest ? "/registrace" : "/nastaveni/predplatne";
+    const cta = pro.guest ? "Vyzkoušet PRO zdarma" : "Upgradovat na PRO";
+    return `
+      <article class="upsell-card" data-upsell="pro">
+        <div class="upsell-main">
+          <p class="upsell-kicker">Realitify PRO</p>
+          <h3>Upgrade na PRO a nepřijdete o žádný byt</h3>
+          <ul class="upsell-list">${pro.features.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
+        </div>
+        <div class="upsell-side">
+          <p class="upsell-price"><strong>${formatKc(pro.price)}</strong> <span>/ měsíc</span></p>
+          <p class="upsell-note">3 dny zdarma, zrušíte kdykoli</p>
+          <a class="upsell-cta" href="${href}" target="_top">${cta}</a>
+        </div>
+      </article>
+    `;
+  }
+
+  // Na mapě se jednou za den (při prvním doscrollování na 20. nabídku) ukáže nabídka Start / PRO.
+  const MAP_PROMO_AT = 20;
+  const MAP_PROMO_KEY = "rf-map-promo-day";
+  let mapPromoObserver = null;
+
+  function mapPromoSeenToday() {
+    try {
+      return localStorage.getItem(MAP_PROMO_KEY) === new Date().toLocaleDateString("sv-SE");
+    } catch {
+      return false;
+    }
+  }
+
+  function showMapPromo() {
+    const wrap = document.querySelector(".catalog-map-wrap");
+    if (!wrap || wrap.querySelector(".map-promo")) return;
+    const pro = proPlan();
+    const href = pro.guest ? "/registrace" : "/nastaveni/predplatne";
+    const box = document.createElement("div");
+    box.className = "map-promo";
+    box.innerHTML = `
+      <div class="map-promo-card" role="dialog" aria-label="Start a PRO">
+        <button type="button" class="map-promo-close" aria-label="Zavřít">×</button>
+        <p class="upsell-kicker">Start / PRO</p>
+        <h3>Nechcete ručně procházet nabídky?</h3>
+        <p>Se Startem nebo PRO vám žádná nabídka neuteče. Hlídací pes vám nové byty pošle sám, dřív než ostatním.</p>
+        <a class="upsell-cta" href="${href}" target="_top">${pro.guest ? "Vyzkoušet zdarma" : "Zobrazit tarify"}</a>
+      </div>
+    `;
+    box.addEventListener("click", (event) => {
+      if (event.target === box || event.target.closest(".map-promo-close")) box.remove();
+    });
+    wrap.appendChild(box);
+  }
+
+  function armMapPromo() {
+    if (mapPromoObserver) mapPromoObserver.disconnect();
+    mapPromoObserver = null;
+    if (mapPromoSeenToday() || proPlan().owned || !("IntersectionObserver" in window)) return;
+    const target = listEl.querySelectorAll(".offer-card")[MAP_PROMO_AT - 1];
+    if (!target) return;
+    mapPromoObserver = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting) || mapPromoSeenToday()) return;
+      try {
+        localStorage.setItem(MAP_PROMO_KEY, new Date().toLocaleDateString("sv-SE"));
+      } catch {}
+      mapPromoObserver.disconnect();
+      mapPromoObserver = null;
+      showMapPromo();
+    });
+    mapPromoObserver.observe(target);
+  }
+
   function renderList(items, append) {
-    const html = items.map(cardHtml).join("");
+    const cards = items.map(cardHtml);
+    // Třetí slot v nabídce patří upgradu na PRO (jen na první stránce výsledků).
+    if (!append && cards.length) {
+      const promo = upsellHtml();
+      if (promo) cards.splice(Math.min(2, cards.length), 0, promo);
+    }
+    const html = cards.join("");
     if (append) listEl.insertAdjacentHTML("beforeend", html);
     else listEl.innerHTML = html;
+    armMapPromo();
   }
 
   function galleryPhotos(gallery) {
@@ -2602,7 +2737,7 @@
       lastCatalogQuery = query;
       if (query) readUrlState();
       else restoreSavedFilterState();
-      loadCatalog();
+      resolveQueryPlace().finally(() => loadCatalog());
     } else if (catalogMap) {
       setTimeout(() => catalogMap.invalidateSize(), 80);
     }
@@ -2678,7 +2813,7 @@
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {
     loaded = true;
     ensureMap();
-    settingsReady.finally(() => {
+    settingsReady.finally(() => resolveQueryPlace()).finally(() => {
       if (location.pathname.replace(/\/$/, "") === "/nabidka") loadCatalog();
     });
     // Deep-link from Chrome extension CTA

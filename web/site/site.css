@@ -300,3 +300,14 @@ a.mock-card:hover{transform:translateY(-3px)}
 .hs-tag b{font-size:10px}.hs-tag em{font-size:12.5px;margin-top:1px}
 .hs-pin,.hs-pin-dark{width:26px;height:26px;margin:0;border-radius:9px;background-size:15px}
 }
+
+/* Footer: logo značky a klidné ikony sítí */
+.footer-mark{gap:10px;font-weight:800;text-decoration:none}
+.footer-col h3{font-weight:600}
+.footer-col a,.footer-bot p{line-height:1.5}
+.footer-col a,.soc-i{transition:color .15s cubic-bezier(.2,0,0,1),border-color .15s cubic-bezier(.2,0,0,1)}
+.footer-col a:focus-visible,.footer-mark:focus-visible{outline:2px solid var(--green);outline-offset:4px;border-radius:4px}
+.soc{gap:8px}
+.soc-i{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;border:1px solid rgba(255,255,255,.16);color:#c5cdc7}
+.soc-i:hover{color:#fff;border-color:rgba(255,255,255,.4)}
+.footer-bot{border-top-color:rgba(255,255,255,.1)}

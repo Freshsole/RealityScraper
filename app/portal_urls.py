@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from app import portal_filters as pf
 from app.url_builder import SIZES as SR_SIZES
 
 OFFERS = [
@@ -65,6 +67,13 @@ def _join(url: str, query: dict[str, str]) -> str:
     existing = dict(parse_qsl(split.query, keep_blank_values=True))
     existing.update({key: value for key, value in query.items() if value not in (None, "")})
     return urlunsplit((split.scheme or "https", split.netloc, split.path, urlencode(existing, doseq=True), ""))
+
+
+def _merge(base: dict, parsed: dict) -> dict:
+    for key, value in parsed.items():
+        if value not in (None, [], ""):
+            base[key] = value
+    return base
 
 
 def _parse_common(url: str, source: str) -> dict:
@@ -205,10 +214,12 @@ class MmrealityUrls:
         slug = "pronajem" if offer == "pronajem" else "prodej"
         # Path-based since the 2026 redesign; query params are ignored by the site.
         # "/byty/" matters: without it the list also holds houses, garages, land, offices.
-        return f"{self.site}/nemovitosti/{slug}/byty/"
+        return pf.build_mm(self.site, filters)
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
+        if "query=" in (url or "") or re.search(r"/byty/(praha-\d+|hlavni-mesto-praha)/", url or ""):
+            return _merge(filters, pf.parse_mm(url))
         path = (urlsplit(url or "").path or "").casefold()
         if "/pronajem" in path:
             filters["offers"] = ["pronajem"]
@@ -240,10 +251,10 @@ class UlovdomovUrls:
 
     def build_url(self, filters: dict) -> str:
         offer = _offer(filters)
-        return f"{self.site}/{offer}/byty"
+        return pf.build_ulovdomov(self.site, filters) or f"{self.site}/{offer}/byty"
 
     def parse_url(self, url: str) -> dict:
-        return _parse_common(url, self.source)
+        return _merge(_parse_common(url, self.source), pf.parse_ulovdomov(url))
 
 
 class RemaxUrls:
@@ -264,7 +275,7 @@ class RemaxUrls:
         # Canonical path (the old ``?sale=&order_by_price=0`` form redirects and
         # order_by_price=0 means "most expensive first", not newest). Default
         # order is newest; ``?stranka=N`` pages, 21 cards/page.
-        return f"{self.site}/reality/byty/{'pronajem' if offer == 'pronajem' else 'prodej'}/"
+        return pf.build_remax(self.site, filters) or f"{self.site}/reality/byty/{'pronajem' if offer == 'pronajem' else 'prodej'}/"
 
     def parse_url(self, url: str) -> dict:
         filters = default_filters(self.source)
@@ -273,7 +284,7 @@ class RemaxUrls:
             filters["offers"] = ["prodej"]
         else:
             filters["offers"] = ["pronajem"]
-        return filters
+        return _merge(filters, pf.parse_remax(url))
 
 
 class RealityczUrls:
@@ -306,10 +317,10 @@ class RealityczUrls:
                 # reality.cz uses obvod-Praha-N / okres-... slugs; map plain
                 # "praha" to the whole-city listing, keep explicit slugs.
                 locality = slug if slug != "praha" else "hlavni-mesto-Praha"
-        return f"{self.site}/{offer}/byty/{locality}/"
+        return pf.build_realitycz(self.site, filters, locality)
 
     def parse_url(self, url: str) -> dict:
-        return _parse_common(url, self.source)
+        return _merge(_parse_common(url, self.source), pf.parse_realitycz(url))
 
 
 #: reality.cz kraj slugs (14 regions); sum of region counts = complete market.
@@ -350,13 +361,13 @@ class EurobydleniUrls:
         offer = _offer(filters)
         path = "pronajem" if offer == "pronajem" else "prodej"
         # Nationwide list (all of CZ, newest first by sort_date, 12/page, /page-N/).
-        return f"{self.site}/byty/{path}/"
+        return pf.build_eurobydleni(self.site, filters) or f"{self.site}/byty/{path}/"
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
         filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
-        return filters
+        return _merge(filters, pf.parse_eurobydleni(url))
 
 
 class RealitymixUrls:
@@ -376,13 +387,13 @@ class RealitymixUrls:
         offer = _offer(filters)
         path = "pronajem" if offer == "pronajem" else "prodej"
         # Nationwide list, default order "Nejnovější", 20/page, ?stranka=N.
-        return f"{self.site}/reality/byty/{path}"
+        return pf.build_realitymix(self.site, filters) or f"{self.site}/reality/byty/{path}"
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
         filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
-        return filters
+        return _merge(filters, pf.parse_realitymix(url))
 
 
 class RealingoUrls:
@@ -402,13 +413,13 @@ class RealingoUrls:
         offer = _offer(filters)
         # "_byty" (not "_reality" = every property type, 39k rent / 100k sale incl. houses, land, commercial).
         path = "pronajem_byty" if offer == "pronajem" else "prodej_byty"
-        return f"{self.site}/{path}/cr/"
+        return pf.build_realingo(self.site, filters)
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         raw = (url or "").lower()
         filters["offers"] = ["prodej"] if "prodej" in raw else ["pronajem"]
-        return filters
+        return _merge(filters, pf.parse_realingo(url))
 
 
 class EspolubydleniUrls:
@@ -425,12 +436,12 @@ class EspolubydleniUrls:
         return sample_filters(self.source)
 
     def build_url(self, filters: dict) -> str:
-        return f"{self.site}/podnajem-spolubydlici/"
+        return pf.build_espolubydleni(self.site, filters)
 
     def parse_url(self, url: str) -> dict:
         filters = _parse_common(url, self.source)
         filters["offers"] = ["pronajem"]
-        return filters
+        return _merge(filters, pf.parse_espolubydleni(url))
 
 
 MODULES = {

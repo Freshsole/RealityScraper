@@ -36,6 +36,7 @@ _FACT_FEATURES = _plan_features_from_facts()
 PLANS: dict[str, dict[str, Any]] = {
     "free": {
         "id": "free",
+        "check_interval_sec": 300,
         "label": "Zdarma",
         "price_czk": 0,
         "watch_limit": 1,
@@ -52,6 +53,7 @@ PLANS: dict[str, dict[str, Any]] = {
     },
     "start": {
         "id": "start",
+        "check_interval_sec": 60,
         "label": "Start",
         "price_czk": 149,
         "watch_limit": 10,
@@ -71,6 +73,7 @@ PLANS: dict[str, dict[str, Any]] = {
     },
     "pro": {
         "id": "pro",
+        "check_interval_sec": 30,
         "label": "PRO",
         "price_czk": 349,
         "watch_limit": None,
@@ -90,6 +93,7 @@ PLANS: dict[str, dict[str, Any]] = {
     },
     "individual": {
         "id": "individual",
+        "check_interval_sec": 30,
         "label": "INDIVIDUAL",
         "price_czk": None,
         "watch_limit": None,
@@ -230,6 +234,7 @@ def billing_state(store: Store) -> dict[str, Any]:
         data["mcp"] = PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"]
     data["pending_promo_code"] = str(data.get("pending_promo_code") or "").strip().upper()
     data["first_order"] = plan == "free" and not data.get("subscription_id")
+    data["check_interval_sec"] = PLANS[plan]["check_interval_sec"]
     return data
 
 

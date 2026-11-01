@@ -419,11 +419,11 @@ async function loadAgents() {
   const enabled = Boolean(data.enabled);
   if ($("agents-locked")) $("agents-locked").hidden = enabled;
   if ($("agents-live")) $("agents-live").hidden = !enabled;
-  if ($("agents-plan-pill")) $("agents-plan-pill").textContent = (data.plan || "").toUpperCase() || "PRO";
+  if ($("agents-plan-pill")) $("agents-plan-pill").textContent = ((data.plan || "pro").charAt(0).toUpperCase() + (data.plan || "pro").slice(1));
   if ($("agents-url-copy")) {
     $("agents-url-copy").textContent = enabled
       ? `MCP: ${data.mcp_url || ""} · OpenAPI: ${data.openapi_url || ""}`
-      : "Po aktivaci PRO uvidíte MCP URL, OpenAPI a ukázky pro Cursor, Claude, ChatGPT a Grok.";
+      : "Po aktivaci Pro uvidíte MCP URL, OpenAPI a ukázky pro Cursor, Claude, ChatGPT a Grok.";
   }
   if ($("agents-claude-hint")) {
     $("agents-claude-hint").textContent = data.https
@@ -742,25 +742,6 @@ function portalTitle(portal) {
   return portal === "bezrealitky" ? "Bezrealitky" : "Sreality";
 }
 
-function renderPortalUrlStack(host, targets, primary) {
-  if (!host) return;
-  const rows = (targets || [])
-    .map((item) => ({ portal: item.portal, url: item.search_url || item.url || "" }))
-    .filter((item) => item.url);
-  if (!rows.length && primary) {
-    rows.push({
-      portal: sourceFromUrl(primary),
-      url: primary,
-    });
-  }
-  host.innerHTML = rows
-    .map(
-      (item) =>
-        `<label>${escapeHtml(portalTitle(item.portal))}<textarea rows="3" readonly>${escapeHtml(item.url)}</textarea></label>`,
-    )
-    .join("");
-}
-
 function portalsSummary(value) {
   const portals = normalizeMonitorPortals(value);
   if (portals === "all") return "Všechny (10 portálů)";
@@ -803,9 +784,7 @@ function monitorEditorHtml(item, draft) {
   return `
     <form class="form-card" data-monitor-edit="${escapeHtml(item.id)}">
       <label>Název<input name="name" value="${escapeHtml(data.name)}" /></label>
-      <label>URL hledání</label>
-      <div class="url-stack">${(item.search_targets || []).map((row) => `<label>${escapeHtml(portalTitle(row.portal))}<textarea rows="3" readonly name="search_url_${escapeHtml(row.portal)}">${escapeHtml(row.search_url || "")}</textarea></label>`).join("")}</div>
-      <label>Hlavní URL hledání<textarea name="search_url" rows="3">${escapeHtml(data.search_url)}</textarea></label>
+      <input type="hidden" name="search_url" value="${escapeHtml(data.search_url)}" />
       <input type="hidden" name="portals" value="${escapeHtml(data.portals)}" />
       <div class="filter-group">
         <h3>Hlídané portály</h3>
@@ -1049,7 +1028,8 @@ async function applyUrlToFilters(url) {
 }
 
 async function openWatchEditor(item) {
-  showWatchEditor(item?.name ? item.name.toUpperCase() : "NOVÝ HLÍDACÍ PROFIL");
+  loadNbFacets();
+  showWatchEditor(item?.name ? item.name : "Nový hlídací profil");
   fillMonitorForm(item || null);
   const tplId = item?.template_id || "default";
   const tpl = (statusCache.templates || []).find((row) => row.id === tplId);
@@ -1080,11 +1060,11 @@ function watchLimitCopy(count) {
   const enabled = (statusCache.monitors || []).filter((item) => item.enabled).length;
   const paused = Math.max(0, count - enabled);
   if (billing.watch_limit == null) {
-    return `Využíváte ${enabled} aktivních hlídacích profilů v tarifu ${billing.label} (neomezeně).`;
+    return `Využíváte ${enabled} aktivních hlídacích profilů v tarifu ${billing.label} (neomezeně)`;
   }
-  let text = `Využíváte ${enabled} z ${billing.watch_limit} aktivních hlídacích profilů v tarifu ${billing.label}.`;
-  if (paused === 1) text += ` 1 profil je pozastavený — zapnete ho upgradem tarifu.`;
-  else if (paused) text += ` ${paused} ${pluralProfil(paused)} je pozastaveno — zapnete je upgradem tarifu.`;
+  let text = `Využíváte ${enabled} z ${billing.watch_limit} aktivních hlídacích profilů v tarifu ${billing.label}`;
+  if (paused === 1) text += `, 1 je pozastavený`;
+  else if (paused) text += `, ${paused} ${pluralProfil(paused)} je pozastaveno`;
   return text;
 }
 
@@ -1265,8 +1245,8 @@ function renderBilling(billing) {
     const mine = ranks[plan] ?? 0;
     let label = "Objednat";
     if (id === "free") label = "Přepnout na Zdarma";
-    else if (rank > mine) label = id === "pro" ? "Objednat PRO" : "Objednat Start";
-    else label = id === "pro" ? "Přepnout na PRO" : "Přepnout na Start";
+    else if (rank > mine) label = id === "pro" ? "Objednat Pro" : "Objednat Start";
+    else label = id === "pro" ? "Přepnout na Pro" : "Přepnout na Start";
     button.innerHTML = `<span>${label}</span>`;
   });
   const paid = plan === "start" || plan === "pro";
@@ -1399,7 +1379,7 @@ function confirmPlanChange(plan) {
     const list = $("billing-confirm-losses");
     const box = $("billing-confirm");
     if ($("billing-confirm-title")) {
-      $("billing-confirm-title").textContent = plan === "free" ? "Přepnout na Zdarma?" : `Přepnout na ${plan === "start" ? "Start" : "PRO"}?`;
+      $("billing-confirm-title").textContent = plan === "free" ? "Přepnout na Zdarma?" : `Přepnout na ${plan === "start" ? "Start" : "Pro"}?`;
     }
     if (lead) {
       const when = formatBillingDate(currentBilling().current_period_end);
@@ -1503,15 +1483,19 @@ function renderMonitors(items) {
     const limit = currentBilling().watch_limit;
     const enabled = items.filter((item) => item.enabled).length;
     if (limit == null) {
-      $("watch-create-hint").textContent = "V tarifu máte neomezený počet profilů.";
+      $("watch-create-hint").textContent = "V tarifu máte neomezený počet profilů";
     } else {
       const left = Math.max(0, limit - enabled);
       $("watch-create-hint").textContent = left
-        ? `Zbývá vám ještě ${left} ${pluralProfil(left)} v tarifu ${currentBilling().label}.`
+        ? `Zbývá vám ještě ${left} ${pluralProfil(left)} v tarifu ${currentBilling().label}`
         : Number(limit) === 1
-          ? `Limit tarifu ${currentBilling().label} je 1 aktivní profil. Další zapnete upgradem.`
-          : `Limit tarifu ${currentBilling().label} je ${limit} ${pluralProfil(limit)}. Další zapnete upgradem.`;
+          ? `Limit tarifu ${currentBilling().label} je 1 aktivní profil, další vyžaduje upgrade`
+          : `Limit tarifu ${currentBilling().label} je ${limit} ${pluralProfil(limit)}, další vyžaduje upgrade`;
     }
+  }
+  if (!items.length) {
+    list.innerHTML = `<div class="watch-empty"><strong>Zatím nic nehlídáte</strong><span>Vytvořte první profil a nové nabídky vám pošleme hned, jak se objeví</span></div>`;
+    return;
   }
   list.innerHTML = items
     .map((item) => {
@@ -1519,20 +1503,19 @@ function renderMonitors(items) {
       return `
       <article class="watch-card${editing ? " is-editing" : ""}${item.enabled ? "" : " is-off"}" data-monitor-card="${item.id}">
         <div class="watch-card-head">
-          <h3>${escapeHtml(item.name)} <button type="button" data-edit-monitor="${item.id}" aria-label="Upravit"><img src="/static/assets/settings/icon-edit.svg" alt="" /></button></h3>
+          <h3>${escapeHtml(item.name)} <button type="button" data-edit-monitor="${item.id}" aria-label="Upravit"><img src="/static/assets/settings/icon-pencil.svg" alt="" /></button></h3>
           <span class="watch-status${item.enabled ? "" : " is-off"}"><img src="/static/assets/settings/icon-dot.svg" alt="" />${item.enabled ? "Aktivní" : "Pozastaveno"}</span>
         </div>
         <div class="watch-fields">${watchFieldsHtml(item, parseMonitorUrl(item.search_url))}</div>
         <div class="watch-meta">
           <div class="watch-stats">
-            <div><span>Nalezené nabídky</span><strong>${Number(item.tracked || 0).toLocaleString("cs-CZ")} nabídek</strong></div>
+            <div><span>Nalezené nabídky</span><strong>${Number(item.tracked || 0).toLocaleString("cs-CZ")}</strong></div>
             <div><span>Poslední zásah</span><strong>${item.last_total ? Number(item.last_total).toLocaleString("cs-CZ") : "—"}</strong></div>
           </div>
           <div class="watch-notes">
-            <span class="k">NOTIFIKACE:</span>
-            <span class="watch-chip">DISCORD ON</span>
-            <span class="watch-chip${item.enabled ? "" : " off"}">${item.enabled ? "HLÍDÁNÍ ON" : "HLÍDÁNÍ OFF"}</span>
-            <span class="watch-chip off">SMS OFF</span>
+            <span class="k">Notifikace</span>
+            <span class="watch-chip">Discord zapnutý</span>
+            <span class="watch-chip off">SMS vypnuté</span>
           </div>
         </div>
         <div class="actions">
@@ -1540,7 +1523,7 @@ function renderMonitors(items) {
           <button class="btn btn-ghost" type="button" data-toggle-monitor="${item.id}">${item.enabled ? "Pozastavit hlídání" : "Obnovit hlídání"}</button>
           <button class="set-link" type="button" data-del-monitor="${item.id}">Smazat profil</button>
         </div>
-        ${!item.enabled ? `<p class="watch-upgrade-hint">Pro opětovné zapnutí upgradujte tarif, pokud už máte naplněný limit hlídacích profilů.</p>` : ""}
+        ${!item.enabled ? `<p class="watch-upgrade-hint">Pokud máte naplněný limit profilů, zapnutí vyžaduje vyšší tarif</p>` : ""}
       </article>
     `;
     })
@@ -1612,9 +1595,7 @@ function fillMonitorForm(item) {
   if ($("monitor-webhook")) $("monitor-webhook").value = item?.webhook_url || "";
   $("monitor-template").value = item?.template_id || "default";
   $("monitor-enabled").checked = item ? Boolean(item.enabled) : true;
-  if ($("monitor-interval")) $("monitor-interval").value = item?.interval_sec || "";
   setMonitorPortals(item?.portals || "all");
-  renderPortalUrlStack($("monitor-urls"), item?.search_targets, item?.search_url);
 }
 
 $("monitor-form").addEventListener("submit", async (event) => {
@@ -1641,7 +1622,7 @@ $("monitor-form").addEventListener("submit", async (event) => {
         search_url: $("generated-url")?.value || $("monitor-url").value,
         template_id: $("monitor-template").value,
         enabled: $("monitor-enabled").checked,
-        interval_sec: $("monitor-interval")?.value || "",
+        interval_sec: currentBilling().check_interval_sec || "",
         portals: selectedMonitorPortals(),
       },
       monitorId ? "Profil upraven" : "Hlídací profil vytvořen",
@@ -1930,6 +1911,86 @@ function applySourceCatalog(source) {
   filterCatalog.sample = pack.sample;
 }
 
+// Stejné skupiny filtrů jako na /nabidka (klíč = název filtru v katalogu).
+const NB_GROUPS = [
+  ["Vlastnictví", "ownership", [["Osobní", "Osobní"], ["Družstevní", "Družstevní"], ["Obecní", "Obecní"], ["S.r.o.", "S.r.o."], ["Podílové", "Podílové"], ["Jiné", "Jiné"]]],
+  ["Stav objektu", "condition", ["Novostavba", "Po rekonstrukci", "Velmi dobrý", "Dobrý", "Před rekonstrukcí", "V rekonstrukci", "Ve výstavbě", "Projekt", "Udržovaný", "Špatný", "K demolici"].map((v) => [v, v])],
+  ["Konstrukce", "building", [["cihlova", "Cihlová"], ["panelova", "Panelová"], ["drevena", "Dřevěná"], ["kamenna", "Kamenná"], ["skeletova", "Skeletová"], ["montovana", "Montovaná"], ["smisena", "Smíšená"], ["ostatni", "Ostatní"]]],
+  ["Vybavení bytu", "equipped", [["vybaveny", "Vybavený"], ["castecne", "Částečně"], ["nevybaveny", "Nevybavený"]]],
+  ["Příslušenství", "amenities", [["balcony", "Balkon"], ["loggia", "Lodžie"], ["terrace", "Terasa"], ["cellar", "Sklep"], ["lift", "Výtah"], ["parking", "Parkování"], ["garage", "Garáž"], ["garden", "Zahrada"], ["barrier_free", "Bezbariérový"], ["phone", "Telefon"], ["cable_tv", "Kabelová TV"], ["internet", "Internet"], ["video", "Video"], ["open_house", "Den otevřených dveří"]]],
+];
+const NB_TRI = [
+  ["Spolubydlení", "roommate"],
+  ["Mazlíčci", "pets"],
+  ["Krátkodobý pronájem", "short_term"],
+];
+let nbFacets = { dispositions: [] };
+
+async function loadNbFacets() {
+  try {
+    const response = await fetch("/api/catalog?limit=1", { signal: AbortSignal.timeout(8000) });
+    const data = await response.json();
+    nbFacets = { dispositions: data?.facets?.dispositions || [] };
+  } catch {
+    /* zůstane prázdné, jen bez dalších dispozic */
+  }
+  renderNbFilters();
+}
+
+function nbChips(key, options) {
+  const on = new Set(filterState[`nb_${key}`] || []);
+  return `<div class="chip-row" data-nb="${key}">${options
+    .map(([id, label]) => `<button type="button" class="chip${on.has(String(id)) ? " on" : ""}" data-value="${escapeHtml(String(id))}">${escapeHtml(label)}</button>`)
+    .join("")}</div>`;
+}
+
+function renderNbFilters() {
+  const host = $("nb-filters");
+  if (!host || !filterCatalog) return;
+  const common = new Set((filterCatalog.catalog?.sizes || []).map(([id]) => String(id).toLowerCase()));
+  const more = (nbFacets.dispositions || []).filter((item) => !common.has(String(item).toLowerCase())).map((item) => [item, item]);
+  const label = (text) => `<p class="catalog-label">${text}</p>`;
+  host.innerHTML =
+    (more.length ? label("Další dispozice") + nbChips("disp", more) : "") +
+    NB_GROUPS.map(([title, key, options]) => label(title) + nbChips(key, options)).join("") +
+    label("Jen na jednom portálu") +
+    NB_TRI.map(([title, key]) => {
+      const value = filterState[`nb_${key}`] || "";
+      return `<div class="filter-tri"><p class="catalog-label">${title}</p><div class="chip-row chip-tri" data-nb-tri="${key}"><button type="button" class="chip${value === "s" ? " on" : ""}" data-value="s">S</button><button type="button" class="chip${value === "bez" ? " on" : ""}" data-value="bez">Bez</button></div></div>`;
+    }).join("") +
+    `<p class="catalog-hint">S ukáže jen inzeráty, u kterých to víme. Bez je skryje a nechá i nabídky z druhého portálu, kde tahle volba není.</p>`;
+}
+
+$("nb-filters")?.addEventListener("click", async (event) => {
+  const chip = event.target.closest(".chip");
+  if (!chip) return;
+  const tri = chip.closest("[data-nb-tri]");
+  if (tri) {
+    const key = `nb_${tri.dataset.nbTri}`;
+    filterState[key] = filterState[key] === chip.dataset.value ? "" : chip.dataset.value;
+    renderNbFilters();
+  } else {
+    const row = chip.closest("[data-nb]");
+    if (!row) return;
+    const key = `nb_${row.dataset.nb}`;
+    const current = new Set(filterState[key] || []);
+    if (current.has(chip.dataset.value)) current.delete(chip.dataset.value);
+    else current.add(chip.dataset.value);
+    filterState[key] = [...current];
+    chip.classList.toggle("on");
+  }
+  await rebuildUrl();
+});
+
+const ESTATE_TYPES = [
+  ["byt", "Byt"],
+  ["dum", "Dům"],
+  ["pozemek", "Pozemek"],
+  ["projekt", "Projekt"],
+  ["komercni", "Komerční"],
+  ["ostatni", "Ostatní"],
+];
+
 function renderFilterGroups() {
   if (!filterCatalog) return;
   const source = currentSource();
@@ -1950,8 +2011,7 @@ function renderFilterGroups() {
   const singles = new Set(cat.single_keys || []);
   const groups = [
     ["Typ nabídky", "offers", cat.offers],
-    ["Nemovitost", "estates", cat.estates],
-    ["Nemovitost", "category", cat.categories],
+    ["Typ nemovitosti", "estate", ESTATE_TYPES],
     ["Dispozice", "sizes", cat.sizes],
     ["Typ vlastnictví", "ownership", cat.ownership],
     ["Převod do osobního vlastnictví", "transfers", cat.transfers],
@@ -1965,10 +2025,15 @@ function renderFilterGroups() {
     ["Energetická náročnost", "energy", cat.energy],
     ["V okolí nemovitosti", "pois", cat.pois],
   ];
-  $("filter-groups").innerHTML = groups
-    .filter(([, , options]) => options && options.length)
-    .map(([title, key, options]) => chipGroup(title, key, options, singles.has(key)))
-    .join("");
+  const TOP_GROUPS = new Set(["offers", "estate", "sizes"]);
+  const renderGroups = (rows) =>
+    rows
+      .filter(([, , options]) => options && options.length)
+      .map(([title, key, options]) => chipGroup(title, key, options, singles.has(key)))
+      .join("");
+  $("filter-groups").innerHTML = renderGroups(groups.filter(([, key]) => TOP_GROUPS.has(key)));
+  if ($("filter-groups-more")) $("filter-groups-more").innerHTML = renderGroups(groups.filter(([, key]) => !TOP_GROUPS.has(key)));
+  renderNbFilters();
   renderLocalityChips();
   $("f-price-from").value = filterState.price_from ?? "";
   $("f-price-to").value = filterState.price_to ?? "";
@@ -2051,10 +2116,9 @@ async function rebuildUrl() {
   });
   const data = await response.json();
   $("generated-url").value = data.url;
-  renderPortalUrlStack($("generated-urls"), data.targets, data.url);
 }
 
-$("filter-groups").addEventListener("click", async (event) => {
+["filter-groups", "filter-groups-more"].forEach((id) => $(id)?.addEventListener("click", async (event) => {
   const chip = event.target.closest(".chip");
   if (!chip) return;
   const key = chip.dataset.filter;
@@ -2070,7 +2134,7 @@ $("filter-groups").addEventListener("click", async (event) => {
     chip.classList.toggle("on");
   }
   await rebuildUrl();
-});
+}));
 
 const rangeIds = [
   "f-price-from",
@@ -3284,3 +3348,35 @@ async function applyMirroredFilters(monitorId) {
 
 boot();
 setInterval(refresh, 4000);
+
+
+// Účet v horní liště: Nastavení / Upgrade / Odhlásit se.
+(function () {
+  const btn = $("nav-user-btn");
+  const menu = $("nav-user-menu");
+  if (!btn || !menu) return;
+  const close = () => {
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+  };
+  btn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    menu.hidden = !menu.hidden;
+    btn.setAttribute("aria-expanded", String(!menu.hidden));
+    const plan = statusCache?.billing?.plan;
+    const upgrade = $("nav-upgrade");
+    if (upgrade) upgrade.hidden = plan === "pro" || plan === "individual";
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".nav-user-wrap")) close();
+    else if (event.target.closest("a")) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
+  });
+  $("nav-logout")?.addEventListener("click", async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    localStorage.removeItem(PROFILE_KEY);
+    location.href = "/prihlaseni";
+  });
+})();

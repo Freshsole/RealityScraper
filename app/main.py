@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import re
 import hashlib
 import io
@@ -21,6 +22,8 @@ from typing import Any
 from fastapi import Body, Cookie, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from posthog import Posthog
+from posthog.integrations.asgi import PosthogASGIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
@@ -138,6 +141,10 @@ async def _background_startup() -> None:
             ssr_cache.schedule_loop(lambda: _public_store() or hub.store)
     except Exception:
         pass
+    posthog_logs_logger.info(
+        "background_startup_completed",
+        extra={"scrape_role": config.SCRAPE_ROLE},
+    )
     print("lifespan: background startup complete", flush=True)
 
 
@@ -241,9 +248,62 @@ async def lifespan(_app: FastAPI):
             await asyncio.wait_for(hub.close(), timeout=2.0)
         except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
             pass
+        if posthog_client is not None:
+            posthog_client.flush()
+        if posthog_log_provider is not None:
+            posthog_log_provider.force_flush()
+            posthog_log_provider.shutdown()
+
+
+posthog_client = None
+posthog_log_provider = None
+posthog_logs_logger = logging.getLogger("realitify.posthog_logs")
+if config.POSTHOG_API_KEY and config.POSTHOG_HOST:
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+
+    posthog_client = Posthog(
+        config.POSTHOG_API_KEY,
+        host=config.POSTHOG_HOST,
+        enable_exception_autocapture=True,
+    )
+    atexit.register(posthog_client.shutdown)
+
+    posthog_log_provider = LoggerProvider()
+    set_logger_provider(posthog_log_provider)
+    posthog_log_provider.add_log_record_processor(
+        BatchLogRecordProcessor(
+            OTLPLogExporter(
+                endpoint=f"{config.POSTHOG_HOST.rstrip('/')}/i/v1/logs",
+                headers={"Authorization": f"Bearer {config.POSTHOG_API_KEY}"},
+            )
+        )
+    )
+    posthog_logs_logger.addHandler(LoggingHandler(logger_provider=posthog_log_provider))
+    posthog_logs_logger.setLevel(logging.INFO)
+    posthog_logs_logger.propagate = False
+
+
+def capture_posthog_event(
+    event: str,
+    *,
+    properties: dict[str, Any] | None = None,
+    distinct_id: str | None = None,
+) -> None:
+    """Capture a PII-safe product event when PostHog is configured."""
+    if posthog_client is None:
+        return
+    kwargs: dict[str, Any] = {"event": event, "properties": properties or {}}
+    if distinct_id is not None:
+        kwargs["distinct_id"] = distinct_id
+    posthog_client.capture(**kwargs)
 
 
 app = FastAPI(title="Sreality Monitor", lifespan=lifespan, redirect_slashes=False)
+if posthog_client is not None:
+    app.add_middleware(PosthogASGIMiddleware, client=posthog_client)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
 _public_dir = config.ROOT / "public"
 if _public_dir.is_dir():
@@ -472,6 +532,39 @@ async def _send_verification_email(request: Request, user: dict[str, Any]) -> bo
 
 
 _VERIFY_EXEMPT = ("/api/auth/", "/api/admin/login", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
+
+
+@app.middleware("http")
+async def bind_posthog_authenticated_user(request: Request, call_next):
+    """Pass the authenticated account ID to PostHog's ASGI request context.
+
+    This middleware is outside PosthogASGIMiddleware, so it resolves the app's
+    session before the SDK creates its context. The SDK then applies the stable
+    user ID to every capture and exception in the request without repeated
+    per-route identification.
+    """
+    if posthog_client is not None:
+        session = (
+            request.headers.get("x-realitify-session")
+            or request.cookies.get(user_account.SESSION_COOKIE)
+        )
+        user = await _auth_db(user_account.user_from_session, hub.store, session)
+        if user is None:
+            user = await _auth_db(
+                admin_panel.admin_from_cookie,
+                hub.store,
+                request.cookies.get(admin_panel.ADMIN_COOKIE),
+            )
+        if user and user.get("id"):
+            # The app-authenticated ID wins over a client-supplied analytics header.
+            headers = [
+                (name, value)
+                for name, value in request.scope["headers"]
+                if name.lower() != b"x-posthog-distinct-id"
+            ]
+            headers.append((b"x-posthog-distinct-id", str(user["id"]).encode("ascii")))
+            request.scope["headers"] = headers
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1502,6 +1595,7 @@ async def guest_access_grant(request: Request, payload: dict[str, Any] = Body(..
         max_age=guest_access.MAX_AGE_S,
         path="/",
     )
+    capture_posthog_event("guest_access_granted", properties={"is_new_lead": is_new})
     return response
 
 
@@ -1579,6 +1673,11 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
         site_stats.track(hub.store, site_stats.KIND_SIGNUP, path="/registrace")
     except Exception:
         pass
+    capture_posthog_event(
+        "user_registered",
+        properties={"registration_method": "password"},
+        distinct_id=str(user["id"]),
+    )
     if config.DISCORD_SIGNUPS_WEBHOOK_URL:
         _name = str(user.get("name") or "").strip()
         _mail = str(user.get("email") or "").strip()
@@ -1606,6 +1705,11 @@ async def auth_login_api(request: Request, payload: dict[str, Any] | None = Body
     required = await _auth_db(email_store.verification_required)
     response = JSONResponse({**user, "email_verification_required": required})
     _set_session_cookie(response, token)
+    capture_posthog_event(
+        "user_logged_in",
+        properties={"login_method": "password"},
+        distinct_id=str(user["id"]),
+    )
     return response
 
 
@@ -1663,11 +1767,13 @@ async def auth_verify_email(
         if not current:
             raise HTTPException(400, "Nejdřív se přihlaste, pak zadejte kód.")
         await _auth_db(user_registry.mark_email_verified, hub.store, str(current["id"]))
+        capture_posthog_event("email_verified", distinct_id=str(current["id"]))
         return {"ok": True}
     user = await _auth_db(user_registry.verify_email_with_token, hub.store, token)
     if not user:
         raise HTTPException(400, "Ověřovací odkaz je neplatný nebo vypršel")
     asyncio.create_task(asyncio.to_thread(email_triggers.on_verified, user), name="email-on-verified")
+    capture_posthog_event("email_verified", distinct_id=str(user["id"]))
     return {"ok": True}
 
 
@@ -2901,7 +3007,12 @@ async def push_subscribe(request: Request, payload: dict[str, Any] | None = Body
         return {"ok": True, "devices": store.push_subscription_count(), "notify": store.notify_prefs()}
 
     try:
-        return await asyncio.to_thread(_save)
+        result = await asyncio.to_thread(_save)
+        capture_posthog_event(
+            "push_subscription_enabled",
+            properties={"device_count": int(result.get("devices") or 0)},
+        )
+        return result
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except sqlite3.OperationalError as exc:
@@ -3811,6 +3922,13 @@ async def save_listing_user(
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     _drop_user_catalog_cache(ustore)
+    capture_posthog_event(
+        "listing_status_updated",
+        properties={
+            "listing_status": str(payload.get("status") or ""),
+            "has_note": bool(str(payload.get("note") or "").strip()),
+        },
+    )
     return result
 
 
@@ -3848,6 +3966,8 @@ async def save_monitor(
     if not (payload.get("search_url") or "").strip():
         raise HTTPException(400, "Chybí URL hledání. Vyplňte ho tlačítkem „Použít URL v profilu“.")
     existing = ustore.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
+    # Interval kontroly určuje tarif, ne uživatel.
+    payload = {**payload, "interval_sec": stripe_billing.billing_state(ustore)["check_interval_sec"]}
     try:
         try:
             saved = ustore.save_monitor(payload)
@@ -3862,6 +3982,15 @@ async def save_monitor(
             site_stats.track(hub.store, site_stats.KIND_MONITOR, path="/monitory")
         except Exception:
             pass
+    monitor_operation = "created" if existing is None else "updated"
+    capture_posthog_event(
+        "monitor_created" if existing is None else "monitor_updated",
+        properties={"portal_count": len(saved.get("portals") or []), "is_active": bool(saved.get("enabled", True))},
+    )
+    posthog_logs_logger.info(
+        "monitor_saved",
+        extra={"monitor_operation": monitor_operation, "portal_count": len(saved.get("portals") or [])},
+    )
     return saved
 
 
@@ -3904,6 +4033,7 @@ async def delete_monitor(
         ustore.delete_monitor(monitor_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    capture_posthog_event("monitor_deleted")
     return {"ok": True, "status": hub.hub_for(str(user.get("id"))).status(fresh=True)}
 
 
@@ -4296,6 +4426,14 @@ async def billing_checkout(
             str(user.get("id") or ""),
         )
         hub._status_cache = None
+        selected_plan = str(body.get("plan") or "")
+        capture_posthog_event(
+            "billing_checkout_started",
+            properties={
+                "selected_plan": selected_plan if selected_plan in {"start", "pro"} else "unknown",
+                "subscription_changed": bool(result.get("switched")),
+            },
+        )
         return result
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -4359,6 +4497,7 @@ async def billing_cancel(realitify_session: str | None = Cookie(default=None, al
     try:
         result = stripe_billing.cancel_subscription(ustore)
         hub._status_cache = None
+        capture_posthog_event("subscription_cancellation_scheduled")
         return result
     except Exception as exc:
         logger.exception("Stripe operace selhala")

@@ -73,3 +73,6 @@
 [id]{scroll-margin-top:96px}
 .nx-pill .brand{font-size:17.6px;gap:6px}
 .nx-pill .brand .icon{width:16px!important;height:26px!important}
+
+.nav-account{display:inline-flex;align-items:center;gap:8px;font-weight:600}
+.nav-account-av{width:32px;height:32px;border-radius:50%;background:#e2f6d5;color:#163300;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}

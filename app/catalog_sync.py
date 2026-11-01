@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
+from app import bazos_url, bezrealitky_url, catalog_extra_filters, idnes_url, localities, url_builder
 from app.identity import portal_from_url
 from app.portal_urls import MODULES as EXTRA_URLS
 from app.sources import PORTAL_IDS, is_bazos, is_bezrealitky, is_idnes, portal_of
@@ -574,14 +574,46 @@ def listing_matches_filters(listing: Any, filters: dict[str, Any] | None, *, ign
         if mapped and got not in mapped:
             return False
     sizes = [str(item).casefold() for item in (data.get("sizes") or []) if item]
-    if sizes:
+    extra_disp = [str(item) for item in (data.get("nb_disp") or []) if item]
+    if sizes or extra_disp:
         disp = fold(disposition).replace(" ", "")
-        if disp and not _disposition_matches(disp, sizes):
+        ok = bool(disp and sizes and _disposition_matches(disp, sizes)) or (disposition in extra_disp)
+        if disp and not ok:
+            return False
+    if any(data.get(f"nb_{key}") for key in catalog_extra_filters.ALL_KEYS):
+        if not catalog_extra_filters.matches(listing, {key: data.get(f"nb_{key}") for key in catalog_extra_filters.ALL_KEYS}):
+            return False
+    estates = [str(item) for item in (data.get("estate") or []) if item]
+    if estates:
+        kind = _listing_estate_kind(listing)
+        if kind and kind not in estates:
             return False
     districts = [str(item) for item in (data.get("districts") or []) if item]
     if districts and not _locality_matches(locality, districts):
         return False
     return True
+
+
+_ESTATE_KINDS = (
+    ("byt", ("byt", "flat", "apartm")),
+    ("dum", ("dům", "dum", "dom", "house", "chata", "chalup", "rodinn")),
+    ("pozemek", ("pozem", "land")),
+    ("projekt", ("projekt",)),
+    ("komercni", ("komer", "kancel", "sklad", "obchod", "restaur")),
+    ("ostatni", ("ostatn", "gará", "gara")),
+)
+
+
+def _listing_estate_kind(listing: Any) -> str:
+    """Typ nemovitosti podle extras inzerátu ("" když ho neznáme, pak se nefiltruje)."""
+    extras = _extras(listing)
+    text = str(extras.get("estate") or extras.get("category") or "").casefold().strip()
+    if not text:
+        return ""
+    for kind, tokens in _ESTATE_KINDS:
+        if any(token in text for token in tokens):
+            return kind
+    return ""
 
 
 def listing_matches_search(listing: Any, search_url: str, *, ignore_source: bool = False) -> bool:
@@ -611,11 +643,17 @@ def normalize_portals(value: str | None) -> str:
 def listing_matches_monitor(listing: Any, monitor: dict[str, Any]) -> bool:
     listing_url = str(_field(listing, "url") or "").lower()
     listing_portal = portal_from_url(listing_url)
+    # Portal URLs can't always carry every filter (e.g. Annonce, Ceske Reality),
+    # so the monitor's own canonical filters are always applied on top.
+    canonical = normalize_search_url(monitor.get("search_url") or "")
     for target in monitor_search_targets(monitor):
         if target["portal"] != listing_portal:
             continue
-        if listing_matches_search(listing, target["search_url"], ignore_source=True):
-            return True
+        if not listing_matches_search(listing, target["search_url"], ignore_source=True):
+            continue
+        if canonical and not listing_matches_search(listing, canonical, ignore_source=True):
+            continue
+        return True
     return False
 
 

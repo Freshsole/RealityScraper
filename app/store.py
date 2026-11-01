@@ -5859,6 +5859,20 @@ class Store:
                     )
             if estate_parts:
                 where.append("(" + " OR ".join(estate_parts) + ")")
+        # Withdrawn / sold offers are not part of a search result. They stay reachable only where the
+        # user asked for them by name (their saved offers, or one monitor's own history).
+        if str(filters.get("status") or "").strip() != "saved" and not monitor_id:
+            where.append("IFNULL(listings.gone, 0) = 0")
+        # Some portals ship a sale price (or a typo) under a rental ad and vice versa. For residential
+        # estates a monthly rent above the cap / a sale price under the floor is certainly mislabelled,
+        # so it must not satisfy the offer filter (e.g. "pronájem" sorted by price showing 20M Kč).
+        residential = bool(estates) and all(item in {"byt", "dum"} for item in estates)
+        if residential and offers == ["pronajem"]:
+            where.append("(listings.price_czk IS NULL OR listings.price_czk <= ?)")
+            params.append(self.PRICE_RENT_MAX_CZK)
+        elif residential and offers == ["prodej"] and estates == ["byt"]:
+            where.append("(listings.price_czk IS NULL OR listings.price_czk >= ?)")
+            params.append(self.PRICE_SALE_MIN_CZK)
         # Public listing quality filter (area/price/short-term; apartments by default).
         listing_quality = str(filters.get("listing_quality") or filters.get("quality") or "").strip().lower()
         if listing_quality in {"1", "true", "yes", "apartment", "byt", "byty"} and fast_quality:
