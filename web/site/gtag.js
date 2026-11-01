@@ -1,4 +1,4 @@
-// Google tag (gtag.js) – GA4 G-WGP2CCXNBD, řízeno souhlasem z cookies.js (rf_consent).
+// Google tag (GA4 G-WGP2CCXNBD) + PostHog (EU, session replay), řízeno souhlasem z cookies.js (rf_consent).
 (() => {
   const ID = "G-WGP2CCXNBD";
   function consent() {
@@ -35,5 +35,27 @@
       ad_user_data: m ? "granted" : "denied",
       ad_personalization: m ? "granted" : "denied",
     });
+  };
+
+  // PostHog – nahrávání relací jen při souhlasu s analytikou, vstupy maskované.
+  const ph = document.createElement("script");
+  ph.async = true;
+  ph.crossOrigin = "anonymous";
+  ph.src = "https://eu-assets.i.posthog.com/static/array.js";
+  ph.onload = () => {
+    if (!window.posthog || !posthog.init) return;
+    posthog.init("phc_kqvGH3j3r3vhdkoToEHoSd8oe88PL9iur7ZvqU7P3rU5", {
+      api_host: "https://eu.i.posthog.com",
+      defaults: "2025-05-24",
+      person_profiles: "identified_only",
+      opt_out_capturing_by_default: !c.a,
+      session_recording: { maskAllInputs: true },
+    });
+  };
+  document.head.appendChild(ph);
+  const prev = window.rfGtagConsent;
+  window.rfGtagConsent = function (a, m) {
+    prev(a, m);
+    if (window.posthog && posthog.opt_in_capturing) a ? posthog.opt_in_capturing() : posthog.opt_out_capturing();
   };
 })();
