@@ -269,6 +269,7 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             disp_paths = []
 
         redirects: dict[str, str] = {}
+        summaries: dict[tuple[str, str, str], dict[str, Any]] = {}
         trh_rows: list[tuple[str, str, str, str]] = []
         for row in included:
             loc = row["locality"]
@@ -288,6 +289,7 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             trh_rows.append((f"{key}:html", html, data_as_of, data_as_of))
             trh_rows.append((f"{key}:md", md, data_as_of, data_as_of))
             trh_rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
+            summaries[(loc, offer, "")] = {k: report.get(k) for k in ("active_count", "median_price", "median_price_per_m2", "updated_at")}
             trh_count += 1
             if len(trh_rows) >= 30:
                 _flush_pages(trh_rows, data_as_of=data_as_of, reason=reason, stage="trh_batch")
@@ -309,11 +311,38 @@ def rebuild(store: Any, *, reason: str = "manual") -> dict[str, Any]:
             trh_rows.append((f"{key}:html", html, data_as_of, data_as_of))
             trh_rows.append((f"{key}:md", md, data_as_of, data_as_of))
             trh_rows.append((f"{key}:report", json.dumps(report, ensure_ascii=False), data_as_of, data_as_of))
+            summaries[(loc, offer, disp)] = {k: report.get(k) for k in ("active_count", "median_price", "median_price_per_m2", "updated_at")}
             trh_count += 1
             if len(trh_rows) >= 30:
                 _flush_pages(trh_rows, data_as_of=data_as_of, reason=reason, stage="trh_disp_batch")
                 rows.extend(trh_rows)
                 trh_rows = []
+
+        # Hub pages (/trh and /trh/{locality}) built only from pages that really exist.
+        try:
+            built = [r for r in included if (r["locality"], r["offer"], "") in summaries]
+            month = market_seo.czech_month_label(data_as_of[:7])
+            trh_rows.append(("trh_hub:html", market_seo.render_trh_hub(built, summaries, month=month), data_as_of, data_as_of))
+            by_loc: dict[str, dict[str, Any]] = {}
+            for r in built:
+                by_loc.setdefault(r["locality"], {})[r["offer"]] = r
+            built_locs = set(by_loc)
+            for loc, offers in by_loc.items():
+                disp_by_offer: dict[str, list[str]] = {}
+                for _p, dloc, doffer, ddisp in disp_paths:
+                    if dloc == loc and (dloc, doffer, ddisp) in summaries:
+                        disp_by_offer.setdefault(doffer, []).append(ddisp)
+                kids = [c for c in market_pages._children_for_district(loc) if c in built_locs]
+                trh_rows.append(
+                    (
+                        f"trh_loc:{market_pages.slugify_locality(loc)}:html",
+                        market_seo.render_trh_locality_hub(loc, offers, disp_by_offer, summaries, kids, month=month),
+                        data_as_of,
+                        data_as_of,
+                    )
+                )
+        except Exception as exc:
+            log.error("ssr_cache trh hubs failed: %s", exc)
 
         trh_rows.append(("redirects", json.dumps(redirects, ensure_ascii=False), data_as_of, data_as_of))
         trh_rows.append(

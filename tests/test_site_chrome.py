@@ -32,8 +32,8 @@ class SiteChromeTests(unittest.TestCase):
         self.assertIn(site_chrome.FOOTER_HTML, html)
         self.assertIn("/static/site/nav.js", html)
 
-    def test_no_dead_trh_hub_links(self):
-        self.assertNotIn('href="/trh"', site_chrome.HEADER_HTML + site_chrome.FOOTER_HTML)
+    def test_footer_links_trh_hub(self):
+        self.assertIn('href="/trh"', site_chrome.FOOTER_HTML)
 
 
 if __name__ == "__main__":

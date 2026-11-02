@@ -53,6 +53,16 @@ def czech_month_label(month: str) -> str:
     return f"{CZ_MONTHS[int(m)]} {y}"
 
 
+def report_month_label(report: dict[str, Any]) -> str:
+    """'listopad 2026' from the report's data date (falls back to today)."""
+    from datetime import date
+
+    raw = str(report.get("updated_at") or "")[:7]
+    if not re.fullmatch(r"\d{4}-\d{2}", raw):
+        raw = date.today().strftime("%Y-%m")
+    return czech_month_label(raw)
+
+
 SEO_DISPOSITIONS: tuple[str, ...] = (
     "1+kk",
     "1+1",
@@ -192,7 +202,14 @@ def seo_paths_from_db(store: Store) -> dict[str, list[str]]:
         months = [f"/index/{m}" for m in store.list_index_months()]
     except Exception:
         months = []
-    return {"hub": ["/hledat"], "locality": locality, "disposition": disposition, "index_archive": months}
+    hubs = sorted({p.rsplit("/", 1)[0] for p in locality})
+    return {
+        "hub": ["/trh"],
+        "locality_hub": hubs,
+        "locality": locality,
+        "disposition": disposition,
+        "index_archive": months,
+    }
 
 
 _SITEMAP_LOCK = __import__("threading").Lock()
@@ -239,6 +256,11 @@ def build_sitemap_xml(store: Store | None, static_pages: list[tuple[str, str, st
     seo = seo_paths_from_db(store) if store is not None else {"locality": [], "disposition": [], "index_archive": []}
     if store is not None and not seo.get("locality"):
         _schedule_seo_refresh(store)
+    if seo.get("locality"):
+        for path in seo.get("hub") or []:
+            paths.append((path, "daily", "0.8"))
+    for path in seo.get("locality_hub") or []:
+        paths.append((path, "daily", "0.75"))
     for path in seo.get("locality") or []:
         paths.append((path, "daily", "0.7"))
     for path in seo.get("disposition") or []:
@@ -303,7 +325,7 @@ def top_localities(store: Store, offer: str = "pronajem", limit: int = 10) -> li
 def _breadcrumb_items(locality: str, offer: str, disposition: str = "") -> list[dict[str, str]]:
     items = [
         {"name": "Domů", "url": "https://realitify.cz/"},
-        {"name": "Nabídky", "url": "https://realitify.cz/hledat"},
+        {"name": "Trh s byty", "url": "https://realitify.cz/trh"},
     ]
     chain: list[str] = []
     p = parent_locality(locality)
@@ -311,8 +333,14 @@ def _breadcrumb_items(locality: str, offer: str, disposition: str = "") -> list[
         chain.append(p)
         p = parent_locality(p)
     for loc in reversed(chain):
-        items.append({"name": loc, "url": f"https://realitify.cz/trh/{slugify_locality(loc)}/{offer}"})
-    items.append({"name": locality, "url": f"https://realitify.cz/trh/{slugify_locality(locality)}/{offer}"})
+        items.append({"name": loc, "url": f"https://realitify.cz/trh/{slugify_locality(loc)}"})
+    items.append({"name": locality, "url": f"https://realitify.cz/trh/{slugify_locality(locality)}"})
+    items.append(
+        {
+            "name": offer_label(offer).capitalize(),
+            "url": f"https://realitify.cz/trh/{slugify_locality(locality)}/{offer}",
+        }
+    )
     if disposition:
         items.append(
             {
@@ -389,12 +417,38 @@ def _related_html(store: Store, locality: str, offer: str, disposition: str = ""
     if links:
         blocks.append("<h2>Související lokality</h2><p>" + " · ".join(links[:16]) + "</p>")
     alt = "prodej" if offer == "pronajem" else "pronajem"
+    base = f"/trh/{slugify_locality(locality)}"
+    pair: list[str] = []
+    if disposition:
+        active, _ = evaluate_market_page(store, locality, alt, disposition)
+        if active:
+            pair.append(
+                f'<a href="{base}/{alt}/{slugify_disposition(disposition)}">'
+                f"{offer_label(alt).capitalize()} {html.escape(disposition)} – {html.escape(locality)}</a>"
+            )
+        if disposition in SEO_DISPOSITIONS:
+            i = SEO_DISPOSITIONS.index(disposition)
+            near = []
+            for j in (i - 1, i + 1):
+                if 0 <= j < len(SEO_DISPOSITIONS):
+                    nd = SEO_DISPOSITIONS[j]
+                    if evaluate_market_page(store, locality, offer, nd)[0]:
+                        near.append(
+                            f'<a href="{base}/{offer}/{slugify_disposition(nd)}">'
+                            f"{offer_label(offer).capitalize()} {html.escape(nd)}</a>"
+                        )
+            if near:
+                blocks.insert(0, "<h2>Sousední dispozice</h2><p>" + " · ".join(near) + "</p>")
     active, _ = evaluate_market_page(store, locality, alt)
     if active:
-        blocks.append(
-            "<p>Stejná lokalita: "
-            f'<a href="/trh/{slugify_locality(locality)}/{alt}">{offer_label(alt)}</a></p>'
+        pair.append(
+            f'<a href="{base}/{alt}">{offer_label(alt).capitalize()} bytů – {html.escape(locality)}</a>'
         )
+    if disposition:
+        pair.append(f'<a href="{base}/{offer}">{offer_label(offer).capitalize()} bytů – všechny dispozice</a>')
+    pair.append(f'<a href="{base}">Přehled trhu – {html.escape(locality)}</a>')
+    pair.append('<a href="/trh">Všechna města</a>')
+    blocks.append("<h2>Prodej ↔ pronájem a přehledy</h2><p>" + " · ".join(pair) + "</p>")
     return "\n".join(blocks)
 
 
@@ -407,6 +461,7 @@ def _narrative(
     parent_stats: dict[str, Any] | None = None,
     praha_stats: dict[str, Any] | None = None,
     cr_stats: dict[str, Any] | None = None,
+    loc_report: dict[str, Any] | None = None,
 ) -> list[str]:
     paras: list[str] = []
     ol = offer_label(offer)
@@ -434,6 +489,28 @@ def _narrative(
     else:
         head += "."
     paras.append(head)
+
+    if disposition and loc_report and med_m2 is not None and loc_report.get("median_price_per_m2"):
+        l_m2 = float(loc_report["median_price_per_m2"])
+        if l_m2:
+            diff = round((float(med_m2) - l_m2) * 100.0 / l_m2, 1)
+            share = ""
+            if loc_report.get("active_count"):
+                share = (
+                    f" Dispozice {disposition} tvoří {round(count * 100.0 / int(loc_report['active_count']))} % "
+                    f"všech {_fmt_int(loc_report['active_count'])} nabídek ({ol}) v lokalitě."
+                )
+            if abs(diff) < 0.5:
+                paras.append(
+                    f"Cena za m² u {disposition} odpovídá průměru města {locality} "
+                    f"({_fmt_m2(med_m2)} vs {_fmt_m2(l_m2)}).{share}"
+                )
+            else:
+                paras.append(
+                    f"Oproti průměru města {locality} (všechny dispozice, medián {_fmt_m2(l_m2)}) "
+                    f"je {disposition} za m² o {abs(diff)} % {'dražší' if diff > 0 else 'levnější'} "
+                    f"({_fmt_m2(med_m2)}).{share}"
+                )
 
     if parent_stats and parent_stats.get("active_count"):
         p_name = parent_stats.get("locality") or parent_locality(locality) or ""
@@ -519,7 +596,14 @@ def _narrative(
         first, last = hist[0], hist[-1]
         a = first.get("median_price_per_m2") or first.get("avg_price_per_m2")
         b = last.get("median_price_per_m2") or last.get("avg_price_per_m2")
-        if a and b:
+        if a and b and float(a):
+            pct = round((float(b) - float(a)) * 100.0 / float(a), 1)
+            trend = "stabilní" if abs(pct) < 1 else ("rostoucí" if pct > 0 else "klesající")
+            paras.append(
+                f"Trend za posledních 90 dní je {trend} ({'+' if pct > 0 else ''}{pct} %): "
+                f"medián Kč/m² u nových záznamů se posunul z {_fmt_m2(a)} na {_fmt_m2(b)}."
+            )
+        elif a and b:
             paras.append(
                 f"V datech za poslední měsíce (od {first.get('month') or first.get('week_start')} "
                 f"do {last.get('month') or last.get('week_start')}) se medián Kč/m² u nových záznamů "
@@ -644,21 +728,22 @@ def build_title_description(locality: str, offer: str, report: dict[str, Any], d
     med_m2_s = _fmt_m2(med_m2)
     avg_m2_s = _fmt_m2(avg_m2) if avg_m2 is not None else ""
     med_s = _fmt_czk(med)
+    month = report_month_label(report)
     if disposition:
-        title = f"{ol.capitalize()} {disposition} {locality} – medián {med_m2_s}, {count} nabídek | Realitify"
+        title = f"{ol.capitalize()} bytů {disposition} {locality} – ceny a nabídky ({month})"
         description = (
-            f"Aktuální {ol} {disposition} v lokalitě {locality}: "
+            f"{ol.capitalize()} bytů {disposition} v lokalitě {locality} ({month}): "
             f"{count} nabídek, medián {med_s}, medián {med_m2_s}"
             + (f", průměr {avg_m2_s}" if avg_m2_s else "")
-            + ". Data z katalogu Realitify."
+            + ". Trend, srovnání s průměrem města a aktuální inzeráty."
         )
     else:
-        title = f"{ol.capitalize()} bytů {locality} – medián {med_m2_s}, {count} nabídek | Realitify"
+        title = f"{ol.capitalize()} bytů {locality} – ceny a nabídky ({month})"
         description = (
-            f"Aktuální {ol} v lokalitě {locality}: {count} aktivních nabídek, "
+            f"{ol.capitalize()} bytů v lokalitě {locality} ({month}): {count} aktivních nabídek, "
             f"medián {med_s}, medián {med_m2_s}"
             + (f", průměr {avg_m2_s}" if avg_m2_s else "")
-            + ". Srovnání a ukázka inzerátů."
+            + ". Ceny podle dispozic, trend a ukázka inzerátů."
         )
     return title, description
 
@@ -699,7 +784,8 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
 
     crumbs = _breadcrumb_items(locality, offer, disposition)
     narrative = _narrative(
-        locality, offer, report, disposition=disposition, parent_stats=parent_stats, praha_stats=praha_stats, cr_stats=cr_stats
+        locality, offer, report, disposition=disposition, parent_stats=parent_stats, praha_stats=praha_stats, cr_stats=cr_stats,
+        loc_report=related_report if disposition else None,
     )
     faqs = _faq_items(locality, offer, report, disposition)
     samples = _sample_listing_items(store, locality=locality, offer=offer, q=disposition, limit=12)
@@ -738,9 +824,11 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     md_path += ".md"
 
     title_h1 = (
-        f"{offer_label(offer).capitalize()} {disposition} – {locality}"
+        f"{offer_label(offer).capitalize()} bytů {disposition} v lokalitě {locality}: "
+        f"{_fmt_m2(report.get('median_price_per_m2'))}, {_fmt_int(report.get('active_count'))} nabídek"
         if disposition
-        else f"{offer_label(offer).capitalize()} bytů – {locality}"
+        else f"{offer_label(offer).capitalize()} bytů v lokalitě {locality}: "
+        f"{_fmt_m2(report.get('median_price_per_m2'))}, {_fmt_int(report.get('active_count'))} nabídek"
     )
     stats_cards = "".join(
         [
@@ -804,7 +892,7 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
         <p class="lead">Data z agregovaného katalogu Realitify. {html.escape(updated_label)}</p>
         <div class="pg-actions">
           <a class="pill pill-lg" href="/hledat?q={q_param}">Procházet nabídky</a>
-          <a class="link-row" href="/index">Index nájmů →</a>
+          <a class="link-row" href="/trh/{slugify_locality(locality)}">Přehled trhu – {html.escape(locality)} →</a>
         </div>
       </section>
 
@@ -1026,6 +1114,149 @@ def top_localities_html(store: Store, limit: int = 10) -> str:
         '<h2 class="display is-caps">Nejhledanější lokality k pronájmu</h2>'
         "</div>"
         f'<div class="loc-grid">{cards}</div>'
-        '<a class="pill pill-lg" href="/hledat">Procházet všechny nabídky</a>'
+        '<a class="pill pill-lg" href="/hledat">Procházet všechny nabídky</a> '
+        '<a class="link-row" href="/trh">Ceny bytů ve všech městech →</a>'
         "</section>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hub pages: /trh (all localities) and /trh/{locality} (both offers + dispositions)
+# ---------------------------------------------------------------------------
+
+def _summary(summaries: dict[tuple[str, str, str], dict[str, Any]], loc: str, offer: str, disp: str = "") -> dict[str, Any]:
+    return summaries.get((loc, offer, disp)) or {}
+
+
+def render_trh_hub(
+    rows: list[dict[str, Any]],
+    summaries: dict[tuple[str, str, str], dict[str, Any]],
+    *,
+    month: str,
+) -> str:
+    """/trh – plain <a href> links to every locality hub and its sale/rent pages."""
+    locs: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        locs.setdefault(r["locality"], {"kind": r.get("kind"), "offers": {}})["offers"][r["offer"]] = r
+    cities = sorted(
+        (l for l, v in locs.items() if v["kind"] == "city"),
+        key=lambda l: -sum(int(o.get("active_count") or 0) for o in locs[l]["offers"].values()),
+    )
+    hoods = sorted(l for l, v in locs.items() if v["kind"] != "city")
+
+    def row_html(loc: str) -> str:
+        slug = slugify_locality(loc)
+        cells = []
+        for offer in ("prodej", "pronajem"):
+            r = locs[loc]["offers"].get(offer)
+            if not r:
+                cells.append("<td>—</td><td>—</td>")
+                continue
+            m2 = _summary(summaries, loc, offer).get("median_price_per_m2")
+            cells.append(
+                f'<td><a href="/trh/{slug}/{offer}">{offer_label(offer).capitalize()}</a> '
+                f"({_fmt_int(r.get('active_count'))})</td><td>{_fmt_m2(m2)}</td>"
+            )
+        return f'<tr><td><a href="/trh/{slug}">{html.escape(loc)}</a></td>{"".join(cells)}</tr>'
+
+    def table(names: list[str]) -> str:
+        return (
+            '<div class="table-wrap"><table class="data-table"><thead><tr><th>Lokalita</th>'
+            "<th>Prodej (nabídek)</th><th>Medián Kč/m²</th><th>Pronájem (nabídek)</th><th>Medián Kč/m²</th></tr></thead>"
+            f"<tbody>{''.join(row_html(n) for n in names)}</tbody></table></div>"
+        )
+
+    crumbs = [{"name": "Domů", "url": "https://realitify.cz/"}, {"name": "Trh s byty", "url": "https://realitify.cz/trh"}]
+    total = sum(int(r.get("active_count") or 0) for r in rows)
+    hoods_html = (
+        '<section class="pg-section is-pale" id="casti"><div class="pg-head"><h2 class="display">Městské části a čtvrti</h2></div>'
+        + table(hoods)
+        + "</section>"
+        if hoods
+        else ""
+    )
+    body = f"""      <section class="pg-hero">
+        {_breadcrumbs_html(crumbs)}
+        <p class="eyebrow">TRH S BYTY · {html.escape(month.upper())}</p>
+        <h1 class="display">Ceny bytů v českých městech – prodej a pronájem ({html.escape(month)})</h1>
+        <p class="lead">Mediány cen a cen za m² v {len(cities)} městech a {len(hoods)} městských částech z katalogu Realitify ({_fmt_int(total)} nabídek v přehledech). Vyberte město a zobrazte prodej, pronájem i jednotlivé dispozice.</p>
+      </section>
+      <section class="pg-section" id="mesta"><div class="pg-head"><h2 class="display">Města</h2></div>{table(cities)}</section>
+      {hoods_html}
+      <section class="pg-section"><p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />{html.escape(DISCLAIMER_CS)}</p></section>
+"""
+    title = f"Ceny bytů v městech ČR – prodej a pronájem ({month})"
+    desc = (
+        f"Přehled trhu s byty v {len(cities)} městech a {len(hoods)} čtvrtích ({month}): mediány cen, "
+        "ceny za m² a počty nabídek pro prodej i pronájem."
+    )
+    return _page_shell(
+        title=title, description=desc, canonical="https://realitify.cz/trh", body=body, json_ld=[_breadcrumb_ld(crumbs)]
+    )
+
+
+def render_trh_locality_hub(
+    locality: str,
+    offers: dict[str, dict[str, Any]],
+    disp_by_offer: dict[str, list[str]],
+    summaries: dict[tuple[str, str, str], dict[str, Any]],
+    children: list[str],
+    *,
+    month: str,
+) -> str:
+    """/trh/{locality} – links to sale + rent and to every disposition page of both."""
+    slug = slugify_locality(locality)
+    blocks = []
+    for offer in ("prodej", "pronajem"):
+        if offer not in offers:
+            continue
+        s = _summary(summaries, locality, offer)
+        chip_list = []
+        for d in disp_by_offer.get(offer, []):
+            ds = _summary(summaries, locality, offer, d)
+            extra = f" · {_fmt_m2(ds.get('median_price_per_m2'))}" if ds else ""
+            chip_list.append(
+                f'<a class="pg-chip is-link" href="/trh/{slug}/{offer}/{slugify_disposition(d)}">{html.escape(d)}{extra}</a>'
+            )
+        blocks.append(
+            f"""      <section class="pg-section" id="{offer}"><div class="pg-head"><h2 class="display">{offer_label(offer).capitalize()} bytů – {html.escape(locality)}</h2></div>
+        <p>{_fmt_int(s.get('active_count') or offers[offer].get('active_count'))} nabídek, medián {_fmt_czk(s.get('median_price'))}, medián {_fmt_m2(s.get('median_price_per_m2'))}.
+        <a href="/trh/{slug}/{offer}">Všechny dispozice – {offer_label(offer)} →</a></p>
+        <div class="pg-chips">{''.join(chip_list)}</div></section>"""
+        )
+    kids = ""
+    if children:
+        kids = (
+            '<section class="pg-section is-pale"><div class="pg-head"><h2 class="display">Části a čtvrti</h2></div><div class="pg-chips">'
+            + "".join(f'<a class="pg-chip is-link" href="/trh/{slugify_locality(c)}">{html.escape(c)}</a>' for c in children)
+            + "</div></section>"
+        )
+    crumbs = [
+        {"name": "Domů", "url": "https://realitify.cz/"},
+        {"name": "Trh s byty", "url": "https://realitify.cz/trh"},
+        {"name": locality, "url": f"https://realitify.cz/trh/{slug}"},
+    ]
+    nl = "\n"
+    body = f"""      <section class="pg-hero">
+        {_breadcrumbs_html(crumbs)}
+        <p class="eyebrow">{html.escape(locality.upper())} · {html.escape(month.upper())}</p>
+        <h1 class="display">Trh s byty – {html.escape(locality)}: ceny prodeje a pronájmu ({html.escape(month)})</h1>
+        <p class="lead"><a href="/trh">← Všechna města</a></p>
+      </section>
+{nl.join(blocks)}
+{kids}
+      <section class="pg-section"><p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />{html.escape(DISCLAIMER_CS)}</p></section>
+"""
+    parts = []
+    for offer in ("prodej", "pronajem"):
+        m2 = _summary(summaries, locality, offer).get("median_price_per_m2")
+        if offer in offers and m2:
+            parts.append(f"{offer_label(offer)} {_fmt_m2(m2)}")
+    title = f"Trh s byty {locality} – ceny prodeje a pronájmu ({month})"
+    desc = (
+        f"Ceny bytů v lokalitě {locality} ({month}): " + ", ".join(parts)
+        + ". Odkazy na jednotlivé dispozice a srovnání prodeje a pronájmu."
+    )
+    return _page_shell(
+        title=title, description=desc, canonical=f"https://realitify.cz/trh/{slug}", body=body, json_ld=[_breadcrumb_ld(crumbs)]
     )

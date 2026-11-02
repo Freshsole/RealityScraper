@@ -88,7 +88,8 @@ class SeoMetaTests(unittest.TestCase):
         desc = re.search(r'name="description" content="(.*?)"', html).group(1)
         _assert_clean_meta(title, desc)
         self.assertIn("–", title)
-        self.assertIn("medián", title)
+        self.assertIn("ceny a nabídky", title)
+        self.assertRegex(title, r"\(\w+ \d{4}\)")
 
     def test_index_month_title_czech_and_clean(self) -> None:
         months = self.store.list_index_months(completed_only=True)

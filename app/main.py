@@ -893,8 +893,29 @@ async def trh_page_md_route(locality: str, offer: str, disposition: str = "") ->
 
 
 async def market_trh_hub() -> Response:
-    """The /trh hub was removed; keep old links and bookmarks working."""
-    return RedirectResponse("/hledat", status_code=301)
+    from app import ssr_cache
+
+    page = ssr_cache.get_page("trh_hub:html")
+    if page and page.get("body"):
+        return HTMLResponse(
+            page["body"],
+            headers={"Cache-Control": "public, max-age=1800", "X-Data-As-Of": page.get("data_as_of") or ""},
+        )
+    # Cache not built yet: temporary redirect (not 301) so search engines retry later.
+    return RedirectResponse("/hledat", status_code=302)
+
+
+async def market_trh_locality_hub(locality: str) -> Response:
+    from app import market_pages, ssr_cache
+
+    loc = market_pages.locality_from_slug(locality)
+    page = ssr_cache.get_page(f"trh_loc:{market_pages.slugify_locality(loc)}:html")
+    if page and page.get("body"):
+        return HTMLResponse(
+            page["body"],
+            headers={"Cache-Control": "public, max-age=1800", "X-Data-As-Of": page.get("data_as_of") or ""},
+        )
+    return RedirectResponse("/trh", status_code=302)
 
 
 async def market_trh(
@@ -1405,6 +1426,7 @@ app.add_api_route("/hledat", market_search, methods=["GET"], include_in_schema=F
 app.add_api_route("/o-nas", about_cs, methods=["GET"], include_in_schema=False)
 app.add_api_route("/about", about_en, methods=["GET"], include_in_schema=False)
 app.add_api_route("/trh", market_trh_hub, methods=["GET"], include_in_schema=False)
+app.add_api_route("/trh/{locality}", market_trh_locality_hub, methods=["GET"], include_in_schema=False)
 app.add_api_route("/trh/{locality}/{offer}/og.png", market_trh_og_page, methods=["GET"], include_in_schema=False)
 app.add_api_route(
     "/trh/{locality}/{offer}/{disposition}/og.png",
