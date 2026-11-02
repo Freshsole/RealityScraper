@@ -22,11 +22,13 @@ TOOLS = [
      "Browse and filter current listings: locality, offer_type, price, layout, area, sort newest | cheapest | best_value, max 20.", "search"),
     ("new_listings", "Nabídky poprvé viděné za posledních X hodin.", "Listings first seen in the last N hours.", "clock"),
     ("get_listing", "Detail jedné nabídky podle id nebo listing_key z předchozího hledání.", "One listing by id or listing_key from a prior search.", "doc"),
+    ("get_listing_photos", "Stáhne fotky nabídky a vrátí je jako vložené obrázky, které se zobrazí přímo v chatu.", "Downloads a listing's photos and returns them as inline images that display directly in chat.", "image"),
     ("locality_stats", "Počet aktivních nabídek, průměr a medián ceny a Kč/m² pro lokalitu.", "Active count, average and median price and CZK/m² for a locality.", "chart"),
     ("price_check", "Je požadovaná cena férová oproti srovnatelným nabídkám (percentil, vs_avg_pct).", "Is an asking price fair versus comparable listings (percentile, vs_avg_pct).", "scale"),
     ("compare_localities", "Statistiky více lokalit vedle sebe.", "Statistics for two or more localities side by side.", "columns"),
 ]
 ICONS = {
+    "image": '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="m21 16-5-5-9 9"/>',
     "search": '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
     "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     "doc": '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/>',
@@ -125,10 +127,10 @@ def build(lang: str) -> str:
         </div>
       </section>
 
-      <section class="pg-section is-pale" id="nastroje" data-nav="{t('Nástroje', 'Tools')}" data-nav-desc="{t('Šest read-only nástrojů', 'Six read-only tools')}">
+      <section class="pg-section is-pale" id="nastroje" data-nav="{t('Nástroje', 'Tools')}" data-nav-desc="{t('Sedm read-only nástrojů', 'Seven read-only tools')}">
         <div class="pg-head reveal">
           <p class="eyebrow">{t('NÁSTROJE', 'TOOLS')}</p>
-          <h2 class="display">{t('Šest nástrojů pro práci s trhem', 'Six tools for working with the market')}</h2>
+          <h2 class="display">{t('Sedm nástrojů pro práci s trhem', 'Seven tools for working with the market')}</h2>
           <p>{t('Všechny mají readOnlyHint=true, destructiveHint=false, idempotentHint=true a openWorldHint=false. Lokality a dispozice se normalizují (Praha 5 / Smíchov / Prague 5; 2kk / 2+kk).', 'All tools set readOnlyHint=true, destructiveHint=false, idempotentHint=true and openWorldHint=false. Localities and layouts are normalised (Praha 5 / Smíchov / Prague 5; 2kk / 2+kk).')}</p>
         </div>
         <div class="feature-grid">{tools}</div>

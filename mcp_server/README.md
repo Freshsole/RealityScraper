@@ -33,7 +33,7 @@ MCP endpoint: `http://127.0.0.1:8100/mcp`
 npx @modelcontextprotocol/inspector
 ```
 
-Connect to `http://127.0.0.1:8100/mcp` (Streamable HTTP). Check `tools/list` and call all six tools.
+Connect to `http://127.0.0.1:8100/mcp` (Streamable HTTP). Check `tools/list` and call all seven tools (including `get_listing_photos`, which returns inline images).
 
 ## Production
 

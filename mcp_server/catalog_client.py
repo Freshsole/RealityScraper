@@ -462,3 +462,86 @@ async def compare_localities(
     if not isinstance(data, dict):
         raise CatalogError("Catalog API returned invalid compare payload.")
     return _wrap(data)
+
+
+MAX_PHOTO_BYTES = int(os.environ.get("MAX_PHOTO_BYTES") or str(1_500_000))
+_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+
+def _photo_urls(item: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for candidate in [item.get("image_url"), *(item.get("photos") or [])]:
+        url = str(candidate or "").strip()
+        if url.startswith("https://") and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def _is_public_host(url: str) -> bool:
+    """Reject literal/private IPs and localhost so the tool cannot be used for SSRF."""
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname or ""
+    if not host or host == "localhost":
+        return False
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    return True
+
+
+async def get_listing_photos(listing_id: str, limit: int = 3) -> tuple[dict[str, Any], list[tuple[bytes, str]]]:
+    """Download up to `limit` photos of a listing. Returns (meta, [(bytes, mime), ...])."""
+    raw = str(listing_id or "").strip()
+    if not raw:
+        raise CatalogError("listing_id is required. Pass numeric id or listing_key from search_listings.")
+    params: dict[str, Any] = {"enrich": "0"}
+    params["id" if raw.isdigit() else "listing_key"] = raw
+    data = await _get("/api/public/catalog/item", params)
+    if not isinstance(data, dict):
+        raise CatalogError("Catalog API returned invalid listing payload.")
+    urls = _photo_urls(data)
+    limit_n = min(max(_as_int(limit, 3) or 3, 1), 6)
+    images: list[tuple[bytes, str]] = []
+    skipped = 0
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, follow_redirects=False) as client:
+        for url in urls:
+            if len(images) >= limit_n:
+                break
+            if not _is_public_host(url):
+                skipped += 1
+                continue
+            try:
+                response = await client.get(url)
+            except httpx.HTTPError:
+                skipped += 1
+                continue
+            mime = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if (
+                response.status_code != 200
+                or mime not in _IMAGE_TYPES
+                or not response.content
+                or len(response.content) > MAX_PHOTO_BYTES
+            ):
+                skipped += 1
+                continue
+            images.append((response.content, mime))
+    meta = _wrap(
+        {
+            "id": data.get("id"),
+            "title": sanitize_text(data.get("name") or data.get("title") or "", 160),
+            "photos_total": len(urls),
+            "photos_returned": len(images),
+            "photos_skipped": skipped,
+            "source_url": str(data.get("url") or "").strip(),
+            "realitify_url": realitify_url(data),
+        }
+    )
+    return meta, images

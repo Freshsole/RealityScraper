@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections import defaultdict, deque
@@ -10,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.utilities.types import Image
 from mcp.types import ToolAnnotations
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -21,6 +23,7 @@ from catalog_client import (
     CatalogError,
     compare_localities as fetch_compare,
     get_listing as fetch_listing,
+    get_listing_photos as fetch_photos,
     locality_stats as fetch_locality_stats,
     new_listings as fetch_new,
     price_check as fetch_price_check,
@@ -34,13 +37,14 @@ INSTRUCTIONS = """
 Realitify MCP is a read-only connector for Czech real-estate listings (Czech Republic only).
 Currency is CZK; floor area is m²; price_per_m2 is CZK/m². Responses include data_as_of (ISO time of newest catalog last_seen), units, source, and source_url.
 
-Six tools — pick one:
+Seven tools — pick one:
 1) search_listings — current apartments to rent/buy matching filters (locality, price, disposition). Default use for “hledám byt”, “flat in Prague under 20000”.
 2) new_listings — what first appeared in the last N hours (Realitify first_seen). Use for “co je nového”, “new rentals today”. Do not use for general browsing without a time window.
 3) get_listing — one listing by id/listing_key from a prior search. Do not guess ids.
 4) locality_stats — active count + median/avg price and CZK/m² for a locality. Use for “kolik stojí nájem v Brně”.
 5) price_check — is an asking price fair vs comparables (median primary). Use for “je 25000 za 2+kk hodně?”.
 6) compare_localities — side-by-side stats for 2+ localities. Use for “Praha vs Brno”.
+7) get_listing_photos — downloads the listing's photos and returns them as inline images you can show in chat (external image URLs usually cannot be rendered). Use when the user wants to see photos of a listing.
 
 Do not invent listings or prices. If a locality is unknown, errors include suggestions — retry with a suggested name.
 No writes, no monitors, no account actions via this public MCP.
@@ -215,6 +219,35 @@ async def get_listing(
         return await fetch_listing(listing_id)
     except CatalogError as exc:
         raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(
+    output_schema=None,
+    annotations=ToolAnnotations(
+        title="Listing photos",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
+async def get_listing_photos(
+    listing_id: Annotated[str, "Numeric id or listing_key from search_listings/new_listings."],
+    limit: Annotated[int, "How many photos to download, 1-6. Default 3."] = 3,
+) -> list[Any]:
+    """Use when: user wants to SEE photos of a listing already returned by search_listings/new_listings.
+
+    Downloads the images server-side and returns them as inline image content, so they display directly in chat
+    (plain external image URLs usually cannot be rendered). Do NOT use for text details (get_listing).
+    """
+    try:
+        meta, images = await fetch_photos(listing_id, limit)
+    except CatalogError as exc:
+        raise ToolError(str(exc)) from exc
+    parts: list[Any] = [json.dumps(meta, ensure_ascii=False)]
+    for data, mime in images:
+        parts.append(Image(data=data, format=mime.split("/", 1)[1]))
+    return parts
 
 
 @mcp.tool(annotations=_annotations("Locality statistics"))
