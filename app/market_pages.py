@@ -163,14 +163,29 @@ def evaluate_market_page(
     prev = store.get_market_seo_page(locality, offer, disposition)
     was_active = bool(prev and prev.get("active"))
     active = decide_market_page_active(was_active, count)
-    store.set_market_seo_page(
-        locality,
-        offer,
-        disposition,
-        active=active,
-        quality_count=count,
-    )
+    _persist_market_state(store, locality, offer, disposition, active, count)
     return active, count
+
+
+_PERSIST_BACKOFF_UNTIL = 0.0
+
+
+def _persist_market_state(store: Store, locality: str, offer: str, disposition: str, active: bool, count: int) -> None:
+    """Best-effort save of the hysteresis state.
+
+    The page decision above is already computed; a locked catalog (scraper writing) must not abort a
+    whole SSR rebuild. After one lock failure skip writes for a minute instead of waiting on every page.
+    """
+    import sqlite3
+    import time
+
+    global _PERSIST_BACKOFF_UNTIL
+    if time.monotonic() < _PERSIST_BACKOFF_UNTIL:
+        return
+    try:
+        store.set_market_seo_page(locality, offer, disposition, active=active, quality_count=count)
+    except sqlite3.OperationalError:
+        _PERSIST_BACKOFF_UNTIL = time.monotonic() + 60.0
 
 
 def _active_count(store: Store, locality: str, offer: str) -> int:
