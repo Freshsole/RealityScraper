@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import hmac
+import ipaddress
 import json
 import secrets
+import socket
 import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
+
+import httpx
 
 from app import billing as stripe_billing
 from app import config
@@ -127,6 +133,68 @@ def require_mcp(store: Store, authorization: str | None) -> dict[str, Any]:
     return key
 
 
+MAX_PHOTO_BYTES = 1_500_000
+MAX_PHOTOS = 6
+_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+
+def _public_host(url: str) -> bool:
+    host = urlparse(url).hostname or ""
+    if not host or host == "localhost":
+        return False
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return False
+    return True
+
+
+def _listing_photo_urls(item: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for candidate in [*(item.get("photos") or []), item.get("image_url") or item.get("image")]:
+        url = str(candidate or "").strip()
+        if url.startswith("//"):
+            url = "https:" + url
+        if url.startswith(("http://", "https://")) and url not in urls:
+            urls.append(url)
+    return urls
+
+
+def download_photos(urls: list[str], limit: int) -> tuple[list[dict[str, str]], int]:
+    """Fetch photos server-side. Returns (MCP image blocks, skipped count)."""
+    blocks: list[dict[str, str]] = []
+    skipped = 0
+    with httpx.Client(timeout=20.0, follow_redirects=False) as client:
+        for url in urls:
+            if len(blocks) >= limit:
+                break
+            if not _public_host(url):
+                skipped += 1
+                continue
+            try:
+                response = client.get(url)
+            except httpx.HTTPError:
+                skipped += 1
+                continue
+            mime = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if (
+                response.status_code != 200
+                or mime not in _IMAGE_TYPES
+                or not response.content
+                or len(response.content) > MAX_PHOTO_BYTES
+            ):
+                skipped += 1
+                continue
+            blocks.append(
+                {"type": "image", "data": base64.b64encode(response.content).decode("ascii"), "mimeType": mime}
+            )
+    return blocks, skipped
+
+
 def compact_listing(item: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": item.get("id"),
@@ -139,6 +207,7 @@ def compact_listing(item: dict[str, Any]) -> dict[str, Any]:
         "locality": item.get("locality") or "",
         "url": item.get("url") or "",
         "portal": item.get("portal") or "",
+        "image_url": item.get("image_url") or item.get("image") or "",
         "links": [
             {
                 "url": link.get("url"),
@@ -219,6 +288,30 @@ def run_tool(store: Store, name: str, arguments: dict[str, Any] | None, catalog:
         if not item:
             raise KeyError("Inzerát neexistuje")
         return compact_listing(item)
+    if name == "get_listing_photos":
+        monitor_id = str(args.get("monitor_id") or "")
+        listing_id = args.get("listing_id") or args.get("id")
+        try:
+            listing_id_n = int(listing_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Chybí listing_id") from exc
+        item = catalog_store.catalog_item(monitor_id, listing_id_n)
+        if not item and catalog_store is not store:
+            item = store.catalog_item(monitor_id, listing_id_n)
+        if not item:
+            raise KeyError("Inzerát neexistuje")
+        urls = _listing_photo_urls(item)
+        limit = min(max(_as_int(args.get("limit"), 3), 1), MAX_PHOTOS)
+        blocks, skipped = download_photos(urls, limit)
+        return {
+            "id": item.get("id"),
+            "name": item.get("name") or item.get("title") or "",
+            "url": item.get("url") or "",
+            "photos_total": len(urls),
+            "photos_returned": len(blocks),
+            "photos_skipped": skipped,
+            "_images": blocks,
+        }
     if name == "list_monitors":
         return {"items": [compact_monitor(item) for item in store.list_monitors()]}
     if name == "create_monitor":
@@ -283,6 +376,22 @@ TOOLS = [
             "properties": {
                 "monitor_id": {"type": "string"},
                 "listing_id": {"type": "integer"},
+            },
+            "required": ["monitor_id", "listing_id"],
+        },
+    },
+    {
+        "name": "get_listing_photos",
+        "description": (
+            "Stáhne fotky inzerátu a vrátí je jako vložené obrázky, které se zobrazí přímo v chatu "
+            "(externí URL fotek klient často nezobrazí). Použij po search_listings/get_listing."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "monitor_id": {"type": "string"},
+                "listing_id": {"type": "integer"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 6, "description": "Kolik fotek, výchozí 3"},
             },
             "required": ["monitor_id", "listing_id"],
         },
@@ -385,10 +494,14 @@ def handle_mcp(store: Store, message: dict[str, Any], catalog: Store | None = No
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
         try:
             payload = run_tool(store, name, arguments, catalog)
+            images = payload.pop("_images", []) if isinstance(payload, dict) else []
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {"content": [{"type": "text", "text": tool_text(payload)}], "isError": False},
+                "result": {
+                    "content": [{"type": "text", "text": tool_text(payload)}, *images],
+                    "isError": False,
+                },
             }
         except PermissionError as exc:
             return {
