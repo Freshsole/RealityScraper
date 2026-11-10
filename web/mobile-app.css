@@ -4,7 +4,7 @@
    - catalog filters scroll sideways instead of wrapping into a wall
    - 16px inputs (no iOS zoom on focus), 44px+ tap targets */
 
-.is-caps{text-transform:uppercase}
+.is-caps{}
 .m-filter-btn{display:none}
 
 @media (max-width:900px){

@@ -56,3 +56,26 @@ Kompletní mapa scrapingu (procesy, HTTP, SQLite, rate limity, napojení na appk
 - Env knoby: `SCRAPE_CONCURRENCY` (default 16), `SCRAPE_CONCURRENCY_FLOOR` (4), `SCRAPE_RECENT_PAGES` (4), `SCRAPE_DISCOVERY_DEADLINE_SEC` (50), `SCRAPE_MONITOR_DEADLINE_SEC` (55), `SCRAPE_FULL_MARKET_DEADLINE_SEC` (70), `SCRAPE_BATCH_COMMIT` (500), `SCRAPE_ERROR_RATE_ALERT` (0.10).
 
 Známá omezení živého webu: M&M Reality často vrací Cloudflare 403; Reality.cz mívá maintenance stránku; UlovDomov `offer/find` POST občas 500 — klient padá na `__NEXT_DATA__` / HTML. Parsery jsou fixture-testované a běží v minutové frontě i tak.
+
+## AI chatbot a AI shrnutí inzerátů
+
+Chat (`POST /api/chat`, jen pro přihlášené) a shrnutí inzerátů (`GET /api/listings/<id>/summary`) běží přes DeepSeek
+(OpenAI-kompatibilní API). Všechna LLM volání jdou přes `ai/llm.py`, bez fallbacku na jiný model a bez retry.
+Do modelu se neposílají osobní údaje, jen text dotazu a data inzerátů.
+
+Denní limity zpráv (`ai/limits.py`): free 10, Start 100, PRO 1000 (individual stejně jako PRO).
+
+### Nastavení v Coolify
+
+V aplikaci (Configuration → Environment Variables) přidejte:
+
+| Proměnná | Hodnota |
+| --- | --- |
+| `AI_ENABLED` | `true` (bez ní se AI routy vůbec nezaregistrují) |
+| `LLM_API_KEY` | API klíč z platform.deepseek.com (označte jako secret) |
+| `LLM_MODEL` | `deepseek-flash` |
+| `LLM_BASE_URL` | `https://api.deepseek.com` (výchozí, nastavovat jen při změně) |
+
+Pak aplikaci znovu nasaďte. Při `AI_ENABLED=true` a chybějící `LLM_API_KEY` nebo `LLM_MODEL` aplikace hned při startu
+spadne s chybou. Dávkové dogenerování shrnutí: v terminálu kontejneru
+`python scripts/generate_summaries.py --limit 50`.

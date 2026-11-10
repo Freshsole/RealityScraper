@@ -154,6 +154,22 @@ def _init_user_store(
     user_store.save_billing_record(billing)
 
 
+def _release_unverified_email(global_store: Store, email_norm: str) -> None:
+    """An address nobody has confirmed must not lock out its real owner.
+
+    While e-mail confirmation is enforced, an unconfirmed account cannot do anything (writes are blocked),
+    so it is dropped when somebody registers the same address again (on a local dev box always, for re-testing). The confirmed owner is never affected.
+    """
+    from app.emailing import store as email_store
+
+    existing = user_registry.get_user_by_email(global_store, email_norm)
+    if not existing or existing.get("email_verified") or existing.get("role") == "admin":
+        return
+    if not email_store.verification_required(global_store) and not config.DEV_VERIFY_CODE:
+        return  # switched off in production: unconfirmed accounts are fully usable, never take them over
+    user_registry.delete_user(global_store, str(existing["id"]))
+
+
 def register(
     global_store: Store,
     name: str,
@@ -167,6 +183,9 @@ def register(
     email_norm = (email or "").strip().lower()
     if not email_norm or "@" not in email_norm:
         raise ValueError("Zadej platný e-mail")
+    if email_norm == (config.ADMIN_EMAIL or "").strip().lower():
+        # create_user() promotes ADMIN_EMAIL to admin: never reachable via public sign-up.
+        raise ValueError("Tento e-mail nelze použít k registraci")
     if len(password or "") < 8:
         raise ValueError("Heslo musí mít alespoň 8 znaků")
     first, last = split_name(name)
@@ -178,6 +197,7 @@ def register(
         # An unknown/expired promo code (stale ?promo= link, code from another Stripe mode)
         # must never block sign-up; the account is created without a discount.
         promo = ""
+    _release_unverified_email(global_store, email_norm)
     user = user_registry.create_user(
         global_store,
         email=email_norm,
@@ -206,6 +226,40 @@ def login(global_store: Store, email: str, password: str) -> tuple[dict[str, Any
     public = user_registry.public_user(user)
     assert public is not None
     return public, token
+
+
+def login_with_google(
+    global_store: Store,
+    email: str,
+    name: str,
+    make_user_store: Callable[[str], Store] | None = None,
+) -> tuple[dict[str, Any], str, bool]:
+    """Sign in (or sign up) with an e-mail Google has verified. Returns (user, session token, created)."""
+    import secrets
+
+    email_norm = (email or "").strip().lower()
+    if not email_norm or "@" not in email_norm:
+        raise ValueError("Zadej platný e-mail")
+    user = user_registry.get_user_by_email(global_store, email_norm)
+    created = False
+    if user is None:
+        first, last = split_name(name)
+        if not first:
+            first = email_norm.split("@")[0]
+        user = user_registry.create_user(
+            global_store, email=email_norm, password=secrets.token_urlsafe(32), first=first, last=last
+        )
+        created = True
+        if make_user_store is not None:
+            _init_user_store(make_user_store(user["id"]), first=first, last=last, email=email_norm)
+    if user.get("role") == "admin":
+        raise ValueError("Administrátorský účet se přihlašuje heslem")
+    if not user.get("email_verified"):
+        user_registry.mark_email_verified(global_store, user["id"])
+    token = user_registry.create_session(global_store, user["id"])
+    public = user_registry.public_user(user_registry.get_user_by_id(global_store, user["id"]))
+    assert public is not None
+    return public, token, created
 
 
 def user_from_session(global_store: Store, token: str | None) -> dict[str, Any] | None:

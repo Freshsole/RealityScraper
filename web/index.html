@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -15,11 +16,13 @@
     <meta name="apple-mobile-web-app-title" content="Realitify" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
     <link rel="stylesheet" href="/static/mobile-app.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/static/site/bara-picker.css?v=__ASSET_VERSION__" />
+    <link rel="stylesheet" href="/static/site/ai-chat.css?v=8" />
     <script>
       (function () {
         var path = (location.pathname || "/").replace(/\/$/, "") || "/prehled";
@@ -32,8 +35,9 @@
   </head>
   <body>
     <nav class="nav">
+      <div class="nav-pill">
       <a class="brand" href="/prehled">
-        <img class="brand-mark" src="/static/assets/nav/logo.svg" width="20" height="20" alt="" />
+        <img class="brand-mark" src="/static/site/assets/logo.svg" width="16" height="26" alt="" />
         REALITIFY
       </a>
       <div class="nav-tabs">
@@ -76,14 +80,27 @@
           </div>
         </div>
       </div>
+    </div>
     </nav>
 
     <div id="view-overview">
       <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
       <div class="ov-shell">
-        <header class="set-head ov-head">
-          <h1 class="is-caps">Přehled</h1>
-          <p>Nové nabídky a změny cen z vašich hlídacích profilů. Každý profil hlídá své hledání 24/7 a upozornění jde na Discord, e-mail nebo push.</p>
+        <header class="ov-welcome">
+          <div class="ov-welcome-copy">
+            <h1 id="ov-welcome-title">Bára vás vítá zpátky</h1>
+            <p id="ov-welcome-text">Nové nabídky a změny cen z vašich hlídacích profilů. Každý profil hlídá své hledání 24/7 a upozornění jde na Discord, e-mail nebo push.</p>
+            <ul class="ov-welcome-facts">
+              <li><b>24/7</b>hlídání</li>
+              <li><b>60 s</b>kontrola</li>
+              <li><b>3</b>kanály upozornění</li>
+            </ul>
+            <div class="ov-welcome-actions">
+              <a class="btn" href="/nastaveni/profily">Moje hlídací profily</a>
+              <button class="btn btn-ghost" type="button" data-ai-open hidden>Poradit se s Bárou</button>
+            </div>
+          </div>
+          <img class="ov-welcome-dog" src="/static/assets/settings/overview-dog.webp" width="420" height="318" alt="" decoding="async" />
         </header>
         <p id="error" class="error" hidden></p>
         <section class="ov-stats">
@@ -93,10 +110,10 @@
             <p class="ov-unit">notifikací</p>
           </article>
           <article class="ov-card ov-facts">
-            <div class="ov-fact"><span>Sledovaných ID</span><strong id="tracked">–</strong></div>
-            <div class="ov-fact"><span>V katalogu</span><strong id="total">–</strong></div>
-            <div class="ov-fact"><span>Poslední kontrola</span><strong id="last-check">ještě ne</strong></div>
-            <div class="ov-fact"><span>Interval</span><strong id="interval">60 s</strong></div>
+            <div class="ov-fact"><span>Nabídek ve vašem hlídání</span><strong id="tracked">–</strong></div>
+            <div class="ov-fact"><span>Bytů v celé databázi</span><strong id="total">–</strong></div>
+            <div class="ov-fact"><span>Bára naposledy zkontrolovala</span><strong id="last-check">zatím ne</strong></div>
+            <div class="ov-fact"><span>Kontroluje</span><strong id="interval">každou minutu</strong></div>
           </article>
         </section>
         <section class="ov-card ov-block">
@@ -113,7 +130,8 @@
               <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
             </div>
             <div class="ov-empty-msg">
-              <strong>Zatím tady nic není</strong>
+              <img class="ov-empty-dog" src="/static/assets/settings/empty-sniff-dog.webp" width="140" height="112" alt="" loading="lazy" decoding="async" />
+              <strong>Bára čmuchá první nabídky</strong>
               <p>Nastavte si hlídací psy, ať vám žádná nabídka neuteče.</p>
               <a class="btn" href="/nastaveni/profily">Nastavit hlídacího psa</a>
             </div>
@@ -133,9 +151,10 @@
               <div class="ov-skel-card"><div class="ov-skel-photo"></div><i class="w60"></i><i class="w40"></i><i class="w80"></i></div>
             </div>
             <div class="ov-empty-msg">
+              <img class="ov-empty-dog" src="/static/assets/settings/empty-catalog-dog.webp" width="140" height="102" alt="" loading="lazy" decoding="async" />
               <strong>Zatím tady nic není</strong>
-              <p>Nastavte si hlídací psy, ať vám žádná nabídka neuteče.</p>
-              <a class="btn" href="/nastaveni/profily">Nastavit hlídacího psa</a>
+              <p>Zatím můžete začít procházet katalog nabídek.</p>
+              <a class="btn" href="/nabidka">Procházet katalog</a>
             </div>
           </div>
         </section>
@@ -255,11 +274,11 @@
         <div class="set-main">
           <section class="set-panel" id="panel-profile" hidden>
             <header class="set-head">
-              <h1>Nastavení účtu</h1>
+              <h1 data-icon="user">Nastavení účtu</h1>
               <p>Osobní údaje a body dojezdu</p>
             </header>
             <article class="set-card">
-              <h2>Osobní údaje</h2>
+              <h2 data-icon="user">Osobní údaje</h2>
               <div class="set-grid-2">
                 <label>Jméno<input id="profile-first" /></label>
                 <label>Příjmení<input id="profile-last" /></label>
@@ -272,21 +291,26 @@
                 <label>Telefonní číslo<input id="profile-phone" /></label>
               </div>
               <div class="set-actions-end">
-                <button class="btn" id="profile-save" type="button">Uložit změny</button>
+                <button class="btn" id="profile-save" type="button" data-icon="save">Uložit změny</button>
               </div>
             </article>
             <article class="set-card">
-              <h2>Body dojezdu</h2>
+              <h2 data-icon="paw">Váš hlídací pes Bára</h2>
+              <p class="set-copy">Vyberte si, jak bude Bára vypadat. Použije se jako váš profilový obrázek, nebo nahrajte vlastní.</p>
+              <div id="bara-picker"></div>
+            </article>
+            <article class="set-card">
+              <h2 data-icon="route">Body dojezdu</h2>
               <p class="set-copy">Až dva body, třeba práce nebo metro. V detailu nabídky uvidíte čas autem a pěšky.</p>
               <div id="commute-points"></div>
               <button class="btn btn-ghost" id="commute-add" type="button" data-icon="plus">Přidat bod</button>
               <p class="set-hint">Tarif Start: 2 body, Pro: až 5 bodů</p>
             </article>
             <article class="set-card set-danger">
-              <h2>Nebezpečná zóna</h2>
+              <h2 data-icon="alert">Nebezpečná zóna</h2>
               <div class="set-danger-row">
                 <p>Smazání je nevratné. Odstraní se účet, hlídací profily i historie vyhledávání.</p>
-                <button class="btn btn-danger-outline" id="profile-wipe" type="button">Smazat účet</button>
+                <button class="btn btn-danger-outline" id="profile-wipe" type="button" data-icon="trash">Smazat účet</button>
               </div>
             </article>
           </section>
@@ -294,28 +318,33 @@
           <section class="set-panel" id="panel-watch" hidden>
             <div id="watch-home">
               <header class="set-head">
-                <h1>Hlídací profily</h1>
+                <h1 data-icon="eye">Hlídací profily</h1>
                 <p>Každý profil hlídá nabídky podle vašich kritérií</p>
               </header>
               <div class="set-limit">
                 <p><img class="set-ico-inline" src="/static/assets/settings/icon-tick.svg" alt="" /><span id="watch-limit-copy"></span></p>
-                <a class="btn" href="/nastaveni/predplatne">Přejít na Pro</a>
+                <a class="btn" href="/nastaveni/predplatne" data-icon="crown">Přejít na Pro</a>
               </div>
               <div id="monitor-list" class="watch-list"></div>
               <button class="watch-create" id="watch-create" type="button">
-                <span><img src="/static/assets/settings/icon-add.svg" alt="" />Vytvořit hlídací profil</span>
-                <small id="watch-create-hint"></small>
+                <img class="watch-create-dog" src="/static/assets/settings/watch-dogs.webp" width="380" height="288" alt="" loading="lazy" decoding="async" />
+                <span class="watch-create-copy">
+                  <strong class="watch-create-title">Bára sama na všechno nestačí?</strong>
+                  <span class="watch-create-text">Vytvořte si další hlídací psy. Každý hlídá jiné město, dispozici nebo cenu a vy budete u nových nabídek první.</span>
+                  <span class="watch-create-cta"><img src="/static/assets/settings/icon-add.svg" alt="" />Vytvořit hlídací profil</span>
+                  <small id="watch-create-hint"></small>
+                </span>
               </button>
             </div>
             <div id="watch-editor" hidden>
               <header class="set-head">
-                <button class="set-back" id="watch-back" type="button">← Zpět na profily</button>
+                <button class="set-back" id="watch-back" type="button" data-icon="arrowLeft">Zpět na profily</button>
                 <h1 id="watch-editor-title">Nový hlídací profil</h1>
                 <p>Filtry nastavíte jednou, portál můžete volitelně omezit</p>
               </header>
               <form id="monitor-form" class="set-card form-card">
                 <input type="hidden" id="monitor-id" />
-                <h2>Profil a odesílání</h2>
+                <h2 data-icon="send">Profil a odesílání</h2>
                 <label>Název<input id="monitor-name" placeholder="Praha 6–7 pronájem 2+kk" /></label>
                 <textarea id="monitor-url" rows="3" hidden placeholder="https://www.sreality.cz/hledani/…, bezrealitky.cz, reality.idnes.cz nebo reality.bazos.cz"></textarea>
                                 <label class="switch-field">
@@ -332,9 +361,9 @@
                 </div>
               </form>
               <article class="set-card" id="view-filters">
-                <h2>Kritéria hledání</h2>
+                <h2 data-icon="sliders">Kritéria hledání</h2>
                 <div class="filter-group locality-picker">
-                  <h3>Lokalita</h3>
+                  <h3 data-icon="pin">Lokalita</h3>
                   <div class="locality-search">
                     <span data-icon="pin" aria-hidden="true"></span>
                     <input id="f-locality-q" class="locality-input" placeholder="Začněte psát město nebo městskou část" autocomplete="off" />
@@ -356,7 +385,7 @@
                 <details class="more-filters" id="more-filters">
                   <summary>Další filtry</summary>
                 <div class="filter-group">
-                  <h3>Hlídané portály</h3>
+                  <h3 data-icon="grid">Hlídané portály</h3>
                   <div class="chip-row" id="monitor-portals">
                     <button type="button" class="chip on" data-portals="all" data-icon="grid">Všechny</button>
                     <button type="button" class="chip" data-portals="sreality"><img class="chip-logo" src="/static/icons/sreality.svg" alt="" />Sreality</button>
@@ -439,7 +468,7 @@
                   <textarea id="generated-url" rows="4" readonly hidden></textarea>
               </article>
               <details class="set-card msg-drop" id="view-message">
-                <summary><h2>Discord zpráva</h2></summary>
+                <summary><h2 data-icon="discord">Discord zpráva</h2></summary>
                 <p class="set-copy">Do polí vložte text nebo {{proměnnou}} a šablonu přiřaďte profilu</p>
                 <label>Šablona notifikace<select id="monitor-template"></select></label>
                 <div class="message-layout">
@@ -482,12 +511,12 @@
 
           <section class="set-panel" id="panel-notify" hidden>
             <header class="set-head">
-              <h1>Nastavení notifikací</h1>
+              <h1 data-icon="bell">Nastavení notifikací</h1>
               <p>Kudy a kdy vás upozorníme na nové nabídky</p>
             </header>
             <p class="mail-pause" role="status" hidden>Upozornění na nové nabídky e-mailem vám teď několik dní nechodí. Kvůli nečekanému nárůstu uživatelů na tom pracujeme. Nové nabídky najdete v aplikaci a upozornění přes push a Discord fungují dál.</p>
             <article class="set-card">
-              <h2>Kanály notifikací</h2>
+              <h2 data-icon="message">Kanály notifikací</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Discord notifikace</p>
@@ -498,14 +527,14 @@
                       <p class="set-row-sub">Na Realitify Discord serveru napište tento příkaz:</p>
                       <code id="discord-link-cmd">/link …</code>
                       <div class="discord-link-actions">
-                        <button class="btn btn-ghost" id="discord-link-copy" type="button">Kopírovat příkaz</button>
-                        <button class="btn btn-ghost" id="discord-link-refresh" type="button">Nový kód</button>
-                        <a class="set-link" id="discord-invite" href="#" target="_blank" rel="noopener" hidden>Otevřít Discord server</a>
+                        <button class="btn btn-ghost" id="discord-link-copy" type="button" data-icon="copy">Kopírovat příkaz</button>
+                        <button class="btn btn-ghost" id="discord-link-refresh" type="button" data-icon="refresh">Nový kód</button>
+                        <a class="set-link" id="discord-invite" href="#" target="_blank" rel="noopener" hidden data-icon="external">Otevřít Discord server</a>
                       </div>
                     </div>
                     <div id="discord-link-ok" hidden>
                       <p class="set-row-sub">Kanál <strong id="discord-channel-name"></strong> je propojený. Všechny monitory chodí sem.</p>
-                      <button class="btn btn-ghost" id="discord-unlink" type="button">Odpojit Discord</button>
+                      <button class="btn btn-ghost" id="discord-unlink" type="button" data-icon="x">Odpojit Discord</button>
                     </div>
                   </div>
                 </div>
@@ -541,7 +570,7 @@
                   <p class="set-row-title">SMS notifikace <span class="set-chip-pro">Pro</span></p>
                   <p class="set-row-sub">Notifikace o nových nabídkách přes SMS</p>
                 </div>
-                <a class="set-link" href="/nastaveni/predplatne">Zapnout v Pro</a>
+                <a class="set-link" href="/nastaveni/predplatne" data-icon="crown">Zapnout v Pro</a>
               </div>
               <div class="set-row is-muted">
                 <div>
@@ -552,7 +581,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>Frekvence a časování</h2>
+              <h2 data-icon="clock">Frekvence a časování</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Okamžité notifikace</p>
@@ -597,7 +626,7 @@
               </div>
             </article>
             <article class="set-card">
-              <h2>Typy upozornění</h2>
+              <h2 data-icon="bell">Typy upozornění</h2>
               <label class="set-type"><input type="checkbox" id="nt-new" checked /><span class="switch-ui" aria-hidden="true"></span>Nová nabídka odpovídající aktivnímu hlídacímu profilu</label>
               <label class="set-type"><input type="checkbox" id="nt-price" checked /><span class="switch-ui" aria-hidden="true"></span>Změna ceny u sledované nabídky bytů</label>
               <label class="set-type"><input type="checkbox" id="nt-expire" checked /><span class="switch-ui" aria-hidden="true"></span>Nabídka brzy expiruje nebo se zdá neaktivní</label>
@@ -606,18 +635,18 @@
             </article>
             <div class="set-actions-end">
               <button class="btn btn-ghost" id="digest-test" type="button" data-icon="send">Poslat test</button>
-              <button class="btn" id="settings-save" type="button">Uložit nastavení</button>
+              <button class="btn" id="settings-save" type="button" data-icon="save">Uložit nastavení</button>
             </div>
           </section>
 
           <section class="set-panel" id="panel-billing" hidden>
             <header class="set-head">
-              <h1>Předplatné a fakturace</h1>
+              <h1 data-icon="card">Předplatné a fakturace</h1>
               <p>Tarif, platby a faktury</p>
             </header>
             <article class="set-card">
               <div class="set-card-top">
-                <h2>Aktuální tarif</h2>
+                <h2 data-icon="crown">Aktuální tarif</h2>
                 <span class="set-pill-outline" id="billing-plan-pill">Aktivní plán: Zdarma</span>
               </div>
               <div class="set-plan">
@@ -634,7 +663,7 @@
                 <label for="billing-promo">Slevový kód</label>
                 <div class="bill-promo-row">
                   <input id="billing-promo" type="text" placeholder="např. TEST20" autocomplete="off" />
-                  <button class="btn btn-ghost" type="button" id="billing-promo-apply">Použít</button>
+                  <button class="btn btn-ghost" type="button" id="billing-promo-apply" data-icon="check">Použít</button>
                 </div>
                 <p class="bill-promo-hint">Platí na první objednávku. Se slevovým kódem odpadá 3denní zkušební doba</p>
                 <p class="bill-promo-status" id="billing-promo-status" hidden></p>
@@ -693,23 +722,23 @@
                 <p class="set-row-sub" id="billing-confirm-lead"></p>
                 <ul class="bill-confirm-list" id="billing-confirm-losses"></ul>
                 <div class="set-actions-end">
-                  <button type="button" class="btn btn-ghost" id="billing-confirm-cancel">Zpět</button>
-                  <button type="button" class="btn" id="billing-confirm-ok">Potvrdit přepnutí</button>
+                  <button type="button" class="btn btn-ghost" id="billing-confirm-cancel" data-icon="arrowLeft">Zpět</button>
+                  <button type="button" class="btn" id="billing-confirm-ok" data-icon="check">Potvrdit přepnutí</button>
                 </div>
               </div>
             </div>
             <article class="set-card" id="billing-payment-card" hidden>
-              <h2>Platební metoda</h2>
+              <h2 data-icon="card">Platební metoda</h2>
               <div class="set-card-row">
                 <div class="set-visa"><span id="billing-card-brand">Karta</span><div><strong id="billing-card-label">Žádná karta</strong><p id="billing-card-exp"></p></div></div>
                 <span class="set-chip-on">Výchozí</span>
               </div>
               <div class="set-actions">
-                <button class="btn btn-ghost" type="button" id="billing-change">Spravovat platbu ve Stripe</button>
+                <button class="btn btn-ghost" type="button" id="billing-change" data-icon="card">Spravovat platbu ve Stripe</button>
               </div>
             </article>
             <article class="set-card">
-              <h2>Historie faktur</h2>
+              <h2 data-icon="receipt">Historie faktur</h2>
               <table class="set-table">
                 <thead><tr><th>Datum</th><th>Částka</th><th>Tarif</th><th>Stav</th><th>Faktura</th></tr></thead>
                 <tbody id="billing-invoices">
@@ -718,17 +747,17 @@
               </table>
             </article>
             <article class="set-card set-danger" id="billing-cancel-card" hidden>
-              <h2>Zrušení předplatného</h2>
+              <h2 data-icon="x">Zrušení předplatného</h2>
               <div class="set-danger-row">
                 <p>Po zrušení se účet vrátí na tarif Zdarma, databáze bytů zůstane dostupná</p>
-                <button class="btn btn-danger-outline" id="billing-cancel" type="button">Zrušit předplatné</button>
+                <button class="btn btn-danger-outline" id="billing-cancel" type="button" data-icon="x">Zrušit předplatné</button>
               </div>
             </article>
           </section>
 
           <section class="set-panel" id="panel-agents" hidden>
             <header class="set-head">
-              <h1>AI agenti a MCP</h1>
+              <h1 data-icon="bot">AI agenti a MCP</h1>
               <p>Napojte ChatGPT, Claude, Grok nebo Cursor na svůj katalog inzerátů, vyžaduje tarif Pro</p>
             </header>
             <div id="agents-locked" class="set-limit" hidden>
@@ -745,44 +774,44 @@
             <div id="agents-live">
             <article class="set-card">
               <div class="set-card-top">
-                <h2>API klíče</h2>
+                <h2 data-icon="key">API klíče</h2>
                 <span class="set-pill-outline" id="agents-plan-pill">Pro</span>
               </div>
               <p class="set-copy">Klíč se zobrazí jen jednou. Vložte ho do Cursoru, Claude Desktopu, ChatGPT nebo Groku jako Bearer token</p>
               <div class="agent-create">
                 <label>Název klíče<input id="agent-key-name" placeholder="např. Cursor, Claude, ChatGPT" /></label>
-                <button class="btn" id="agent-key-create" type="button">Vygenerovat klíč</button>
+                <button class="btn" id="agent-key-create" type="button" data-icon="key">Vygenerovat klíč</button>
               </div>
               <div id="agent-key-once" class="agent-once" hidden>
                 <p class="set-row-title">Nový klíč (zkopírujte teď)</p>
                 <code id="agent-key-token"></code>
-                <button class="btn btn-ghost" id="agent-key-copy" type="button">Kopírovat</button>
+                <button class="btn btn-ghost" id="agent-key-copy" type="button" data-icon="copy">Kopírovat</button>
               </div>
               <div id="agent-key-list" class="agent-keys"></div>
             </article>
             <article class="set-card">
-              <h2>Připojení</h2>
+              <h2 data-icon="plug">Připojení</h2>
               <p class="set-copy" id="agents-url-copy">MCP endpoint a OpenAPI se doplní po načtení</p>
               <div class="agent-snips">
                 <div>
-                  <div class="agent-snip-head"><p class="set-row-title">Cursor</p><button class="btn btn-ghost" type="button" data-copy-snip="cursor">Kopírovat</button></div>
+                  <div class="agent-snip-head"><p class="set-row-title">Cursor</p><button class="btn btn-ghost" type="button" data-copy-snip="cursor" data-icon="copy">Kopírovat</button></div>
                   <pre id="agent-snip-cursor" class="agent-code"></pre>
                 </div>
                 <div>
-                  <div class="agent-snip-head"><p class="set-row-title">Claude.ai (custom connector)</p><button class="btn btn-ghost" type="button" data-copy-snip="claude_web">Kopírovat</button></div>
+                  <div class="agent-snip-head"><p class="set-row-title">Claude.ai (custom connector)</p><button class="btn btn-ghost" type="button" data-copy-snip="claude_web" data-icon="copy">Kopírovat</button></div>
                   <p class="set-copy" id="agents-claude-hint"></p>
                   <pre id="agent-snip-claude_web" class="agent-code"></pre>
                 </div>
                 <div>
-                  <div class="agent-snip-head"><p class="set-row-title">Claude Desktop</p><button class="btn btn-ghost" type="button" data-copy-snip="claude">Kopírovat</button></div>
+                  <div class="agent-snip-head"><p class="set-row-title">Claude Desktop</p><button class="btn btn-ghost" type="button" data-copy-snip="claude" data-icon="copy">Kopírovat</button></div>
                   <pre id="agent-snip-claude" class="agent-code"></pre>
                 </div>
                 <div>
-                  <div class="agent-snip-head"><p class="set-row-title">ChatGPT</p><button class="btn btn-ghost" type="button" data-copy-snip="chatgpt">Kopírovat</button></div>
+                  <div class="agent-snip-head"><p class="set-row-title">ChatGPT</p><button class="btn btn-ghost" type="button" data-copy-snip="chatgpt" data-icon="copy">Kopírovat</button></div>
                   <pre id="agent-snip-chatgpt" class="agent-code"></pre>
                 </div>
                 <div>
-                  <div class="agent-snip-head"><p class="set-row-title">Grok</p><button class="btn btn-ghost" type="button" data-copy-snip="grok">Kopírovat</button></div>
+                  <div class="agent-snip-head"><p class="set-row-title">Grok</p><button class="btn btn-ghost" type="button" data-copy-snip="grok" data-icon="copy">Kopírovat</button></div>
                   <pre id="agent-snip-grok" class="agent-code"></pre>
                 </div>
               </div>
@@ -792,11 +821,11 @@
 
           <section class="set-panel" id="panel-security" hidden>
             <header class="set-head">
-              <h1>Bezpečnost účtu</h1>
+              <h1 data-icon="shield">Bezpečnost účtu</h1>
               <p>Silné heslo a dvoufaktorové ověření</p>
             </header>
             <article class="set-card">
-              <h2>Změna hesla</h2>
+              <h2 data-icon="lock">Změna hesla</h2>
               <div class="pw-layout">
                 <div class="pw-fields">
                   <label>Současné heslo<input id="pw-current" type="password" autocomplete="current-password" /></label>
@@ -820,21 +849,21 @@
                 </div>
               </div>
               <div class="set-actions-end">
-                <button class="btn" id="pw-save" type="button">Změnit heslo</button>
+                <button class="btn" id="pw-save" type="button" data-icon="lock">Změnit heslo</button>
               </div>
             </article>
             <article class="set-card">
               <div class="set-card-top">
-                <h2>Dvoufaktorové ověření (2FA)</h2>
+                <h2 data-icon="shield">Dvoufaktorové ověření (2FA)</h2>
                 <span class="set-pill-warn">Neaktivní</span>
               </div>
               <p class="set-copy">Po přihlášení zadáte kód z autentifikační aplikace v mobilu</p>
               <p class="set-kicker">Podporované aplikace</p>
               <p class="set-copy">Google Authenticator, Authy, Microsoft Authenticator a další kompatibilní aplikace.</p>
-              <button class="btn" id="sec-2fa" type="button">Aktivovat 2FA</button>
+              <button class="btn" id="sec-2fa" type="button" data-icon="shield">Aktivovat 2FA</button>
             </article>
             <article class="set-card">
-              <h2>Aktivní relace</h2>
+              <h2 data-icon="device">Aktivní relace</h2>
               <div class="set-session is-now">
                 <img src="/static/assets/settings/icon-device-desktop.svg" alt="" />
                 <div>
@@ -842,10 +871,10 @@
                   <p class="set-row-sub">Lokální aplikace na tomto zařízení</p>
                 </div>
               </div>
-              <button class="btn btn-ghost" id="sec-logout-all" type="button">Odhlásit všechna ostatní zařízení</button>
+              <button class="btn btn-ghost" id="sec-logout-all" type="button" data-icon="logout">Odhlásit všechna ostatní zařízení</button>
             </article>
             <article class="set-card">
-              <h2>Ochrana účtu</h2>
+              <h2 data-icon="shield">Ochrana účtu</h2>
               <div class="set-row">
                 <div>
                   <p class="set-row-title">Upozornění na přihlášení z nového zařízení</p>
@@ -1064,9 +1093,11 @@
     <script src="/static/map-basemap.js?v=2"></script>
     <script src="/static/portals.js?v=1"></script>
     <script src="/static/icons.js?v=__ASSET_VERSION__"></script>
+    <script src="/static/site/bara-picker.js?v=__ASSET_VERSION__"></script>
     <script src="/static/app.js?v=__ASSET_VERSION__"></script>
     <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>
     <script src="/static/mobile-app.js?v=__ASSET_VERSION__"></script>
-    <script src="/static/t.js?v=9"></script>
+    <script src="/static/t.js?v=10"></script>
+    <script src="/static/site/ai-chat.js?v=8" defer></script>
   </body>
 </html>

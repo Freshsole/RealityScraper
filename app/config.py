@@ -69,6 +69,7 @@ def _api_key_env(name: str) -> str:
 DISCORD_WEBHOOK_URL = _webhook_env("DISCORD_WEBHOOK_URL")
 DISCORD_LEADS_WEBHOOK_URL = _webhook_env("DISCORD_LEADS_WEBHOOK_URL")
 DISCORD_SIGNUPS_WEBHOOK_URL = _webhook_env("DISCORD_SIGNUPS_WEBHOOK_URL")
+FRONTEND_ERROR_WEBHOOK_URL = _webhook_env("FRONTEND_ERROR_WEBHOOK_URL")
 BEZREALITKY_WEBHOOK_URL = _webhook_env("BEZREALITKY_WEBHOOK_URL")
 SOLD_WEBHOOK_URL = _webhook_env("SOLD_WEBHOOK_URL")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "").strip()
@@ -190,6 +191,8 @@ LIVENESS_IDLE_SEC = max(5, int(os.getenv("LIVENESS_IDLE_SEC") or "30"))
 HOST = os.getenv("HOST") or ("0.0.0.0" if os.getenv("RAILWAY_ENVIRONMENT") else "127.0.0.1")
 PORT = int((os.getenv("PORT") or "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
+# AI chat + listing summaries. Off by default: routes are not registered and ai/llm.py is never imported.
+AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG = os.getenv("DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "").strip()
 POSTHOG_HOST = os.getenv("POSTHOG_HOST", "").strip()
@@ -204,9 +207,17 @@ if DEBUG and not POSTHOG_HOST:
         "This error stops appearing once POSTHOG_HOST is configured"
     )
 # Local development only (PUBLIC_BASE_URL points at localhost): the code 000000 confirms an e-mail without a mailbox.
-DEV_VERIFY_CODE = (
-    "000000" if any(h in PUBLIC_BASE_URL for h in ("://localhost", "://127.0.0.1", "://[::1]")) else ""
-)
+def dev_verify_code(explicit_base_url: str, base_url: str) -> str:
+    """Local development only. The code 000000 confirms an e-mail without a mailbox.
+
+    Only when PUBLIC_BASE_URL was *explicitly* set to localhost: the unset default is localhost too, and a
+    production deploy that lost the variable must never accept 000000 as an e-mail confirmation.
+    """
+    local = any(h in base_url for h in ("://localhost", "://127.0.0.1", "://[::1]"))
+    return "000000" if (explicit_base_url or "").strip() and local else ""
+
+
+DEV_VERIFY_CODE = dev_verify_code(os.getenv("PUBLIC_BASE_URL", ""), PUBLIC_BASE_URL)
 STRIPE_PUBLISHABLE_KEY = _api_key_env("STRIPE_PUBLISHABLE_KEY")
 STRIPE_SECRET_KEY = _api_key_env("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = _api_key_env("STRIPE_WEBHOOK_SECRET")
@@ -214,6 +225,9 @@ UPDATE_FEED = os.getenv("UPDATE_FEED", "").strip()
 UPDATE_TOKEN = os.getenv("UPDATE_TOKEN", "").strip()
 AUTO_UPDATE = os.getenv("AUTO_UPDATE", "1").strip() in {"1", "true", "yes"}
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
+# Google sign-in (OAuth 2.0 web client; redirect URI = PUBLIC_BASE_URL + /api/auth/google/callback)
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "").strip()
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").replace("\\n", "\n").strip()
 VAPID_MAILTO = os.getenv("VAPID_MAILTO", "mailto:ahoj@realitify.cz").strip() or "mailto:ahoj@realitify.cz"

@@ -185,7 +185,7 @@ def resolve_click(token: str, url: str) -> str | None:
 _PAGE = """<!doctype html><html lang="cs"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex"><title>{title} – Realitify</title>
 <style>body{{margin:0;background:#f7f9f6;color:#163300;font:16px/1.5 Inter,Arial,sans-serif}}main{{max-width:480px;margin:12vh auto;padding:36px;background:#fff;border-radius:24px;box-shadow:0 12px 32px #0e0f0c14}}
-h1{{margin:0 0 12px;font:800 28px/1.15 Manrope,Inter,Arial,sans-serif;letter-spacing:-.02em}}p{{color:#555b54}}
+h1{{margin:0 0 12px;font:800 28px/1.15 Inter,Arial,sans-serif;letter-spacing:-.02em}}p{{color:#555b54}}
 button,a.btn{{display:inline-block;margin-top:12px;padding:13px 28px;border:0;border-radius:999px;background:#9fe870;color:#163300;font:600 16px Inter,Arial,sans-serif;cursor:pointer;text-decoration:none}}</style></head>
 <body><main><h1>{title}</h1>{body}</main></body></html>"""
 

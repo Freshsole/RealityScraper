@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
+import urllib.parse
 import atexit
 import re
 import hashlib
@@ -33,8 +35,10 @@ from app.monitor import Hub
 from app.scrape_console import install_stdout_tee
 from app.templates import VARIABLES, default_template_config, sample_vars
 from app.updater import apply_update, version_info
+from app.version import current_version
 from app import bazos_url, bezrealitky_url, idnes_url, localities, url_builder
 from app import places as place_geo
+from app import filter_bridge
 from app.filter_bridge import convert_search_url
 from app.catalog_sync import monitor_search_targets
 from app.commute import route_times
@@ -56,7 +60,9 @@ from app.emailing import triggers as email_triggers
 from app import whatsapp as wa_notify
 from app import agent_discovery
 from app import agents as agent_hub
+from app import google_auth
 from app import mcp_oauth
+from app import user_actions
 from app import admin_mcp
 from app import admin_oauth
 from app import free_pro
@@ -531,7 +537,14 @@ async def _send_verification_email(request: Request, user: dict[str, Any]) -> bo
     return False
 
 
-_VERIFY_EXEMPT = ("/api/auth/", "/api/admin/login", "/api/guest/", "/api/public/", "/api/places/", "/api/t", "/api/inquiries")
+_VERIFY_EXEMPT_PREFIXES = ("/api/auth/", "/api/guest/", "/api/public/", "/api/places/")
+_VERIFY_EXEMPT_EXACT = {"/api/admin/login", "/api/t", "/api/inquiries"}
+# Non-API entry points that hand out access (MCP/agent keys, member-only catalog) must be gated too.
+_VERIFY_GATED_PAGES = {"/oauth/authorize", "/agent/claim", "/hledat/katalog"}
+
+
+def _verify_exempt(path: str) -> bool:
+    return path in _VERIFY_EXEMPT_EXACT or path.startswith(_VERIFY_EXEMPT_PREFIXES)
 
 
 @app.middleware("http")
@@ -567,30 +580,40 @@ async def bind_posthog_authenticated_user(request: Request, call_next):
     return await call_next(request)
 
 
+async def _unverified_user(request: Request) -> dict[str, Any] | None:
+    """The signed-in user if admin requires e-mail confirmation and they have not confirmed it yet."""
+    token = (request.headers.get("x-realitify-session") or "").strip() or request.cookies.get(user_account.SESSION_COOKIE)
+    if not token:
+        return None
+    loop = asyncio.get_running_loop()
+    user = await loop.run_in_executor(hub.auth_pool, user_account.user_from_session, hub.store, token)
+    if (
+        user
+        and not user.get("email_verified")
+        and user.get("role") != "admin"
+        and await loop.run_in_executor(hub.auth_pool, email_store.verification_required)
+    ):
+        return user
+    return None
+
+
 @app.middleware("http")
 async def require_verified_email_for_writes(request: Request, call_next):
-    """Accounts must confirm their e-mail before they can change anything (reads stay open)."""
+    """Accounts must confirm their e-mail before they can use the app: no reads, no writes."""
     path = request.url.path
+    if request.method != "OPTIONS" and path in _VERIFY_GATED_PAGES and await _unverified_user(request):
+        return RedirectResponse("/overeni", status_code=303)
     if (
-        request.method in {"POST", "PUT", "PATCH", "DELETE"}
+        request.method != "OPTIONS"
         and path.startswith("/api/")
-        and not path.startswith(_VERIFY_EXEMPT)
+        and not _verify_exempt(path)
+        and await _unverified_user(request)
     ):
-        token = request.cookies.get(user_account.SESSION_COOKIE)
-        if token:
-            user = await asyncio.get_running_loop().run_in_executor(
-                hub.auth_pool, user_account.user_from_session, hub.store, token
-            )
-            if (
-                user
-                and not user.get("email_verified")
-                and user.get("role") != "admin"
-                and await asyncio.get_running_loop().run_in_executor(hub.auth_pool, email_store.verification_required)
-            ):
-                return JSONResponse(
-                    {"detail": "Nejdřív potvrďte svůj e-mail.", "verification_required": True},
-                    status_code=403,
-                )
+        return JSONResponse(
+            {"detail": "Nejdřív potvrďte svůj e-mail.", "verification_required": True},
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
+        )
     return await call_next(request)
 
 
@@ -610,6 +633,9 @@ async def require_account(request: Request, call_next):
                 hub.store.guest_search_has_access,
                 request.cookies.get("rf_guest_search") or "",
             )
+        if user and not user.get("email_verified") and user.get("role") != "admin":
+            if await asyncio.get_running_loop().run_in_executor(hub.auth_pool, email_store.verification_required):
+                return RedirectResponse("/overeni", status_code=303)
         if not user:
             if request.url.path == "/nabidka" and guest_ok:
                 return await call_next(request)
@@ -1558,6 +1584,52 @@ def _catalog_reader(user: dict[str, Any] | None, ustore: Store, payload: dict[st
     return _shared_catalog_for(ustore) or ustore
 
 
+def _monitor_catalog_scope(user: dict[str, Any] | None, ustore: Store, payload: dict[str, Any]) -> dict[str, Any]:
+    """`monitor_id=<own watch profile>` shows every listing in the shared catalog that matches the profile's
+    criteria (also those that existed before the profile was created), not only its recorded hits.
+
+    The profile's search URL is translated to catalog filters; filters the visitor set explicitly win.
+    Falls back to the old hit-only view when the profile has no usable criteria.
+    """
+    monitor_id = str(payload.get("monitor_id") or "").strip()
+    if user is None or not monitor_id or monitor_id == CATALOG_MONITOR_ID or str(payload.get("hits") or "").strip():
+        return payload
+    if not config.SHARED_CATALOG:
+        return payload
+    monitor = ustore.get_monitor(monitor_id)
+    url = str((monitor or {}).get("search_url") or "")
+    if not url:
+        return payload
+    try:
+        if filter_bridge.portal_of(url) == "sreality":
+            f = url_builder.parse_url(url)
+        else:
+            f = filter_bridge.convert_search_url(url)["filters"]
+    except Exception:
+        return payload
+    districts = [str(d) for d in (f.get("districts") or []) if d]
+    if not districts and not (f.get("offers") or []):
+        return payload
+    scoped = dict(payload)
+    scoped["monitor_id"] = ""
+    wanted = {
+        "offer": ",".join(f.get("offers") or []),
+        "disposition": ",".join(f.get("sizes") or []),
+        "district": ",".join(districts),
+        "price_from": f.get("price_from"),
+        "price_to": f.get("price_to"),
+        "area_from": f.get("area_from"),
+        "area_to": f.get("area_to"),
+    }
+    for key, value in wanted.items():
+        if value in (None, "") or str(scoped.get(key) or "").strip():
+            continue
+        if key == "district" and str(scoped.get("places") or "").strip():
+            continue
+        scoped[key] = str(value)
+    return scoped
+
+
 def _shared_catalog_for(ustore: Store) -> Store | None:
     """Owner catalog scoped to this user's store (None when the user's own store is the catalog)."""
     if not config.SHARED_CATALOG:
@@ -1705,6 +1777,58 @@ async def auth_register_api(request: Request, payload: dict[str, Any] | None = B
         _mail = str(user.get("email") or "").strip()
         _who = f"{_name} <{_mail}>" if _name else _mail
         _fire_discord_ping(config.DISCORD_SIGNUPS_WEBHOOK_URL, f"👤 Nová registrace: {_who}")
+    return response
+
+
+@app.get("/api/auth/google/start")
+async def auth_google_start(request: Request, next: str = "/prehled"):
+    if not google_auth.enabled():
+        return RedirectResponse("/prihlaseni?error=google_off", status_code=302)
+    _rate_limit_or_429(request, "auth_google", "ip", 30, 60)
+    state = google_auth.new_state()
+    response = RedirectResponse(google_auth.authorize_url(state), status_code=302)
+    response.set_cookie(
+        google_auth.STATE_COOKIE,
+        f"{state}|{urllib.parse.quote(google_auth.safe_next(next), safe='')}",
+        max_age=600,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+        path="/api/auth/google",
+    )
+    return response
+
+
+@app.get("/api/auth/google/callback")
+async def auth_google_callback(request: Request, code: str = "", state: str = ""):
+    raw = request.cookies.get(google_auth.STATE_COOKIE) or ""
+    saved_state, _, saved_next = raw.partition("|")
+    fail = RedirectResponse("/prihlaseni?error=google", status_code=302)
+    fail.delete_cookie(google_auth.STATE_COOKIE, path="/api/auth/google")
+    if not google_auth.enabled() or not code or not state or not saved_state or not secrets.compare_digest(state, saved_state):
+        return fail
+    try:
+        claims = await asyncio.to_thread(google_auth.exchange_code, code)
+        user, token, created = await _auth_db(
+            user_account.login_with_google,
+            hub.store,
+            str(claims["email"]),
+            str(claims.get("name") or ""),
+            hub.store_for,
+        )
+    except ValueError:
+        return fail
+    next_url = google_auth.safe_next(urllib.parse.unquote(saved_next))
+    # New accounts continue with the registration steps (same as after confirming the e-mail).
+    target = f"/registrace?resume=1&next={urllib.parse.quote(next_url, safe='')}" if created else next_url
+    response = RedirectResponse(target, status_code=302)
+    response.delete_cookie(google_auth.STATE_COOKIE, path="/api/auth/google")
+    _set_session_cookie(response, token)
+    capture_posthog_event(
+        "user_registered" if created else "user_logged_in",
+        properties={"registration_method" if created else "login_method": "google"},
+        distinct_id=str(user["id"]),
+    )
     return response
 
 
@@ -2012,6 +2136,67 @@ async def auth_profile(payload: dict[str, Any] | None = Body(None), realitify_se
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+_AVATAR_MAX_BYTES = 3 * 1024 * 1024
+
+
+def _store_custom_avatar(user_id: str, data_url: str) -> str:
+    import base64
+    from PIL import Image, ImageOps
+
+    head, _, b64 = (data_url or "").partition(",")
+    if not head.startswith("data:image/") or ";base64" not in head or not b64:
+        raise ValueError("Nahrajte obrázek (PNG, JPG nebo WebP).")
+    if len(b64) > _AVATAR_MAX_BYTES * 4 // 3 + 16:
+        raise ValueError("Obrázek je příliš velký (max 3 MB).")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+        img = Image.open(io.BytesIO(raw))
+        if img.width * img.height > 40_000_000:
+            raise ValueError("Obrázek má příliš velké rozlišení.")
+        img = ImageOps.exif_transpose(img).convert("RGBA")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Obrázek se nepodařilo přečíst.") from exc
+    img = ImageOps.fit(img, (256, 256), Image.LANCZOS)
+    target = user_registry.avatar_file(user_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    img.save(target, "WEBP", quality=88)
+    return f"custom:{int(time.time())}"
+
+
+@app.post("/api/auth/avatar")
+async def auth_avatar_set(payload: dict[str, Any] | None = Body(None), realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
+    user = _current_user(realitify_session)
+    uid = str(user.get("id"))
+    body = payload or {}
+    try:
+        if body.get("clear"):
+            value = ""
+        elif body.get("preset") is not None:
+            num = str(body.get("preset")).strip()
+            if not num.isdigit() or not 1 <= int(num) <= user_registry.AVATAR_PRESETS:
+                raise ValueError("Neznámý avatar.")
+            value = f"bara:{int(num):03d}"
+        elif body.get("image"):
+            value = await asyncio.to_thread(_store_custom_avatar, uid, str(body.get("image")))
+        else:
+            raise ValueError("Vyberte avatar.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    await asyncio.to_thread(user_registry.set_user_avatar, hub.store, uid, value)
+    return {"ok": True, "avatar": user_registry.avatar_url({"avatar": value})}
+
+
+@app.get("/api/auth/avatar")
+async def auth_avatar_get(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
+    user = _current_user(realitify_session)
+    path = user_registry.avatar_file(str(user.get("id")))
+    if not path.is_file():
+        raise HTTPException(404, "Bez vlastního avataru")
+    return Response(path.read_bytes(), media_type="image/webp", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/api/auth/password")
@@ -2736,7 +2921,27 @@ async def cms_media(name: str) -> FileResponse:
 async def status(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     user, store = _user_store(realitify_session)
     child = hub.hub_for(str(user.get("id")))
-    return await asyncio.to_thread(child.status)
+    data = dict(await asyncio.to_thread(child.status))
+    # "Offers in your watch": everything in the catalog matching the user's active watch profiles
+    # (not only what arrived after they were created).
+    watched = 0
+    try:
+        for monitor in data.get("monitors") or []:
+            if monitor.get("enabled") is False or not monitor.get("id"):
+                continue
+            payload = _monitor_catalog_scope(
+                user,
+                store,
+                _catalog_filters(monitor_id=str(monitor["id"]), limit=1, facets="0", sort="newest"),
+            )
+            result = await _run_catalog_query_cached(
+                payload, _catalog_reader(user, store, payload), scope=str(store.path)
+            )
+            watched += int(result.get("total") or 0)
+    except Exception:
+        watched = int(data.get("tracked") or 0)
+    data["watched"] = watched
+    return data
 
 
 @app.get("/api/admin/stacks")
@@ -2903,17 +3108,9 @@ async def discord_unlink(realitify_session: str | None = Cookie(default=None, al
 async def email_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     _, ustore = _user_store(realitify_session)
     try:
-        sent = await mail_notify.notify_listing(
-            ustore,
-            {"name": "Testovací zpráva z Realitify"},
-            "test",
-            ignore_quiet=True,
-        )
-    except Exception as exc:
-        logger.warning("test email failed: %s", exc)
-        raise HTTPException(502, "Testovací e-mail se nepodařilo odeslat. Zkuste to později.") from exc
-    if not sent:
-        raise HTTPException(400, "Zapněte e-mail a na serveru nastavte SMTP_HOST a SMTP_FROM")
+        await user_actions.send_test_email(ustore)
+    except user_actions.ActionError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     return {"ok": True, "email": mail_notify.account_email(ustore)}
 
 
@@ -2941,20 +3138,10 @@ async def whatsapp_phone(
 @app.post("/api/whatsapp/test")
 async def whatsapp_test(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> dict:
     _, ustore = _user_store(realitify_session)
-    if not wa_notify.plan_allows(ustore):
-        raise HTTPException(403, "WhatsApp notifikace jsou jen v tarifu PRO")
     try:
-        sent = await wa_notify.notify_listing(
-            ustore,
-            {"name": "Testovací zpráva z Realitify"},
-            "test",
-            ignore_quiet=True,
-        )
-    except Exception as exc:
-        logger.warning("whatsapp test failed: %s", exc)
-        raise HTTPException(502, "Testovací zprávu se nepodařilo odeslat. Zkuste to později.") from exc
-    if not sent:
-        raise HTTPException(400, "Zapněte WhatsApp a vyplňte telefonní číslo")
+        await user_actions.send_test_whatsapp(ustore)
+    except user_actions.ActionError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     return {"ok": True, **wa_notify.status(ustore)}
 
 
@@ -3457,6 +3644,136 @@ async def public_game_rent_round() -> dict:
     return {"round_id": payload["round_id"], "items": payload["items"]}
 
 
+_CLIENT_ERROR_SEEN: dict[str, float] = {}
+_CLIENT_ERROR_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_CLIENT_ERROR_LONG_NUM = re.compile(r"\d{7,}")
+_CLIENT_ERROR_TOKEN = re.compile(r"\b[A-Za-z0-9_\-]{32,}\b")
+
+
+def _client_error_clean(value: Any, limit: int, *, multiline: bool = False) -> str:
+    """Zkrátí text a vyhodí e-maily, tokeny a dlouhá čísla: do Discordu nesmí odejít přímé osobní údaje."""
+    text = str(value or "").replace("`", "'")
+    text = _CLIENT_ERROR_EMAIL.sub("[email]", text)
+    text = _CLIENT_ERROR_TOKEN.sub("[token]", text)
+    text = _CLIENT_ERROR_LONG_NUM.sub("[num]", text)
+    if multiline:
+        return "\n".join(line.rstrip() for line in text.splitlines())[:limit]
+    return " ".join(text.split())[:limit]
+
+
+def _client_error_user(realitify_session: str | None) -> str:
+    """Pseudonymní popis uživatele: interní ID, role, tarif. Bez e-mailu, jména, telefonu a IP."""
+    try:
+        user = user_account.user_from_session(hub.store, realitify_session)
+    except Exception:
+        user = None
+    if not user:
+        return "nepřihlášen (host / veřejný web)"
+    parts = [f"id `{user.get('id')}`", f"role `{user.get('role') or 'user'}`"]
+    try:
+        account = ext_score.extension_account(hub.store_for(str(user.get("id"))))
+        parts.append(f"tarif `{account.get('plan')}`")
+    except Exception:
+        pass
+    parts.append("e-mail ověřen: " + ("ano" if user.get("email_verified") else "ne"))
+    return " · ".join(parts)
+
+
+@app.post("/api/public/client-error")
+async def public_client_error(
+    request: Request,
+    payload: dict[str, Any] | None = Body(None),
+    realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
+) -> Response:
+    """Chyby z frontendu: uživateli se neukazují, přeposílají se na Discord webhook (URL je jen v env)."""
+    from datetime import datetime, timezone
+
+    from app import discord_notify
+
+    webhook = config.FRONTEND_ERROR_WEBHOOK_URL
+    body = payload or {}
+    message = _client_error_clean(body.get("message"), 700)
+    if not webhook or not message:
+        return Response(status_code=204)
+    if not rate_limit.check("client_error", f"{_client_ip(request)}", 10, 60) or not rate_limit.check(
+        "client_error_all", "all", 60, 60
+    ):
+        return Response(status_code=204)
+    source = _client_error_clean(body.get("source"), 40) or "frontend"
+    key = hashlib.sha1(f"{source}|{message}|{body.get('page')}".encode("utf-8")).hexdigest()
+    now = time.time()
+    if now - _CLIENT_ERROR_SEEN.get(key, 0) < 300:
+        return Response(status_code=204)
+    if len(_CLIENT_ERROR_SEEN) > 500:
+        _CLIENT_ERROR_SEEN.clear()
+    _CLIENT_ERROR_SEEN[key] = now
+
+    def field(name: str, value: str, inline: bool = False) -> dict[str, Any] | None:
+        value = (value or "").strip()
+        return {"name": name, "value": value[:1000], "inline": inline} if value else None
+
+    page = _client_error_clean(body.get("page"), 160)
+    qkeys = _client_error_clean(body.get("query_keys"), 120)
+    hash_ = _client_error_clean(body.get("hash"), 60)
+    where = f"`{page or '/'}`" + (f"\nparametry: `{qkeys}`" if qkeys else "") + (f"\nhash: `{hash_}`" if hash_ else "")
+    ref = _client_error_clean(body.get("referrer"), 120)
+    device = " · ".join(
+        x
+        for x in (
+            _client_error_clean(body.get("viewport"), 30),
+            f"jazyk {_client_error_clean(body.get('lang'), 12)}" if body.get("lang") else "",
+            f"TZ {_client_error_clean(body.get('tz'), 40)}" if body.get("tz") else "",
+            "offline" if body.get("online") is False else "",
+        )
+        if x
+    )
+    req = body.get("request") if isinstance(body.get("request"), dict) else {}
+    req_text = ""
+    if req:
+        req_text = (
+            f"`{_client_error_clean(req.get('method'), 8)} {_client_error_clean(req.get('path'), 160)}` → "
+            f"**{_client_error_clean(req.get('status'), 8)}** ({_client_error_clean(req.get('ms'), 8)} ms)"
+        )
+        resp = _client_error_clean(req.get("body"), 400, multiline=True)
+        if resp:
+            req_text += f"\n```{resp}```"
+    crumbs = body.get("crumbs") if isinstance(body.get("crumbs"), list) else []
+    crumbs_text = "\n".join(_client_error_clean(c, 140) for c in crumbs[-14:])
+    stack = _client_error_clean(body.get("detail"), 2400, multiline=True)
+    description = f"**{message}**"
+    if stack:
+        description += f"\n```{stack}```"
+    embed = {
+        "title": f"Frontend chyba · {source}",
+        "description": description[:3800],
+        "color": 0xD64545,
+        "fields": [
+            f
+            for f in (
+                field("Uživatel (pseudonym)", _client_error_user(realitify_session)),
+                field("Stránka", where),
+                field("Odkud přišel", f"`{ref}`" if ref else ""),
+                field("Požadavek", req_text),
+                field("Verze", _client_error_clean(body.get("app_version"), 60) or f"server v{current_version()}", True),
+                field("Zařízení", device, True),
+                field("Prohlížeč", _client_error_clean(request.headers.get("user-agent"), 200)),
+                field("Poslední kroky uživatele", f"```{crumbs_text}```" if crumbs_text else ""),
+            )
+            if f
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    async def _runner() -> None:
+        try:
+            await discord_notify.send_embed(webhook, embed)
+        except Exception as exc:
+            print(f"[client-error] webhook selhal: {exc}")
+
+    asyncio.create_task(_runner())
+    return Response(status_code=204)
+
+
 @app.post("/api/public/games/rent-score")
 async def public_game_rent_score(payload: dict[str, Any] | None = Body(None)) -> dict:
     from app import games as marketing_games
@@ -3778,6 +4095,7 @@ async def catalog(
             facets=facets,
         )
     )
+    payload = _monitor_catalog_scope(cuser, ustore, payload)
     reader = _catalog_reader(cuser, ustore, payload)
     return await _run_catalog_query_cached(payload, reader, scope="" if cuser is None else str(ustore.path))
 
@@ -3853,6 +4171,7 @@ async def catalog_pins(
             pins_only=True,
         )
     )
+    payload = _monitor_catalog_scope(cuser, ustore, payload)
     reader = _catalog_reader(cuser, ustore, payload)
     return await _run_catalog_query_cached(payload, reader, scope="" if cuser is None else str(ustore.path))
 
@@ -3938,20 +4257,17 @@ async def save_listing_user(
 ) -> dict:
     _, ustore = _user_store(realitify_session)
     try:
-        result = await asyncio.to_thread(
-            ustore.set_listing_user, payload.get("url") or "", payload.get("status"), payload.get("note")
+        return await asyncio.to_thread(
+            user_actions.set_listing_user,
+            ustore,
+            payload.get("url") or "",
+            payload.get("status"),
+            payload.get("note"),
+            after=_drop_user_catalog_cache,
+            on_event=lambda name, props: capture_posthog_event(name, properties=props),
         )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    _drop_user_catalog_cache(ustore)
-    capture_posthog_event(
-        "listing_status_updated",
-        properties={
-            "listing_status": str(payload.get("status") or ""),
-            "has_note": bool(str(payload.get("note") or "").strip()),
-        },
-    )
-    return result
+    except user_actions.ActionError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
 
 
 @app.get("/api/settings")
@@ -3985,33 +4301,18 @@ async def save_monitor(
     realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
 ) -> dict:
     _, ustore = _user_store(realitify_session)
-    if not (payload.get("search_url") or "").strip():
-        raise HTTPException(400, "Chybí URL hledání. Vyplňte ho tlačítkem „Použít URL v profilu“.")
-    existing = ustore.get_monitor(str(payload.get("id") or "")) if payload.get("id") else None
-    # Interval kontroly určuje tarif, ne uživatel.
-    payload = {**payload, "interval_sec": stripe_billing.billing_state(ustore)["check_interval_sec"]}
     try:
-        try:
-            saved = ustore.save_monitor(payload)
-        except ValueError as exc:
-            if "Limit tarifu" in str(exc):
-                asyncio.create_task(asyncio.to_thread(email_triggers.on_dog_limit_hit, ustore), name="email-dog-limit")
-            raise
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    if existing is None:
-        try:
-            site_stats.track(hub.store, site_stats.KIND_MONITOR, path="/monitory")
-        except Exception:
-            pass
-    monitor_operation = "created" if existing is None else "updated"
-    capture_posthog_event(
-        "monitor_created" if existing is None else "monitor_updated",
-        properties={"portal_count": len(saved.get("portals") or []), "is_active": bool(saved.get("enabled", True))},
-    )
+        saved = user_actions.save_monitor(
+            ustore,
+            payload,
+            on_event=lambda name, props: capture_posthog_event(name, properties=props),
+            track_signup=lambda: site_stats.track(hub.store, site_stats.KIND_MONITOR, path="/monitory"),
+        )
+    except user_actions.ActionError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     posthog_logs_logger.info(
         "monitor_saved",
-        extra={"monitor_operation": monitor_operation, "portal_count": len(saved.get("portals") or [])},
+        extra={"monitor_operation": "saved", "portal_count": len(saved.get("portals") or [])},
     )
     return saved
 
@@ -4052,10 +4353,11 @@ async def delete_monitor(
 ) -> dict:
     user, ustore = _user_store(realitify_session)
     try:
-        ustore.delete_monitor(monitor_id)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    capture_posthog_event("monitor_deleted")
+        user_actions.delete_monitor(
+            ustore, monitor_id, on_event=lambda name, props: capture_posthog_event(name, properties=props)
+        )
+    except user_actions.ActionError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     return {"ok": True, "status": hub.hub_for(str(user.get("id"))).status(fresh=True)}
 
 
@@ -4119,24 +4421,7 @@ async def filter_catalog() -> dict:
 
 @app.post("/api/filters/build")
 async def filter_build(payload: dict[str, Any]) -> dict:
-    filters = payload.get("filters") or {}
-    mod = _filter_mod(filters.get("source"))
-    if not filters.get("source"):
-        filters = {
-            **filters,
-            "source": "idnes"
-            if mod is idnes_url
-            else "bazos"
-            if mod is bazos_url
-            else "bezrealitky"
-            if mod is bezrealitky_url
-            else "sreality",
-        }
-    filters = localities.normalize_filters(filters)
-    built = mod.build_url(filters or mod.default_filters())
-    portals = str(payload.get("portals") or "all")
-    targets = monitor_search_targets({"search_url": built, "portals": portals})
-    return {"url": built, "filters": mod.parse_url(built), "targets": targets}
+    return user_actions.build_search_url(payload, _filter_mod)
 
 
 @app.post("/api/filters/parse")
@@ -4614,6 +4899,12 @@ def _agent_key(request: Request) -> tuple[dict[str, Any], Store]:
         except PermissionError as exc:
             last_error = exc
             continue
+        if (
+            not candidate.get("email_verified")
+            and candidate.get("role") != "admin"
+            and email_store.verification_required()
+        ):
+            raise HTTPException(403, "Nejdřív potvrďte svůj e-mail.")
         if not agent_hub.rate_ok(str(key.get("id") or "")):
             raise HTTPException(429, "Příliš mnoho požadavků. Zkuste to za chvíli.")
         return key, ustore
@@ -5136,3 +5427,40 @@ async def agent_list_alerts(request: Request) -> dict:
 async def agent_get_account(request: Request) -> dict:
     _, mcp_store = _agent_key(request)
     return agent_hub.run_tool(mcp_store, "get_account", {})
+
+
+if config.AI_ENABLED:
+    # ai/llm.py is imported only here; missing LLM_API_KEY / LLM_MODEL stop the app at start.
+    from ai.context import Services
+    from app import ai_routes
+    from app.commute import route_times as _route_times
+
+    ai_routes.register(
+        app,
+        hub=hub,
+        current_user=_current_user,
+        catalog_store=_catalog_store,
+        public_store=_public_store,
+        services=Services(
+            global_store=hub.store,
+            public_base_url=config.PUBLIC_BASE_URL,
+            catalog={
+                "search": public_catalog,
+                "item": public_catalog_item,
+                "stats": public_catalog_stats,
+                "price_check": public_catalog_price_check,
+                "compare": public_catalog_compare,
+            },
+            user_catalog=_shared_catalog_for,
+            public_store=_public_store,
+            geocode=geocode,
+            resolve_locality=filter_locality,
+            route_times=_route_times,
+            filter_mod=_filter_mod,
+            check_once=lambda user_id, monitor_id: hub.hub_for(user_id).check_once(monitor_id),
+            discord_test=lambda user_id, monitor_id: hub.hub_for(user_id).send_test(monitor_id),
+            on_event=lambda name, props: capture_posthog_event(name, properties=props),
+            after_listing_user=_drop_user_catalog_cache,
+            track_monitor_created=lambda: site_stats.track(hub.store, site_stats.KIND_MONITOR, path="/monitory"),
+        ),
+    )

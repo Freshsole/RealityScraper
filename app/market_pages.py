@@ -107,6 +107,15 @@ MIN_ACTIVE = MIN_ACTIVE_CREATE  # backward-compatible alias (= create threshold)
 PRICE_METHODOLOGY_CS = product_facts.methodology_cs()
 
 
+def _page_with_chat(**kwargs: Any) -> str:
+    """site_chrome.page + the AI chat widget (the script hides itself when the AI routes are not registered)."""
+    from app import site_chrome
+
+    chat = '\n    <link rel="stylesheet" href="/static/site/ai-chat.css?v=8" />\n    <script src="/static/site/ai-chat.js?v=8" defer></script>'
+    kwargs["scripts"] = kwargs.get("scripts", "") + chat
+    return site_chrome.page(**kwargs)
+
+
 def _parents_for_neighborhood(name: str) -> list[str]:
     parents: list[str] = []
     for num, areas in PRAGUE_DISTRICTS.items():
@@ -509,7 +518,7 @@ def render_index(store: Store) -> str:
         </div>
       </section>
 {site_chrome.cta_band("Hlídejte nové byty dřív než ostatní", "Upozornění na nové nabídky podle vašich filtrů. Registrace trvá 30 sekund a nepotřebujete platební kartu.")}"""
-    return site_chrome.page(
+    return _page_with_chat(
         title=f"Realitify index nájmů – průběžně k {today_cs}",
         description=cite_praha,
         canonical="https://realitify.cz/index",
@@ -601,6 +610,11 @@ def _faq_items(store: Store) -> list[dict[str, str]]:
     plans = facts.get("plans") or {}
     start = plans.get("start") or {}
     pro = plans.get("pro") or {}
+    free = plans.get("free") or {}
+
+    def _features(plan: dict) -> str:
+        return "; ".join(str(x) for x in (plan.get("features_cs") or []))
+
     return [
         {
             "q": "Co je Realitify?",
@@ -619,7 +633,7 @@ def _faq_items(store: Store) -> list[dict[str, str]]:
             "q": "Jak být první u nové nabídky?",
             "a": (
                 "Nastavte filtr (lokalita, dispozice, max. cena) a zapněte notifikace. "
-                "Realitify agreguje portály a hlásí nové first_seen záznamy."
+                "Realitify vás upozorní, jakmile se objeví nový odpovídající inzerát."
             ),
         },
         {
@@ -639,6 +653,18 @@ def _faq_items(store: Store) -> list[dict[str, str]]:
                 f"PRO {pro.get('price_czk')} Kč/měsíc (neomezeně hlídacích psů). "
                 "INDIVIDUAL je cena dohodou."
             ),
+        },
+        {
+            "q": "Co dostanu v tarifu PRO?",
+            "a": f"PRO stojí {pro.get('price_czk')} Kč/měsíc a zahrnuje: {_features(pro)}.",
+        },
+        {
+            "q": "Co dostanu v tarifu Start?",
+            "a": f"Start stojí {start.get('price_czk')} Kč/měsíc a zahrnuje: {_features(start)}.",
+        },
+        {
+            "q": "Co mám zdarma?",
+            "a": f"Tarif Zdarma zahrnuje: {_features(free)}. Prohlížení katalogu a veřejné MCP je zdarma.",
         },
         {
             "q": "Jak poznat předraženou nabídku?",
@@ -698,6 +724,9 @@ _FAQ_CAT_BY_Q = {
     "Jak být první u nové nabídky?": "hlidani",
     "Kolik stojí pronájem 2+kk v Praze?": "ceny",
     "Jaké jsou tarify?": "hlidani",
+    "Co dostanu v tarifu PRO?": "hlidani",
+    "Co dostanu v tarifu Start?": "hlidani",
+    "Co mám zdarma?": "hlidani",
     "Jak poznat předraženou nabídku?": "ceny",
     "Jak Realitify počítá cenu za m²?": "metodika",
     "Kdy vznikne a zanikne lokalitní stránka?": "metodika",
@@ -705,6 +734,26 @@ _FAQ_CAT_BY_Q = {
     "Které portály Realitify sleduje?": "obecne",
     "Jak často se nabídky aktualizují?": "obecne",
     "Musím se registrovat, abych viděl nabídky?": "hlidani",
+}
+
+
+# Extra words people type that are not in the question text (searched with weight between question and answer).
+_FAQ_KW = {
+    "Co je Realitify?": "služba aplikace web portál co to je k čemu slouží o vás agregátor",
+    "Jak rychle sehnat byt v Praze?": "najít hledat rychle sehnat nový byt praha nabídky",
+    "Jak být první u nové nabídky?": "rychle rychlost jak brzy dostanu upozornění notifikace alert hlídač hlídací pes filtr push email nové inzeráty první",
+    "Kolik stojí pronájem 2+kk v Praze?": "cena nájem nájemné průměr medián praha 2kk kolik zaplatím",
+    "Jaké jsou tarify?": "ceník cena kolik stojí předplatné plán balíček platba start pro individual zdarma free měsíc",
+    "Co dostanu v tarifu PRO?": "pro premium předplatné balíček funkce výhody co obsahuje features ai mcp push discord sms neomezeně rozdíl",
+    "Co dostanu v tarifu Start?": "start předplatné balíček funkce výhody co obsahuje features rozdíl",
+    "Co mám zdarma?": "free bezplatně zdarma základní tarif bez platby funkce výhody co umí",
+    "Jak poznat předraženou nabídku?": "drahý levný přeplacený cena m2 porovnání price check výhodná",
+    "Jak Realitify počítá cenu za m²?": "metodika výpočet medián průměr metr čtvereční",
+    "Kdy vznikne a zanikne lokalitní stránka?": "stránka lokalita město čtvrť seo trh",
+    "Souvisí Realitify se společností Realtify nebo PriceHubble?": "konkurence firma vztah spolupráce",
+    "Které portály Realitify sleduje?": "sreality bezrealitky idnes bazoš zdroje weby inzeráty odkud",
+    "Jak často se nabídky aktualizují?": "aktualizace čerstvost rychlost interval minuty sekundy stahování",
+    "Musím se registrovat, abych viděl nabídky?": "registrace účet přihlášení email heslo zdarma katalog",
 }
 
 
@@ -726,10 +775,13 @@ def render_faq(store: Store) -> str:
         '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" '
         'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
     )
+    arrow = (
+        '<svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>'
+    )
     qa = "".join(
-        f'<div class="qa" id="q{i + 1}" data-cat="{_FAQ_CAT_BY_Q.get(f["q"], "obecne")}">'
-        f'<button type="button" class="qa-q" aria-expanded="false"><span>{html.escape(f["q"])}</span>'
-        f'<span class="qa-ico">{chevron}</span></button>'
+        f'<div class="qa" id="q{i + 1}" data-cat="{_FAQ_CAT_BY_Q.get(f["q"], "obecne")}" data-kw="{html.escape(_FAQ_KW.get(f["q"], ""))}">'
+        f'<button type="button" class="qa-q" aria-expanded="false"><span>{html.escape(f["q"])}</span>{arrow}</button>'
         f'<div class="qa-a"><div><p>{html.escape(f["a"])}</p></div></div></div>'
         for i, f in enumerate(faqs)
     )
@@ -742,17 +794,16 @@ def render_faq(store: Store) -> str:
         'stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
     )
     body = f"""      <section class="pg-hero" data-nav="Dotazy" data-nav-desc="Hledejte v odpovědích">
-        <p class="eyebrow">ČASTÉ DOTAZY · {html.escape(updated.upper())}</p>
         <h1 class="display">Odpovědi na to, co se nás lidé ptají</h1>
         <p class="lead">Co je Realitify, kolik stojí, jak počítáme ceny a jak rychle dostanete upozornění. Najdete tu {len(faqs)} odpovědí.</p>
       </section>
 
       <section class="pg-section" id="otazky" data-nav="Otázky" data-nav-desc="Rozbalte odpověď nebo vyhledejte">
-        <div class="faq-layout">
+        <div class="faq-layout faq-help">
           <div>
             <div class="faq-tools">
-              <label class="faq-search">{search_icon}<input id="faq-q" type="search" placeholder="Hledat v otázkách a odpovědích…" autocomplete="off" aria-label="Hledat v otázkách" /></label>
-              <div class="faq-cats" role="tablist" aria-label="Kategorie">{cats}</div>
+              <label class="help-box">{search_icon}<input id="faq-q" type="search" placeholder="Hledat v otázkách a odpovědích…" autocomplete="off" aria-label="Hledat v otázkách" /></label>
+              <div class="help-chips faq-cats" role="tablist" aria-label="Kategorie">{cats}</div>
             </div>
             <div class="qa-list">{qa}</div>
             <p class="faq-empty" id="faq-empty" hidden>Nic jsme nenašli. Zkuste jiné slovo, nebo nám napište.</p>
@@ -765,13 +816,14 @@ def render_faq(store: Store) -> str:
         </div>
       </section>
 {site_chrome.cta_band("Vyzkoušejte hlídání zdarma", "Nastavte filtr, zapněte upozornění a buďte u nových bytů první.")}"""
-    return site_chrome.page(
+    return _page_with_chat(
         title="FAQ – Realitify",
         description=f"Co je Realitify, tarify, medián Kč/m² a metodika. {updated}.",
         canonical="https://realitify.cz/faq",
         body=body,
         markdown_alt="https://realitify.cz/faq.md",
         ld=[faq_ld],
+        extra_head='<link rel="stylesheet" href="/static/site/help.css?v=3" />',
     )
 
 
@@ -809,7 +861,7 @@ def render_search(store: Store | None = None, q: str = "") -> str:
         <iframe id="hl-frame" title="Katalog nabídek Realitify" allow="geolocation"></iframe>
       </section>
 """
-    return site_chrome.page(
+    return _page_with_chat(
         title="Nabídky bytů a domů – katalog Realitify",
         description="Katalog nabídek bytů a domů z českých realitních portálů na jednom místě. Mapa, filtry a ceny.",
         canonical="https://realitify.cz/hledat",
@@ -939,7 +991,7 @@ def render_about_cs(store: Store | None = None) -> str:
         </div>
       </section>
 {site_chrome.cta_band("Začněte hlídat byty ještě dnes", "Prohlížení katalogu je zdarma. Hlídání nových nabídek si vyzkoušíte bez platební karty.")}"""
-    return site_chrome.page(
+    return _page_with_chat(
         title="O nás – Realitify",
         description=f"{product_facts.one_liner_cs()} Provozuje {op.get('name')} ({op.get('legal_form')}), IČO {op.get('ico')}.",
         canonical="https://realitify.cz/o-nas",

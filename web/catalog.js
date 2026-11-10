@@ -1873,6 +1873,21 @@
     return fetch(`/api/catalog/item?${params}`);
   }
 
+  // AI summary is fetched after the detail is shown. A 404 (AI off) or any error just leaves the box hidden.
+  async function loadAiSummary(item) {
+    const box = $("detail-ai");
+    const text = $("detail-ai-text");
+    if (!box || !text || item.id == null) return;
+    try {
+      const response = await fetch(`/api/listings/${encodeURIComponent(item.id)}/summary`, { credentials: "same-origin" });
+      if (!response.ok) return;
+      const data = await response.json();
+      if (!data.summary || !box.isConnected) return;
+      text.textContent = data.summary;
+      box.hidden = false;
+    } catch {}
+  }
+
   async function openDetail(monitorId, listingId, extra = {}) {
     const modal = $("catalog-modal");
     const host = $("catalog-detail");
@@ -1890,11 +1905,13 @@
       });
       item = await response.json().catch(() => ({}));
       if (!response.ok) {
-        host.innerHTML = `<p class="empty">${escapeHtml(item.detail || "Detail se nepodařilo načíst")}</p>`;
+        window.reportClientError?.(String(item.detail || "Detail inzerátu se nenačetl"), "catalog-detail");
+        host.innerHTML = "";
         return;
       }
     } catch {
-      host.innerHTML = `<p class="empty">Detail se nepodařilo načíst</p>`;
+      window.reportClientError?.("Detail inzerátu se nenačetl", "catalog-detail");
+      host.innerHTML = "";
       return;
     }
     const photos = item.photos?.length ? item.photos : item.image_url ? [item.image_url] : [];
@@ -1946,6 +1963,11 @@
                   .join("")}</div>`
               : ""
           }
+          <section class="detail-ai" id="detail-ai" hidden>
+            <p class="detail-ai-label">AI shrnutí</p>
+            <p class="detail-ai-text" id="detail-ai-text"></p>
+            <p class="detail-ai-note">Vygenerováno AI, může obsahovat nepřesnosti.</p>
+          </section>
           ${description ? `<p class="detail-desc">${escapeHtml(item.description)}</p>` : `<p class="empty">Portál u této nabídky zatím neposlal popis.</p>`}
           <section class="detail-note">
             <div class="detail-note-head">
@@ -1953,6 +1975,7 @@
               <p class="detail-note-hint" id="detail-note-hint">${item.note ? "Uloženo" : "Jen u tebe"}</p>
             </div>
             <textarea id="detail-note" rows="4" placeholder="Termín prohlídky, dojem, co ještě ověřit…">${escapeHtml(item.note || "")}</textarea>
+            <p class="detail-note-ai">Poznámky může číst AI asistent.</p>
           </section>
           <h3>Historie cen</h3>
           ${historyChart(item.price_history)}
@@ -2010,6 +2033,7 @@
       });
     }
     mountDetailMap(item);
+    loadAiSummary(item);
     $("detail-map-full")?.addEventListener("click", (event) => {
       event.stopPropagation();
       toggleDetailMapFullscreen();
@@ -2301,7 +2325,8 @@
       catalogFailed = true;
       const failEl = $("catalog-count");
       if (failEl) {
-        failEl.innerHTML = 'Načtení selhalo. <button type="button" id="catalog-retry" class="link-btn">Zkusit znovu</button>';
+        window.reportClientError?.("Seznam nabídek se nenačetl", "catalog-list");
+        failEl.innerHTML = '<button type="button" id="catalog-retry" class="btn">Načíst znovu</button>';
         $("catalog-retry")?.addEventListener("click", () => {
           catalogRetries = 0;
           catalogFailed = false;
@@ -2653,14 +2678,253 @@
     syncStatusChips();
     loadCatalog();
   });
-  $("catalog-views")?.addEventListener("click", (event) => {
-    if (event.target.id === "view-save") {
-      const name = prompt("Název pohledu");
-      if (!name) return;
-      const views = savedViews();
-      views.push({ id: String(Date.now()), name: name.trim(), filters: filters(), circle: circleFilter, places: selectedPlaces });
-      localStorage.setItem("nabidka-views", JSON.stringify(views));
+
+  /* ---- "Uložit pohled" = create a watchdog from the current filters (or upsell when the plan limit is reached) ---- */
+  function watchQuota() {
+    let billing = null;
+    let monitors = [];
+    try {
+      billing = typeof statusCache !== "undefined" ? statusCache?.billing : null;
+      monitors = typeof statusCache !== "undefined" ? statusCache?.monitors || [] : [];
+    } catch {
+      billing = null;
+    }
+    const limit = billing ? billing.watch_limit : null;
+    const used = monitors.filter((item) => item.enabled).length;
+    return { limit: limit == null ? null : Number(limit), used, label: billing?.label || "Zdarma", reached: limit != null && used >= Number(limit) };
+  }
+
+  function watchCriteria() {
+    const f = filters();
+    const offerNames = { pronajem: "Pronájem", prodej: "Prodej", drazby: "Dražby", podily: "Podíly" };
+    const estateNames = { byt: "Byt", dum: "Dům", pozemek: "Pozemek", projekt: "Projekt", komercni: "Komerční", ostatni: "Ostatní" };
+    const rows = [];
+    const offers = [...selected.offers];
+    rows.push(["Typ", `${(offers.length ? offers : ["pronajem"]).map((o) => offerNames[o] || o).join(", ")}${selected.estates.size ? " · " + [...selected.estates].map((e) => estateNames[e] || e).join(", ") : ""}`]);
+    const where = selectedPlaces.map((p) => p.label || p.id).concat([...selected.districts].filter((d) => !selectedPlaces.some((p) => slugForPlace(p.id) === d)));
+    if (where.length) rows.push(["Lokalita", where.join(", ")]);
+    else if (f.q) rows.push(["Lokalita", f.q]);
+    if (selected.dispositions.size) rows.push(["Dispozice", [...selected.dispositions].join(", ")]);
+    if (f.price_from || f.price_to) {
+      rows.push(["Cena", `${f.price_from ? "od " + Number(f.price_from).toLocaleString("cs-CZ") : ""} ${f.price_to ? "do " + Number(f.price_to).toLocaleString("cs-CZ") : ""} Kč`.trim()]);
+    }
+    if (f.area_from || f.area_to) {
+      rows.push(["Plocha", `${f.area_from ? "od " + f.area_from : ""} ${f.area_to ? "do " + f.area_to : ""} m²`.trim()]);
+    }
+    return rows;
+  }
+
+  function defaultWatchName() {
+    const rows = Object.fromEntries(watchCriteria());
+    const offer = String(rows["Typ"] || "Hlídání").split(" · ")[0];
+    const where = rows["Lokalita"] ? String(rows["Lokalita"]).split(", ").slice(0, 2).join(", ") : "";
+    const disp = rows["Dispozice"] ? String(rows["Dispozice"]).split(", ").slice(0, 2).join(", ") : "";
+    return [offer, disp, where].filter(Boolean).join(" · ").slice(0, 60);
+  }
+
+  function ensureSaveViewModal() {
+    let modal = $("view-save-modal");
+    if (modal) return modal;
+    modal = document.createElement("div");
+    modal.id = "view-save-modal";
+    modal.className = "catalog-modal";
+    modal.hidden = true;
+    modal.innerHTML = '<div class="catalog-modal-card monitor-modal-card save-view-card"><button class="catalog-close" type="button" data-sv-close aria-label="Zavřít">×</button><div id="view-save-body"></div></div>';
+    document.body.appendChild(modal);
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal || event.target.closest("[data-sv-close], a[href]")) closeSaveViewModal();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !modal.hidden) closeSaveViewModal();
+    });
+    return modal;
+  }
+
+  function closeSaveViewModal() {
+    const modal = $("view-save-modal");
+    if (modal) modal.hidden = true;
+    document.body.classList.remove("catalog-modal-open");
+  }
+
+  function planSlides() {
+    let plans = [];
+    try {
+      plans = (typeof statusCache !== "undefined" ? statusCache?.billing?.plans : null) || [];
+    } catch {
+      plans = [];
+    }
+    const pro = proPlan();
+    const start = plans.find((item) => item.id === "start");
+    const slides = [
+      { id: "pro", tab: "PRO", kicker: "Realitify PRO", price: pro.price, features: pro.features, cta: "Přejít na Pro", note: "3 dny zdarma, zrušíte kdykoli" },
+    ];
+    if (start) {
+      slides.push({ id: "start", tab: "Start", kicker: "Realitify Start", price: start.price_czk, features: start.features || [], cta: "Přejít na Start", note: "Zrušíte kdykoli" });
+    }
+    return slides;
+  }
+
+  function profileAvatarUrl() {
+    try {
+      if (typeof lastProfile !== "undefined" && lastProfile?.avatar) return lastProfile.avatar;
+    } catch {}
+    return "/static/site/assets/bara/001.webp";
+  }
+
+  function upgradeHtml(quota) {
+    const slides = planSlides();
+    const used = Math.max(quota.used, quota.limit || 0);
+    return `
+      <p class="card-label">Hlídací pes</p>
+      <h2 class="sv-title"><span class="sv-bara"><img src="${escapeHtml(profileAvatarUrl())}" width="56" height="56" alt="" /></span>Na dalšího hlídacího psa je Bára krátká</h2>
+      <p class="sv-copy">${quota.limit == null ? `Limit hlídacích psů v tarifu ${escapeHtml(quota.label)} je naplněný.` : `<strong>Už máte využito ${used}/${quota.limit} hlídacích psů</strong> v tarifu ${escapeHtml(quota.label)}.`} Upgradujte a hlídejte tolik hledání, kolik chcete.</p>
+      <div class="sv-slider" data-sv-slider>
+        ${slides.length > 1 ? `<div class="sv-tabs" role="tablist">${slides.map((sl, i) => `<button type="button" role="tab" class="sv-tab${i === 0 ? " on" : ""}" data-sv-go="${i}">${escapeHtml(sl.tab)}</button>`).join("")}</div>` : ""}
+        <div class="sv-track">
+          ${slides
+            .map(
+              (sl) => `
+          <div class="sv-slide" data-plan="${sl.id}">
+            <article class="upsell-card${sl.id === "start" ? " is-start" : ""}">
+              <div class="upsell-main">
+                <p class="upsell-kicker">${escapeHtml(sl.kicker)}</p>
+                <ul class="upsell-list">${sl.features.map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
+              </div>
+              <div class="upsell-side">
+                <p class="upsell-price"><strong>${formatKc(sl.price)}</strong> <span>/ měsíc</span></p>
+                <p class="upsell-note">${escapeHtml(sl.note)}</p>
+                <a class="upsell-cta" href="/nastaveni/predplatne">${escapeHtml(sl.cta)}</a>
+              </div>
+            </article>
+          </div>`,
+            )
+            .join("")}
+        </div>
+        ${slides.length > 1 ? `<div class="sv-dots">${slides.map((_, i) => `<button type="button" class="sv-dot${i === 0 ? " on" : ""}" data-sv-go="${i}" aria-label="Tarif ${i + 1}"></button>`).join("")}</div>` : ""}
+      </div>`;
+  }
+
+  function initUpgradeSlider(root) {
+    const slider = root.querySelector("[data-sv-slider]");
+    const track = slider?.querySelector(".sv-track");
+    if (!track) return;
+    const mark = () => {
+      const index = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      slider.querySelectorAll(".sv-tab, .sv-dot").forEach((el) => el.classList.toggle("on", Number(el.dataset.svGo) === index));
+    };
+    track.addEventListener("scroll", () => requestAnimationFrame(mark), { passive: true });
+    slider.addEventListener("click", (event) => {
+      const go = event.target.closest("[data-sv-go]");
+      if (!go) return;
+      track.scrollTo({ left: Number(go.dataset.svGo) * track.clientWidth, behavior: "smooth" });
+    });
+  }
+
+  function openSaveViewModal() {
+    const modal = ensureSaveViewModal();
+    const body = $("view-save-body");
+    const quota = watchQuota();
+    if (quota.reached) {
+      body.innerHTML = upgradeHtml(quota);
+      initUpgradeSlider(body);
+    } else {
+      const rows = watchCriteria();
+      const left = quota.limit == null ? "" : `Zbývá vám ${quota.limit - quota.used} z ${quota.limit} aktivních hlídacích psů v tarifu ${quota.label}.`;
+      body.innerHTML = `
+        <p class="card-label">Nový hlídací pes</p>
+        <h2 class="sv-title">${icon("paw")}Hlídat toto hledání</h2>
+        <p class="sv-copy">Podle aktuálních filtrů vytvoříme hlídacího psa. Jakmile se objeví nová nabídka, hned vám dáme vědět.</p>
+        <form id="view-save-form" class="sv-form">
+          <label>Název hlídacího psa<input name="name" maxlength="60" value="${escapeHtml(defaultWatchName())}" required /></label>
+          <dl class="sv-criteria">${rows.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl>
+          ${left ? `<p class="sv-quota">${escapeHtml(left)}</p>` : ""}
+          <p class="sv-error" id="view-save-error" hidden></p>
+          <div class="actions sv-actions">
+            <button class="btn" type="submit" data-icon="paw">Vytvořit hlídacího psa</button>
+            <button class="btn btn-ghost" type="button" data-sv-close>Zrušit</button>
+          </div>
+        </form>`;
+      $("view-save-form").addEventListener("submit", submitSaveView);
+    }
+    decorateIcons(body);
+    modal.hidden = false;
+    document.body.classList.add("catalog-modal-open");
+    body.querySelector("input[name=name]")?.select();
+  }
+
+  function monitorFiltersFromCatalog() {
+    const districts = new Set(selected.districts);
+    for (const place of selectedPlaces) {
+      const slug = slugForPlace(place.id);
+      if (slug) districts.add(slug);
+    }
+    const num = (id) => {
+      const v = $(id)?.value;
+      return v ? Number(v) : null;
+    };
+    return {
+      source: "sreality",
+      offers: selected.offers.size ? [...selected.offers] : ["pronajem"],
+      category: "byty",
+      estate: [...selected.estates],
+      sizes: [...selected.dispositions],
+      districts: [...districts],
+      price_from: num("cat-price-from"),
+      price_to: num("cat-price-to"),
+      area_from: num("cat-area-from"),
+      area_to: num("cat-area-to"),
+      ownership: [...selected.ownership],
+      conditions: [...selected.conditions],
+      buildings: [...selected.buildings],
+      sort: "nejnovejsi",
+    };
+  }
+
+  async function submitSaveView(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const btn = form.querySelector('button[type="submit"]');
+    const err = $("view-save-error");
+    err.hidden = true;
+    btn.disabled = true;
+    try {
+      const built = await fetch("/api/filters/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filters: monitorFiltersFromCatalog(), portals: "all" }),
+      }).then((r) => r.json());
+      if (!built.url) throw new Error("Hledání se nepodařilo převést na hlídacího psa.");
+      const res = await fetch("/api/monitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.elements.name.value.trim() || "Hlídací pes", search_url: built.url, template_id: "default", enabled: true, portals: "all" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const message = String(data.detail || "Hlídacího psa se nepodařilo vytvořit.");
+        if (/limit/i.test(message)) {
+          $("view-save-body").innerHTML = upgradeHtml(watchQuota(), message);
+          initUpgradeSlider($("view-save-body"));
+          decorateIcons($("view-save-body"));
+          return;
+        }
+        throw new Error(message);
+      }
+      closeSaveViewModal();
+      if (typeof toast === "function") toast(`Hlídací pes „${data.name || "nový"}“ je vytvořený`);
+      if (typeof refresh === "function") refresh();
       renderViews();
+    } catch (e) {
+      err.textContent = e.message || "Hlídacího psa se nepodařilo vytvořit.";
+      err.hidden = false;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  $("catalog-views")?.addEventListener("click", (event) => {
+    if (event.target.closest("#view-save")) {
+      openSaveViewModal();
       return;
     }
     const watch = event.target.closest("[data-watch]");

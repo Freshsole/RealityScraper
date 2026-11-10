@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -23,11 +24,12 @@
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/site/site.css?v=28" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
     <link rel="stylesheet" href="/static/site/pages.css?v=11" />
     <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+    <link rel="stylesheet" href="/static/site/ai-chat.css?v=8" />
     <script src="/static/site/mobile.js?v=1" defer></script>
     <link rel="preload" as="image" href="/static/site/assets/room/dum.webp" fetchpriority="high" />
     <style>
@@ -121,7 +123,7 @@
 
     <section class="hero">
       <div class="hero-left">
-        <h1 class="display">NEJLEPŠÍ <span class="type-slot"><span class="type-ghost" aria-hidden="true">NEMOVITOSTI</span><span class="type-live"><span id="type-word">BYTY</span><span class="type-caret" aria-hidden="true">|</span></span></span> ZMIZÍ ZA MINUTY. BUĎTE U TOHO.</h1>
+        <h1 class="display">Nejlepší <span class="type-slot"><span class="type-ghost" aria-hidden="true">nemovitosti</span><span class="type-live"><span id="type-word">byty</span><span class="type-caret" aria-hidden="true">|</span></span></span> zmizí za minuty. Buďte u toho.</h1>
         <p class="hero-copy">Realitify monitoruje všechny hlavní české realitní portály (Sreality, Bezrealitky, Reality.cz a další) 24/7 v reálném čase. Jakmile se objeví byt odpovídající vašim kritériím, dostanete okamžité upozornění na mobil či e-mail dřív než ostatní.</p>
         <div class="hero-actions">
           <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
@@ -169,7 +171,7 @@
 
     <section class="sold-section">
       <div class="section-head">
-        <p class="eyebrow">PŘÍKLADY Z TRHU</p>
+        <p class="eyebrow">Příklady z trhu</p>
         <h2 class="display is-caps">Tyto byty byly pryč za pár hodin</h2>
       </div>
       <div class="sold-cards" id="sold-cards">
@@ -241,7 +243,7 @@
 
     <section class="how-section" id="jak-to-funguje">
       <div class="section-head">
-        <p class="eyebrow">JAK REALITIFY FUNGUJE</p>
+        <p class="eyebrow">Jak Realitify funguje</p>
         <h2 class="display is-caps">Získejte unikátní náskok před ostatními zájemci</h2>
       </div>
       <div class="steps">
@@ -280,7 +282,7 @@
 
     <section class="fomo">
       <div class="fomo-copy">
-        <p class="eyebrow">ČAS HRAJE PROTI VÁM</p>
+        <p class="eyebrow">Čas hraje proti vám</p>
         <h2 class="display is-caps">Zatímco vy ručně hledáte, někdo jiný už kupuje.</h2>
         <p class="lead">Nejlepší byty v Praze a krajských městech jsou často zarezervované do několika hodin. Spoléhat na ruční prohledávání portálů jednou denně znamená sbírat zbytky. Realitify vám dává technologický náskok, který rozhoduje o vašem budoucím bydlení.</p>
       </div>
@@ -295,7 +297,7 @@
 
     <section class="db-section" id="databaze">
       <div class="section-head">
-        <p class="eyebrow">KOMPLETNÍ TRH NA JEDNOM MÍSTĚ</p>
+        <p class="eyebrow">Kompletní trh na jednom místě</p>
         <h2 class="display is-caps">Všechny byty v ČR zdarma k prohlížení</h2>
         <p class="lead" style="max-width:680px">První hledání je bez registrace. Neomezené prohlížení celé databáze máte po bezplatné registraci — bez placených účtů na portálech.</p>
       </div>
@@ -378,7 +380,7 @@
       </div>
       <div class="db-gate" id="db-gate" hidden>
         <div class="db-gate-card">
-          <p class="eyebrow">PRVNÍ HLEDÁNÍ MÁTE ZA SEBOU</p>
+          <p class="eyebrow">První hledání máte za sebou</p>
           <h3>Prohlížení databáze je po registraci zdarma</h3>
           <p>Další hledání už potřebuje účet. Registrace nic nestojí a odemkne neomezené prohlížení. Chcete i hlídání a okamžité notifikace? Vyberte předplatné.</p>
           <div class="db-gate-actions">
@@ -396,7 +398,7 @@
 
     <section class="compare-section" id="srovnani">
       <div class="section-head">
-        <p class="eyebrow">UŠETŘETE ČAS I PENÍZE</p>
+        <p class="eyebrow">Ušetřete čas i peníze</p>
         <h2 class="display is-caps">Jedna služba místo pěti hlídacích psů</h2>
         <p class="lead" style="max-width:680px">Už nemusíte platit prémiové hlídače na každém webu samostatně. Realitify vše sjednocuje pod jedno přehledné rozhraní s bezkonkurenční rychlostí.</p>
       </div>
@@ -461,7 +463,7 @@
 
     <section class="pricing-section" id="cenik">
       <div class="section-head">
-        <p class="eyebrow">CENOVÉ PLÁNY</p>
+        <p class="eyebrow">Cenové plány</p>
         <h2 class="display is-caps">Flexibilní tarify pro každého</h2>
       </div>
       <div class="pricing-grid">
@@ -482,7 +484,7 @@
           <div class="tier-cta"><a class="btn-outline" href="/registrace">Vyzkoušet zdarma</a></div>
         </article>
         <article class="tier tier-pro">
-          <span class="pop">PRO NÁROČNÉ</span>
+          <span class="pop">Pro náročné</span>
           <div>
             <p class="tier-name">PRO</p>
             <p class="tier-price">349 Kč<span>/měsíc</span></p>
@@ -499,7 +501,7 @@
           <div class="tier-cta"><a class="btn-fill" href="/nastaveni/predplatne?checkout=pro">Aktivovat PRO</a></div>
         </article>
         <article class="tier">
-          <span class="pop">NEJLEPŠÍ POMĚR</span>
+          <span class="pop">Nejlepší poměr</span>
           <div>
             <p class="tier-name">Start</p>
             <p class="tier-price">149 Kč<span>/měsíc</span></p>
@@ -520,7 +522,7 @@
 
     <section class="quotes-section">
       <div class="section-head">
-        <p class="eyebrow">ZKUŠENOSTI NAŠICH UŽIVATELŮ</p>
+        <p class="eyebrow">Zkušenosti našich uživatelů</p>
         <h2 class="display is-caps">Našli své bydlení díky rychlosti</h2>
       </div>
       <div class="quotes">
@@ -646,7 +648,7 @@
         <div class="soc">
           <span class="soc-i" role="img" aria-label="Facebook"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg></span>
           <span class="soc-i" role="img" aria-label="Twitter"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 4s-.7 2.1-2 3.4c1.6 10-9.4 17.3-18 11.6 2.2.1 4.4-.6 6-2C3 15.5.5 9.6 3 5c2.2 2.6 5.6 4.1 9 4-.9-4.2 4-6.6 7-3.8 1.1 0 3-1.2 3-1.2z"/></svg></span>
-          <span class="soc-i" role="img" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></span>
+          <a class="soc-i" href="https://www.instagram.com/realitify.cz/" target="_blank" rel="noopener" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></a>
         </div>
       </div>
     </footer>
@@ -658,7 +660,7 @@
     </div>
     <script src="/static/site/site.js?v=9" defer></script>
     <script src="/static/site/landing-search.js?v=2"></script>
-    <script src="/static/t.js?v=9" defer></script>
+    <script src="/static/t.js?v=10" defer></script>
     <script>
       (() => {
         const scene = document.getElementById("room-scene");
@@ -707,5 +709,6 @@
 
       <script src="/static/site/nav.js?v=3" defer></script>
     <script src="/static/site/pages.js?v=2" defer></script>
+    <script src="/static/site/ai-chat.js?v=8" defer></script>
 </body>
 </html>

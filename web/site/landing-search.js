@@ -123,7 +123,8 @@
       const response = await fetch(`/api/catalog/item?${params}`);
       const item = await response.json().catch(() => ({}));
       if (!response.ok) {
-        modalBody.innerHTML = `<p class="meta">${escapeHtml(item.detail || "Nabídku se nepodařilo načíst.")}</p>`;
+        window.reportClientError?.(String(item.detail || "Detail nabídky se nenačetl"), "landing-detail");
+        modalBody.innerHTML = "";
         return;
       }
       const photo = (item.photos && item.photos[0]) || item.image_url || "";
@@ -139,7 +140,8 @@
         ${item.url ? `<a class="pill pill-lg" href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">Otevřít na portálu</a>` : ""}
       `;
     } catch {
-      modalBody.innerHTML = `<p class="meta">Nabídku se nepodařilo načíst.</p>`;
+      window.reportClientError?.("Detail nabídky se nenačetl", "landing-detail");
+      modalBody.innerHTML = "";
     }
   }
 

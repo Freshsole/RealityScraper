@@ -411,6 +411,9 @@ if (register) {
   };
   show(0);
 
+  const baraBox = register.querySelector("#bara-picker");
+  if (baraBox && window.BaraPicker) window.BaraPicker.mount(baraBox, {});
+
   const prefs = {
     offer: "pronajem",
     localities: [],
@@ -758,7 +761,7 @@ if (register) {
   }
 
   // ---- e-mail verification (panel 3, shown between step 1 and step 2) ----
-  const VERIFY_PANEL = 3;
+  const VERIFY_PANEL = 4;
   let verifyTimer = 0;
   let resendCooldown = 0;
 
@@ -885,12 +888,20 @@ if (register) {
   });
   register.querySelector("#to-step3").addEventListener("click", async () => {
     try {
-      if (await saveWatchPrefs()) show(2);
+      if (await saveWatchPrefs()) show(3);
     } catch (err) {
       showError(err.message || "Filtry se nepodařilo uložit.");
     }
   });
-  register.querySelector("#skip-prefs").addEventListener("click", () => show(2));
+  register.querySelector("#back-to-prefs")?.addEventListener("click", () => show(2));
+  register.querySelector("#to-prefs")?.addEventListener("click", () => show(2));
+  register.querySelector("#back-to-bara")?.addEventListener("click", () => show(1));
+  register.querySelector("#verify-back")?.addEventListener("click", () => {
+    clearInterval(verifyTimer);
+    show(0);
+    register.querySelector("#email")?.focus();
+  });
+  register.querySelector("#skip-prefs").addEventListener("click", () => show(3));
   async function saveNotifyChoices() {
     const on = (kind) => Boolean(register.querySelector(`[data-kind="${kind}"]`)?.classList.contains("on"));
     try {
@@ -979,3 +990,19 @@ if (register) {
 }
 
 window.authIcon = icon;
+
+// Google sign-in: forward ?next= and show a failure message.
+{
+  const gbtn = document.querySelector("#google-btn");
+  const params = new URLSearchParams(location.search);
+  if (gbtn && params.get("next")) gbtn.href = `/api/auth/google/start?next=${encodeURIComponent(params.get("next"))}`;
+  const err = params.get("error");
+  if (gbtn && (err === "google" || err === "google_off")) {
+    const msg = err === "google_off" ? "Přihlášení přes Google není zapnuté." : "Přihlášení přes Google se nepovedlo, zkuste to znovu.";
+    const note = document.createElement("p");
+    note.className = "auth-lead";
+    note.setAttribute("role", "alert");
+    note.textContent = msg;
+    gbtn.closest(".socials")?.before(note);
+  }
+}

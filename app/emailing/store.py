@@ -160,7 +160,13 @@ def set_meta(key: str, value: str, store: "Store | None" = None) -> None:
 
 _VERIFY_KEY = "require_email_verification"
 _VERIFY_TTL_SEC = 10.0
-_verify_cache: dict[str, Any] = {"value": True, "at": 0.0}
+_verify_cache: dict[str, Any] = {"value": True, "at": 0.0}  # replaced on first read
+
+
+def verification_default() -> bool:
+    from app.config import DEV_VERIFY_CODE
+
+    return not DEV_VERIFY_CODE
 
 
 def verification_required(store: "Store | None" = None) -> bool:
@@ -169,7 +175,9 @@ def verification_required(store: "Store | None" = None) -> bool:
     if store is None and now - float(_verify_cache["at"]) < _VERIFY_TTL_SEC:
         return bool(_verify_cache["value"])
     try:
-        value = get_meta(_VERIFY_KEY, store) != "0"
+        raw = get_meta(_VERIFY_KEY, store)
+        # Never set by an admin: on, except on a local dev box (PUBLIC_BASE_URL explicitly localhost) where it is off.
+        value = verification_default() if raw is None else raw != "0"
     except Exception:
         return bool(_verify_cache["value"])
     if store is None:

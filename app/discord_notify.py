@@ -112,6 +112,17 @@ async def send_simple(webhook_url: str, content: str) -> None:
     _raise_for_discord(response, webhook_url)
 
 
+async def send_embed(webhook_url: str, embed: dict[str, Any]) -> None:
+    """Pošle jeden embed (delší, strukturovaná zpráva) na Discord webhook."""
+    webhook_url = (webhook_url or "").strip()
+    if not webhook_url or not embed:
+        return
+    webhook_url = _require_webhook(webhook_url)
+    client = _http()
+    response = await client.post(webhook_url, json={"embeds": [embed]})
+    _raise_for_discord(response, webhook_url)
+
+
 async def send_sold(webhook_url: str, row: dict[str, Any], monitor_name: str = "") -> None:
     if not webhook_url:
         raise RuntimeError("SOLD_WEBHOOK_URL is empty")

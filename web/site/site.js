@@ -5,7 +5,7 @@ document.querySelectorAll(".faq-section .faq-item").forEach((e,s)=>{const a=e.qu
           </picture>`}function soldImageHtml(e,s){if(!e)return'<div class="sold-noimg" aria-hidden="true"></div>';const a=String(e),n=a.match(/\/static\/site\/assets\/(sold-\d+)/);return n?pictureHtml(n[1],301,220,s):`<img src="${escapeHtml(a)}" width="301" height="220" alt="${escapeHtml(s)}" loading="lazy" decoding="async" />`}async function renderGoneFast(){const e=document.getElementById("sold-cards");if(e)try{const n=(await(await fetch("/api/public/gone-fast")).json().catch(()=>({}))).items||[];if(!n.length)return;e.closest(".sold-section")?.removeAttribute("hidden");e.innerHTML=n.map(t=>`<article class="sold-card">
           <div class="sold-img">
             ${soldImageHtml(t.image,t.locality||"")}
-            <span class="sold-badge">${escapeHtml(t.badge||"PRONAJATO")}</span>
+            <span class="sold-badge">${escapeHtml(t.badge||"Pronajato")}</span>
           </div>
           <div class="sold-meta">
             <div class="sold-top"><span>${escapeHtml(t.locality||"")}</span><span>${escapeHtml(t.price||"")}</span></div>

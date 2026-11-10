@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -26,9 +27,10 @@
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/site/site.css?v=28" />
     <link rel="stylesheet" href="/static/site/auth.css?v=4" />
+    <link rel="stylesheet" href="/static/site/bara-picker.css?v=7" />
     <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
@@ -45,8 +47,8 @@
       <form class="auth-card tight" id="reg-step1">
         <div class="auth-head">
           <div class="step-ind">
-            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 1 z 3</span></div>
-            <div class="step-bar"><span class="on"></span><span></span><span></span></div>
+            <div class="step-ind-top"><span class="muted">Průběh registrace</span><span class="now">Krok 1 z 4</span></div>
+            <div class="step-bar"><span class="on"></span><span></span><span></span><span></span></div>
           </div>
           <h1 class="auth-h is-caps">Vytvořte si účet</h1>
           <p class="auth-lead">Dostávejte upozornění dřív než ostatní zájemci.</p>
@@ -92,7 +94,7 @@
           <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/auth-arrow-right.svg" width="16" height="16" alt="" /></span>
         </button>
         <div class="socials">
-          <a class="social" href="/prihlaseni">
+          <a class="social" id="google-btn" href="/api/auth/google/start">
             <span class="icon" style="width:18px;height:18px"><img src="/static/site/assets/google.svg" width="18" height="18" alt="" /></span>
             Google
           </a>
@@ -110,11 +112,36 @@
       <div class="auth-card">
         <div class="auth-head">
           <div class="step-ind">
-            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 2 z 3</span></div>
-            <div class="step-bar"><span class="on"></span><span class="on"></span><span></span></div>
+            <div class="step-ind-top"><span class="muted">Průběh registrace</span><span class="now">Krok 2 z 4</span></div>
+            <div class="step-bar"><span class="on"></span><span class="on"></span><span></span><span></span></div>
           </div>
-          <h1 class="auth-h is-caps">Co hledáte?</h1>
-          <p class="auth-lead">Nastavte si preferovaná kritéria vyhledávání.</p>
+          <h1 class="auth-h is-caps">Seznamte se s Bárou</h1>
+          <p class="auth-lead">Bára je váš hlídací pes, který se postará o všechny vaše nabídky. Vyberte, jak bude vypadat.</p>
+        </div>
+        <div class="pref-form">
+          <div class="field">
+            <div id="bara-picker"></div>
+          </div>
+        </div>
+        <div class="auth-actions">
+          <button class="auth-btn" id="to-prefs" type="button">
+            Pokračovat
+            <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/auth-arrow-right.svg" width="16" height="16" alt="" /></span>
+          </button>
+        </div>
+      </div>
+      <p class="auth-hint">Vzhled Báry můžete kdykoliv změnit v nastavení.</p>
+      </div>
+
+      <div class="step-panel" hidden>
+      <div class="auth-card">
+        <div class="auth-head">
+          <div class="step-ind">
+            <div class="step-ind-top"><span class="muted">Průběh registrace</span><span class="now">Krok 3 z 4</span></div>
+            <div class="step-bar"><span class="on"></span><span class="on"></span><span class="on"></span><span></span></div>
+          </div>
+          <h1 class="auth-h is-caps">Co má Bára hlídat?</h1>
+          <p class="auth-lead">Nastavte kritéria, podle kterých pro vás bude Bára nabídky hledat.</p>
         </div>
         <div class="pref-form">
           <div class="field">
@@ -157,6 +184,7 @@
             Uložit a pokračovat
             <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/auth-arrow-right.svg" width="16" height="16" alt="" /></span>
           </button>
+          <button class="auth-ghost" id="back-to-bara" type="button">← Zpět</button>
           <button class="skip" id="skip-prefs" type="button">Přeskočit, nastavit později</button>
         </div>
       </div>
@@ -167,8 +195,8 @@
       <div class="auth-card">
         <div class="auth-head">
           <div class="step-ind">
-            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 3 z 3</span></div>
-            <div class="step-bar"><span class="on"></span><span class="on"></span><span class="on"></span></div>
+            <div class="step-ind-top"><span class="muted">Průběh registrace</span><span class="now">Krok 4 z 4</span></div>
+            <div class="step-bar"><span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span></div>
           </div>
           <h1 class="auth-h is-caps">Nastavte notifikace</h1>
           <p class="auth-lead">Jak se k vám informace o bytech dostane nejrychleji?</p>
@@ -190,7 +218,7 @@
           </div>
           <div class="toggle-row is-locked" data-tooltip="Po zaplacení PRO verze se vám SMS notifikace zpřístupní.">
             <div class="toggle-copy">
-              <strong>SMS notifikace <span class="tag-pro">PRO VERZE</span></strong>
+              <strong>SMS notifikace <span class="tag-pro">Pro verze</span></strong>
               <p>Bleskové zprávy přímo na váš mobilní telefon. V PRO 10 SMS / měsíc + Discord.</p>
             </div>
             <button class="switch" data-toggle data-locked type="button" aria-disabled="true" aria-label="SMS notifikace, dostupné v PRO verzi" title="Po zaplacení PRO verze se vám SMS notifikace zpřístupní."><i></i></button>
@@ -220,6 +248,7 @@
           Dokončit registraci
           <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/check-circle.svg" width="16" height="16" alt="" /></span>
         </button>
+        <button class="auth-ghost" id="back-to-prefs" type="button">← Zpět</button>
       </div>
       <p class="auth-hint">Notifikace běží nepřetržitě na pozadí 24/7.</p>
       </div>
@@ -227,8 +256,8 @@
       <div class="auth-card" id="verify-card">
         <div class="auth-head">
           <div class="step-ind">
-            <div class="step-ind-top"><span class="muted">PRŮBĚH REGISTRACE</span><span class="now">Krok 1 z 3</span></div>
-            <div class="step-bar"><span class="on"></span><span></span><span></span></div>
+            <div class="step-ind-top"><span class="muted">Průběh registrace</span><span class="now">Krok 1 z 4</span></div>
+            <div class="step-bar"><span class="on"></span><span></span><span></span><span></span></div>
           </div>
           <h1 class="auth-h is-caps">Ověřte svůj e-mail</h1>
           <p class="auth-lead">Poslali jsme potvrzovací odkaz na <strong id="verify-email"></strong>. Otevřete e-mail a klikněte na něj. Pak se sem automaticky vrátíte.</p>
@@ -236,11 +265,13 @@
         <p class="verify-status" id="verify-status" role="status" aria-live="polite">Čekám na potvrzení…</p>
         <button class="auth-btn" id="verify-check" type="button">Už jsem klikl(a)</button>
         <button class="auth-ghost" id="verify-resend" type="button">Poslat odkaz znovu</button>
+        <button class="auth-ghost" id="verify-back" type="button">← Zpět a změnit e-mail</button>
         <p class="field-hint">E-mail nepřišel? Zkontrolujte složku spam. Odkaz platí 48 hodin.</p>
       </div>
       </div>
     </div>
-    <script src="/static/site/auth.js?v=11"></script>
-    <script src="/static/t.js?v=9"></script>
+    <script src="/static/site/bara-picker.js?v=5"></script>
+    <script src="/static/site/auth.js?v=14"></script>
+    <script src="/static/t.js?v=10"></script>
   </body>
 </html>

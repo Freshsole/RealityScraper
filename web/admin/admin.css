@@ -10,7 +10,7 @@
   --sold: #cf2929;
   --track: #eef2ec;
   --radius: 24px;
-  --font-display: Manrope, Inter, sans-serif;
+  --font-display: Inter, sans-serif;
   --font-ui: Inter, Helvetica, Arial, sans-serif;
   --side: 280px;
 }
@@ -308,7 +308,7 @@ img {
   font-size: 36px;
   line-height: 1.1;
   letter-spacing: -1px;
-  text-transform: uppercase;font-weight:800;}
+  font-weight:800;}
 
 .ad-lead {
   margin: 8px 0 24px;
@@ -424,7 +424,7 @@ img {
   font-size: 18px;
   font-weight:800;
   letter-spacing: -0.5px;
-  text-transform: uppercase;
+  
   margin: 0 0 16px;
   color: var(--forest);
 }
@@ -1234,7 +1234,7 @@ img {
   margin: 0;
   font-size: 12px;
   font-weight: 700;
-  text-transform: uppercase;
+  
   color: var(--body);
 }
 
@@ -2174,7 +2174,7 @@ img {
   font-size: 14px;
   font-weight:800;
   letter-spacing: 0.5px;
-  text-transform: uppercase;
+  
   color: var(--forest);
 }
 
@@ -4445,7 +4445,7 @@ img {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 1px;
-  text-transform: uppercase;
+  
   padding: 6px 12px;
   border-radius: 6px;
 }
@@ -4492,7 +4492,7 @@ img {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 1px;
-  text-transform: uppercase;
+  
   opacity: 0.6;
 }
 
@@ -4561,7 +4561,7 @@ img {
 .cms-papt-grid p {
   font-size: 11px;
   font-weight: 700;
-  text-transform: uppercase;
+  
 }
 
 .cms-papt-grid strong {
@@ -4633,7 +4633,7 @@ img {
 .em-tbl { min-width: 760px; }
 .em-tr { display: grid; grid-template-columns: minmax(0, 2.6fr) 1fr 1.6fr 1fr 1fr 1.3fr; gap: 16px; align-items: center; padding: 14px 24px; border-top: 1px solid var(--line); font-size: 13px; color: var(--forest); }
 a.em-tr:hover, .em-log-tr[data-id]:hover { background: var(--canvas); cursor: pointer; }
-.em-th { border-top: 0; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--body); }
+.em-th { border-top: 0; font-size: 11px; font-weight: 800;  letter-spacing: .5px; color: var(--body); }
 .em-th:hover { background: none !important; cursor: default !important; }
 .em-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .em-name small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

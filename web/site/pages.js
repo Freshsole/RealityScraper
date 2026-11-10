@@ -89,18 +89,56 @@
       });
     });
     var esc = function (s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); };
+    /* Natural-language matching: fold diacritics, drop filler words, match word starts (Czech endings), rank. */
+    var fold = function (s) { return (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); };
+    var words = function (s) { return fold(s).split(/[^a-z0-9]+/).filter(Boolean); };
+    var STOP = {};
+    ('a aby ale ani asi ba bez by byl byla bylo byt co copak do dalsi jak jake jaky jaka jakou je jeho jeji jen jsem jsou jste k kam kde kdy kdyz ke kolik kterak ktery ktera ktere kym me mi mit moc mohu moje muj musim my na nad nam nas nebo nic o od on ona oni po pod pokud pri proc protoze s se si sve tak take tam to tom tu ty u uz v ve vam vas vsak z za ze zda').split(' ').forEach(function (w) { STOP[w] = 1; });
+    var stem = function (w) { return w.length <= 3 ? w : w.slice(0, Math.max(4, w.length - 2)); };
+    var docs = items.map(function (it) {
+      return {
+        q: words(it.querySelector('.qa-q span').textContent),
+        k: words(it.getAttribute('data-kw') || ''),
+        a: words(it.querySelector('.qa-a p').textContent)
+      };
+    });
+    var hit = function (list, tok) {
+      var st = stem(tok);
+      for (var i = 0; i < list.length; i++) {
+        if (tok.length <= 3 ? list[i] === tok : list[i].indexOf(st) === 0) return true;
+      }
+      return false;
+    };
+    var score = function (d, toks) {
+      var total = 0, matched = 0;
+      toks.forEach(function (t) {
+        var s = hit(d.q, t) ? 3 : hit(d.k, t) ? 2 : hit(d.a, t) ? 1 : 0;
+        if (s) { matched++; total += s; }
+      });
+      return matched / toks.length >= 0.5 ? total + matched : 0;
+    };
+    var order = items.slice();
     var apply = function () {
-      var q = (search && search.value || '').trim().toLowerCase();
-      var shown = 0;
+      var raw = (search && search.value || '').trim();
+      var toks = words(raw).filter(function (w) { return !STOP[w]; });
+      if (!toks.length) toks = words(raw);
+      var scores = items.map(function (it, i) { return toks.length ? score(docs[i], toks) : 1; });
+      var shown = 0, best = -1;
       items.forEach(function (it, i) {
-        var text = (it.textContent || '').toLowerCase();
-        var ok = (catNow === 'all' || it.getAttribute('data-cat') === catNow) && (!q || text.indexOf(q) !== -1);
+        var ok = (catNow === 'all' || it.getAttribute('data-cat') === catNow) && scores[i] > 0;
         it.hidden = !ok;
         var p = it.querySelector('.qa-a p');
-        p.innerHTML = q && ok ? originals[i].replace(new RegExp('(' + esc(q) + ')', 'gi'), '<mark>$1</mark>') : originals[i];
-        if (ok) shown++;
-        if (ok && q) setOpen(it, true);
+        var marks = raw ? toks.filter(function (t) { return t.length > 2; }) : [];
+        p.innerHTML = marks.length && ok
+          ? originals[i].replace(new RegExp('(' + marks.map(esc).join('|') + ')', 'gi'), '<mark>$1</mark>')
+          : originals[i];
+        if (ok) { shown++; if (best < 0 || scores[i] > scores[best]) best = i; }
+        if (raw) setOpen(it, false);
       });
+      if (raw && best >= 0) setOpen(items[best], true);
+      var sorted = raw ? items.map(function (it, i) { return i; }).sort(function (x, y) { return scores[y] - scores[x] || x - y; }) : items.map(function (it, i) { return i; });
+      sorted.forEach(function (i) { list.appendChild(items[i]); });
+      [].forEach.call(document.querySelectorAll('.help-cat'), function (c) { c.hidden = !c.querySelector('.qa:not([hidden])'); });
       if (empty) empty.hidden = shown !== 0;
     };
     if (search) search.addEventListener('input', apply);

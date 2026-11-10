@@ -94,7 +94,7 @@ Fonty se načítají z Google Fonts (Manrope 800, Inter 400/600/700/800 + kurzí
 
 - **Nadpis:** Zatímco vy ručně hledáte, někdo jiný už kupuje.
 - **Text:** Nejlepší byty v Praze a krajských městech jsou často zarezervované do několika hodin. Spoléhat na ruční prohledávání portálů jednou denně znamená sbírat zbytky. Realitify vám dává technologický náskok, který rozhoduje o vašem budoucím bydlení.
-- **CTA:** Začít hlídat teď hned · Chci ušetřit drahocenný čas (odkaz na ceník)
+- **CTA:** Začít hlídat teď hned · Nechci přeplácet za nájem (odkaz na ceník)
 
 ### 6. Databáze zdarma
 

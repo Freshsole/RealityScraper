@@ -4,6 +4,8 @@ const livePill = $("live-pill");
 const liveLabel = $("live-label");
 const errorEl = $("error");
 
+/* Chyby se uživateli neukazují; hlásí je window.reportClientError ze site/error-report.js (Discord webhook přes backend). */
+
 let hitsMap = null;
 let hitsLayer = null;
 let hitsPins = [];
@@ -294,6 +296,8 @@ function setBusy() {}
 function toast(message, kind = "ok") {
   const host = $("toasts");
   if (!host || !message) return;
+  /* Odpověď na akci uživatele (uložení, platba…) zůstává vidět, aby nevznikla tichá porucha, a zároveň se hlásí na webhook. */
+  if (kind === "error") reportClientError(message, "toast");
   const item = document.createElement("div");
   item.className = `toast toast-${kind}`;
   item.innerHTML = `<span class="toast-dot"></span><p>${escapeHtml(message)}</p>`;
@@ -532,24 +536,23 @@ window.addEventListener("popstate", () => applyRoute());
 function renderStatus(status) {
   statusCache = status;
   const running = Boolean(status.running);
-  livePill.dataset.state = status.last_error ? "error" : running ? "on" : "off";
-  liveLabel.textContent = status.last_error ? "Chyba" : running ? "Hlídám" : "Zastaveno";
+  livePill.dataset.state = running ? "on" : "off";
+  liveLabel.textContent = running ? "Hlídám" : "Zastaveno";
   $("new-today").textContent = status.new_today ?? 0;
-  $("tracked").textContent = status.tracked ?? 0;
-  $("total").textContent = status.search_total || "–";
-  $("last-check").textContent = formatTime(status.last_check);
-  $("interval").textContent = `${status.interval_sec} s`;
+  $("tracked").textContent = Number(status.watched ?? status.tracked ?? 0).toLocaleString("cs-CZ");
+  $("total").textContent = status.search_total ? Number(status.search_total).toLocaleString("cs-CZ") : "–";
+  $("last-check").textContent = status.last_check ? formatTime(status.last_check) : "zatím ne";
+  const every = Number(status.interval_sec) || 60;
+  $("interval").textContent =
+    every === 60 ? "každou minutu" : every % 60 === 0 ? `každých ${every / 60} min` : `každých ${every} s`;
   if (status.version) {
     if ($("footer-version")) $("footer-version").textContent = `v${status.version}`;
   }
   if (status.last_error) {
-    console.error("Status error:", status.last_error);
-    errorEl.hidden = false;
-    errorEl.textContent = "Při poslední kontrole nastala chyba. Zkuste to později, nebo nám napište na ahoj@realitify.cz.";
-  } else {
-    errorEl.hidden = true;
-    errorEl.textContent = "";
+    reportClientError(String(status.last_error).slice(0, 400), "status");
   }
+  errorEl.hidden = true;
+  errorEl.textContent = "";
 
   fillCarousel("carousel-today", "empty-today", hitsFromToday(status));
   fillCarousel("carousel-all", "empty-all", status.recent || []);
@@ -1000,7 +1003,7 @@ function showWatchHome() {
 function showWatchEditor(title) {
   if ($("watch-home")) $("watch-home").hidden = true;
   if ($("watch-editor")) $("watch-editor").hidden = false;
-  if ($("watch-editor-title")) $("watch-editor-title").textContent = title || "NOVÝ HLÍDACÍ PROFIL";
+  if ($("watch-editor-title")) $("watch-editor-title").textContent = title || "Nový hlídací profil";
 }
 
 async function applyUrlToFilters(url) {
@@ -2687,7 +2690,30 @@ function shortProfileName(profile) {
   return first || last || profile.email || "Účet";
 }
 
+let baraPickerApi = null;
+let lastProfile = {};
+
+// First visit of the overview after signing up: Bára introduces herself (remembered per user in this browser).
+function applyWelcomeIntro(profile) {
+  const title = $("ov-welcome-title");
+  const text = $("ov-welcome-text");
+  if (!title || !text || !profile || !profile.id) return;
+  const key = `rf_bara_intro_${profile.id}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (_err) {
+    return;
+  }
+  const first = (profile.first || "").trim();
+  title.textContent = first ? `Ahoj ${first}, já jsem Bára` : "Ahoj, já jsem Bára";
+  text.textContent =
+    "Budu pro vás hlídat nové nabídky a změny cen 24/7. Každý hlídací profil hlídá své hledání a upozornění pošlu na Discord, e-mail nebo push.";
+}
+
 function applyProfile(profile) {
+  lastProfile = profile;
+  applyWelcomeIntro(profile);
   if ($("profile-first")) $("profile-first").value = profile.first || "";
   if ($("profile-last")) $("profile-last").value = profile.last || "";
   if ($("profile-email")) {
@@ -2699,8 +2725,30 @@ function applyProfile(profile) {
   if ($("set-user-name")) $("set-user-name").textContent = name;
   if ($("set-user-mail")) $("set-user-mail").textContent = profile.email || "";
   const initials = initialsFromProfile(profile);
-  if ($("set-avatar")) $("set-avatar").textContent = initials;
-  if ($("nav-avatar")) $("nav-avatar").textContent = initials;
+  for (const id of ["set-avatar", "nav-avatar"]) {
+    const el = $(id);
+    if (!el) continue;
+    if (profile.avatar) {
+      el.textContent = "";
+      const img = document.createElement("img");
+      img.className = "avatar-img";
+      img.alt = "";
+      img.src = profile.avatar;
+      el.appendChild(img);
+    } else {
+      el.textContent = initials;
+    }
+  }
+  if ($("bara-picker") && window.BaraPicker) {
+    if (!baraPickerApi) {
+      baraPickerApi = window.BaraPicker.mount($("bara-picker"), {
+        current: profile.avatar || "",
+        onChange: (url) => applyProfile({ ...lastProfile, avatar: url }),
+      });
+    } else {
+      baraPickerApi.set(profile.avatar || "");
+    }
+  }
   if ($("nav-user-name")) $("nav-user-name").textContent = shortProfileName(profile);
   if ($("profile-verified")) $("profile-verified").hidden = !profile.email_verified;
   updateEmailHint();
@@ -3380,3 +3428,4 @@ setInterval(refresh, 4000);
     location.href = "/prihlaseni";
   });
 })();
+

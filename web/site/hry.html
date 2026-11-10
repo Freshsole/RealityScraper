@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -22,10 +23,10 @@
     <meta name="twitter:description" content="Zábavné hry o cenách nájmů v Praze a ČR. Tipněte nájem bytu a otestujte si znalost realitního trhu." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/site/site.css?v=28" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=11" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=16" />
     <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
@@ -48,45 +49,39 @@
       </div>
     </header>
     <main class="pg" id="top">
-      <section class="pg-hero hero-split" data-nav="Hry" data-nav-desc="Minihry z reálných nabídek">
-        <div class="hero-copy">
-          <p class="eyebrow">HRY Z REÁLNÝCH CEN</p>
-          <h1 class="display">Trefíte cenu dřív, než byt zmizí?</h1>
-          <p class="lead">Dvě minihry z reálných nabídek ve stejné lokalitě. Ukážou, že dobré ceny existují — a že bez minutového hlídání je nestihnete.</p>
-          <div class="pg-chips">
-            <span class="pg-chip">stejná lokalita</span>
-            <span class="pg-chip">10 portálů</span>
-            <span class="pg-chip">obnova ~60 s</span>
+      <section class="gh-wrap" data-nav="Hry" data-nav-desc="Minihry z reálných nabídek">
+        <div class="gh">
+          <div class="gh-copy">
+            <h1 class="display">Trefíte cenu dřív, než byt zmizí?</h1>
+            <p class="lead">Dvě minihry z reálných nabídek ve stejné lokalitě. Ukážou, že dobré ceny existují — a že bez minutového hlídání je nestihnete.</p>
+            <ul class="gh-rules"><li><b>1</b> stejná lokalita</li><li><b>2</b> 10 portálů</li><li><b>3</b> obnova ~60 s</li></ul>
+            <div class="gh-actions">
+              <a class="pill pill-lg" href="/hry/vyssi-nizsi">Hrát higher / lower</a>
+              <a class="gh-ghost" href="/hry/najem">Tipnout nájem</a>
+            </div>
           </div>
-          <div class="pg-actions">
-            <a class="pill pill-lg" href="/hry/vyssi-nizsi">Hrát higher / lower</a>
-            <a class="link-row" href="/hry/najem">Tipnout nájem →</a>
+          <div class="gh-dogs" aria-hidden="true">
+            <img class="gh-dog is-front" src="/static/site/assets/games-hero-dog.webp" width="420" height="384" alt="" decoding="async" />
           </div>
-        </div>
-        <div class="mock-card" aria-hidden="true">
-          <div class="mock-top"><span class="mock-badge">TIP NÁJMU</span><span class="mock-time">před 38 sekundami</span></div>
-          <picture><source type="image/avif" srcset="/static/site/assets/hero-apart.avif 1x, /static/site/assets/hero-apart@2x.avif 2x" /><source type="image/webp" srcset="/static/site/assets/hero-apart.webp 1x, /static/site/assets/hero-apart@2x.webp 2x" /><img class="mock-photo" src="/static/site/assets/hero-apart.webp" width="432" height="180" alt="" decoding="async" /></picture>
-          <div class="mock-meta"><strong>Praha 3 – Žižkov</strong><span class="pg-chip">2+kk · 54 m²</span></div>
-          <div class="mock-guess"><span>Kolik stojí měsíc?</span><b>??? Kč</b></div>
         </div>
       </section>
 
       <section class="pg-section" id="hry" data-nav="Vyberte hru" data-nav-desc="Higher / Lower nebo tip nájmu">
         <div class="pg-head reveal">
-          <p class="eyebrow">VYBERTE HRU</p>
+          <p class="eyebrow">Vyberte hru</p>
           <h2 class="display">Dvě hry, jedna zkušenost: trh je rychlý</h2>
           <p>Každá hra bere skutečné nabídky ze všech sledovaných portálů. Žádné vymyšlené ceny.</p>
         </div>
         <div class="game-tiles">
           <a class="game-tile reveal" href="/hry/vyssi-nizsi">
-            <span class="game-tile-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></span>
+            <img class="game-dog" src="/static/site/assets/game-higher-lower-dog.webp" width="380" height="347" alt="" loading="lazy" decoding="async" />
             <h3>Higher / Lower</h3>
             <p>Dva byty ze stejné čtvrti. Hádejte, který je levnější. Často je ten hezčí i levnější — a přesně ty mizí první.</p>
             <div class="pg-chips"><span class="pg-chip">2 byty</span><span class="pg-chip">1 klik</span><span class="pg-chip">série bez konce</span></div>
             <span class="pill pill-lg">Hrát higher / lower</span>
           </a>
           <a class="game-tile is-dark reveal" href="/hry/najem">
-            <span class="game-tile-icon"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg></span>
+            <img class="game-dog" src="/static/site/assets/game-tip-najem-dog.webp" width="380" height="347" alt="" loading="lazy" decoding="async" />
             <h3>Tipněte nájem</h3>
             <p>Pět bytů, pět tipů měsíčního nájmu. Čím blíž jste realitě, tím víc bodů. Skóre se ukládá do žebříčku.</p>
             <div class="pg-chips"><span class="pg-chip">5 bytů</span><span class="pg-chip">body za přesnost</span></div>
@@ -97,7 +92,7 @@
 
       <section class="pg-section is-pale" id="jak" data-nav="Jak hrát" data-nav-desc="Tři kroky k lepšímu odhadu">
         <div class="pg-head reveal">
-          <p class="eyebrow">JAK HRÁT</p>
+          <p class="eyebrow">Jak hrát</p>
           <h2 class="display">Tři kroky, jedna minuta</h2>
         </div>
         <div class="steps is-3">
@@ -167,7 +162,7 @@
         <div class="soc">
           <span class="soc-i" role="img" aria-label="Facebook"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg></span>
           <span class="soc-i" role="img" aria-label="Twitter"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 4s-.7 2.1-2 3.4c1.6 10-9.4 17.3-18 11.6 2.2.1 4.4-.6 6-2C3 15.5.5 9.6 3 5c2.2 2.6 5.6 4.1 9 4-.9-4.2 4-6.6 7-3.8 1.1 0 3-1.2 3-1.2z"/></svg></span>
-          <span class="soc-i" role="img" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></span>
+          <a class="soc-i" href="https://www.instagram.com/realitify.cz/" target="_blank" rel="noopener" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></a>
         </div>
       </div>
     </footer>

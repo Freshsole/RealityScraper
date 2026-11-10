@@ -70,6 +70,8 @@ def ensure_users_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub INTEGER NOT NULL DEFAULT 0")
     if "marketing_unsub_at" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN marketing_unsub_at TEXT")
+    if "avatar" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
     if "first_vocative" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN first_vocative TEXT NOT NULL DEFAULT ''")
     if "email_suppressed" not in cols:
@@ -152,8 +154,33 @@ def _row_to_user(row: sqlite3.Row | None) -> dict[str, Any] | None:
         "email_verified": bool(verified),
         "marketing_unsub": bool(row["marketing_unsub"]) if "marketing_unsub" in row.keys() else False,
         "first_vocative": (row["first_vocative"] or "") if "first_vocative" in row.keys() else "",
+        "avatar": (row["avatar"] or "") if "avatar" in row.keys() else "",
         "created_at": row["created_at"],
     }
+
+
+AVATAR_PRESETS = 110  # web/site/assets/bara/001.webp … 110.webp
+
+
+def avatar_url(user: dict[str, Any]) -> str:
+    """Empty -> the first preset. Preset 'bara:NNN' -> static file, 'custom:<stamp>' -> the uploaded picture of the signed-in user."""
+    raw = (user.get("avatar") or "").strip()
+    if raw.startswith("bara:"):
+        num = raw[5:]
+        if num.isdigit() and 1 <= int(num) <= AVATAR_PRESETS:
+            return f"/static/site/assets/bara/{int(num):03d}.webp"
+    if raw.startswith("custom:"):
+        return f"/api/auth/avatar?v={raw[7:]}"
+    return f"/static/site/assets/bara/001.webp"  # default until the user picks another one
+
+
+def avatar_file(user_id: str) -> Path:
+    return user_store_path(user_id).parent / "avatar.webp"
+
+
+def set_user_avatar(store: Store, user_id: str, value: str) -> None:
+    with store.connect() as conn:
+        conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (value, user_id))
 
 
 def public_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -173,6 +200,7 @@ def public_user(user: dict[str, Any] | None) -> dict[str, Any] | None:
         "email": email,
         "phone": (user.get("phone") or "").strip(),
         "email_verified": bool(user.get("email_verified")),
+        "avatar": avatar_url(user),
         "authenticated": bool(email),
         "role": role,
     }

@@ -749,6 +749,7 @@ class Store:
                     self._ensure_push(conn)
                     self._ensure_analytics(conn)
                     self._ensure_guest_searches(conn)
+                    self._ensure_ai_tables(conn)
                     self._ensure_user_identity(conn)
                 return
             except sqlite3.OperationalError as exc:
@@ -795,6 +796,295 @@ class Store:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_ip ON guest_searches(ip)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_guest_searches_vid ON guest_searches(visitor_id)")
+
+    def _ensure_ai_tables(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                user_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                chat_messages INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, date)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_chats (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_chats_user ON ai_chats(user_id, updated_at)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                cards TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_pending_actions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                chat_id TEXT,
+                tool TEXT NOT NULL,
+                args TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_pending_user ON ai_pending_actions(user_id, status)")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_actions_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                args TEXT NOT NULL,
+                result TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS listing_summaries (
+                listing_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                model TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    def ai_usage_try_increment(self, user_id: str, day: str, limit: int) -> tuple[bool, int]:
+        """Atomically count one chat message for (user, day). (False, count) when the limit is already used up."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO ai_usage(user_id, date, chat_messages) VALUES (?, ?, 1)
+                ON CONFLICT(user_id, date) DO UPDATE SET chat_messages = chat_messages + 1
+                WHERE chat_messages < ?
+                """,
+                (user_id, day, int(limit)),
+            )
+            allowed = cur.rowcount == 1
+            count = conn.execute(
+                "SELECT chat_messages FROM ai_usage WHERE user_id = ? AND date = ?", (user_id, day)
+            ).fetchone()
+        return allowed, int(count[0]) if count else 0
+
+    # ---- saved AI chats (every query is scoped by user_id: a user only ever sees their own chats) ----
+
+    def ai_chat_create(self, user_id: str, title: str) -> str:
+        chat_id = secrets.token_hex(12)
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO ai_chats(id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (chat_id, user_id, title[:80], now, now),
+            )
+        return chat_id
+
+    def ai_chat_owned(self, user_id: str, chat_id: str) -> bool:
+        with self.connect(readonly=True) as conn:
+            return conn.execute(
+                "SELECT 1 FROM ai_chats WHERE id = ? AND user_id = ?", (chat_id, user_id)
+            ).fetchone() is not None
+
+    def ai_chat_add_message(self, chat_id: str, role: str, content: str, cards: list[dict[str, Any]] | None = None) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO ai_chat_messages(chat_id, role, content, cards, created_at) VALUES (?, ?, ?, ?, ?)",
+                (chat_id, role, content, json.dumps(cards, ensure_ascii=False) if cards else None, now),
+            )
+            conn.execute("UPDATE ai_chats SET updated_at = ? WHERE id = ?", (now, chat_id))
+            return int(cur.lastrowid)
+
+    def ai_chat_delete_message(self, message_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM ai_chat_messages WHERE id = ?", (int(message_id),))
+
+    def ai_chat_recent_messages(self, chat_id: str, limit: int) -> list[dict[str, str]]:
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT role, content FROM ai_chat_messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, int(limit)),
+            ).fetchall()
+        return [{"role": str(r[0]), "content": str(r[1])} for r in reversed(rows)]
+
+    def ai_chat_list(self, user_id: str, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT id, title, updated_at FROM ai_chats WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (user_id, int(limit)),
+            ).fetchall()
+        return [{"id": r[0], "title": r[1], "updated_at": r[2]} for r in rows]
+
+    def ai_chat_get(self, user_id: str, chat_id: str) -> dict[str, Any] | None:
+        with self.connect(readonly=True) as conn:
+            chat = conn.execute(
+                "SELECT id, title, updated_at FROM ai_chats WHERE id = ? AND user_id = ?", (chat_id, user_id)
+            ).fetchone()
+            if not chat:
+                return None
+            rows = conn.execute(
+                "SELECT role, content, cards FROM ai_chat_messages WHERE chat_id = ? ORDER BY id", (chat_id,)
+            ).fetchall()
+        messages = []
+        for role, content, cards in rows:
+            msg: dict[str, Any] = {"role": role, "content": content}
+            if cards:
+                try:
+                    msg["cards"] = json.loads(cards)
+                except ValueError:
+                    pass
+            messages.append(msg)
+        return {"id": chat[0], "title": chat[1], "updated_at": chat[2], "messages": messages}
+
+    def ai_chat_delete(self, user_id: str, chat_id: str) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute("DELETE FROM ai_chats WHERE id = ? AND user_id = ?", (chat_id, user_id))
+            if cur.rowcount != 1:
+                return False
+            conn.execute("DELETE FROM ai_chat_messages WHERE chat_id = ?", (chat_id,))
+        return True
+
+    # ---- AI pending actions (two-phase confirmation) + audit log ----
+
+    def ai_action_create(
+        self, user_id: str, chat_id: str | None, tool: str, args: dict[str, Any], summary: str, ttl_s: int
+    ) -> str:
+        action_id = secrets.token_hex(12)
+        now = datetime.now(timezone.utc)
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO ai_pending_actions(id, user_id, chat_id, tool, args, summary, created_at, expires_at, status)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')",
+                (
+                    action_id,
+                    user_id,
+                    chat_id,
+                    tool,
+                    json.dumps(args, ensure_ascii=False),
+                    summary,
+                    now.isoformat(),
+                    (now + timedelta(seconds=ttl_s)).isoformat(),
+                ),
+            )
+        return action_id
+
+    def ai_action_get(self, action_id: str) -> dict[str, Any] | None:
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT id, user_id, chat_id, tool, args, summary, created_at, expires_at, status"
+                " FROM ai_pending_actions WHERE id = ?",
+                (action_id,),
+            ).fetchone()
+        if not row:
+            return None
+        out = {k: row[k] for k in row.keys()}
+        out["args"] = json.loads(out["args"])
+        return out
+
+    def ai_action_claim(self, action_id: str, user_id: str, new_status: str) -> bool:
+        """Atomically move a still-valid pending action of this user to `new_status` (executing / cancelled)."""
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE ai_pending_actions SET status = ? WHERE id = ? AND user_id = ? AND status = 'pending'"
+                " AND expires_at > ?",
+                (new_status, action_id, user_id, datetime.now(timezone.utc).isoformat()),
+            )
+            return cur.rowcount == 1
+
+    def ai_action_set_status(self, action_id: str, status: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE ai_pending_actions SET status = ? WHERE id = ?", (status, action_id))
+
+    def ai_action_log(self, user_id: str, tool: str, args: dict[str, Any], result: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO ai_actions_log(user_id, tool, args, result, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, tool, json.dumps(args, ensure_ascii=False), result, utc_now()),
+            )
+
+    def ai_actions_expire(self, user_id: str) -> int:
+        """Mark this user's stale pending actions as expired and write them to the audit log."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, tool, args FROM ai_pending_actions WHERE user_id = ? AND status = 'pending' AND expires_at <= ?",
+                (user_id, now),
+            ).fetchall()
+            for row in rows:
+                conn.execute("UPDATE ai_pending_actions SET status = 'expired' WHERE id = ?", (row["id"],))
+                conn.execute(
+                    "INSERT INTO ai_actions_log(user_id, tool, args, result, created_at) VALUES (?, ?, ?, 'expired', ?)",
+                    (user_id, row["tool"], row["args"], utc_now()),
+                )
+        return len(rows)
+
+    def ai_actions_pending_for_chat(self, user_id: str, chat_id: str) -> list[dict[str, str]]:
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT id, summary FROM ai_pending_actions WHERE user_id = ? AND chat_id = ? AND status = 'pending'"
+                " AND expires_at > ? ORDER BY created_at",
+                (user_id, chat_id, datetime.now(timezone.utc).isoformat()),
+            ).fetchall()
+        return [{"action_id": r["id"], "summary": r["summary"]} for r in rows]
+
+    def ai_usage_refund(self, user_id: str, day: str) -> None:
+        """Give one counted chat message back (the LLM call failed). One atomic UPDATE, never below zero."""
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE ai_usage SET chat_messages = chat_messages - 1 WHERE user_id = ? AND date = ? AND chat_messages > 0",
+                (user_id, day),
+            )
+
+    def listing_summary_get(self, listing_id: str) -> str | None:
+        with self.connect(readonly=True) as conn:
+            row = conn.execute(
+                "SELECT summary FROM listing_summaries WHERE listing_id = ?", (str(listing_id),)
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    def listing_summary_save(self, listing_id: str, summary: str, model: str) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO listing_summaries(listing_id, summary, model, created_at) VALUES (?, ?, ?, ?)",
+                (str(listing_id), summary, model, utc_now()),
+            )
+
+    def listing_ids_without_summary(self, limit: int) -> list[str]:
+        """Newest catalog listings (by first_seen) that have no stored summary yet."""
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT CAST(listings.id AS TEXT) FROM listings
+                WHERE listings.monitor_id = ? AND IFNULL(listings.gone, 0) = 0
+                  AND CAST(listings.id AS TEXT) NOT IN (SELECT listing_id FROM listing_summaries)
+                ORDER BY listings.first_seen DESC
+                LIMIT ?
+                """,
+                (CATALOG_MONITOR_ID, int(limit)),
+            ).fetchall()
+        return [str(r[0]) for r in rows]
 
     def _ensure_market_seo_pages(self, conn: sqlite3.Connection) -> None:
         conn.execute(

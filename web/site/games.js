@@ -72,13 +72,13 @@
             ${rowHtml(left, { revealed: true, state: data.cheaper === "left" ? "win" : "lose" })}
             <div class="vs-row">VS</div>
             ${rowHtml(right, { revealed: true, state: data.cheaper === "right" ? "win" : "lose" })}
-            <div class="mint-banner">
-              <strong>${correct ? "Správně." : "Špatně."}</strong>
+            <div class="mint-banner ${correct ? "is-ok" : "is-miss"}">
+              <strong>${correct ? "Správně!" : "To nevyšlo."}</strong>
               <span>${escapeHtml(message || "Dobré byty mizí rychle.")}</span>
             </div>
             <div class="converter-actions">
               <button class="pill pill-lg" type="button" id="hl-next">Další dvojice</button>
-              <a class="pill pill-lg" href="/registrace" style="text-align:center">Hlídat podobné byty</a>
+              <a class="pill-ghost hl-ghost" href="/registrace">Hlídat podobné byty</a>
             </div>
           `;
           renderScore();
@@ -94,7 +94,9 @@
       });
     }
     round().catch(() => {
-      board.innerHTML = "<div class='mint-banner'><strong>Hru se teď nepodařilo načíst. Zkuste to za chvíli.</strong></div>";
+      window.reportClientError?.("Higher/Lower se nenačetlo", "games");
+      board.innerHTML = "<div class='converter-actions'><button class='pill pill-lg' type='button' id='hl-retry'>Načíst znovu</button></div>";
+      document.getElementById("hl-retry")?.addEventListener("click", () => round().catch(() => {}));
     });
   }
 
@@ -107,21 +109,34 @@
     const data = await res.json();
     grid.innerHTML = (data.items || [])
       .map(
-        (item) => `
+        (item, i) => `
         <article class="rent-card">
+          <span class="rent-num" aria-hidden="true">${i + 1}</span>
           <img src="${escapeHtml(item.image_url || "/static/site/assets/sold-1.webp")}" alt="" width="300" height="140" decoding="async" />
           <div class="meta">
             <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
             <div class="spec">${escapeHtml(specText(item))}</div>
             <div class="portal">${escapeHtml(item.portal_label || "")}</div>
-            <label>Tip nájmu / měsíc
-              <input type="number" min="1000" step="100" name="guess" data-id="${escapeHtml(item.id)}" required />
+            <label>Váš tip nájmu / měsíc
+              <span class="rent-input"><input type="number" min="1000" step="100" name="guess" inputmode="numeric" placeholder="0" data-id="${escapeHtml(item.id)}" required /><span class="rent-unit">Kč</span></span>
             </label>
           </div>
         </article>
       `,
       )
       .join("");
+    const bar = document.getElementById("rent-bar");
+    const count = document.getElementById("rent-count");
+    const inputs = () => [...grid.querySelectorAll("input[name='guess']")];
+    const updateProgress = () => {
+      const all = inputs();
+      const done = all.filter((el) => Number(el.value) > 0).length;
+      all.forEach((el) => el.closest(".rent-card")?.classList.toggle("is-filled", Number(el.value) > 0));
+      if (bar) bar.style.width = `${all.length ? (done / all.length) * 100 : 0}%`;
+      if (count) count.textContent = `${done} / ${all.length}`;
+    };
+    grid.addEventListener("input", updateProgress);
+    updateProgress();
     form?.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const guesses = [...grid.querySelectorAll("input[name='guess']")].map((input) => ({
@@ -138,14 +153,19 @@
           body: JSON.stringify({ name, guesses }),
         }).then((row) => row.json());
         result.hidden = false;
+        const per = (scored.max_score || 0) / Math.max(1, (scored.items || []).length);
         result.innerHTML = `
-          <h2 class="display">SKÓRE ${escapeHtml(scored.score)} / ${escapeHtml(scored.max_score)}</h2>
-          <p>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat 5 inzerátů ručně.</p>
-          <div class="rent-grid" style="margin-top:16px">
+          <img class="result-dog" src="/static/site/assets/game-higher-lower-dog.webp" alt="" width="260" height="238" />
+          <div class="result-head">
+            <span class="result-kicker">Vaše skóre</span>
+            <h2 class="display">${escapeHtml(scored.score)} <small>/ ${escapeHtml(scored.max_score)} bodů</small></h2>
+            <p>Přesnost ${String(scored.accuracy).replace(".", ",")} %. Skvělé byty mizí dřív, než stihnete srovnat 5 inzerátů ručně.</p>
+          </div>
+          <div class="rent-grid result-grid">
             ${(scored.items || [])
               .map(
                 (item) => `
-                <article class="rent-card">
+                <article class="rent-card is-result ${per && item.points / per >= 0.7 ? "is-good" : per && item.points / per >= 0.3 ? "is-mid" : "is-bad"}">
                   <div class="meta">
                     <div class="loc">${escapeHtml(item.locality || item.name || "")}</div>
                     <div class="flat-price">${escapeHtml(fmt(item.actual))}</div>
@@ -158,6 +178,7 @@
           </div>
           <a class="pill" href="/registrace">Hlídat podobné byty</a>
         `;
+        result.scrollIntoView({ behavior: "smooth", block: "start" });
       } finally {
         if (submit) submit.disabled = false;
       }

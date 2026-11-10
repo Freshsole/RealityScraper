@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
@@ -20,12 +21,12 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Tipněte nájem bytu — hra | REALITIFY" />
     <meta name="twitter:description" content="Hra Tipněte nájem: odhadněte měsíční nájem bytu v Praze a porovnejte se s realitou trhu." />
-    <link rel="stylesheet" href="/static/site/games.css?v=6" />
+    <link rel="stylesheet" href="/static/site/games.css?v=10" />
     <link rel="stylesheet" href="/static/site/nav.css?v=1" />
     <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
     <script src="/static/site/mobile.js?v=1" defer></script>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@800&family=Inter:wght@400;600;700&display=swap" /></noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" media="print" onload="this.media='all'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" /></noscript>
   </head>
   <body class="game-page game-rent">
     <header class="navbar">
@@ -45,17 +46,28 @@
         <a class="pill pill-nav" href="/registrace">Vyzkoušet zdarma</a>
       </div>
     </header>
-    <section class="game-hero">
-      <p class="eyebrow">TIP NÁJMU · 5 BYTŮ</p>
-      <h1 class="display is-caps">Kolik stojí měsíc?</h1>
-      <p class="lead">Napište měsíční nájem u pěti nabídek. Čím blíž jste, tím víc bodů. Žebříček uvidí admin — vy uvidíte, jak rychle dobré ceny mizí.</p>
+    <section class="rent-hero">
+      <div class="rent-hero-copy">
+        <p class="rent-chip">Tip nájmu · 5 bytů</p>
+        <h1 class="display">Kolik stojí měsíc?</h1>
+        <p class="lead">Napište měsíční nájem u pěti nabídek. Čím blíž jste, tím víc bodů. Žebříček uvidí admin — vy uvidíte, jak rychle dobré ceny mizí.</p>
+        <ul class="rent-rules"><li><b>1</b> Prohlédněte si byt</li><li><b>2</b> Tipněte nájem</li><li><b>3</b> Sbírejte body</li></ul>
+      </div>
+      <img class="rent-hero-dog" src="/static/site/assets/game-tip-najem-dog.webp" alt="" width="420" height="384" />
     </section>
+    <div class="rent-progress" aria-live="polite"><span>Vyplněno <b id="rent-count">0 / 5</b></span><div class="rent-track"><div id="rent-bar"></div></div></div>
     <form class="rent-wrap" id="rent-form">
       <section class="rent-grid" id="rent-grid"></section>
       <div class="game-form">
-        <input id="player-name" type="text" maxlength="64" placeholder="Jméno do žebříčku (volitelné)" />
-        <button class="pill" type="submit">Odeslat tipy</button>
-        <a class="pill-ghost" href="/hry">Zpět na hry</a>
+        <div class="gf-copy">
+          <h2>Máte natipováno?</h2>
+          <p>Jméno je volitelné. Skóre se zapíše do žebříčku pod ním.</p>
+        </div>
+        <div class="gf-actions">
+          <input id="player-name" type="text" maxlength="64" placeholder="Vaše jméno do žebříčku" autocomplete="nickname" />
+          <button class="pill" type="submit">Odeslat tipy</button>
+          <a class="pill-ghost" href="/hry">Zpět na hry</a>
+        </div>
       </div>
       <section class="game-result" id="rent-result" hidden></section>
     </form>
@@ -112,11 +124,11 @@
         <div class="soc">
           <span class="soc-i" role="img" aria-label="Facebook"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg></span>
           <span class="soc-i" role="img" aria-label="Twitter"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 4s-.7 2.1-2 3.4c1.6 10-9.4 17.3-18 11.6 2.2.1 4.4-.6 6-2C3 15.5.5 9.6 3 5c2.2 2.6 5.6 4.1 9 4-.9-4.2 4-6.6 7-3.8 1.1 0 3-1.2 3-1.2z"/></svg></span>
-          <span class="soc-i" role="img" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></span>
+          <a class="soc-i" href="https://www.instagram.com/realitify.cz/" target="_blank" rel="noopener" aria-label="Instagram"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></a>
         </div>
       </div>
     </footer>
-    <script src="/static/site/games.js?v=2"></script>
+    <script src="/static/site/games.js?v=3"></script>
       <script src="/static/site/nav.js?v=3" defer></script>
 </body>
 </html>

@@ -258,12 +258,12 @@
           <div class="cms-inq-scroll">
             <div class="cms-inq-table">
               <div class="cms-inq-thead">
-                <span class="cms-inq-c-date">DATUM</span>
-                <span class="cms-inq-c-name">JMÉNO</span>
-                <span class="cms-inq-c-mail">E-MAIL</span>
-                <span class="cms-inq-c-phone">TELEFON</span>
-                <span class="cms-inq-c-msg">ZPRÁVA</span>
-                <span class="cms-inq-c-src">ZDROJ</span>
+                <span class="cms-inq-c-date">Datum</span>
+                <span class="cms-inq-c-name">Jméno</span>
+                <span class="cms-inq-c-mail">E-mail</span>
+                <span class="cms-inq-c-phone">Telefon</span>
+                <span class="cms-inq-c-msg">Zpráva</span>
+                <span class="cms-inq-c-src">Zdroj</span>
                 <span class="cms-inq-c-st">STAV</span>
                 <span class="cms-inq-c-act">AKCE</span>
               </div>
@@ -392,7 +392,7 @@
       main.innerHTML = `
         <div class="cms-headrow">
           <div>
-            <h1 class="ad-h">SPRÁVA ČLÁNKŮ</h1>
+            <h1 class="ad-h">Správa článků</h1>
             <p class="ad-lead">Vytvářejte a spravujte úspěšné příběhy, rady a trendy ze světa bydlení.</p>
           </div>
           <a class="cms-pill cms-pill-green" href="/admin/cms/novy">${ico("plus", 14)} Nový příspěvek</a>
@@ -449,12 +449,12 @@
         </form>
         <section class="cms-table-wrap">
           <div class="cms-thead">
-            <span class="cms-col-title">NÁZEV ČLÁNKU</span>
+            <span class="cms-col-title">Název článku</span>
             <span class="cms-col-status">STAV</span>
-            <span class="cms-col-cat">KATEGORIE</span>
-            <span class="cms-col-author">AUTOR</span>
-            <span class="cms-col-date">PUBLIKACE</span>
-            <span class="cms-col-views">ZOBRAZENÍ</span>
+            <span class="cms-col-cat">Kategorie</span>
+            <span class="cms-col-author">Autor</span>
+            <span class="cms-col-date">Publikace</span>
+            <span class="cms-col-views">Zobrazení</span>
             <span class="cms-col-act">AKCE</span>
           </div>
           ${
@@ -511,7 +511,7 @@
           <a class="cms-back" href="/admin/cms">${ico("arrow-left", 16)} Zpět na přehled</a>
           ${dirtyBar(saved)}
         </div>
-        <h1 class="ad-h">${isNew ? "NOVÝ PŘÍSPĚVEK" : "UPRAVIT PŘÍSPĚVEK"}</h1>
+        <h1 class="ad-h">${isNew ? "Nový příspěvek" : "Upravit příspěvek"}</h1>
         <form id="cms-form" class="cms-editor">
           <input type="hidden" name="id" value="${esc(a.id || "")}" />
           <div class="cms-left">
@@ -556,7 +556,7 @@
             </div>
           </div>
           <aside class="cms-right">
-            <h2>NASTAVENÍ ČLÁNKU</h2>
+            <h2>Nastavení článku</h2>
             ${sel("Stav publikace", "status", a.status || "draft", [
               ["draft", "Koncept"],
               ["scheduled", "Naplánováno"],

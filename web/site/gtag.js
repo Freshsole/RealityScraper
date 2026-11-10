@@ -3,7 +3,7 @@
   const ID = "G-WGP2CCXNBD";
   function consent() {
     const raw = document.cookie.split("; ").find((p) => p.startsWith("rf_consent="));
-    let a = true, m = false;
+    let a = false, m = false; // bez výslovného souhlasu se nesleduje
     if (raw) {
       try {
         const d = JSON.parse(decodeURIComponent(raw.slice(11)));
@@ -14,6 +14,12 @@
     return { a, m };
   }
   const c = consent();
+  if (!/^\/admin(\/|$)/.test(location.pathname)) {
+    const cb = document.createElement("script");
+    cb.src = "/static/site/consent-banner.js?v=3";
+    cb.defer = true;
+    document.head.appendChild(cb);
+  }
   window.dataLayer = window.dataLayer || [];
   window.gtag = function () { window.dataLayer.push(arguments); };
   gtag("consent", "default", {
