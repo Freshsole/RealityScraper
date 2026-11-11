@@ -324,3 +324,59 @@ def test_chat_stream_emits_confirm_and_get_chat_lists_pending(store, monkeypatch
     # the model's tool result says the action was NOT executed
     tool_msg = [m for m in llm.chat_calls[1]["messages"] if m["role"] == "tool"][0]["content"]
     assert "NEBYLA provedena" in tool_msg
+
+
+def test_update_monitor_can_change_filters_and_portal_after_confirm(store, monkeypatch):
+    client = chat_app(store, "pro", FakeLLM(), monkeypatch, services=make_services(store, resolve_locality=_resolve, geocode=_geocode))
+    ustore = client.hub.store_for("user-1")
+    tools, _svc = _tools(store)
+    ctx = make_ctx(ustore, plan="pro", chat_id=store.ai_chat_create("user-1", "t"))
+    _, events = _call(tools, ctx, "create_monitor", locality="Praha 7", offer_type="pronajem", disposition=["2+kk"], max_price=25000)
+    assert client.post(f"/api/chat/actions/{events[0]['action_id']}/confirm").status_code == 200
+    monitor = ustore.list_monitors()[-1]
+    old_url = monitor["search_url"]
+    result, events = _call(
+        tools, ctx, "update_monitor", monitor_id=monitor["id"], locality="Praha 7", offer_type="pronajem",
+        disposition=["3+kk"], max_price=30000, portal="sreality",
+    )
+    assert result.get("status") == "pending_confirmation", result
+    summary = [e for e in events if e["type"] == "confirm"][0]["summary"]
+    assert "30 000 Kč" in summary and "sreality" in summary
+    assert ustore.get_monitor(monitor["id"])["search_url"] == old_url  # unchanged until confirmed
+    assert client.post(f"/api/chat/actions/{events[0]['action_id']}/confirm").status_code == 200
+    updated = ustore.get_monitor(monitor["id"])
+    assert updated["search_url"] != old_url and updated["portals"] == "sreality"
+
+
+def test_update_monitor_rejects_unknown_portal_and_empty_change(store, ustore):
+    tools, _svc = _tools(store)
+    ctx = make_ctx(ustore, plan="pro")
+    ustore.save_monitor({"name": "m", "search_url": "https://www.sreality.cz/hledani/pronajem/byty/praha", "enabled": True})
+    mid = ustore.list_monitors()[-1]["id"]
+    assert "error" in _call(tools, ctx, "update_monitor", monitor_id=mid, portal="evil")[0]
+    assert "error" in _call(tools, ctx, "update_monitor", monitor_id=mid)[0]
+
+
+def test_bulk_status_watch_prefs_and_monitor_from_url(store, monkeypatch):
+    client = chat_app(store, "pro", FakeLLM(), monkeypatch, services=make_services(store, resolve_locality=_resolve, geocode=_geocode))
+    ustore = client.hub.store_for("user-1")
+    tools, _svc = _tools(store)
+    ctx = make_ctx(ustore, plan="pro", chat_id=store.ai_chat_create("user-1", "t"))
+    urls = [f"https://x.cz/{i}" for i in range(3)]
+    result, events = _call(tools, ctx, "set_listings_status", listing_urls=urls, status="saved")
+    assert result.get("status") == "pending_confirmation" and "3 inzerátů" in events[0]["summary"]
+    assert ustore.get_listing_user(urls[0])["status"] == ""
+    assert client.post(f"/api/chat/actions/{events[0]['action_id']}/confirm").status_code == 200
+    assert all(ustore.get_listing_user(u)["status"] == "saved" for u in urls)
+    assert "error" in _call(tools, ctx, "set_listings_status", listing_urls=[f"https://x.cz/{i}" for i in range(21)], status="hidden")[0]
+
+    _, events = _call(tools, ctx, "update_watch_prefs", disposition=["2+kk"], max_price=20000)
+    assert client.post(f"/api/chat/actions/{events[0]['action_id']}/confirm").status_code == 200
+    prefs = ustore.app_settings()["watch_prefs"]
+    assert prefs["price_to"] == 20000 and prefs["sizes"]
+
+    n = len(ustore.list_monitors())
+    _, events = _call(tools, ctx, "create_monitor_from_url", search_url="https://www.sreality.cz/hledani/pronajem/byty/praha", name="Z adresy", portal="sreality")
+    assert client.post(f"/api/chat/actions/{events[0]['action_id']}/confirm").status_code == 200
+    assert len(ustore.list_monitors()) == n + 1
+    assert "error" in _call(tools, ctx, "create_monitor_from_url", search_url="notaurl")[0]

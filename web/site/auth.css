@@ -833,3 +833,60 @@ label .optional {
 .auth-ghost{width:100%;padding:12px;font:inherit;font-size:14px;font-weight:700;color:var(--forest,#163300);background:none;border:0;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .auth-ghost:disabled{opacity:.5;cursor:default}
 a.auth-btn{display:flex;align-items:center;justify-content:center;text-decoration:none}
+
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* audit fix: dvě pole vedle sebe nesmí přetéct kartu (iPad) */
+.price-row > .field { flex: 1 1 0; min-width: 0; width: auto; }
+.field-input { box-sizing: border-box; }
+/* audit fix: plovoucí přepínač jazyka nesmí překrývat tlačítka kroků */
+body.auth-page .rf-lang-float { position: absolute; top: 12px; bottom: auto; right: 12px; }
+
+/* Phones: compact auth screens (login / register / reset / verify) */
+@media (max-width: 560px) {
+  body.auth-page { padding: 20px 16px 32px; }
+  body.auth-page .auth-stack { gap: 18px; }
+  body.auth-page .auth-logo { min-height: 0; font-size: 19px; }
+  body.auth-page .auth-card { padding: 22px 18px; gap: 20px; border-radius: 20px; }
+  body.auth-page .auth-card.tight { gap: 16px; }
+  body.auth-page .auth-head { gap: 8px; }
+  body.auth-page .auth-h { font-size: 26px; letter-spacing: -.6px; }
+  body.auth-page .auth-lead { font-size: 13.5px; line-height: 1.45; }
+  body.auth-page .auth-fields { gap: 12px; }
+  body.auth-page .field { gap: 6px; }
+  body.auth-page .field label { font-size: 12.5px; }
+  body.auth-page .field-input { padding: 0 14px; border-radius: 12px; min-height: 48px; }
+  body.auth-page .field-input input { min-height: 0; height: 46px; padding: 0; font-size: 16px; }
+  body.auth-page .pw-toggle { min-height: 0; width: auto; height: 36px; padding: 0 2px; }
+  body.auth-page .auth-btn { padding: 0 24px; min-height: 48px; font-size: 15px; }
+  body.auth-page .social { padding: 0 20px; min-height: 46px; }
+  body.auth-page .divider { gap: 12px; }
+  body.auth-page .auth-foot { align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+  body.auth-page .auth-foot a { min-height: 0; display: inline; }
+}
+
+@media (max-width: 560px) {
+  body.auth-page .field-input { height: 48px; box-sizing: border-box; }
+  body.auth-page .check-row { gap: 10px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; }
+  body.auth-page .check-row span:last-child { font-size: 12.5px; line-height: 1.4; }
+  body.auth-page .check-row a { font-size: inherit; min-height: 0; display: inline; }
+  body.auth-page .check-box { flex: none; width: 20px; height: 20px; margin-top: 1px; }
+  body.auth-page .strength { gap: 4px; }
+  body.auth-page .strength-label { font-size: 12px; }
+  body.auth-page .step-ind { gap: 6px; }
+}
+
+@media (max-width: 560px) {
+  body.auth-page .step-ind { margin-bottom: 14px; }
+  body.auth-page .auth-head { gap: 10px; }
+  body.auth-page .auth-card:has(.step-ind) { gap: 22px; }
+}
+
+.auth-fields .field-strength { margin-top: -6px; }
+.strength-label:empty{display:none}
+
+@media (max-width: 560px) {
+  body.auth-page .price-row { flex-direction: row; gap: 10px; }
+  body.auth-page .price-row .field-input { padding: 0 12px; }
+  body.auth-page .price-row .field label { font-size: 12px; }
+}

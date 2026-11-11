@@ -465,7 +465,6 @@ def render_index(store: Store) -> str:
     ) or '<span class="note">Zatím bez ukončených měsíců.</span>'
 
     body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="Souhrn nájmů k dnešnímu dni">
-        <p class="eyebrow">INDEX NÁJMŮ · {html.escape(updated_label.upper())}</p>
         <h1 class="display">Kolik dnes stojí pronájem bytu v Česku?</h1>
         <p class="lead">{html.escape(cite_praha)} Čísla počítáme z aktivních nabídek ze všech sledovaných portálů, bez duplicit.</p>
         <div class="pg-actions">
@@ -476,7 +475,6 @@ def render_index(store: Store) -> str:
 
       <section class="pg-section" id="mesta" data-nav="Města" data-nav-desc="Medián nájmu v největších městech">
         <div class="pg-head reveal">
-          <p class="eyebrow">NEJVĚTŠÍ MĚSTA</p>
           <h2 class="display">Medián nájmu podle města</h2>
           <p>Aktuální nabídky bytů k pronájmu. Medián je odolnější vůči extrémům než průměr.</p>
         </div>
@@ -485,7 +483,6 @@ def render_index(store: Store) -> str:
 
       <section class="pg-section is-pale" id="mesic" data-nav="Tento měsíc" data-nav-desc="Nové nabídky a ceny v aktuálním měsíci">
         <div class="pg-head reveal">
-          <p class="eyebrow">{html.escape(current_month)}</p>
           <h2 class="display">Aktuální měsíc podle lokality</h2>
           <p>Neukončený měsíc nemá trvalou archivní adresu, čísla se průběžně mění. Po skončení měsíce vznikne /index/{html.escape(current_month)}. Řadit můžete kliknutím na záhlaví sloupce.</p>
         </div>
@@ -494,7 +491,6 @@ def render_index(store: Store) -> str:
 
       <section class="pg-section" id="archiv" data-nav="Archiv" data-nav-desc="Trvalé odkazy na ukončené měsíce">
         <div class="pg-head reveal">
-          <p class="eyebrow">ARCHIV</p>
           <h2 class="display">Ukončené měsíce</h2>
           <p>Trvalé adresy vhodné pro citace a reportáže.</p>
         </div>
@@ -510,7 +506,6 @@ def render_index(store: Store) -> str:
             {_cite_row(cite_ostrava)}
           </div>
           <div class="pg-head reveal">
-            <p class="eyebrow">METODIKA</p>
             <h2 class="display">Jak počítáme Kč/m²</h2>
             <p>{html.escape(PRICE_METHODOLOGY_CS)}</p>
             <p class="note">{html.escape(DISCLAIMER_CS)}</p>
@@ -844,7 +839,6 @@ def render_search(store: Store | None = None, q: str = "") -> str:
     del store, q  # data is loaded client-side by the guest catalog
     body = """      <section class="hl-gate-wrap" id="gate" hidden>
         <div class="pg-card hl-gate" id="hl-gate">
-          <p class="eyebrow">KATALOG NABÍDEK</p>
           <h1>Odemkněte celý katalog bytů</h1>
           <p>Mapa, filtry a nabídky ze všech sledovaných portálů. Zadejte e-mail a katalog je váš. Bez hesla a bez platební karty.</p>
           <form class="hl-form" id="hl-form" novalidate>
@@ -930,7 +924,6 @@ def render_about_cs(store: Store | None = None) -> str:
     )
     pro, start = plans.get("pro") or {}, plans.get("start") or {}
     body = f"""      <section class="pg-hero" data-nav="O nás" data-nav-desc="Kdo jsme a co děláme">
-        <p class="eyebrow">O REALITIFY</p>
         <h1 class="display">Hlídáme český trh s byty za vás</h1>
         <p class="lead">{html.escape(product_facts.one_liner_cs())} Sjednocujeme inzeráty z {html.escape(portals)} a hlásíme nové shody dřív než ostatní.</p>
         <div class="pg-actions">
@@ -945,7 +938,6 @@ def render_about_cs(store: Store | None = None) -> str:
 
       <section class="pg-section is-pale" id="co-delame" data-nav="Co děláme" data-nav-desc="Tři věci, na kterých stavíme">
         <div class="pg-head reveal">
-          <p class="eyebrow">CO DĚLÁME</p>
           <h2 class="display">Jedno místo místo deseti záložek</h2>
           <p>Realitní portály jsou roztříštěné. Realitify je spojuje do jednoho katalogu a hlídá ho za vás.</p>
         </div>
@@ -958,7 +950,6 @@ def render_about_cs(store: Store | None = None) -> str:
 
       <section class="pg-section" id="jak" data-nav="Jak funguje" data-nav-desc="Od scraperu k upozornění">
         <div class="pg-head reveal">
-          <p class="eyebrow">JAK FUNGUJE AGREGACE</p>
           <h2 class="display">Od inzerátu k upozornění za minutu</h2>
           <p>Veřejné stránky a MCP server čtou ze stejného katalogu, který průběžně plní naše scrapery.</p>
         </div>
@@ -973,7 +964,6 @@ def render_about_cs(store: Store | None = None) -> str:
       <section class="pg-section is-pale" id="provozovatel" data-nav="Provozovatel" data-nav-desc="Kdo službu provozuje">
         <div class="split">
           <div class="pg-head reveal">
-            <p class="eyebrow">PROVOZOVATEL</p>
             <h2 class="display">Za Realitify stojí Virtuex.cz</h2>
             <p>Realitify vytváří a provozuje <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a>, které řídí OSVČ {html.escape(str(op.get('name')))}. Najdete nás na kontaktu níže a rádi odpovíme na cokoli.</p>
             <p class="note">{html.escape(DISCLAIMER_CS)}</p>
@@ -1054,7 +1044,6 @@ def render_about_en() -> str:
     product = facts.get("product") or {}
     support = html.escape(str(contact.get("support") or ""))
     body = f"""      <section class="pg-hero" data-nav="About" data-nav-desc="Who we are">
-        <p class="eyebrow">ABOUT REALITIFY</p>
         <h1 class="display">We watch the Czech property market for you</h1>
         <p class="lead">{html.escape(product_facts.one_liner_en())} It collects and deduplicates ads from {html.escape(portals)}.</p>
         <div class="pg-actions">
@@ -1065,7 +1054,6 @@ def render_about_en() -> str:
 
       <section class="pg-section is-pale" id="what" data-nav="What we do" data-nav-desc="Three things we build on">
         <div class="pg-head reveal">
-          <p class="eyebrow">WHAT WE DO</p>
           <h2 class="display">One catalog instead of ten tabs</h2>
         </div>
         <div class="feature-grid">
@@ -1077,7 +1065,6 @@ def render_about_en() -> str:
 
       <section class="pg-section" id="how" data-nav="How it works" data-nav-desc="From scraper to alert">
         <div class="pg-head reveal">
-          <p class="eyebrow">HOW AGGREGATION WORKS</p>
           <h2 class="display">From a listing to an alert within a minute</h2>
         </div>
         <div class="steps">
@@ -1091,7 +1078,6 @@ def render_about_en() -> str:
       <section class="pg-section is-pale" id="operator" data-nav="Operator" data-nav-desc="Who runs the service">
         <div class="split">
           <div class="pg-head reveal">
-            <p class="eyebrow">OPERATOR</p>
             <h2 class="display">Realitify is built by Virtuex.cz</h2>
             <p>Realitify is created and run by <a href="https://www.virtuex.cz" rel="noopener" style="text-decoration:underline;text-underline-offset:3px">Virtuex.cz</a>, managed by sole trader {html.escape(str(op.get('name')))}. It has been operating since {html.escape(str(product.get('since_year')))}.</p>
             <p class="note">{html.escape(DISCLAIMER_EN)}</p>

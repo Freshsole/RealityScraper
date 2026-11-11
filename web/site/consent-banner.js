@@ -18,7 +18,7 @@
 .rf-cc-btns{display:flex;gap:10px;flex-wrap:wrap}
 .rf-cc button,.rf-cc .rf-cc-pref{appearance:none;border:0;cursor:pointer;font:inherit;font-size:14px;font-weight:700;
   height:44px;padding:0 22px;border-radius:12px;display:inline-flex;align-items:center;text-decoration:none;transition:filter .15s}
-.rf-cc-ok{background:#1a1a2e;color:#fff}
+.rf-cc-ok,.rf-cc-no{background:#1a1a2e;color:#fff}
 .rf-cc .rf-cc-pref{background:#e9e9ee;color:#1a1a2e}
 .rf-cc button:hover,.rf-cc .rf-cc-pref:hover{filter:brightness(1.12)}
 .rf-cc button:focus-visible,.rf-cc .rf-cc-pref:focus-visible{outline:2px solid #1a1a2e;outline-offset:2px}
@@ -36,10 +36,15 @@
 .rf-cc[data-view=prefs] .rf-cc-intro,.rf-cc:not([data-view=prefs]) .rf-cc-prefs{display:none}
 @keyframes rf-cc-in{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
 @media (max-width:560px){
-  .rf-cc{left:8px;right:8px;bottom:8px;width:auto;padding:22px 20px 20px;padding-right:20px}
-  .rf-cc h2{font-size:24px;padding-right:96px}
-  .rf-cc-dog{height:130px;right:6px;top:-62px;bottom:auto}
-  .rf-cc p{font-size:14px}
+  .rf-cc{left:0;right:0;bottom:0;width:auto;padding:14px 16px calc(34px + env(safe-area-inset-bottom));border-radius:18px 18px 0 0}
+  .rf-cc h2{font-size:17px;margin:0 0 4px}
+  .rf-cc-dog{display:none}
+  .rf-cc p{font-size:13px;line-height:1.45;margin:0 0 12px}
+  .rf-cc-btns{flex-wrap:nowrap;gap:8px}
+  .rf-cc button,.rf-cc .rf-cc-pref{flex:1 1 0;justify-content:center;padding:0 8px;font-size:13px;height:44px;min-width:0}
+  .rf-cc-list{gap:8px;margin-bottom:12px}
+  .rf-cc-list span{font-size:12px}
+  .rf-cc[data-view=prefs]{max-height:80vh;overflow:auto}
 }
 @media (prefers-reduced-motion:reduce){.rf-cc{animation:none}}`;
 
@@ -66,14 +71,15 @@
     box.innerHTML =
       '<h2 id="rf-cc-title">Cookies</h2>' +
       '<div class="rf-cc-intro"><p>Používáme cookies, abychom vás udrželi přihlášené, zapamatovali si vaše nastavení a vylepšovali Realitify. ' +
-      'Kliknutím na Přijmout souhlasíte s našimi <a href="/ochrana-soukromi">zásadami cookies</a>.</p>' +
+      'Volitelné cookies (analytika, marketing) zapneme jen s vaším souhlasem. Více v <a href="/ochrana-soukromi">zásadách cookies</a>.</p>' +
       '<div class="rf-cc-btns"><button type="button" class="rf-cc-ok">Přijmout</button>' +
+      '<button type="button" class="rf-cc-no">Odmítnout</button>' +
       '<button type="button" class="rf-cc-pref">Nastavení</button></div></div>' +
       '<div class="rf-cc-prefs"><ul class="rf-cc-list">' +
       row("necessary", "Nezbytné", "Přihlášení a bezpečnost, bez nich web nefunguje.", true, true) +
-      row("analytics", "Analytické", "Anonymní statistiky návštěvnosti a nahrávání relací.", true) +
-      row("marketing", "Marketingové", "Měření reklam a personalizace.", true) +
-      row("functional", "Funkční", "Pamatuje si filtry, profil a nastavení oznámení.", true) +
+      row("analytics", "Analytické", "Anonymní statistiky návštěvnosti a nahrávání relací.", false) +
+      row("marketing", "Marketingové", "Měření reklam a personalizace.", false) +
+      row("functional", "Funkční", "Pamatuje si filtry, profil a nastavení oznámení.", false) +
       '</ul><div class="rf-cc-btns"><button type="button" class="rf-cc-save rf-cc-ok">Uložit nastavení</button>' +
       '<button type="button" class="rf-cc-pref rf-cc-all">Přijmout vše</button></div></div>' +
       '<picture><source srcset="/static/site/assets/cookie-dog.webp" type="image/webp" />' +
@@ -91,6 +97,7 @@
       sw.addEventListener("click", () => sw.setAttribute("aria-checked", sw.getAttribute("aria-checked") === "true" ? "false" : "true")));
     const val = (k) => box.querySelector(`.rf-cc-sw[data-k="${k}"]`).getAttribute("aria-checked") === "true";
     box.querySelector(".rf-cc-intro .rf-cc-ok").addEventListener("click", () => done(true, true, true));
+    box.querySelector(".rf-cc-intro .rf-cc-no").addEventListener("click", () => done(false, false, false));
     box.querySelector(".rf-cc-intro .rf-cc-pref").addEventListener("click", () => {
       box.dataset.view = "prefs";
       box.querySelector(".rf-cc-save").focus();

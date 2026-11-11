@@ -97,7 +97,9 @@ function fillCarousel(id, emptyId, items) {
     }
     return;
   }
-  track.innerHTML = list.map((item) => listingCardHtml(item)).join("");
+  const cardApi = window.RealitifyCard;
+  track.classList.toggle("has-offer-cards", Boolean(cardApi));
+  track.innerHTML = list.map((item) => (cardApi ? cardApi.html(item) : listingCardHtml(item))).join("");
   state.keys = keys;
   state.page = prevPage;
   state.dragX = 0;
@@ -268,6 +270,14 @@ window.addEventListener("resize", () => {
   }
 });
 
+function valueBadge(item) {
+  const pct = Number(item.value_pct);
+  if (!Number.isFinite(pct) || pct < 3) return "";
+  const text = `${Math.round(pct)} % pod okolím`;
+  const tip = `Cena za m² je o ${Math.round(pct)} % nižší než medián ${Number(item.value_median_m2 || 0).toLocaleString("cs-CZ")} Kč/m² u ${item.value_comps} srovnatelných nabídek v okolí`;
+  return `<span class="value-badge${pct >= 15 ? " is-top" : ""}" title="${escapeHtml(tip)}">${escapeHtml(text)}</span>`;
+}
+
 function listingCardHtml(item, { compact = false } = {}) {
   const photo = item.image_url || item.photos?.[0] || "";
   const area = item.area_m2 ? `${item.area_m2} m²` : "rozloha neuvedena";
@@ -282,6 +292,7 @@ function listingCardHtml(item, { compact = false } = {}) {
   return `
     <a class="listing" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noreferrer">
       ${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : `<div class="listing-photo-empty" aria-hidden="true"></div>`}
+      ${valueBadge(item)}
       <div class="listing-body">
         <h3>${escapeHtml(item.name || item.locality || "Nabídka")}</h3>
         <div class="price">${escapeHtml(item.price_label || "Cena na dotaz")}</div>
@@ -293,6 +304,8 @@ function listingCardHtml(item, { compact = false } = {}) {
 
 function setBusy() {}
 
+let toastActive = 0;
+
 function toast(message, kind = "ok") {
   const host = $("toasts");
   if (!host || !message) return;
@@ -302,16 +315,29 @@ function toast(message, kind = "ok") {
   item.className = `toast toast-${kind}`;
   item.innerHTML = `<span class="toast-dot"></span><p>${escapeHtml(message)}</p>`;
   host.appendChild(item);
-  requestAnimationFrame(() => item.classList.add("in"));
+  // Choreografie: Bára (plovoucí tlačítko) se schová, pak vyjede toast; po zmizení toastu se Bára vrátí.
+  const first = toastActive === 0;
+  toastActive += 1;
+  document.body.classList.add("toast-active");
+  let closed = false;
+  let timer = null;
   const hide = () => {
-    item.classList.remove("in");
-    setTimeout(() => item.remove(), 240);
-  };
-  const timer = setTimeout(hide, kind === "error" || message.length > 80 ? 7000 : 3200);
-  item.addEventListener("click", () => {
+    if (closed) return;
+    closed = true;
     clearTimeout(timer);
-    hide();
-  });
+    item.classList.remove("in");
+    setTimeout(() => {
+      item.remove();
+      toastActive = Math.max(0, toastActive - 1);
+      if (toastActive === 0) document.body.classList.remove("toast-active");
+    }, 260);
+  };
+  setTimeout(() => {
+    if (closed) return;
+    item.classList.add("in");
+    timer = setTimeout(hide, kind === "error" || message.length > 80 ? 7000 : 3200);
+  }, first ? 280 : 0);
+  item.addEventListener("click", hide);
 }
 
 const ROUTES = {
@@ -607,7 +633,7 @@ function addBaseTiles(map) {
 
 function ensureMap() {
   if (hitsMap || typeof L === "undefined") return;
-  hitsMap = L.map("hits-map", { scrollWheelZoom: false, attributionControl: false }).setView([50.08, 14.44], 12);
+  hitsMap = L.map("hits-map", { scrollWheelZoom: true, wheelPxPerZoomLevel: 90, zoomSnap: 0.5, touchZoom: true, attributionControl: false }).setView([50.08, 14.44], 12);
   addBaseTiles(hitsMap);
   hitsLayer = L.layerGroup().addTo(hitsMap);
   hitsMap.on("zoomend", () => drawHitsPins(false));

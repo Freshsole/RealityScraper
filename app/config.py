@@ -193,6 +193,8 @@ PORT = int((os.getenv("PORT") or "8080"))
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", f"http://{HOST}:{PORT}").strip().rstrip("/")
 # AI chat + listing summaries. Off by default: routes are not registered and ai/llm.py is never imported.
 AI_ENABLED = os.getenv("AI_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+# Listing AI summary only (the chat is unaffected). Temporarily OFF by default: set AI_SUMMARY_ENABLED=true to turn it back on.
+AI_SUMMARY_ENABLED = os.getenv("AI_SUMMARY_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 DEBUG = os.getenv("DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY", "").strip()
 POSTHOG_HOST = os.getenv("POSTHOG_HOST", "").strip()
@@ -431,4 +433,6 @@ JOB_POOL_WORKERS = max(2, int((os.getenv("JOB_POOL_WORKERS") or "16" if (os.gete
 SCRAPE_FAST_TOUCH_TTL_SEC = max(30, int((os.getenv("SCRAPE_FAST_TOUCH_TTL_SEC") or "900")))
 
 # Max. registrací z jedné IP za hodinu (anti-abuse; sdílené IP jako mobilní sítě potřebují víc než 5)
+# Number of reverse proxies in front of the app (Coolify/Traefik = 1; add Cloudflare = 2).
+TRUSTED_PROXY_HOPS = int((os.getenv("TRUSTED_PROXY_HOPS") or "1") or "1")
 REGISTER_LIMIT_PER_HOUR = int((os.getenv("REGISTER_LIMIT_PER_HOUR") or "20") or "20")

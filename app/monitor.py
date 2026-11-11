@@ -2739,6 +2739,10 @@ class Hub:
         tracked = self.store.count()
         new_today = self.store.new_today_count()
         recent = self.store.recent_notified(limit=36, twins=False)
+        try:
+            recent = (reader or self.store).add_value_scores(recent)
+        except Exception:
+            pass
         recent_today = self.store.recent_notified(limit=24, since=local_day_start(), twins=False)
         templates = self.store.list_templates()
         settings = self.store.app_settings()

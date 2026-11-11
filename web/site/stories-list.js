@@ -1,3 +1,5 @@
+/* Legacy CMS rows may still point to the PNG originals; the WebP twins are ~10x smaller. */
+function toWebp(u) { return typeof u === "string" ? u.replace(/(\/static\/site\/assets\/stories\/[\w-]+)\.png$/, "$1.webp") : u; }
 (() => {
   const esc = (value) =>
     String(value ?? "")
@@ -10,7 +12,7 @@
       <div class="section-badge">${esc(a.badge || "Příběh měsíce")}</div>
       <a class="featured-card" href="/uspechy/${esc(a.slug)}">
         <div class="featured-photo">
-          <img src="${esc(a.listPhoto || a.photo)}" width="640" height="500" alt="${esc(a.crumb)}" />
+          <img src="${esc(toWebp(a.listPhoto || a.photo))}" width="640" height="500" alt="${esc(a.crumb)}" />
         </div>
         <div class="featured-content">
           <div class="featured-header">
@@ -29,7 +31,7 @@
 
   const cardHtml = (a) => `
         <a class="story-card" href="/uspechy/${esc(a.slug)}">
-          <div class="story-img"><img src="${esc(a.listPhoto || a.photo)}" width="400" height="220" alt="" /></div>
+          <div class="story-img"><img src="${esc(toWebp(a.listPhoto || a.photo))}" width="400" height="220" alt="" /></div>
           <div class="story-body">
             <div class="story-top">
               <div class="section-badge">${esc(a.cardBadge || a.badge || "Příběh")}</div>

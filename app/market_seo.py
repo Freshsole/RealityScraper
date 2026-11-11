@@ -863,7 +863,7 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
             for r in (related_report.get("by_disposition") or [])
         )
         disp_section = f"""      <section class="pg-section" id="dispozice" data-nav="Dispozice" data-nav-desc="Ceny podle velikosti bytu">
-        <div class="pg-head reveal"><p class="eyebrow">DISPOZICE</p><h2 class="display">Ceny podle dispozice</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Ceny podle dispozice</h2></div>
         <div class="table-wrap"><table class="data-table"><thead><tr><th>Dispozice</th><th data-sort>Počet</th><th data-sort>Průměr</th><th data-sort>Medián Kč/m²</th></tr></thead>
         <tbody>{disp_rows_html or '<tr><td colspan="4">Bez dat</td></tr>'}</tbody></table></div>
       </section>
@@ -876,7 +876,7 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     )
     hist_section = (
         f"""      <section class="pg-section is-pale" id="vyvoj" data-nav="Vývoj" data-nav-desc="Posledních 90 dní">
-        <div class="pg-head reveal"><p class="eyebrow">VÝVOJ</p><h2 class="display">Vývoj za posledních 90 dní</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Vývoj za posledních 90 dní</h2></div>
         <div class="table-wrap"><table class="data-table"><thead><tr><th>Období</th><th>Nové nabídky</th><th>Medián Kč/m²</th></tr></thead><tbody>{hist_rows}</tbody></table></div>
       </section>
 """
@@ -887,7 +887,6 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
     q_param = html.escape(locality)
     body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="{html.escape(locality)} v číslech">
         {_breadcrumbs_html(crumbs)}
-        <p class="eyebrow">{html.escape(locality.upper())} · {html.escape(offer_label(offer).upper())}</p>
         <h1 class="display">{html.escape(title_h1)}</h1>
         <p class="lead">Data z agregovaného katalogu Realitify. {html.escape(updated_label)}</p>
         <div class="pg-actions">
@@ -902,18 +901,18 @@ def render_trh_page(store: Store, locality: str, offer: str, disposition: str = 
       </section>
 
       <section class="pg-section is-pale" id="nabidky" data-nav="Nabídky" data-nav-desc="Ukázka aktuálních nabídek">
-        <div class="pg-head reveal"><p class="eyebrow">AKTUÁLNÍ NABÍDKY</p><h2 class="display">Ukázka nabídek v lokalitě</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Ukázka nabídek v lokalitě</h2></div>
         <div class="listing-list">{listing_rows}</div>
         <div class="pg-actions"><a class="pill pill-lg" href="/hledat?q={q_param}">Všechny nabídky na mapě</a></div>
       </section>
 
 {disp_section}{hist_section}      <section class="pg-section{'' if hist_section else ' is-pale'}" id="dotazy" data-nav="Dotazy" data-nav-desc="Časté otázky k lokalitě">
-        <div class="pg-head reveal"><p class="eyebrow">ČASTÉ OTÁZKY</p><h2 class="display">Co lidé k lokalitě zajímá</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Co lidé k lokalitě zajímá</h2></div>
         <div class="qa-list">{qa_html}</div>
       </section>
 
       <section class="pg-section is-pale" id="souvisejici" data-nav="Související" data-nav-desc="Další lokality a dispozice">
-        <div class="pg-head reveal"><p class="eyebrow">SOUVISEJÍCÍ</p><h2 class="display">Další lokality a dispozice</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Další lokality a dispozice</h2></div>
         {related or '<p class="note">Zatím bez souvisejících stránek.</p>'}
         <p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />{html.escape(DISCLAIMER_CS)}</p>
       </section>
@@ -1000,7 +999,6 @@ def render_index_month(store: Store, month: str) -> str:
     )
     body = f"""      <section class="pg-hero" data-nav="Přehled" data-nav-desc="Souhrn měsíce">
         <nav class="crumbs" aria-label="Drobečková navigace"><a href="/index">Index nájmů</a> › <span>{html.escape(month_label)}</span></nav>
-        <p class="eyebrow">ARCHIV INDEXU · {html.escape(month_label.upper())}</p>
         <h1 class="display">Index nájmů – {html.escape(month_label)}</h1>
         <p class="lead">Nabídky poprvé zaznamenané v katalogu Realitify v měsíci {html.escape(month_label)}. Trvalá adresa vhodná pro citace.</p>
         <div class="pg-actions"><a class="pill pill-lg" href="/hledat">Procházet nabídky</a><a class="link-row" href="/index">Aktuální index →</a></div>
@@ -1011,12 +1009,12 @@ def render_index_month(store: Store, month: str) -> str:
       </section>
 
       <section class="pg-section is-pale" id="mesta" data-nav="Města" data-nav-desc="Všechny sledované lokality">
-        <div class="pg-head reveal"><p class="eyebrow">PODLE LOKALITY</p><h2 class="display">Čísla za {html.escape(month_label)}</h2><p>Řadit můžete kliknutím na záhlaví sloupce.</p></div>
+        <div class="pg-head reveal"><h2 class="display">Čísla za {html.escape(month_label)}</h2><p>Řadit můžete kliknutím na záhlaví sloupce.</p></div>
         <div class="table-wrap"><table class="data-table"><thead><tr><th>Lokalita</th><th data-sort>Nové</th><th data-sort>Medián</th><th data-sort>Průměr</th><th data-sort>Medián Kč/m²</th><th data-sort>Průměr Kč/m²</th></tr></thead><tbody>{table}</tbody></table></div>
       </section>
 
       <section class="pg-section" id="archiv" data-nav="Archiv" data-nav-desc="Další ukončené měsíce">
-        <div class="pg-head reveal"><p class="eyebrow">ARCHIV</p><h2 class="display">Další měsíce</h2></div>
+        <div class="pg-head reveal"><h2 class="display">Další měsíce</h2></div>
         <div class="pg-chips">{archive}</div>
         <p class="note">{html.escape(PRICE_METHODOLOGY_CS)}<br />Čísla vycházejí z first_seen v katalogu, ne z oficiální statistiky ČSÚ. {html.escape(DISCLAIMER_CS)}</p>
       </section>
@@ -1110,7 +1108,7 @@ def top_localities_html(store: Store, limit: int = 10) -> str:
     return (
         '<section class="market-top">'
         '<div class="section-head">'
-        '<p class="eyebrow">PŘEHLED TRHU</p>'
+        ''
         '<h2 class="display is-caps">Nejhledanější lokality k pronájmu</h2>'
         "</div>"
         f'<div class="loc-grid">{cards}</div>'
@@ -1177,7 +1175,6 @@ def render_trh_hub(
     )
     body = f"""      <section class="pg-hero">
         {_breadcrumbs_html(crumbs)}
-        <p class="eyebrow">TRH S BYTY · {html.escape(month.upper())}</p>
         <h1 class="display">Ceny bytů v českých městech – prodej a pronájem ({html.escape(month)})</h1>
         <p class="lead">Mediány cen a cen za m² v {len(cities)} městech a {len(hoods)} městských částech z katalogu Realitify ({_fmt_int(total)} nabídek v přehledech). Vyberte město a zobrazte prodej, pronájem i jednotlivé dispozice.</p>
       </section>
@@ -1239,7 +1236,6 @@ def render_trh_locality_hub(
     nl = "\n"
     body = f"""      <section class="pg-hero">
         {_breadcrumbs_html(crumbs)}
-        <p class="eyebrow">{html.escape(locality.upper())} · {html.escape(month.upper())}</p>
         <h1 class="display">Trh s byty – {html.escape(locality)}: ceny prodeje a pronájmu ({html.escape(month)})</h1>
         <p class="lead"><a href="/trh">← Všechna města</a></p>
       </section>

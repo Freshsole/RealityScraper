@@ -132,7 +132,7 @@
       const loc = item.extras?.address || item.locality || "";
       const desc = item.description ? `<p class="meta">${escapeHtml(String(item.description).slice(0, 420))}</p>` : "";
       modalBody.innerHTML = `
-        ${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : ""}
+        ${photo ? `<img src="${escapeHtml(photo)}" alt="" />` : `<div class="no-photo" style="height:200px;border-radius:12px;background:#eef0ed url(/static/assets/no-photo-dog.webp) center 60%/auto 82% no-repeat" aria-hidden="true"></div>`}
         <p class="meta">${escapeHtml(item.portal || "")} · ${escapeHtml(price)}</p>
         <h3>${escapeHtml(item.name || loc || "Nabídka")}</h3>
         <p class="meta">${escapeHtml([item.disposition, item.area_m2 ? `${item.area_m2} m²` : "", loc].filter(Boolean).join(" · "))}</p>

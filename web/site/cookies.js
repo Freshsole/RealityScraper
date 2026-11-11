@@ -3,7 +3,7 @@
   const YEAR = 60 * 60 * 24 * 365;
   const FUNCTIONAL_KEYS = ["nabidka-views", "nabidka-circle", "realitify-notify", "realitify-profile"];
 
-  const defaults = { analytics: true, marketing: false, functional: true };
+  const defaults = { analytics: false, marketing: false, functional: false };
 
   function readConsent() {
     const raw = document.cookie.split("; ").find((part) => part.startsWith(`${KEY}=`));
@@ -36,9 +36,9 @@
     const marketing = document.querySelector('[data-key="marketing"]');
     const functional = document.querySelector('[data-key="functional"]');
     return {
-      analytics: analytics ? analytics.getAttribute("aria-pressed") === "true" : true,
+      analytics: analytics ? analytics.getAttribute("aria-pressed") === "true" : false,
       marketing: marketing ? marketing.getAttribute("aria-pressed") === "true" : false,
-      functional: functional ? functional.getAttribute("aria-pressed") === "true" : true,
+      functional: functional ? functional.getAttribute("aria-pressed") === "true" : false,
     };
   }
 

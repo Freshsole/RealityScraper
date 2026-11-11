@@ -74,6 +74,8 @@
     var search = document.getElementById('faq-q');
     var cats = [].slice.call(document.querySelectorAll('.faq-cat'));
     var empty = document.getElementById('faq-empty');
+    /* filter chips are toggle buttons, not tabs */
+    cats.forEach(function (c) { c.setAttribute('aria-pressed', c.classList.contains('is-on') ? 'true' : 'false'); if (c.parentNode) { c.parentNode.setAttribute('role', 'group'); } });
     var catNow = 'all';
     var originals = items.map(function (it) { return it.querySelector('.qa-a p').innerHTML; });
 
@@ -145,7 +147,7 @@
     cats.forEach(function (c) {
       c.addEventListener('click', function () {
         catNow = c.getAttribute('data-cat');
-        cats.forEach(function (x) { x.classList.toggle('is-on', x === c); });
+        cats.forEach(function (x) { x.classList.toggle('is-on', x === c); x.setAttribute('aria-pressed', x === c ? 'true' : 'false'); });
         apply();
       });
     });

@@ -180,17 +180,15 @@ def register(
 ) -> tuple[dict[str, Any], str]:
     from app.billing import pending_promo_for_signup
 
-    email_norm = (email or "").strip().lower()
-    if not email_norm or "@" not in email_norm:
-        raise ValueError("Zadej platný e-mail")
+    email_norm = user_registry.check_email(email)
     if email_norm == (config.ADMIN_EMAIL or "").strip().lower():
         # create_user() promotes ADMIN_EMAIL to admin: never reachable via public sign-up.
         raise ValueError("Tento e-mail nelze použít k registraci")
-    if len(password or "") < 8:
-        raise ValueError("Heslo musí mít alespoň 8 znaků")
+    user_registry.check_password_policy(password)
     first, last = split_name(name)
     if not first:
         raise ValueError("Zadej jméno a příjmení")
+    user_registry.check_name(first, last)
     try:
         promo = pending_promo_for_signup(promo_code)
     except ValueError:
@@ -277,8 +275,7 @@ def change_password(global_store: Store, user_id: str, current: str, new: str) -
         raise ValueError("Účet neexistuje")
     if not user_registry.verify_user_password(global_store, user["email"], current or ""):
         raise ValueError("Současné heslo nesedí")
-    if len(new or "") < 8:
-        raise ValueError("Nové heslo musí mít alespoň 8 znaků")
+    user_registry.check_password_policy(new, label="Nové heslo")
     user_registry.set_user_password(global_store, user_id, new)
     user_registry.clear_password_resets(global_store, user_id)
     user_registry.delete_user_sessions(global_store, user_id)
@@ -297,8 +294,7 @@ def password_reset_ok(global_store: Store, token: str) -> bool:
 def reset_password_with_token(
     global_store: Store, token: str, new_password: str
 ) -> tuple[dict[str, Any], str]:
-    if len(new_password or "") < 8:
-        raise ValueError("Nové heslo musí mít alespoň 8 znaků")
+    user_registry.check_password_policy(new_password, label="Nové heslo")
     user = user_registry.consume_password_reset(global_store, token)
     if not user:
         raise ValueError("Odkaz pro obnovení hesla je neplatný nebo vypršel")

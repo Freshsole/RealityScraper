@@ -1,3 +1,11 @@
+// Same rule as google_auth.safe_next: local path only, no "//" and no backslash (browsers turn "/\\host" into "//host").
+function safeNext(value, prefixes) {
+  const v = String(value || "").trim();
+  if (!v.startsWith("/") || v.startsWith("//") || /[\\\u0000-\u001f]/.test(v)) return "";
+  if (prefixes && !prefixes.some((p) => v.startsWith(p))) return "";
+  return v;
+}
+
 function icon(src, w, h) {
   return `<span class="icon" style="width:${w}px;height:${h}px"><img src="${src}" width="${w}" height="${h}" alt="" /></span>`;
 }
@@ -18,25 +26,30 @@ function togglePassword(btn) {
   syncPasswordToggle(btn);
 }
 
+const COMMON_PASSWORDS = new Set(["password", "password1", "12345678", "123456789", "1234567890", "qwertyui", "qwerty123", "iloveyou", "11111111", "heslo123", "abc12345", "realitify"]);
+
 function strengthLevel(value) {
   if (!value) return 0;
+  if (value.length < 8) return 1;
+  if (COMMON_PASSWORDS.has(value.toLowerCase()) || /^(.)\1+$/.test(value) || /^\d+$/.test(value)) return 1;
   let score = 0;
-  if (value.length >= 8) score += 1;
-  if (/[A-Z]/.test(value) && /[a-z]/.test(value)) score += 1;
-  if (/\d/.test(value) || /[^A-Za-z0-9]/.test(value)) score += 1;
-  return Math.min(3, score);
+  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) score += 1;
+  if (/\d/.test(value)) score += 1;
+  if (/[^A-Za-z0-9]/.test(value)) score += 1;
+  if (value.length >= 12) score += 1;
+  return score >= 3 ? 3 : score >= 1 ? 2 : 1;
 }
 
 function bindStrength(input) {
   const box = document.querySelector(".strength");
   if (!input || !box) return;
   const label = box.querySelector(".strength-label");
-  const names = ["Zadejte heslo", "Slabé heslo", "Střední síla hesla", "Silné heslo"];
+  const names = ["", "Slabé heslo", "Střední síla hesla", "Silné heslo"];
   const apply = () => {
     const level = strengthLevel(input.value);
     box.dataset.level = String(level);
     box.querySelector(".strength-bars").dataset.level = String(level);
-    label.textContent = names[level];
+    label.textContent = input.value && input.value.length < 8 ? "Příliš krátké heslo (min. 8 znaků)" : names[level];
   };
   input.addEventListener("input", apply);
   apply();
@@ -321,7 +334,7 @@ if (loginForm) {
         location.href = `/registrace?verify=1&next=${encodeURIComponent(next)}`;
         return;
       }
-      location.href = next.startsWith("/oauth/authorize") || (next.startsWith("/nabidka") && !next.startsWith("//")) ? next : "/prehled";
+      location.href = safeNext(next, ["/oauth/authorize", "/nabidka"]) || "/prehled";
     } catch (err) {
       toast(err.message || "Přihlášení se nepovedlo");
     }
@@ -931,7 +944,7 @@ if (register) {
       writeStoredPromo(promo);
       await saveNotifyChoices();
       const next = refinedNext || new URLSearchParams(location.search).get("next") || "/nabidka";
-      location.href = next.startsWith("/") && !next.startsWith("//") ? next : "/nabidka";
+      location.href = safeNext(next) || "/nabidka";
     } catch (err) {
       toast(err.message || "Dokončení se nepovedlo");
       if (btn) btn.disabled = false;

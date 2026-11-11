@@ -140,6 +140,8 @@ def _gone_rental_card(row: dict[str, Any]) -> dict[str, Any] | None:
         price = 0
     if price < 4000 or price > 120000:
         return None
+    if not (row.get("locality") or "").strip() or not (row.get("image_url") or "").strip():
+        return None
     disposition = (row.get("disposition") or "").strip()
     if "+" not in disposition:
         return None
@@ -388,6 +390,18 @@ def _apply_map_bbox(where: list[str], params: list[Any], filters: dict[str, Any]
     filters["_bbox"] = (south, north, west, east)
     where.append(gps)
     params.extend([south, north, west, east])
+
+
+def _view_bbox(filters: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    """Visible map viewport from south/north/west/east, only used to cut the pins of a place query."""
+    try:
+        south, north = float(filters.get("south")), float(filters.get("north"))
+        west, east = float(filters.get("west")), float(filters.get("east"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= south < north <= 90 and -180 <= west < east <= 180):
+        return None
+    return (south, north, west, east)
 
 
 def _apply_circle(where: list[str], params: list[Any], filters: dict[str, Any]) -> None:
@@ -5195,6 +5209,75 @@ class Store:
             )
             self._record_price(conn, monitor_id, listing, now)
 
+    _VALUE_CACHE: dict[tuple, tuple[float, float | None, int]] = {}
+    _VALUE_PENDING: set[tuple] = set()
+
+    def _value_median(self, lat: float, lon: float, area: float, rent: bool) -> tuple[float | None, int]:
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT price_czk * 1.0 / area_m2 AS ppm FROM catalog_listings
+                WHERE lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?
+                  AND IFNULL(gone, 0) = 0 AND price_czk > 0 AND area_m2 BETWEEN ? AND ?
+                  AND price_czk {"BETWEEN 3000 AND 150000" if rent else ">= 400000"}
+                LIMIT 300
+                """,
+                (lat - 0.014, lat + 0.014, lon - 0.022, lon + 0.022, area * 0.75, area * 1.35),
+            ).fetchall()
+        values = sorted(float(r["ppm"]) for r in rows if r["ppm"])
+        return (self._median(values) if len(values) >= 5 else None), len(values)
+
+    def add_value_scores(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Ohodnotí zásahy podle výhodnosti: cena/m² proti mediánu srovnatelných nabídek v okolí (~1,5 km,
+        stejný typ nabídky, plocha 75-135 %). value_pct > 0 = levnější než okolí. Seřadí od nejvýhodnějších.
+        Mediány se počítají na pozadí (dotaz nad velkým katalogem je pomalý); do cache se dostanou do pár vteřin."""
+        import threading
+        import time as _time
+
+        now = _time.time()
+        todo: list[tuple] = []
+        for item in items:
+            try:
+                price = float(item.get("price_czk") or 0)
+                area = float(item.get("area_m2") or 0)
+                lat = float(item.get("lat")) if item.get("lat") is not None else None
+                lon = float(item.get("lon")) if item.get("lon") is not None else None
+            except (TypeError, ValueError):
+                continue
+            if price <= 0 or area <= 0 or lat is None or lon is None:
+                continue
+            rent = price < 150000  # nájem x prodej podle řádu ceny (štítky bývají neúplné)
+            key = (round(lat, 2), round(lon, 2), rent, int(area // 10))
+            cached = self._VALUE_CACHE.get(key)
+            if not cached or now - cached[0] > 900:
+                if key not in self._VALUE_PENDING:
+                    todo.append((key, lat, lon, area, rent))
+                    self._VALUE_PENDING.add(key)
+                if not cached:
+                    continue
+            median, comps = cached[1], cached[2]
+            pct = (median - price / area) / median * 100 if median else None
+            if pct is not None and -80 < pct < 60:  # extrémy = chybná data, ne tip
+                item["value_pct"] = round(pct, 1)
+                item["value_median_m2"] = round(median)
+                item["value_comps"] = comps
+        if todo:
+            def work() -> None:
+                for key, lat, lon, area, rent in todo:
+                    try:
+                        median, comps = self._value_median(lat, lon, area, rent)
+                        self._VALUE_CACHE[key] = (_time.time(), median, comps)
+                    except Exception:
+                        self._VALUE_CACHE[key] = (_time.time(), None, 0)
+                    finally:
+                        self._VALUE_PENDING.discard(key)
+
+            threading.Thread(target=work, daemon=True, name="value-scores").start()
+        scored = [it for it in items if it.get("value_pct") is not None]
+        rest = [it for it in items if it.get("value_pct") is None]
+        scored.sort(key=lambda it: it["value_pct"], reverse=True)
+        return scored + rest
+
     def recent_notified(
         self,
         limit: int = 12,
@@ -6350,7 +6433,7 @@ class Store:
         want_pins = pins_only or str(filters.get("include_pins") or "0").strip().lower() not in {"0", "false", "no"}
         snap = self._snap_usable(filters, where)
         if place_geoms:
-            resolved = self._resolve_in_places(where, params, place_geoms, order, offset, limit, want_pins, snap=snap)
+            resolved = self._resolve_in_places(where, params, place_geoms, order, offset, limit, want_pins, snap=snap, view=_view_bbox(filters))
         else:
             bbox = filters.get("_bbox") if isinstance(filters.get("_bbox"), tuple) else None
             resolved = self._resolve_in_sql(where, params, bbox, circle_active, order, offset, limit, want_pins, pins_only, snap=snap)
@@ -6436,6 +6519,7 @@ class Store:
         limit: int,
         want_pins: bool,
         snap: bool = False,
+        view: tuple[float, float, float, float] | None = None,
     ) -> dict[str, Any]:
         """Offers whose stored coordinates lie inside the selected place(s).
 
@@ -6460,8 +6544,16 @@ class Store:
                 matched.append(row)
         pins: list[dict[str, Any]] = []
         if want_pins:
-            if len(matched) <= PIN_DETAIL_MAX:
-                pins = [_pin_item(row) for row in matched]
+            # The pins follow the visible viewport (when the client sends one), so zooming in splits
+            # clusters into price pins instead of re-drawing the same coarse place-wide grid.
+            visible = matched
+            if view is not None:
+                vs, vn, vw, ve = view
+                visible = [r for r in matched if vs <= float(r["lat"]) <= vn and vw <= float(r["lon"]) <= ve]
+            if len(visible) <= PIN_DETAIL_MAX:
+                pins = [_pin_item(row) for row in visible]
+            elif view is not None:
+                pins = _grid_pins(visible, view)
             else:
                 box = places.bbox_of(place_geoms) or (
                     min(float(r["lat"]) for r in matched), max(float(r["lat"]) for r in matched),
@@ -7523,6 +7615,14 @@ class Store:
             self._refresh_hidden_flag()
         return {"url": url, "status": next_status, "note": next_note or ""}
 
+    def listing_notes(self, limit: int = 10) -> list[dict[str, Any]]:
+        with self.connect(readonly=True) as conn:
+            rows = conn.execute(
+                "SELECT url, status, note FROM listing_user WHERE TRIM(IFNULL(note, '')) != '' ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [{"url": r["url"], "status": r["status"] or "", "note": r["note"] or ""} for r in rows]
+
     def get_listing_user(self, url: str) -> dict[str, Any]:
         with self.connect() as conn:
             row = conn.execute("SELECT url, status, note FROM listing_user WHERE url = ?", (url,)).fetchone()
@@ -7829,7 +7929,7 @@ class Store:
                   AND last_seen IS NOT NULL
                   AND last_seen >= ?
                 ORDER BY last_seen DESC
-                LIMIT 64
+                LIMIT 800
                 """,
                 (since,),
             ).fetchall()
@@ -7859,6 +7959,15 @@ class Store:
             picked.append(item)
             if len(picked) >= limit:
                 break
+        if len(picked) < limit:
+            # Not enough distinct places/minutes: fill up with the next fastest ones so the block never shows a partial row.
+            used = {id(i) for i in picked}
+            for _hours, item, _url, _place, _gone in ranked:
+                if id(item) in used:
+                    continue
+                picked.append(item)
+                if len(picked) >= limit:
+                    break
         return picked
 
     def mark_sold_notified(self, monitor_id: str, listing_id: int) -> None:

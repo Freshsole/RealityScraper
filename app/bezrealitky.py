@@ -212,7 +212,7 @@ BR_FLOORS = {
 
 
 def format_disposition(raw: str | None) -> str:
-    if not raw:
+    if not raw or str(raw).upper() in {"UNDEFINED", "NULL", "NONE"}:
         return ""
     body = raw.replace("DISP_", "")
     if raw in {"GARSONIERA"}:
@@ -418,6 +418,23 @@ class BezrealitkyClient:
             price_czk = int(price) if price is not None else None
         except (TypeError, ValueError):
             price_czk = None
+        # Cizoměnové inzeráty (Flatio apod.): `price`/`charges` jsou v EUR, `originalPrice` už v Kč. Bez převodu
+        # by byla cena 1 191 Kč a "sleva 96 %". Kurz odvodíme z originalPrice (= stejná cena v Kč), jinak odhad.
+        currency = str(raw.get("currency") or "CZK").upper()
+        fx: dict[str, Any] | None = None
+        if currency != "CZK" and price_czk:
+            fx_amount = price_czk
+            try:
+                orig = int(raw.get("originalPrice")) if raw.get("originalPrice") is not None else 0
+            except (TypeError, ValueError):
+                orig = 0
+            rate = orig / price_czk if orig > price_czk * 15 else 25.0
+            price_czk = int(round(price_czk * rate))
+            fx = {"currency": currency, "amount": fx_amount, "rate": round(rate, 2)}
+            try:
+                raw = {**raw, "originalPrice": None, "charges": int(round(int(raw.get("charges") or 0) * rate)) or None}
+            except (TypeError, ValueError):
+                raw = {**raw, "originalPrice": None}
         unit = "měsíc" if raw.get("offerType") == "PRONAJEM" else "ks"
         price_label = format_price(price_czk, unit)
         charges = raw.get("charges")
@@ -476,7 +493,7 @@ class BezrealitkyClient:
             views=views_n,
             old_price_czk=old_price_czk,
             description=text or None,
-            extras=extras_from_bezrealitky(raw),
+            extras={**extras_from_bezrealitky(raw), **({"fx": fx} if fx else {})},
         )
 
 

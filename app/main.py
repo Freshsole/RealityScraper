@@ -242,7 +242,10 @@ async def lifespan(_app: FastAPI):
             time.sleep(2.5)
             os._exit(130)
 
-        threading.Thread(target=_force_exit, name="shutdown-watchdog", daemon=True).start()
+        # The watchdog hard-kills a hung server; under pytest it would kill the whole test run 2.5 s after the
+        # first TestClient context closes.
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            threading.Thread(target=_force_exit, name="shutdown-watchdog", daemon=True).start()
         try:
             from app import discord_notify, places
 
@@ -307,7 +310,16 @@ def capture_posthog_event(
     posthog_client.capture(**kwargs)
 
 
-app = FastAPI(title="Sreality Monitor", lifespan=lifespan, redirect_slashes=False)
+_API_DOCS_ON = os.getenv("ENABLE_API_DOCS", "").strip() == "1" or not (config.PUBLIC_BASE_URL or "").startswith("https://")
+app = FastAPI(
+    title="Sreality Monitor",
+    lifespan=lifespan,
+    redirect_slashes=False,
+    # The generated schema lists every internal and admin route: keep it private in production.
+    docs_url="/docs" if _API_DOCS_ON else None,
+    redoc_url="/redoc" if _API_DOCS_ON else None,
+    openapi_url="/openapi.json" if _API_DOCS_ON else None,
+)
 if posthog_client is not None:
     app.add_middleware(PosthogASGIMiddleware, client=posthog_client)
 app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
@@ -382,6 +394,33 @@ _PUBLIC_HTML_CACHE = "no-cache"
 _PRIVATE_HTML_CACHE = "no-store, max-age=0"
 
 
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(self), payment=(self), interest-cohort=()",
+    "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+    # A full script/style CSP would break inline snippets; these directives are safe everywhere.
+    "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self' https://accounts.google.com",
+}
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    # Never serve dotfiles (.DS_Store, .env, .git…) from the static mounts.
+    if request.url.path.startswith(("/static/", "/public/")) and any(
+        part.startswith(".") for part in request.url.path.split("/") if part
+    ):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+    response = await call_next(request)
+    for key, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(key, value)
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",")[0].strip().lower()
+    if proto == "https" or (config.PUBLIC_BASE_URL or "").startswith("https://"):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
 @app.middleware("http")
 async def strip_trailing_slash(request: Request, call_next):
     path = request.url.path
@@ -390,6 +429,40 @@ async def strip_trailing_slash(request: Request, call_next):
         url = request.url.replace(path=target)
         return RedirectResponse(str(url), status_code=301)
     return await call_next(request)
+
+
+_I18N_SKIP_PREFIXES = ("/admin", "/api/", "/static/", "/public/", "/oauth", "/.well-known")
+_I18N_SCRIPT_PATH = config.WEB_DIR / "site" / "i18n.js"
+
+
+def _i18n_script_tag() -> str:
+    try:
+        version = int(_I18N_SCRIPT_PATH.stat().st_mtime)
+    except OSError:
+        version = 0
+    return f'<script src="/static/site/i18n.js?v={version}"></script>'
+
+
+@app.middleware("http")
+async def inject_i18n(request: Request, call_next):
+    """Add the auto-translation script (web/site/i18n.js) to every public HTML page."""
+    response = await call_next(request)
+    path = request.url.path
+    if (
+        response.status_code >= 300
+        or path.startswith(_I18N_SKIP_PREFIXES)
+        or not (response.headers.get("content-type") or "").startswith("text/html")
+        or response.headers.get("content-encoding")
+    ):
+        return response
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = b"".join(c if isinstance(c, bytes) else c.encode("utf-8") for c in chunks)
+    marker = b"</head>"
+    index = body.lower().find(marker)
+    if index >= 0 and b"/static/site/i18n.js" not in body:
+        body = body[:index] + _i18n_script_tag().encode("utf-8") + body[index:]
+    headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
+    return Response(content=body, status_code=response.status_code, headers=headers, media_type=None)
 
 
 @app.middleware("http")
@@ -489,25 +562,19 @@ def _is_app_page(path: str) -> bool:
     return path in {"/prehled", "/nabidka", "/monitory", "/filtry", "/zprava", "/nastaveni"} or path.startswith("/nastaveni/")
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded[:64]
-    return ((request.client.host if request.client else "") or "")[:64]
-
-
 async def _auth_db(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(hub.auth_pool, fn, *args)
 
 
 def _site_base(request: Request) -> str:
-    """Public base URL for links in e-mails (config first, else what the request used)."""
+    """Public base URL for links in e-mails: config first, else localhost only, never a client-supplied Host."""
     configured = (config.PUBLIC_BASE_URL or "").rstrip("/")
     if configured:
         return configured
-    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    return f"{scheme}://{host}".rstrip("/")
+    host = (request.headers.get("host") or request.url.netloc or "").split(":")[0].lower()
+    if host in {"localhost", "127.0.0.1", "[::1]"}:
+        return f"{request.url.scheme}://{request.url.netloc}".rstrip("/")
+    return "https://realitify.cz"
 
 
 async def _send_verification_email(request: Request, user: dict[str, Any]) -> bool:
@@ -1510,11 +1577,19 @@ def _set_session_cookie(response: Response, token: str) -> None:
 
 
 def _client_ip(request: Request) -> str:
-    # Za reverzní proxy (Coolify/Traefik) bereme X-Forwarded-For.
+    """Client address for rate limiting.
+
+    X-Forwarded-For is client-controlled on its left side: every proxy appends the address it saw on the
+    right. With TRUSTED_PROXY_HOPS proxies in front of the app (default 1: Coolify/Traefik) the real client is
+    the Nth entry from the right, so spoofed leading entries are ignored.
+    """
     xff = request.headers.get("x-forwarded-for") or ""
     if xff:
-        return xff.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        parts = [part.strip() for part in xff.split(",") if part.strip()]
+        hops = max(1, config.TRUSTED_PROXY_HOPS)
+        if parts:
+            return (parts[-hops] if len(parts) >= hops else parts[0])[:64]
+    return ((request.client.host if request.client else "unknown") or "unknown")[:64]
 
 
 def _rate_limit_or_429(request: Request, scope: str, key: str, limit: int, window_s: float) -> None:
@@ -1859,26 +1934,35 @@ async def auth_login_api(request: Request, payload: dict[str, Any] | None = Body
     return response
 
 
+async def _send_reset_email(email: str, token: str) -> None:
+    """Fire-and-forget: the HTTP answer must not depend on (or reveal) whether the account exists or mail works."""
+    try:
+        if not mail_notify.configured():
+            logger.warning("password reset requested but SMTP is not configured")
+            return
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"
+        reset_url = f"{base}/heslo?token={token}"
+        target = await _auth_db(user_registry.get_user_by_email, hub.store, email)
+        log_id = await asyncio.to_thread(email_triggers.on_password_reset_requested, target or email, reset_url)
+        row = await asyncio.to_thread(email_store.log_get, log_id) if log_id else None
+        if not row or row["status"] != "sent":
+            logger.warning("password reset e-mail not sent: %s", (row or {}).get("error") or "unknown")
+    except Exception:
+        logger.exception("password reset e-mail failed")
+
+
 @app.post("/api/auth/forgot")
 async def auth_forgot_api(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
     _rate_limit_or_429(request, "auth_forgot", "ip", 5, 3600)
     body = payload or {}
-    email = str(body.get("email") or "").strip().lower()
+    email = str(body.get("email") or "").strip().lower()[:254]
+    # Per-address cap independent of the caller's IP, so one mailbox cannot be flooded from many addresses.
+    if email and not rate_limit.check("auth_forgot_email", email, 3, 3600):
+        return {"ok": True}
     token = await _auth_db(user_account.create_password_reset, hub.store, email)
     if token:
-        if not mail_notify.configured():
-            raise HTTPException(503, "Odesílání e-mailů není nastavené (SMTP_HOST / SMTP_FROM)")
-        base = (config.PUBLIC_BASE_URL or "").rstrip("/") or "https://realitify.cz"
-        reset_url = f"{base}/heslo?token={token}"
-        target = await _auth_db(user_registry.get_user_by_email, hub.store, email)
-        try:
-            log_id = await asyncio.to_thread(email_triggers.on_password_reset_requested, target or email, reset_url)
-            row = await asyncio.to_thread(email_store.log_get, log_id) if log_id else None
-        except Exception as exc:
-            raise HTTPException(502, f"E-mail se nepodařilo odeslat: {exc}") from exc
-        if not row or row["status"] != "sent":
-            raise HTTPException(502, f"E-mail se nepodařilo odeslat: {(row or {}).get('error') or 'neznámá chyba'}")
-    # Stejná odpověď i když účet neexistuje — neprozrazujeme e-maily.
+        asyncio.create_task(_send_reset_email(email, token), name="send-password-reset")
+    # Same answer (and similar timing) whether or not the account exists.
     return {"ok": True}
 
 
@@ -1992,13 +2076,22 @@ async def extension_me(
 ) -> dict:
     session = _extension_session(request, realitify_session)
     user = user_account.user_from_session(hub.store, session)
-    ustore = hub.store_for(str(user.get("id"))) if user else None
-    account = ext_score.extension_account(ustore or hub.store)
     if not user:
-        account["authenticated"] = False
-        account["active"] = False
-        account["pro"] = False
-        return account
+        # Never fall back to the global store here: it holds the owner's profile.
+        base = (config.PUBLIC_BASE_URL or "").rstrip("/")
+        return {
+            "authenticated": False,
+            "name": "",
+            "email": "",
+            "plan": "free",
+            "label": "FREE",
+            "active": False,
+            "pro": False,
+            "login_url": f"{base}/prihlaseni",
+            "pricing_url": f"{base}/#cenik",
+            "app_url": f"{base}/app",
+        }
+    account = ext_score.extension_account(hub.store_for(str(user.get("id"))))
     account["authenticated"] = True
     return account
 
@@ -2287,6 +2380,9 @@ async def _admin_store_async(token: str | None) -> tuple[dict[str, Any], Store]:
 
 
 app.include_router(email_admin_api.build_router(_admin_user, hub.store_for))
+from app import i18n as _i18n
+
+_i18n.register(app, lambda request: _client_ip(request))
 
 
 @app.post("/api/ses/webhook", include_in_schema=False)
@@ -2815,7 +2911,8 @@ async def stories_detail(slug: str, view: int = 0) -> dict:
 
 
 @app.post("/api/inquiries")
-async def public_inquiry(payload: dict[str, Any] | None = Body(None)) -> dict:
+async def public_inquiry(request: Request, payload: dict[str, Any] | None = Body(None)) -> dict:
+    _rate_limit_or_429(request, "inquiry", "ip", 5, 3600)
     store = _public_store() or hub.store
     try:
         return await asyncio.to_thread(stories_cms.create_inquiry, store, payload or {})
@@ -3289,7 +3386,7 @@ async def _image_loads(client: Any, url: str) -> bool:
 async def _loadable_cards(store: Any, city: str, need: int) -> list[dict[str, Any]]:
     import httpx
 
-    cards = await asyncio.to_thread(store.landing_preview_listings, city, 12)
+    cards = await asyncio.to_thread(store.landing_preview_listings, city, 24)
     cards = [c for c in cards if str(c.get("image") or "").startswith("https://")]
     if not cards:
         return []
@@ -3307,12 +3404,12 @@ async def public_landing_listings(request: Request) -> dict:
     used = "Brno"
     items: list[dict[str, Any]] = []
     if city and city != "Brno":
-        items = await _loadable_cards(store, city, 3)
-        if len(items) >= 3:
+        items = await _loadable_cards(store, city, 6)
+        if len(items) >= 6:
             used = city
-    if len(items) < 3:
+    if len(items) < 6:
         used = "Brno"
-        items = await _loadable_cards(store, "Brno", 3)
+        items = await _loadable_cards(store, "Brno", 6)
     label = _CITY_LOCATIVE.get(used)
     title = f"Pronájmy {label} do 22 000 Kč" if label else f"Pronájmy – {used} do 22 000 Kč"
     return {"items": items, "city": used, "title": title}
@@ -3357,11 +3454,27 @@ async def public_guest_search_start(request: Request) -> JSONResponse:
     return response
 
 
+_GONE_FAST_CACHE: dict[str, Any] = {"items": [], "ts": 0.0}
+
+
 @app.get("/api/public/gone-fast")
 async def public_gone_fast() -> dict:
+    # Always return a full set: widen the window when the last 3 days are thin, and fall back to the last full result.
+    now = time.time()
+    cached = _GONE_FAST_CACHE["items"]
+    if cached and now - float(_GONE_FAST_CACHE["ts"]) < 300:
+        return {"items": cached}
     store = _public_store() or hub.store
-    items = await asyncio.to_thread(store.public_gone_fast_rentals, days=3, limit=4)
-    return {"items": items}
+    items: list = []
+    for days in (3, 7, 14):
+        items = await asyncio.to_thread(store.public_gone_fast_rentals, days=days, limit=8)
+        if len(items) >= 6:
+            break
+    if len(items) >= 6 or not cached:
+        _GONE_FAST_CACHE["items"] = items
+        _GONE_FAST_CACHE["ts"] = now
+        return {"items": items}
+    return {"items": cached}
 
 
 @app.get("/api/public/catalog")
@@ -3690,6 +3803,8 @@ async def public_client_error(
 
     from app import discord_notify
 
+    if not rate_limit.check("client_error", _client_ip(request), 30, 600):
+        return Response(status_code=204)
     webhook = config.FRONTEND_ERROR_WEBHOOK_URL
     body = payload or {}
     message = _client_error_clean(body.get("message"), 700)
@@ -4613,8 +4728,8 @@ async def commute_times(
 
 @app.get("/api/backup/json")
 async def backup_json(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
-    _, ustore = _user_store(realitify_session)
-    payload = json.dumps(export_config(ustore), ensure_ascii=False, indent=2)
+    user, ustore = _user_store(realitify_session)
+    payload = json.dumps(export_config(ustore, include_settings=user_registry.is_admin(user)), ensure_ascii=False, indent=2)
     return Response(
         payload,
         media_type="application/json",
@@ -4634,9 +4749,9 @@ async def backup_sqlite(realitify_session: str | None = Cookie(default=None, ali
 
 @app.get("/api/backup/pack")
 async def backup_pack(realitify_session: str | None = Cookie(default=None, alias="realitify_session")) -> Response:
-    _, ustore = _user_store(realitify_session)
+    user, ustore = _user_store(realitify_session)
     return Response(
-        export_pack(ustore),
+        export_pack(ustore, include_settings=user_registry.is_admin(user)),
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="sreality-backup.zip"'},
     )
@@ -4649,9 +4764,12 @@ async def backup_import(
 ) -> dict:
     user, ustore = _user_store(realitify_session)
     user_id = str(user.get("id"))
+    is_admin = user_registry.is_admin(user)
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "Prázdný soubor")
+    if len(raw) > 200 * 1024 * 1024:
+        raise HTTPException(413, "Soubor je příliš velký")
     name = (file.filename or "").lower()
 
     def _do_import() -> None:
@@ -4661,18 +4779,23 @@ async def backup_import(
                 names = archive.namelist()
                 sqlite_name = next((item for item in names if item.endswith((".sqlite", ".db"))), None)
                 json_name = next((item for item in names if item.endswith((".json"))), None)
+                # A raw SQLite file carries billing/plan/AI-usage state: only an admin may restore one.
+                if sqlite_name and not is_admin:
+                    sqlite_name = None
                 if sqlite_name:
                     replace_sqlite(ustore, archive.read(sqlite_name))
                     hub.drop_store_cache(user_id)
                     ustore = hub.store_for(user_id)
                 if json_name:
                     payload = json.loads(archive.read(json_name))
-                    import_config(ustore, payload, reset_seeded=sqlite_name is None)
+                    import_config(ustore, payload, reset_seeded=sqlite_name is None, apply_global=is_admin)
                 if not sqlite_name and not json_name:
                     raise HTTPException(400, "V zipu chybí config.json nebo monitor.sqlite")
         elif name.endswith(".json") or raw[:1] in {b"{", b"["}:
-            import_config(ustore, json.loads(raw.decode("utf-8")), reset_seeded=True)
+            import_config(ustore, json.loads(raw.decode("utf-8")), reset_seeded=True, apply_global=is_admin)
         elif name.endswith((".sqlite", ".db")) or raw[:16] == b"SQLite format 3\x00":
+            if not is_admin:
+                raise HTTPException(403, "Import SQLite souboru je jen pro administrátora. Použijte export JSON.")
             replace_sqlite(ustore, raw)
             hub.drop_store_cache(user_id)
             ustore = hub.store_for(user_id)
@@ -4953,7 +5076,8 @@ async def oauth_authorization_server() -> dict:
 
 
 @app.post("/oauth/register")
-async def oauth_register(payload: dict[str, Any] | None = Body(None)):
+async def oauth_register(request: Request, payload: dict[str, Any] | None = Body(None)):
+    _rate_limit_or_429(request, "oauth_register", "", 20, 3600)
     try:
         created = mcp_oauth.register_client(hub.store, payload or {})
     except ValueError as exc:

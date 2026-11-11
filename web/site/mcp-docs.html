@@ -16,13 +16,12 @@
     <meta property="og:title" content="MCP docs – Realitify" />
     <meta property="og:description" content="Realitify public read-only MCP connector for Claude and ChatGPT: Czech listings, prices and locality comparisons." />
     <meta property="og:url" content="https://realitify.cz/mcp-docs" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=29" />
-    <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=11" />
-    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="/static/site/site.css?v=39" />
+    <link rel="stylesheet" href="/static/site/nav.css?v=5" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=11f1" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1f3" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
   <body class="pg-page">
@@ -46,7 +45,6 @@
     <main class="pg" id="top">
       <section class="pg-hero hero-split" data-nav="MCP" data-nav-desc="Connect Realitify to AI">
         <div class="hero-copy">
-          <p class="eyebrow">MCP connector</p>
           <h1 class="display">Realitify inside Claude and ChatGPT</h1>
           <p class="lead">A public read-only connector with Czech property listings. Search, new listings, price checks and locality comparisons straight from a conversation. No login and no API key.</p>
           <div class="pg-chips">
@@ -75,7 +73,6 @@
 
       <section class="pg-section" id="pripojeni" data-nav="Connect" data-nav-desc="Server URL and setup">
         <div class="pg-head reveal">
-          <p class="eyebrow">Connect</p>
           <h2 class="display">Add the connector in a minute</h2>
           <p>Just paste the server address. Transport is Streamable HTTP; every response includes data_as_of, units, source and source_url.</p>
         </div>
@@ -91,7 +88,6 @@
 
       <section class="pg-section is-pale" id="nastroje" data-nav="Tools" data-nav-desc="Seven read-only tools">
         <div class="pg-head reveal">
-          <p class="eyebrow">Tools</p>
           <h2 class="display">Seven tools for working with the market</h2>
           <p>All tools set readOnlyHint=true, destructiveHint=false, idempotentHint=true and openWorldHint=false. Localities and layouts are normalised (Praha 5 / Smíchov / Prague 5; 2kk / 2+kk).</p>
         </div>
@@ -101,7 +97,6 @@
       <section class="pg-section" id="prompty" data-nav="Prompts" data-nav-desc="Examples to try">
         <div class="split">
           <div class="pg-head reveal">
-            <p class="eyebrow">Examples</p>
             <h2 class="display">What you can ask</h2>
             <p>Use it when you look for a flat or house in Czechia or ask about prices and availability. An unknown locality returns an error with suggestions, not an empty list.</p>
           </div>
@@ -112,7 +107,6 @@
       <section class="pg-section is-pale" id="podpora" data-nav="Support" data-nav-desc="Contact and related links">
         <div class="split">
           <div class="pg-head reveal">
-            <p class="eyebrow">Support</p>
             <h2 class="display">Need help?</h2>
             <p>Write to us, we are happy to help with setup and with using the data.</p>
             <p class="note">Realitify (realitify.cz) is not affiliated with Realtify or PriceHubble. Operator: Jiří Kolb (sole trader), Company ID 21527059.</p>
@@ -183,8 +177,8 @@
         </div>
       </div>
     </footer>
-    <script src="/static/site/nav.js?v=3" defer></script>
-    <script src="/static/site/pages.js?v=1" defer></script>
+    <script src="/static/site/nav.js?v=8" defer></script>
+    <script src="/static/site/pages.js?v=1f1" defer></script>
     <script src="/static/site/webmcp.js?v=1" defer></script>
   </body>
 </html>

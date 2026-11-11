@@ -14,7 +14,7 @@
   }
 
   // Text is inserted as DOM nodes only (never innerHTML): **bold**, "- " bullet lines and http(s)/ /nabidka links.
-  var INLINE = /(\*\*[^*]+\*\*|https?:\/\/[^\s)]+|\/nabidka\?[^\s)]+)/g;
+  var INLINE = /(\*\*[^*]+\*\*|\[[^\]\n]{1,120}\]\((?:https?:\/\/|\/nabidka\?)[^\s)]+\)|https?:\/\/[^\s)]+|\/nabidka\?[^\s)]+)/g;
 
   function renderInline(parent, text) {
     var last = 0, m;
@@ -24,6 +24,15 @@
       var tok = m[0];
       if (tok.indexOf("**") === 0) {
         parent.appendChild(el("strong", "", tok.slice(2, -2)));
+        last = m.index + tok.length;
+      } else if (tok.charAt(0) === "[") {
+        // [název](adresa): a recommended listing shown as a green link
+        var close = tok.lastIndexOf("](");
+        var link = el("a", "aic-reco", tok.slice(1, close));
+        link.href = tok.slice(close + 2, -1);
+        link.target = "_blank";
+        link.rel = "noopener";
+        parent.appendChild(link);
         last = m.index + tok.length;
       } else {
         var url = tok.replace(/[.,;]+$/, "");
@@ -160,13 +169,13 @@
     typing.innerHTML = "<i></i><i></i><i></i>";
     els.log.appendChild(typing);
     els.log.scrollTop = els.log.scrollHeight;
-    var bubble = null, answer = "", navigateTo = null;
+    var bubble = null, answer = "", navigateTo = null, uiEvents = [];
     try {
       var res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ message: text, chat_id: chatId }),
+        body: JSON.stringify({ message: text, chat_id: chatId, ui: uiState() }),
       });
       if (res.status === 429) {
         typing.remove();
@@ -203,6 +212,8 @@
             els.log.appendChild(typing);
           } else if (ev.type === "navigate") {
             navigateTo = ev.path;
+          } else if (ev.type === "ui") {
+            uiEvents.push(ev);
           } else if (ev.type === "error") {
             typing.remove();
             if (ev.chat_deleted) chatId = null;
@@ -218,7 +229,77 @@
       els.send.disabled = false;
       refreshRecent();
     }
-    if (navigateTo) goTo(navigateTo);
+    var uiPath = await runUiEvents(uiEvents);
+    if (uiPath) goTo(uiPath);
+    else if (navigateTo) goTo(navigateTo);
+  }
+
+  // What the user currently sees (sent with each message so Bára can refer to "this flat", the filters, the comparison).
+  function uiState() {
+    try {
+      if (window.RealitifyUI && typeof window.RealitifyUI.state === "function") return window.RealitifyUI.state();
+    } catch (e) {}
+    return { page: location.pathname };
+  }
+
+  // A command that needs the catalog page waits in sessionStorage until the page has loaded there.
+  function stashUi(ev) {
+    try {
+      var list = JSON.parse(sessionStorage.getItem("aic_pending_ui") || "[]");
+      list.push(ev);
+      sessionStorage.setItem("aic_pending_ui", JSON.stringify(list.slice(-6)));
+    } catch (e) {}
+  }
+
+  function runPendingUi() {
+    var list = [];
+    try {
+      list = JSON.parse(sessionStorage.getItem("aic_pending_ui") || "[]");
+      sessionStorage.removeItem("aic_pending_ui");
+    } catch (e) {}
+    if (!list.length || location.pathname.replace(/\/$/, "") !== "/nabidka") return;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      if (window.RealitifyUI && window.RealitifyUI.ready && window.RealitifyUI.ready()) {
+        clearInterval(timer);
+        runUiEvents(list);
+      } else if (tries > 40) clearInterval(timer);
+    }, 250);
+  }
+
+  // Apply UI commands from Bára. Returns a path to navigate to when the current page cannot do it.
+  async function runUiEvents(list) {
+    var api = window.RealitifyUI;
+    var fallback = null;
+    for (var i = 0; i < list.length; i++) {
+      var ev = list[i];
+      try {
+        if (ev.op === "catalog_filters") {
+          var done = api && (await api.applyFilters(ev.params || {}, !!ev.keep_current));
+          if (!done) {
+            var q = new URLSearchParams(ev.params || {}).toString();
+            fallback = "/nabidka" + (q ? "?" + q : "");
+          }
+        } else if (ev.op === "view") {
+          if (api && api.setView && location.pathname.replace(/\/$/, "") === "/nabidka") api.setView(ev.mode);
+          else { stashUi(ev); if (!fallback) fallback = "/nabidka"; }
+        } else if (ev.op === "compare") {
+          if (api && api.compare && location.pathname.replace(/\/$/, "") === "/nabidka") api.compare(ev.action, ev.urls || []);
+          else { stashUi(ev); if (!fallback) fallback = "/nabidka"; }
+        } else if (ev.op === "open_listing") {
+          if (api && api.openListing && location.pathname.replace(/\/$/, "") === "/nabidka") await api.openListing(ev);
+          else {
+            var p = new URLSearchParams();
+            if (ev.listing_key) p.set("listing_key", ev.listing_key);
+            else if (ev.url) p.set("url", ev.url);
+            else if (ev.id) p.set("id", ev.id);
+            fallback = "/nabidka?" + p.toString();
+          }
+        }
+      } catch (e) {}
+    }
+    return fallback;
   }
 
   // Only relative paths on this site. The server whitelists the pages too; this is the second check.
@@ -527,6 +608,7 @@
         els.panel.hidden = false;
         openChat(resume.chat);
       }
+      runPendingUi();
     })
     .catch(function () {});
 })();

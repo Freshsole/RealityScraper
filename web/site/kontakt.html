@@ -2,7 +2,7 @@
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
-    <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/gtag.js?v=3"></script>
     <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
@@ -25,14 +25,13 @@
     <meta name="twitter:title" content="Kontakt — REALITIFY" />
     <meta name="twitter:description" content="Kontaktujte tým Realitify. Pomůžeme s hlídáním bytů k pronájmu v Praze, Brně i celé ČR." />
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=28" />
-    <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=18" />
-    <link rel="stylesheet" href="/static/site/help.css?v=3" />
-    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="/static/site/site.css?v=39" />
+    <link rel="stylesheet" href="/static/site/nav.css?v=5" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=18f1" />
+    <link rel="stylesheet" href="/static/site/help.css?v=3f6" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1f3" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
   <body class="contact-page">
@@ -105,16 +104,15 @@
       </div>
     </section>
 
-    <section class="ct-faq" id="faq">
+    <section class="ct-faq" id="faq" data-nav="Máte otázky?">
       <div class="ct-faq-head">
-        <p class="ct-chip">Máte otázky?</p>
         <h2 class="display">Často kladené dotazy</h2>
       </div>
       <div class="faq-layout faq-help">
         <div>
           <div class="faq-tools">
             <label class="help-box"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="faq-q" type="search" placeholder="Hledat v otázkách a odpovědích…" autocomplete="off" aria-label="Hledat v otázkách" /></label>
-            <div class="help-chips faq-cats" role="tablist" aria-label="Kategorie"><button type="button" class="faq-cat is-on" data-cat="all">Vše</button><button type="button" class="faq-cat" data-cat="hlidani">Hlídání</button><button type="button" class="faq-cat" data-cat="tarify">Tarify a platby</button><button type="button" class="faq-cat" data-cat="pokryti">Pokrytí</button></div>
+            <div class="help-chips faq-cats" role="group" aria-label="Kategorie"><button type="button" class="faq-cat is-on" data-cat="all">Vše</button><button type="button" class="faq-cat" data-cat="hlidani">Hlídání</button><button type="button" class="faq-cat" data-cat="tarify">Tarify a platby</button><button type="button" class="faq-cat" data-cat="pokryti">Pokrytí</button></div>
           </div>
           <div class="qa-list"><div class="qa" data-cat="hlidani"><button type="button" class="qa-q" aria-expanded="false"><span>Jak funguje hlídací profil?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>Hlídací profil je automatický nástroj. Nastavíte si své preference (lokalitu, cenu, dispozici) a náš robot v reálném čase monitoruje realitní portály. Jakmile najde shodu, okamžitě vám posílá notifikaci.</p></div></div></div><div class="qa" data-cat="tarify"><button type="button" class="qa-q" aria-expanded="false"><span>Kolik stojí předplatné?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>Máme k dispozici tři tarify: Zdarma pro občasné hledání (0 Kč), tarif Start s upozorněním do 5 minut (149 Kč/měsíc) a nejrychlejší bleskový tarif Pro s doručením pod 60 sekund (349 Kč/měsíc).</p></div></div></div><div class="qa" data-cat="tarify"><button type="button" class="qa-q" aria-expanded="false"><span>Mohu si vyzkoušet službu zdarma?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>Ano, základní vyhledávání v sjednocené databázi je pro všechny uživatele zcela zdarma. Můžete si také aktivovat zkušební profil pro automatické hlídání.</p></div></div></div><div class="qa" data-cat="tarify"><button type="button" class="qa-q" aria-expanded="false"><span>Jak zruším předplatné?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>Služba je naprosto bez závazků. Předplatné můžete kdykoliv jedním kliknutím zrušit přímo ve svém uživatelském profilu v sekci Nastavení.</p></div></div></div><div class="qa" data-cat="hlidani"><button type="button" class="qa-q" aria-expanded="false"><span>Jak rychle dostanu upozornění na novou nabídku?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>U tarifu Pro odesíláme notifikaci na SMS, e-mail nebo push upozornění bleskově do 60 sekund od zveřejnění inzerátu na jakémkoliv českém webu.</p></div></div></div><div class="qa" data-cat="pokryti"><button type="button" class="qa-q" aria-expanded="false"><span>Podporujete celou ČR?</span><svg class="qa-ico" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button><div class="qa-a"><div><p>Ano. Sledujeme nabídky bytů, domů a pronájmů ve všech krajích, okresech a městech České republiky včetně menších obcí.</p></div></div></div></div>
           <p class="faq-empty" id="faq-empty" hidden>Nic jsme nenašli. Zkuste jiné slovo, nebo nám napište.</p>
@@ -127,9 +125,8 @@
       </div>
     </section>
 
-    <section class="final-cta contact-cta">
+    <section class="final-cta contact-cta" data-nav="JEŠTĚ NEMÁTE ÚČET?">
       <div class="final-copy">
-        <p class="eyebrow">JEŠTĚ NEMÁTE ÚČET?</p>
         <h2 class="display is-caps">Nezmeškejte už žádnou skvělou nabídku</h2>
         <p class="lead">Založte si bezplatný účet za 30 sekund, nastavte si parametry a nechte technologii pracovat za vás. Vaše vysněné bydlení už vám neuteče.</p>
       </div>
@@ -187,7 +184,7 @@
     <script src="https://intouch.virtuex.cz/f/embed.js" async></script>
     <script src="/static/site/contact-form.js?v=1" defer></script>
     <script src="/static/t.js?v=10"></script>
-      <script src="/static/site/nav.js?v=3" defer></script>
-    <script src="/static/site/pages.js?v=2" defer></script>
+      <script src="/static/site/nav.js?v=8" defer></script>
+    <script src="/static/site/pages.js?v=2f1" defer></script>
 </body>
 </html>

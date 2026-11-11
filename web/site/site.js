@@ -2,14 +2,17 @@ document.querySelectorAll(".faq-section .faq-item").forEach((e,s)=>{const a=e.qu
             <source type="image/avif" srcset="${t}.avif 1x, ${t}@2x.avif 2x" />
             <source type="image/webp" srcset="${t}.webp 1x, ${t}@2x.webp 2x" />
             <img src="${t}.webp" width="${s}" height="${a}" alt="${escapeHtml(n)}" loading="lazy" decoding="async" />
-          </picture>`}function soldImageHtml(e,s){if(!e)return'<div class="sold-noimg" aria-hidden="true"></div>';const a=String(e),n=a.match(/\/static\/site\/assets\/(sold-\d+)/);return n?pictureHtml(n[1],301,220,s):`<img src="${escapeHtml(a)}" width="301" height="220" alt="${escapeHtml(s)}" loading="lazy" decoding="async" />`}async function renderGoneFast(){const e=document.getElementById("sold-cards");if(e)try{const n=(await(await fetch("/api/public/gone-fast")).json().catch(()=>({}))).items||[];if(!n.length)return;e.closest(".sold-section")?.removeAttribute("hidden");e.innerHTML=n.map(t=>`<article class="sold-card">
+          </picture>`}function soldImageHtml(e,s){if(!e)return'<div class="sold-noimg" aria-hidden="true"></div>';const a=String(e),n=a.match(/\/static\/site\/assets\/(sold-\d+)/);return n?pictureHtml(n[1],301,220,s):`<img src="${escapeHtml(a)}" width="301" height="220" alt="${escapeHtml(s)}" loading="lazy" decoding="async" />`}async function renderGoneFast(){const e=document.getElementById("sold-cards");if(e)try{let n=(await(await fetch("/api/public/gone-fast")).json().catch(()=>({}))).items||[];const ok=await Promise.all(n.map(t=>new Promise(r=>{if(!t.image)return r(!1);const i=new Image,d=setTimeout(()=>r(!1),5e3);i.onload=()=>{clearTimeout(d);r(i.naturalWidth>40)};i.onerror=()=>{clearTimeout(d);r(!1)};i.src=t.image})));n=n.filter((t,i)=>ok[i]).slice(0,4);if(!n.length)return;e.closest(".sold-section")?.removeAttribute("hidden");e.innerHTML=n.map(t=>{const fd=x=>String(x||"").replace(/^\S+\s*/,"").replace(/\s*\d{4}\s*v\s*/,", "),bd=(x=>x.charAt(0)+x.slice(1).toLowerCase())(String(t.badge||"Pronajato")),w=String(t.when||"").split(" · "),pr=String(t.price||"").replace(/\s*Kč.*$/,"").replace(/\D/g,""),pt=pr?pr.replace(/\B(?=(\d{3})+(?!\d))/g,"\u00A0"):"";return`<article class="sold-card">
           <div class="sold-img">
             ${soldImageHtml(t.image,t.locality||"")}
-            <span class="sold-badge">${escapeHtml(t.badge||"Pronajato")}</span>
+            <span class="sold-badge">${escapeHtml(bd)}</span>
           </div>
           <div class="sold-meta">
-            <div class="sold-top"><span>${escapeHtml(t.locality||"")}</span><span>${escapeHtml(t.price||"")}</span></div>
-            <p class="spec">${escapeHtml(t.spec||"")}</p>
-            <p class="when">${escapeHtml(t.when||"")}</p>
+            <div class="sold-price">${pt?`<b>${pt}\u00A0Kč</b><span>/ měsíc</span>`:`<b>${escapeHtml(t.price||"")}</b>`}</div>
+            <div class="sold-body">
+              <h3 class="sold-title">${escapeHtml(t.spec||"Byt")}</h3>
+              <p class="sold-addr">${escapeHtml(t.locality||"")}</p>
+            </div>
+            <div class="sold-when"><div><small>Přidáno</small><span>${escapeHtml(fd(w[0]))}</span></div><div><small>Pronajato</small><span>${escapeHtml(fd(w[1]))}</span></div></div>
           </div>
-        </article>`).join("")}catch{}}async function renderNewToday(){const e=document.getElementById("urg-new-today");if(e)try{const a=await(await fetch("/api/public/stats")).json().catch(()=>({}));if(!Number.isFinite(a.new_today))return;e.textContent=`${Number(a.new_today).toLocaleString("cs-CZ")} `}catch{}}afterPageLoad(()=>{renderGoneFast(),renderNewToday()});
+        </article>`}).join("")}catch{}}async function renderNewToday(){const e=document.getElementById("urg-new-today");if(e)try{const a=await(await fetch("/api/public/stats")).json().catch(()=>({}));if(!Number.isFinite(a.new_today))return;e.textContent=`${Number(a.new_today).toLocaleString("cs-CZ")} `}catch{}}afterPageLoad(()=>{renderGoneFast(),renderNewToday()});

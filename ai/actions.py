@@ -86,10 +86,11 @@ def _limit_error(limit: int) -> ToolError:
 
 # ---- create_monitor ---------------------------------------------------------------------------------------------
 
-async def _prepare_create_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    limit, enabled = await asyncio.to_thread(user_actions.watch_slots_left, ctx.ustore)
-    if limit is not None and enabled >= limit:
-        raise _limit_error(limit)
+_PORTALS = {"sreality", "idnes", "bazos", "ceskereality", "bezrealitky", "annonce", "mmreality", "ulovdomov", "remax", "realitycz"}
+
+
+async def _filters_to_url(svc: Services, a: dict[str, Any], portals: str = "all") -> tuple[str, list[str], str]:
+    """Validated monitor filters -> (search_url, human summary parts, label). Shared by create and update."""
     locality = _txt(a.get("locality"), 80)
     if len(locality) < 2:
         raise ToolError("Chybí lokalita.")
@@ -109,7 +110,7 @@ async def _prepare_create_monitor(svc: Services, ctx: ToolContext, a: dict[str, 
                 filters[key] = int(value)
             except (TypeError, ValueError) as exc:
                 raise ToolError(f"{key} musí být číslo.") from exc
-    built = await asyncio.to_thread(user_actions.build_search_url, {"filters": filters, "portals": "all"}, svc.filter_mod)
+    built = await asyncio.to_thread(user_actions.build_search_url, {"filters": filters, "portals": portals}, svc.filter_mod)
     label = _txt(place.get("label"), 80) or locality
     parts = [", ".join(filters["sizes"]) or "všechny dispozice", label, "pronájem" if offer == "pronajem" else "prodej"]
     if filters.get("price_to"):
@@ -118,8 +119,19 @@ async def _prepare_create_monitor(svc: Services, ctx: ToolContext, a: dict[str, 
         parts.append(f"od {_kc(filters['price_from'])}")
     if filters.get("area_from"):
         parts.append(f"od {filters['area_from']} m²")
-    name = _txt(a.get("name"), 80) or f"{', '.join(filters['sizes']) or 'Byty'} · {label}"
-    args = {"name": name, "search_url": built["url"], "portals": "all"}
+    if filters.get("area_to"):
+        parts.append(f"do {filters['area_to']} m²")
+    default_name = f"{', '.join(filters['sizes']) or 'Byty'} · {label}"
+    return built["url"], parts, default_name
+
+
+async def _prepare_create_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    limit, enabled = await asyncio.to_thread(user_actions.watch_slots_left, ctx.ustore)
+    if limit is not None and enabled >= limit:
+        raise _limit_error(limit)
+    url, parts, default_name = await _filters_to_url(svc, a)
+    name = _txt(a.get("name"), 80) or default_name
+    args = {"name": name, "search_url": url, "portals": "all"}
     return args, "Vytvořit hlídání: " + ", ".join(parts)
 
 
@@ -136,12 +148,19 @@ async def _exec_create_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any
 
 # ---- update_monitor / delete_monitor -----------------------------------------------------------------------------
 
+_FILTER_ARGS = ("locality", "offer_type", "disposition", "price_from", "price_to", "area_from", "area_to")
+
+
 async def _prepare_update_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
     monitor = await _monitor(ctx, a.get("monitor_id"))
     new_name = _txt(a.get("name"), 80)
     enabled = a.get("enabled")
-    if not new_name and enabled is None:
-        raise ToolError("Chybí, co změnit: name nebo enabled.")
+    portal = _txt(a.get("portal"), 20).casefold()
+    changes_filters = any(a.get(k) not in (None, "", [], 0) for k in _FILTER_ARGS)
+    if portal and portal != "all" and portal not in _PORTALS:
+        raise ToolError("portal musí být all nebo jeden z podporovaných portálů (sreality, idnes, bazos, ceskereality, bezrealitky, annonce, mmreality, ulovdomov, remax, realitycz).")
+    if not new_name and enabled is None and not changes_filters and not portal:
+        raise ToolError("Chybí, co změnit: name, enabled, portal nebo filtry hlídání.")
     if enabled is True and not monitor.get("enabled"):
         limit, count = await asyncio.to_thread(user_actions.watch_slots_left, ctx.ustore)
         if limit is not None and count >= limit:
@@ -151,8 +170,15 @@ async def _prepare_update_monitor(svc: Services, ctx: ToolContext, a: dict[str, 
         parts.append(f"přejmenovat na „{new_name}“")
     if enabled is not None:
         parts.append("zapnout" if enabled else "vypnout")
-    args = {"monitor_id": monitor["id"], "name": new_name, "enabled": enabled}
-    return args, f"Upravit hlídání „{monitor.get('name')}“: " + ", ".join(parts)
+    args: dict[str, Any] = {"monitor_id": monitor["id"], "name": new_name, "enabled": enabled}
+    if portal:
+        args["portals"] = portal
+        parts.append("hlídat všechny portály" if portal == "all" else f"hlídat jen portál {portal}")
+    if changes_filters:
+        url, filter_parts, _name = await _filters_to_url(svc, a, portal or str(monitor.get("portals") or "all"))
+        args["search_url"] = url
+        parts.append("nové filtry: " + ", ".join(filter_parts))
+    return args, f"Upravit hlídání „{monitor.get('name')}“: " + "; ".join(parts)
 
 
 async def _exec_update_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> str:
@@ -162,6 +188,10 @@ async def _exec_update_monitor(svc: Services, ctx: ToolContext, a: dict[str, Any
         "name": a.get("name") or monitor.get("name"),
         "enabled": monitor.get("enabled") if a.get("enabled") is None else bool(a["enabled"]),
     }
+    if a.get("search_url"):
+        payload["search_url"] = a["search_url"]
+    if a.get("portals"):
+        payload["portals"] = a["portals"]
     saved = await asyncio.to_thread(user_actions.save_monitor, ctx.ustore, payload, on_event=svc.on_event)
     return f"Hlídání „{saved.get('name')}“ je upravené."
 
@@ -213,6 +243,85 @@ async def _exec_listing_status(svc: Services, ctx: ToolContext, a: dict[str, Any
         on_event=svc.on_event,
     )
     return "Hotovo."
+
+
+async def _prepare_listings_status(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    urls = []
+    for raw in a.get("listing_urls") or []:
+        url = _check_listing_url(raw)
+        if url not in urls:
+            urls.append(url)
+    if not urls:
+        raise ToolError("Chybí listing_urls.")
+    if len(urls) > 20:
+        raise ToolError("Najednou jde změnit nejvýš 20 inzerátů.")
+    status = _txt(a.get("status")).casefold()
+    if status not in {"saved", "hidden", "none"}:
+        raise ToolError("status musí být saved, hidden nebo none.")
+    verb = {"saved": "Uložit do oblíbených", "hidden": "Skrýt", "none": "Vrátit mezi nabídky"}[status]
+    return {"urls": urls, "status": status}, f"{verb}: {len(urls)} inzerátů"
+
+
+async def _exec_listings_status(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> str:
+    for url in a["urls"]:
+        await asyncio.to_thread(
+            user_actions.set_listing_user,
+            ctx.ustore,
+            url,
+            "" if a["status"] == "none" else a["status"],
+            None,
+            after=svc.after_listing_user,
+            on_event=svc.on_event,
+        )
+    return f"Hotovo ({len(a['urls'])} inzerátů)."
+
+
+async def _prepare_monitor_from_url(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    limit, enabled = await asyncio.to_thread(user_actions.watch_slots_left, ctx.ustore)
+    if limit is not None and enabled >= limit:
+        raise _limit_error(limit)
+    url = _txt(a.get("search_url"), 500)
+    if not url.startswith(("http://", "https://")):
+        raise ToolError("search_url musí být adresa hledání na portálu.")
+    try:
+        mod = svc.filter_mod(None, url)
+        mod.parse_url(url)
+    except Exception as exc:
+        raise ToolError("Tuhle adresu hledání se nepodařilo rozpoznat. Zkus jiný portál nebo filtry.") from exc
+    portal = _txt(a.get("portal"), 20).casefold() or "all"
+    if portal != "all" and portal not in _PORTALS:
+        raise ToolError("portal musí být all nebo jeden z podporovaných portálů.")
+    name = _txt(a.get("name"), 80) or "Hlídání z adresy"
+    return {"name": name, "search_url": url, "portals": portal}, f"Vytvořit hlídání „{name}“ z adresy hledání ({'všechny portály' if portal == 'all' else portal})"
+
+
+async def _prepare_watch_prefs(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    if a.get("clear"):
+        return {"prefs": {}}, "Smazat výchozí preference hledání"
+    prefs: dict[str, Any] = {}
+    parts = []
+    sizes = [normalize_disposition(str(d)) for d in (a.get("sizes") or []) if str(d).strip()]
+    sizes = [x for x in sizes if x]
+    if sizes:
+        prefs["sizes"] = sizes
+        parts.append("dispozice " + ", ".join(sizes))
+    for key, label in (("price_from", "cena od"), ("price_to", "cena do"), ("area_from", "plocha od")):
+        value = a.get(key)
+        if value not in (None, "", 0):
+            try:
+                prefs[key] = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ToolError(f"{key} musí být číslo.") from exc
+            parts.append(f"{label} {prefs[key]}")
+    if not parts:
+        raise ToolError("Chybí, co nastavit.")
+    current = (await _settings(ctx)).get("watch_prefs") or {}
+    return {"prefs": {**current, **prefs}}, "Výchozí preference hledání: " + ", ".join(parts)
+
+
+async def _exec_watch_prefs(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> str:
+    await asyncio.to_thread(user_actions.save_settings, ctx.ustore, {"watch_prefs": a["prefs"]})
+    return "Preference jsou uložené."
 
 
 async def _prepare_listing_note(svc: Services, ctx: ToolContext, a: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -379,6 +488,9 @@ WRITE_SPECS: dict[str, WriteSpec] = {
     "delete_monitor": WriteSpec(_prepare_delete_monitor, _exec_delete_monitor),
     "set_listing_status": WriteSpec(_prepare_listing_status, _exec_listing_status),
     "set_listing_note": WriteSpec(_prepare_listing_note, _exec_listing_note),
+    "set_listings_status": WriteSpec(_prepare_listings_status, _exec_listings_status),
+    "create_monitor_from_url": WriteSpec(_prepare_monitor_from_url, _exec_create_monitor),
+    "update_watch_prefs": WriteSpec(_prepare_watch_prefs, _exec_watch_prefs),
     "update_notify_settings": WriteSpec(_prepare_notify, _exec_notify),
     "set_commute_point": WriteSpec(_prepare_commute_set, _exec_commute_set),
     "delete_commute_point": WriteSpec(_prepare_commute_delete, _exec_commute_delete),

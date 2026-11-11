@@ -1,3 +1,5 @@
+/* Legacy CMS rows may still point to the PNG originals; the WebP twins are ~10x smaller. */
+function toWebp(u) { return typeof u === "string" ? u.replace(/(\/static\/site\/assets\/stories\/[\w-]+)\.png$/, "$1.webp") : u; }
 (() => {
   const escapeHtml = (value) =>
     String(value ?? "")
@@ -49,7 +51,7 @@
     document.getElementById("article-author").textContent = article.author;
     document.getElementById("article-role").textContent = article.role;
     const photo = document.getElementById("article-photo");
-    photo.src = article.photo;
+    photo.src = toWebp(article.photo);
     photo.alt = article.crumb;
     photo.style.objectPosition = article.photoPos || "50% 50%";
     document.getElementById("article-stats").innerHTML = renderStats(article.stats);

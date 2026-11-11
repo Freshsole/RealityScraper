@@ -39,7 +39,7 @@ def current_settings() -> dict[str, Any]:
     }
 
 
-def export_config(store: Store) -> dict[str, Any]:
+def export_config(store: Store, *, include_settings: bool = False) -> dict[str, Any]:
     with store.connect() as conn:
         monitors = [dict(row) for row in conn.execute("SELECT * FROM monitors ORDER BY created_at")]
         meta = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM meta")}
@@ -51,7 +51,8 @@ def export_config(store: Store) -> dict[str, Any]:
         "kind": "sreality-monitor",
         "version": current_version(),
         "exported_at": utc_now(),
-        "settings": current_settings(),
+        # Global server settings (webhooks, URLs, host/port) are secrets: admin exports only.
+        "settings": current_settings() if include_settings else {},
         "monitors": monitors,
         "templates": store.list_templates(),
         "meta": meta,
@@ -71,8 +72,8 @@ def export_sqlite(store: Store) -> bytes:
         dest.unlink(missing_ok=True)
 
 
-def export_pack(store: Store) -> bytes:
-    payload = json.dumps(export_config(store), ensure_ascii=False, indent=2).encode("utf-8")
+def export_pack(store: Store, *, include_settings: bool = False) -> bytes:
+    payload = json.dumps(export_config(store, include_settings=include_settings), ensure_ascii=False, indent=2).encode("utf-8")
     database = export_sqlite(store)
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -142,10 +143,12 @@ def _write_env(settings: dict[str, Any]) -> None:
     path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
 
 
-def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) -> None:
+def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool, apply_global: bool = False) -> None:
     if payload.get("kind") not in {None, "sreality-monitor"}:
         raise ValueError("Soubor není export ze Sreality monitoru")
-    apply_settings(payload.get("settings") if isinstance(payload.get("settings"), dict) else None)
+    # Only an admin may change process-wide config / the server .env; users import their own data only.
+    if apply_global:
+        apply_settings(payload.get("settings") if isinstance(payload.get("settings"), dict) else None)
     now = utc_now()
     with store.connect() as conn:
         templates = payload.get("templates") or []
@@ -165,6 +168,12 @@ def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) 
                     ),
                 )
         monitors = payload.get("monitors") or []
+        if monitors and not apply_global:
+            # Users go through Store.save_monitor so plan limits and URL/webhook validation still apply.
+            monitors_for_user = [item for item in monitors if isinstance(item, dict)]
+            monitors = []
+        else:
+            monitors_for_user = []
         if monitors:
             conn.execute("DELETE FROM monitors")
             for item in monitors:
@@ -202,6 +211,11 @@ def import_config(store: Store, payload: dict[str, Any], *, reset_seeded: bool) 
                     "INSERT OR REPLACE INTO listing_user(url, status, note, updated_at) VALUES (?, ?, ?, ?)",
                     (item["url"], item.get("status") or "", item.get("note") or "", item.get("updated_at") or now),
                 )
+    for item in monitors_for_user[:50]:
+        try:
+            store.save_monitor({k: item.get(k) for k in ("id", "name", "search_url", "webhook_url", "template_id", "enabled") if k in item})
+        except (ValueError, KeyError, TypeError):
+            continue
 
 
 def replace_sqlite(store: Store, data: bytes) -> Store:

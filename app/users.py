@@ -13,6 +13,7 @@ the global store and then serves that user's private store.
 from __future__ import annotations
 
 import hashlib
+import re
 import hmac
 import secrets
 import sqlite3
@@ -215,6 +216,45 @@ def is_admin(user: dict[str, Any] | None) -> bool:
     return bool(email) and email == config.ADMIN_EMAIL
 
 
+_COMMON_PASSWORDS = frozenset(
+    """password password1 password12 password123 passw0rd p@ssw0rd 12345678 123456789 1234567890 11111111 00000000
+    qwertyui qwerty123 qwertyuiop 1q2w3e4r 1qaz2wsx abc12345 abcd1234 iloveyou letmein1 welcome1 admin123 administrator
+    heslo123 heslo1234 hesloheslo realitify realitify1 realitify123 zaq12wsx asdfghjk asdf1234 monkey123 dragon123""".split()
+)
+_EMAIL_RE = re.compile(r"^[^\s@<>\"',;:()\[\]\\]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
+MAX_PASSWORD_LEN = 128
+MAX_NAME_LEN = 100
+
+
+def check_password_policy(password: str, *, label: str = "Heslo") -> None:
+    """Raise ValueError with a Czech message unless the password is acceptable."""
+    pw = password or ""
+    if len(pw) < 8:
+        raise ValueError(f"{label} musí mít alespoň 8 znaků")
+    if len(pw) > MAX_PASSWORD_LEN:
+        raise ValueError(f"{label} může mít nejvýše {MAX_PASSWORD_LEN} znaků")
+    lowered = pw.lower()
+    if lowered in _COMMON_PASSWORDS or len(set(lowered)) < 3:
+        raise ValueError(f"{label} je příliš běžné, zvolte jiné")
+    if pw.isdigit() or pw.isalpha():
+        raise ValueError(f"{label} musí kombinovat písmena a čísla (nebo další znaky)")
+
+
+def check_email(email: str) -> str:
+    """Return the normalised e-mail or raise ValueError."""
+    value = (email or "").strip().lower()
+    if len(value) > 254 or not _EMAIL_RE.match(value):
+        raise ValueError("Zadej platný e-mail")
+    return value
+
+
+def check_name(first: str, last: str = "") -> None:
+    if len(first or "") > MAX_NAME_LEN or len(last or "") > MAX_NAME_LEN:
+        raise ValueError(f"Jméno může mít nejvýše {MAX_NAME_LEN} znaků")
+    if any(ord(ch) < 32 for ch in f"{first}{last}"):
+        raise ValueError("Jméno obsahuje nepovolené znaky")
+
+
 def create_user(
     store: Store,
     *,
@@ -224,6 +264,7 @@ def create_user(
     last: str = "",
     role: str = "user",
 ) -> dict[str, Any]:
+    # Internal API (Google sign-in, admin bootstrap): the strict user-facing checks live in app.account.
     email_norm = (email or "").strip().lower()
     if not email_norm or "@" not in email_norm:
         raise ValueError("Zadej platný e-mail")

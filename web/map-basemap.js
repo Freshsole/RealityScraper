@@ -88,6 +88,25 @@
     });
   }
 
+  // Czech labels where the tiles have them (name:cs), else the local name.
+  function localizeLabels(gl) {
+    try {
+      const style = gl.getStyle?.();
+      (style?.layers || []).forEach((layer) => {
+        if (layer.type !== "symbol" || !layer.layout || !layer.layout["text-field"]) return;
+        if (layer.__rfCs) return;
+        gl.setLayoutProperty(layer.id, "text-field", [
+          "coalesce",
+          ["get", "name:cs"],
+          ["get", "name:latin"],
+          ["get", "name"],
+        ]);
+      });
+    } catch {
+      /* labels stay in the default language */
+    }
+  }
+
   function refresh(map) {
     map.invalidateSize({ animate: false });
     const layer = layerOf.get(map);
@@ -106,7 +125,10 @@
     const layer = createLayer(map, style);
     layer.addTo(map);
     const gl = layer.getMaplibreMap?.();
-    gl?.once?.("load", () => refresh(map));
+    gl?.once?.("load", () => {
+      localizeLabels(gl);
+      refresh(map);
+    });
     gl?.on?.("error", () => {
       if (styleOf.get(map) !== style.id) return;
       if (!map.hasLayer(layer)) return;

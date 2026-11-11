@@ -82,4 +82,26 @@
   input.addEventListener("input", () => { if (!input.value.trim()) { out.hidden = true; clearTimeout(timer); } });
   document.querySelectorAll(".help-chips button").forEach((b) =>
     b.addEventListener("click", () => { input.value = b.dataset.q; show(b.dataset.q); }));
+
+  /* chips row: touch scrolls natively; add mouse drag so it also swipes in desktop/emulated view */
+  const row = document.querySelector(".help-chips-row");
+  if (row) {
+    let down = false, moved = false, x0 = 0, l0 = 0;
+    row.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "touch" || (e.button != null && e.button !== 0)) return;
+      down = true; moved = false; x0 = e.clientX; l0 = row.scrollLeft;
+    });
+    row.addEventListener("pointermove", (e) => {
+      if (!down) return;
+      const dx = e.clientX - x0;
+      if (!moved && Math.abs(dx) < 5) return;
+      moved = true;
+      row.scrollLeft = l0 - dx;
+    });
+    const end = () => { down = false; };
+    row.addEventListener("pointerup", end);
+    row.addEventListener("pointerleave", end);
+    row.addEventListener("click", (e) => { if (moved) { e.preventDefault(); e.stopPropagation(); moved = false; } }, true);
+    row.addEventListener("dragstart", (e) => e.preventDefault());
+  }
 })();

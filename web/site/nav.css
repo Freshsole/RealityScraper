@@ -5,7 +5,7 @@
 .nx-pill:before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:rgba(255,255,255,.82);-webkit-backdrop-filter:blur(20px) saturate(130%);backdrop-filter:blur(20px) saturate(130%);border:1px solid rgba(208,212,205,.7);box-shadow:0 1px 2px #0e0f0c0a,0 8px 24px #0e0f0c14,0 24px 48px #0e0f0c0d;opacity:0;transition:opacity .4s ease}
 .navbar.nx.is-scrolled .nx-pill{max-width:1020px}
 .navbar.nx.is-scrolled .nx-pill:before,.navbar.nx.is-open .nx-pill:before,.navbar.nx.is-mega .nx-pill:before{opacity:1}
-.nx-right{display:flex;align-items:center;gap:20px}
+.nx-right{display:flex;align-items:center;gap:8px}
 .nx-menu{position:relative;display:flex;align-items:center;gap:2px;height:36px}
 .nx-highlight{position:absolute;top:0;left:0;height:36px;width:0;border-radius:999px;background:var(--mint);opacity:0;pointer-events:none}
 .nx-menu.is-ready .nx-highlight{transition:transform .7s cubic-bezier(.65,0,.35,1),width .7s cubic-bezier(.65,0,.35,1),opacity .3s ease}
@@ -42,9 +42,9 @@
 .nx-item-desc{font-size:13px;line-height:1.4;color:var(--body)}
 
 .nx-toggle,.nx-panel,.nx-backdrop{display:none}
-@media (max-width:860px){
+@media (max-width:1040px){
   .navbar.nx{height:72px;padding:10px 12px}
-  .nx-pill{height:52px;padding:0 8px 0 16px}
+  .nx-pill{height:52px;padding:0 8px 0 16px;gap:6px}
   .nx-pill:before{opacity:1}
   .navbar.nx.is-scrolled .nx-pill{max-width:none}
   .nx-right,.nx-mega{display:none!important}
@@ -76,3 +76,12 @@
 
 .nav-account{display:inline-flex;align-items:center;gap:8px;font-weight:600}
 .nav-account-av{width:32px;height:32px;border-radius:50%;background:#e2f6d5;color:#163300;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.nx-pill .nav-login.is-account,.nav-login.is-account{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border:1px solid rgba(208,212,205,.9);border-radius:999px;background:rgba(255,255,255,.9);color:#0e0f0c;font:600 14px/1 Inter,Helvetica,Arial,sans-serif;white-space:nowrap}
+.nav-login.is-account:hover{background:#f7f9f6}
+.nav-login.is-account .icon{display:inline-flex;flex:none}
+@media (min-width:1041px) and (max-width:1240px){
+  .nx-pill{gap:10px;padding:0 10px 0 16px}
+  .nx-right{gap:6px}
+  .nx-trigger,.nx-link{padding:0 9px}
+  .nx-pill .nav-login.is-account,.nav-login.is-account{padding:0 11px}
+}

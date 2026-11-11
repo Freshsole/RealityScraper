@@ -20,6 +20,7 @@ from typing import Any, Union
 from urllib.parse import parse_qs, quote, urlparse
 
 from ai import actions
+from app.locality_normalize import normalize_disposition
 from ai.context import Services, ToolContext, ToolError
 from app import billing
 
@@ -53,6 +54,16 @@ NAVIGATE_PREFIXES = (
     "/ochrana-soukromi",
 )
 NAVIGATE_HOME_FRAGMENTS = {"cenik", "jak-to-funguje", "srovnani"}
+
+_CATALOG_PORTALS = {"sreality", "idnes", "bazos", "ceskereality", "bezrealitky", "annonce", "mmreality", "ulovdomov", "remax", "realitycz"}
+_AMENITY_FLAGS = {"balcony", "loggia", "terrace", "cellar", "lift", "parking", "garage", "garden", "barrier_free"}
+_OWNERSHIP = {"Osobní", "Družstevní", "Obecní", "S.r.o.", "Podílové", "Jiné"}
+_CONDITIONS = {"Novostavba", "Po rekonstrukci", "Velmi dobrý", "Dobrý", "Před rekonstrukcí", "V rekonstrukci", "Ve výstavbě", "Projekt", "Udržovaný", "Špatný", "K demolici"}
+_BUILDINGS = {"cihlova", "panelova", "drevena", "kamenna", "skeletova", "montovana", "smisena", "ostatni"}
+_EQUIPPED = {"vybaveny", "castecne", "nevybaveny"}
+_TRI = {"s", "bez"}
+_KM_PER_MIN = {"walk": 0.08, "bike": 0.2, "transit": 0.25, "drive": 0.4}  # straight-line km per minute, door to door
+_CATALOG_SORTS = {"newest", "oldest", "price_asc", "price_desc", "area_desc", "area_asc", "discount_desc"}
 
 
 def safe_path(raw: Any) -> str:
@@ -150,8 +161,8 @@ class ChatTools:
         )
         return await self._listings_with_commute(ctx, data, wanted, commute_point_id, max_commute_minutes, commute_mode)
 
-    async def get_listing(self, ctx: ToolContext, listing_url: str) -> dict[str, Any]:
-        """Detail jednoho inzerátu včetně uživatelovy poznámky a stavu (uložený, skrytý). listing_url je přesně pole url z výsledku search_listings nebo new_listings."""
+    async def get_listing(self, ctx: ToolContext, listing_url: str, full_description: bool = False) -> dict[str, Any]:
+        """Detail jednoho inzerátu včetně uživatelovy poznámky, stavu (uložený, skrytý), historie ceny a počtu fotek. Popis je zkrácený, celý (až 3000 znaků) vrátí full_description true. listing_url je přesně pole url z výsledku search_listings nebo new_listings."""
         params = parse_qs(urlparse(listing_url or "").query)
         lookup: dict[str, str] = {}
         if params.get("listing_key"):
@@ -167,7 +178,16 @@ class ChatTools:
         out["_cards"] = [self._card(item)]
         description = str(item.get("description") or "").strip()
         if description:
-            out["description"] = description[:MAX_DESCRIPTION]
+            out["description"] = description[: (3000 if full_description else MAX_DESCRIPTION)]
+        photos = item.get("photos")
+        if isinstance(photos, list):
+            out["photo_count"] = len(photos)
+        history = item.get("price_history")
+        if isinstance(history, list) and history:
+            out["price_history"] = [
+                {k: point.get(k) for k in ("date", "seen_at", "price_czk", "price") if isinstance(point, dict) and point.get(k) is not None}
+                for point in history[-8:]
+            ]
         source = str(item.get("url") or "")
         if source:
             mine = await asyncio.to_thread(ctx.ustore.get_listing_user, source)
@@ -226,7 +246,7 @@ class ChatTools:
         return self._listings({"items": items, "total": len(items)})
 
     async def convert_monitor(self, ctx: ToolContext, monitor_id: str) -> dict[str, Any]:
-        """Převede hledání jednoho hlídání na jiný portál (např. Sreality na Bezrealitky). Jen navrhne adresu, nic nevytváří."""
+        """Převede hledání jednoho hlídání na jiný portál (např. Sreality na Bezrealitky). Jen navrhne adresu, nic nevytváří; hlídání pak založíš nástrojem create_monitor_from_url."""
         from app.filter_bridge import convert_search_url
 
         monitor = await asyncio.to_thread(ctx.ustore.get_monitor, str(monitor_id))
@@ -320,10 +340,38 @@ class ChatTools:
         )
 
     async def update_monitor(
-        self, ctx: ToolContext, monitor_id: str, name: str = "", enabled: bool | None = None
+        self,
+        ctx: ToolContext,
+        monitor_id: str,
+        name: str = "",
+        enabled: bool | None = None,
+        portal: str = "",
+        locality: str = "",
+        offer_type: str = "",
+        disposition: list[str] | None = None,
+        max_price: int | None = None,
+        min_price: int | None = None,
+        min_area: int | None = None,
+        max_area: int | None = None,
     ) -> dict[str, Any]:
-        """Navrhne přejmenování nebo zapnutí/vypnutí hlídání (monitor_id z list_my_monitors). Uživatel musí potvrdit."""
-        return await self._propose(ctx, "update_monitor", {"monitor_id": monitor_id, "name": name, "enabled": enabled})
+        """Navrhne úpravu hlídání (monitor_id z list_my_monitors): přejmenování, zapnutí/vypnutí, portál (all nebo jeden portál, např. sreality) nebo změnu filtrů. Při změně filtrů pošli VŠECHNY filtry hlídání znovu (locality a offer_type povinně, nahradí původní nastavení; původní hodnoty zjisti z list_my_monitors). Uživatel musí potvrdit."""
+        return await self._propose(
+            ctx,
+            "update_monitor",
+            {
+                "monitor_id": monitor_id,
+                "name": name,
+                "enabled": enabled,
+                "portal": portal,
+                "locality": locality,
+                "offer_type": offer_type,
+                "disposition": disposition or [],
+                "price_to": max_price,
+                "price_from": min_price,
+                "area_from": min_area,
+                "area_to": max_area,
+            },
+        )
 
     async def delete_monitor(self, ctx: ToolContext, monitor_id: str) -> dict[str, Any]:
         """Navrhne smazání hlídání (monitor_id z list_my_monitors). Uživatel musí potvrdit."""
@@ -332,6 +380,30 @@ class ChatTools:
     async def set_listing_status(self, ctx: ToolContext, listing_url: str, status: str) -> dict[str, Any]:
         """Navrhne uložení inzerátu mezi oblíbené (saved), skrytí (hidden) nebo vrácení (none). listing_url je pole source_url inzerátu. Uživatel musí potvrdit."""
         return await self._propose(ctx, "set_listing_status", {"listing_url": listing_url, "status": status})
+
+    async def set_listings_status(self, ctx: ToolContext, listing_urls: list[str], status: str) -> dict[str, Any]:
+        """Navrhne hromadně uložit do oblíbených (saved), skrýt (hidden) nebo vrátit (none) až 20 inzerátů najednou, jedno potvrzení. listing_urls jsou pole source_url. Uživatel musí potvrdit."""
+        return await self._propose(ctx, "set_listings_status", {"listing_urls": listing_urls, "status": status})
+
+    async def create_monitor_from_url(self, ctx: ToolContext, search_url: str, name: str = "", portal: str = "all") -> dict[str, Any]:
+        """Navrhne nové hlídání z hotové adresy hledání na portálu (např. z convert_monitor nebo od uživatele). portal je all nebo jeden portál. Uživatel musí potvrdit."""
+        return await self._propose(ctx, "create_monitor_from_url", {"search_url": search_url, "name": name, "portal": portal})
+
+    async def update_watch_prefs(
+        self,
+        ctx: ToolContext,
+        disposition: list[str] | None = None,
+        min_price: int | None = None,
+        max_price: int | None = None,
+        min_area: int | None = None,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Navrhne změnu výchozích preferencí hledání (dispozice, cena, plocha), které se předvyplní v nabídce. clear true je smaže. Uživatel musí potvrdit."""
+        return await self._propose(
+            ctx,
+            "update_watch_prefs",
+            {"sizes": disposition or [], "price_from": min_price, "price_to": max_price, "area_from": min_area, "clear": clear},
+        )
 
     async def set_listing_note(self, ctx: ToolContext, listing_url: str, note: str) -> dict[str, Any]:
         """Navrhne uložení poznámky k inzerátu (prázdná poznámka ji smaže). listing_url je pole source_url inzerátu. Uživatel musí potvrdit."""
@@ -395,11 +467,237 @@ class ChatTools:
         """Navrhne odpojení Discordu od účtu. Uživatel musí potvrdit."""
         return await self._propose(ctx, "unlink_discord", {})
 
+    # ---- READ: notes and side-by-side comparison ------------------------------------------------------------------
+
+    async def get_overview(self, ctx: ToolContext) -> dict[str, Any]:
+        """Přehled účtu jako na stránce Přehled: tarif, kolik hlídání je zapnutých a pro každé počet zásahů celkem a nových dnes."""
+        monitors = await asyncio.to_thread(ctx.ustore.list_monitors)
+
+        def stats() -> list[dict[str, Any]]:
+            out = []
+            for m in monitors:
+                mid = str(m.get("id"))
+                out.append(
+                    {
+                        "id": mid,
+                        "name": str(m.get("name") or "")[:80],
+                        "enabled": bool(m.get("enabled")),
+                        "hits_total": ctx.ustore.count(mid),
+                        "hits_today": ctx.ustore.new_today_count(mid),
+                    }
+                )
+            return out
+
+        plan = await self.get_my_plan(ctx)
+        return {"plan": plan.get("label"), "watch_limit": plan.get("watch_limit"), "monitors": await asyncio.to_thread(stats)}
+
+    async def list_my_notes(self, ctx: ToolContext, limit: int = 10) -> dict[str, Any]:
+        """Poznámky, které si uživatel napsal k inzerátům (nejnovější první): název inzerátu, text poznámky a stav (uložený/skrytý)."""
+        rows = await asyncio.to_thread(ctx.ustore.listing_notes, min(max(int(limit or 10), 1), MAX_LISTINGS))
+        out = []
+        for row in rows:
+            item = await self._svc.catalog["item"](url=row["url"]) if row.get("url") else None
+            out.append(
+                {
+                    "title": str((item or {}).get("name") or "")[:120] or row["url"][:100],
+                    "locality": str((item or {}).get("locality") or "")[:80],
+                    "note": str(row.get("note") or "")[:MAX_NOTE],
+                    "status": row.get("status") or "",
+                    "source_url": row["url"],
+                }
+            )
+        return {"count": len(out), "items": out}
+
+    async def compare_listings(self, ctx: ToolContext, listing_urls: list[str]) -> dict[str, Any]:
+        """Porovná 2 až 3 inzeráty vedle sebe (cena, dispozice, plocha, cena za m², lokalita, poznámka uživatele). listing_urls jsou pole url nebo source_url z výsledků nebo z porovnání v UI."""
+        urls = [str(u).strip() for u in (listing_urls or []) if str(u).strip()][:3]
+        if len(urls) < 2:
+            raise ToolError("K porovnání jsou potřeba aspoň 2 inzeráty.")
+        rows: list[dict[str, Any]] = []
+        cards: list[dict[str, Any]] = []
+        for url in urls:
+            params = parse_qs(urlparse(url).query)
+            lookup = (
+                {"listing_key": params["listing_key"][0]}
+                if params.get("listing_key")
+                else {"id": params["id"][0]}
+                if params.get("id")
+                else {"url": params.get("url", [url])[0]}
+            )
+            try:
+                item = await self._svc.catalog["item"](**lookup)
+            except Exception:
+                rows.append({"url": url, "error": "Inzerát se nepodařilo načíst."})
+                continue
+            row = self._listing(item)
+            try:
+                if item.get("price_czk") and item.get("area_m2"):
+                    row["price_per_m2"] = round(int(item["price_czk"]) / float(item["area_m2"]))
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+            for key in ("floor", "condition", "equipped", "building", "ownership", "balcony", "terrace", "parking", "lift"):
+                if item.get(key) not in (None, "", False):
+                    row[key] = item[key]
+            source = str(item.get("url") or "")
+            if source:
+                mine = await asyncio.to_thread(ctx.ustore.get_listing_user, source)
+                if mine.get("note"):
+                    row["my_note"] = str(mine["note"])[:MAX_NOTE]
+            rows.append(row)
+            cards.append(self._card(item))
+        return {"items": rows, "_cards": cards}
+
     # ---- UI ------------------------------------------------------------------------------------------------------
 
     async def navigate(self, ctx: ToolContext, path: str) -> dict[str, Any]:
         """Přesune uživatele na stránku Realitify (relativní cesta, např. /monitory, /nastaveni, /prehled). Použij i pro věci, které sama nesmíš dělat (předplatné, platby, heslo, e-mail, smazání účtu, API klíče, profil a telefon): pošli uživatele na /nastaveni."""
         return {"ok": True, "_events": [{"type": "navigate", "path": safe_path(path)}]}
+
+    async def set_catalog_filters(
+        self,
+        ctx: ToolContext,
+        locality: str = "",
+        offer_type: str = "",
+        estate: str = "",
+        disposition: list[str] | None = None,
+        max_price: int | None = None,
+        min_price: int | None = None,
+        min_area: int | None = None,
+        max_area: int | None = None,
+        portal: str = "",
+        amenities: list[str] | None = None,
+        sort: str = "",
+        status: str = "",
+        discounted: bool | None = None,
+        ownership: list[str] | None = None,
+        condition: list[str] | None = None,
+        building: list[str] | None = None,
+        equipped: list[str] | None = None,
+        roommate: str = "",
+        pets: str = "",
+        short_term: str = "",
+        monitor_id: str = "",
+        hits: str = "",
+        around_address: str = "",
+        radius_km: float | None = None,
+        max_commute_minutes: int | None = None,
+        commute_mode: str = "transit",
+        keep_current: bool = False,
+    ) -> dict[str, Any]:
+        """Nastaví filtry v nabídce (/nabidka) přímo v UI uživatele. locality: město nebo čtvrť (hledá se v poli lokality), offer_type pronajem/prodej/drazba, estate byt/dum/pozemek, disposition např. ["2+kk"], ceny v Kč, plocha v m², portal (sreality, idnes, bazos, ceskereality, bezrealitky, annonce, mmreality, ulovdomov, remax, realitycz), amenities (balcony, loggia, terrace, cellar, lift, parking, garage, garden, barrier_free), sort (newest, oldest, price_asc, price_desc, area_desc, area_asc, discount_desc), status (prázdné = aktivní, saved = uložené, hidden = skryté, all = vše), discounted jen zlevněné. Další filtry: ownership (Osobní, Družstevní, Obecní, S.r.o., Podílové, Jiné), condition (Novostavba, Po rekonstrukci, Velmi dobrý, Dobrý, Před rekonstrukcí, V rekonstrukci, Ve výstavbě, Projekt, Udržovaný, Špatný, K demolici), building (cihlova, panelova, drevena, kamenna, skeletova, montovana, smisena, ostatni), equipped (vybaveny, castecne, nevybaveny), roommate / pets / short_term (s = jen kde to víme, bez = skrýt), monitor_id (jen nabídky jednoho hlídání z list_my_monitors), hits (today = zásahy z dneška, notified = všechny zásahy z hlídání), around_address + radius_km (nabídky v okruhu kolem adresy). Dojezd: místo radius_km můžeš dát max_commute_minutes s commute_mode (transit = MHD, walk, bike, drive); server z toho udělá přibližný okruh kolem adresy (MHD 20 min je asi 5 km vzdušnou čarou), takže jde o odhad, ne přesný dojezd. Pro „centrum“ použij around_address například „Václavské náměstí, Praha“. Ostatní dosavadní filtry se vymažou, pokud keep_current není true. Nic se nemění v datech, jen se zobrazí výsledky."""
+        params: dict[str, str] = {}
+        offer = offer_type.strip().casefold()
+        if offer:
+            if offer not in {"pronajem", "prodej", "drazba"}:
+                raise ToolError("offer_type musí být pronajem, prodej nebo drazba.")
+            params["offer"] = offer
+        if estate.strip():
+            if estate.strip().casefold() not in {"byt", "dum", "pozemek"}:
+                raise ToolError("estate musí být byt, dum nebo pozemek.")
+            params["estate"] = estate.strip().casefold()
+        if locality.strip():
+            params["q"] = locality.strip()[:80]
+        sizes = [normalize_disposition(str(d)) for d in (disposition or []) if str(d).strip()]
+        if any(sizes):
+            params["disposition"] = ",".join(x for x in sizes if x)
+        for key, value in (("price_to", max_price), ("price_from", min_price), ("area_from", min_area), ("area_to", max_area)):
+            if value not in (None, "", 0):
+                params[key] = str(int(value))
+        if portal.strip():
+            if portal.strip().casefold() not in _CATALOG_PORTALS:
+                raise ToolError("Neznámý portál.")
+            params["portal"] = portal.strip().casefold()
+        flags = [f.strip() for f in (amenities or []) if f.strip()]
+        if flags:
+            if any(f not in _AMENITY_FLAGS for f in flags):
+                raise ToolError("Neznámé příslušenství. Povolené: " + ", ".join(sorted(_AMENITY_FLAGS)))
+            params["amenities"] = ",".join(flags)
+        if sort.strip():
+            if sort.strip() not in _CATALOG_SORTS:
+                raise ToolError("Neznámé řazení.")
+            params["sort"] = sort.strip()
+        if status.strip():
+            if status.strip() not in {"saved", "hidden", "all"}:
+                raise ToolError("status musí být saved, hidden nebo all (prázdné = aktivní).")
+            params["status"] = status.strip()
+        if discounted:
+            params["discounted"] = "1"
+        for key, values, allowed in (
+            ("ownership", ownership, _OWNERSHIP),
+            ("condition", condition, _CONDITIONS),
+            ("building", building, _BUILDINGS),
+            ("equipped", equipped, _EQUIPPED),
+        ):
+            picked = [v.strip() for v in (values or []) if v.strip()]
+            if picked:
+                if any(v not in allowed for v in picked):
+                    raise ToolError(f"Neplatná hodnota pro {key}. Povolené: " + ", ".join(sorted(allowed)))
+                params[key] = ",".join(picked)
+        for key, value in (("roommate", roommate), ("pets", pets), ("short_term", short_term)):
+            if value.strip():
+                if value.strip() not in _TRI:
+                    raise ToolError(f"{key} musí být s nebo bez.")
+                params[key] = value.strip()
+        if monitor_id.strip():
+            monitor = await asyncio.to_thread(ctx.ustore.get_monitor, monitor_id.strip())
+            if not monitor:
+                raise ToolError("Hlídání s tímto id neexistuje. Zavolej list_my_monitors.")
+            params["monitor_id"] = str(monitor["id"])
+        if hits.strip():
+            if hits.strip() not in {"today", "notified"}:
+                raise ToolError("hits musí být today nebo notified.")
+            params["hits"] = hits.strip()
+        if around_address.strip():
+            found = (await self._svc.geocode(q=around_address.strip())).get("items") or []
+            if not found:
+                raise ToolError(f"Adresu „{around_address.strip()}“ se nepodařilo najít.")
+            if radius_km is None and max_commute_minutes:
+                if commute_mode not in _KM_PER_MIN:
+                    raise ToolError("commute_mode musí být transit, walk, bike nebo drive.")
+                radius_km = round(int(max_commute_minutes) * _KM_PER_MIN[commute_mode], 1)
+            km = float(radius_km or 2)
+            if not 0.2 <= km <= 50:
+                raise ToolError("radius_km musí být mezi 0,2 a 50.")
+            params["lat"], params["lon"], params["radius_m"] = str(found[0]["lat"]), str(found[0]["lon"]), str(int(km * 1000))
+        return {
+            "ok": True,
+            "applied": params,
+            "note": "Okruh je jen přibližný odhad dojezdu (vzdušná čára), uživateli to řekni." if "radius_m" in params else None,
+            "_events": [{"type": "ui", "op": "catalog_filters", "params": params, "keep_current": bool(keep_current)}],
+        }
+
+    async def set_catalog_view(self, ctx: ToolContext, mode: str) -> dict[str, Any]:
+        """Přepne zobrazení nabídky: list (seznam s mapou), grid (karty) nebo map (jen mapa)."""
+        mode = mode.strip().casefold()
+        if mode not in {"list", "grid", "map"}:
+            raise ToolError("mode musí být list, grid nebo map.")
+        return {"ok": True, "_events": [{"type": "ui", "op": "view", "mode": mode}]}
+
+    async def clear_catalog_filters(self, ctx: ToolContext) -> dict[str, Any]:
+        """Vymaže všechny filtry v nabídce (/nabidka) a vrátí výchozí zobrazení."""
+        return {"ok": True, "_events": [{"type": "ui", "op": "catalog_filters", "params": {}, "keep_current": False}]}
+
+    async def catalog_compare(self, ctx: ToolContext, action: str, listing_urls: list[str] | None = None) -> dict[str, Any]:
+        """Ovládá porovnávání inzerátů v UI (max 3): action add (přidat listing_urls), remove (odebrat), clear (vyprázdnit) nebo open (otevřít porovnání). listing_urls jsou pole source_url z karet nebo get_listing."""
+        action = action.strip().casefold()
+        if action not in {"add", "remove", "clear", "open"}:
+            raise ToolError("action musí být add, remove, clear nebo open.")
+        urls = [str(u).strip() for u in (listing_urls or []) if str(u).strip()][:3]
+        if action in {"add", "remove"} and not urls:
+            raise ToolError("Chybí listing_urls.")
+        return {"ok": True, "_events": [{"type": "ui", "op": "compare", "action": action, "urls": urls}]}
+
+    async def open_listing(self, ctx: ToolContext, listing_url: str) -> dict[str, Any]:
+        """Otevře detail inzerátu v UI uživatele. listing_url je pole url z výsledků nebo get_listing."""
+        params = parse_qs(urlparse(listing_url or "").query)
+        target = {
+            "listing_key": (params.get("listing_key") or [""])[0],
+            "id": (params.get("id") or [""])[0],
+            "url": (params.get("url") or [listing_url if str(listing_url).startswith("http") else ""])[0],
+        }
+        if not any(target.values()):
+            raise ToolError("Chybí listing_url.")
+        return {"ok": True, "_events": [{"type": "ui", "op": "open_listing", **target}]}
 
     # ---- internals -----------------------------------------------------------------------------------------------
 
@@ -539,9 +837,12 @@ READ_TOOLS = (
     "get_settings",
     "get_discord_status",
     "get_whatsapp_status",
+    "list_my_notes",
+    "compare_listings",
+    "get_overview",
 )
 WRITE_TOOLS = tuple(actions.WRITE_SPECS)
-UI_TOOLS = ("navigate",)
+UI_TOOLS = ("navigate", "set_catalog_filters", "clear_catalog_filters", "set_catalog_view", "catalog_compare", "open_listing")
 TOOL_NAMES = READ_TOOLS + WRITE_TOOLS + UI_TOOLS
 
 

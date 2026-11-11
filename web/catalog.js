@@ -359,7 +359,7 @@
     if (kicker) {
       if (selected.hits === "today") kicker.textContent = "Zásahy z dneška · můžeš vybrat monitor a přidat další filtry";
       else if (selected.hits === "notified") kicker.textContent = "Všechny zásahy z monitorů · můžeš filtrovat dál";
-      else kicker.textContent = document.body.classList.contains("guest") ? "Aktuální nabídky ze všech portálů" : "Uložené inzeráty z hlídaných hledání";
+      else kicker.textContent = document.body.classList.contains("guest") ? "Aktuální nabídky ze všech portálů" : "";
     }
   }
 
@@ -796,6 +796,87 @@
     return Date.now() - new Date(item.first_seen).getTime() < 3 * 24 * 60 * 60 * 1000;
   }
 
+  // Fotka se nenačetla (mrtvý odkaz, hotlink blok) -> ukaž psa místo rozbité ikony.
+  const PHOTO_SEL = ".offer-photo, .detail-gallery, .compare-col, .listing";
+  document.addEventListener("error", (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || img.classList.contains("offer-portal")) return;
+    const box = img.closest(PHOTO_SEL);
+    if (!box) return;
+    // Hromadné načítání karet občas shodí první fotku (limit CDN) -> 1x zopakovat, pak zkusit další fotku z galerie.
+    const tries = Number(img.dataset.tries || 0);
+    if (tries < 3) {
+      img.dataset.tries = String(tries + 1);
+      const failed = img.getAttribute("src") || "";
+      let list = [];
+      try { list = JSON.parse(box.dataset.photos || "[]"); } catch (_) { list = []; }
+      img.referrerPolicy = "no-referrer";
+      if (tries === 0 || list.length < 2) {
+        setTimeout(() => { if (img.isConnected) img.src = failed; }, 700);
+      } else {
+        const idx = Math.max(0, list.indexOf(failed));
+        const next = list[(idx + tries) % list.length];
+        setTimeout(() => { if (img.isConnected && next) img.src = next; }, 200);
+      }
+      return;
+    }
+    // Fotky ze seznamu mohou být zastaralé (portál je přečísloval) -> detail má čerstvé, zkusit ty.
+    const card = box.closest("[data-open-offer]");
+    if (card && box.classList.contains("offer-photo") && !box.dataset.refetched && typeof fetchCatalogItem === "function") {
+      box.dataset.refetched = "1";
+      const [monitorId, ...rest] = String(card.dataset.openOffer || "").split(":");
+      fetchCatalogItem({ monitor_id: monitorId, id: rest.join(":"), listing_key: "", url: card.dataset.url || "" })
+        .then((response) => response.json())
+        .then((fresh) => {
+          const photos = Array.isArray(fresh?.photos) ? fresh.photos.filter(Boolean) : [];
+          if (!photos.length || !img.isConnected) throw new Error("no photos");
+          box.dataset.photos = JSON.stringify(photos);
+          img.dataset.tries = "0";
+          img.src = photos[0];
+          box.dataset.index = "0";
+          const count = box.querySelector(".offer-count");
+          if (count) count.textContent = `1 / ${photos.length}`;
+        })
+        .catch(() => box.classList.add("photo-failed"));
+      return;
+    }
+    box.classList.add("photo-failed");
+  }, true);
+  document.addEventListener("load", (event) => {
+    const img = event.target;
+    if (!(img instanceof HTMLImageElement) || img.classList.contains("offer-portal")) return;
+    img.dataset.tries = "0";
+    img.closest(PHOTO_SEL)?.classList.remove("photo-failed");
+  }, true);
+
+  function valueBadge(item) {
+    const pct = Number(item.value_pct);
+    if (!Number.isFinite(pct) || pct < 3) return "";
+    const tip = `Cena za m² je o ${Math.round(pct)} % nižší než medián ${Number(item.value_median_m2 || 0).toLocaleString("cs-CZ")} Kč/m² u ${item.value_comps} srovnatelných nabídek v okolí`;
+    return `<span class="value-badge${pct >= 15 ? " is-top" : ""}" title="${escapeHtml(tip)}">${Math.round(pct)} % pod okolím</span>`;
+  }
+
+  function ageLabel(item) {
+    if (!item.first_seen) return "";
+    const ts = new Date(item.first_seen).getTime();
+    if (!Number.isFinite(ts)) return "";
+    const mins = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+    if (mins < 60) return `${Math.max(1, mins)} min`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} h`;
+    const days = Math.floor(hours / 24);
+    if (days < 31) return `${days} ${days === 1 ? "den" : days < 5 ? "dny" : "dní"}`;
+    const months = Math.floor(days / 30);
+    if (months < 12) return `${months} měs`;
+    return `${Math.floor(days / 365)} r`;
+  }
+
+  function ageBadge(item) {
+    const label = ageLabel(item);
+    if (!label) return "";
+    return `<span class="offer-age${isFresh(item) ? " is-new" : ""}" title="Stáří inzerátu"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>${label}</span>`;
+  }
+
   function priceBlock(item) {
     const extras = item.extras || {};
     const mainRaw = item.price_czk != null ? formatKc(item.price_czk) : (item.price_label || "").replace(/\/měsíc.*/, "").replace(/\s*\(.*/, "").trim();
@@ -825,7 +906,6 @@
       .join("");
     const monitors = (item.monitors || []).map((row) => row.name).filter(Boolean);
     const badges = [
-      isFresh(item) ? `<span class="offer-badge">Nový</span>` : "",
       item.discount_czk ? `<span class="offer-badge offer-badge-sale">−${formatKc(item.discount_czk)}</span>` : "",
       item.gone ? `<span class="offer-badge offer-badge-gone">Prodáno</span>` : "",
       item.status === "saved" ? `<span class="offer-badge">Uložené</span>` : "",
@@ -847,6 +927,8 @@
                    <p class="offer-count">1 / ${photos.length}</p>`
                 : ""
           }
+          ${ageBadge(item)}
+          ${valueBadge(item)}
           ${portalIcons(item)}
         </div>
         <div class="offer-body">
@@ -870,9 +952,9 @@
           <div class="offer-foot">
             ${priceBlock(item)}
             <div class="offer-tools">
-              <button type="button" class="offer-tool${item.status === "saved" ? " on" : ""}" data-save-url="${escapeHtml(item.url || "")}">${icon("bookmark")}<span>Uložit</span></button>
-              <button type="button" class="offer-tool" data-hide-url="${escapeHtml(item.url || "")}">${icon("eyeOff")}<span>Skrýt</span></button>
-              <button type="button" class="offer-tool${compareUrls.includes(item.url) ? " on" : ""}" data-compare-url="${escapeHtml(item.url || "")}">${icon("columns")}<span>Porovnat</span></button>
+              <button type="button" class="offer-tool${item.status === "saved" ? " on" : ""}" data-save-url="${escapeHtml(item.url || "")}" title="Uložit" aria-label="Uložit">${icon("bookmark")}<span>Uložit</span></button>
+              <button type="button" class="offer-tool" data-hide-url="${escapeHtml(item.url || "")}" title="Skrýt" aria-label="Skrýt">${icon("eyeOff")}<span>Skrýt</span></button>
+              <button type="button" class="offer-tool${compareUrls.includes(item.url) ? " on" : ""}" data-compare-url="${escapeHtml(item.url || "")}" title="Porovnat" aria-label="Porovnat">${icon("columns")}<span>Porovnat</span></button>
             </div>
           </div>
         </div>
@@ -896,6 +978,128 @@
       short_term: "krátkodobý",
       discounted: "zlevněné",
     })[flag] || flag;
+  }
+
+  const FACT_ICONS = {
+    ruler: '<path d="M4 15.5 15.5 4 20 8.5 8.5 20z"/><path d="M8 12l2 2M11 9l2 2M14 6l2 2"/>',
+    layout: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/>',
+    floor: '<rect x="6" y="3.5" width="12" height="17" rx="1.5"/><path d="M9.5 8h1M13.5 8h1M9.5 12h1M13.5 12h1M10.5 20.5v-3h3v3"/>',
+    wrench: '<path d="M14.5 6.2a4 4 0 0 0 4.9 5l-1.7-1.6-2.4.4-.4-2.4L16.600 5.900a4 4 0 0 0-2.100.300z"/><path d="M14 11 5 20l-1-1 9-9"/>',
+    landmark: '<path d="M4 9.5 12 4l8 5.500M5.500 10v8M9.500 10v8M14.500 10v8M18.500 10v8M3.500 20.500h17"/>',
+    key: '<circle cx="8" cy="15" r="3.6"/><path d="m10.6 12.4 8-8M16 7l2.4 2.4M13.4 9.6l1.8 1.8"/>',
+    sofa: '<path d="M6 11V8a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v3"/><path d="M4 12.500a1.500 1.500 0 0 1 3 0V15h10v-2.500a1.500 1.500 0 0 1 3 0V18a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM7 19v1.500M17 19v1.500"/>',
+    zap: '<path d="M13 3.500 5.500 13H12l-1 7.500L18.500 11H12z"/>',
+    calendar: '<rect x="4" y="5.500" width="16" height="14.500" rx="2"/><path d="M4 10h16M8.500 3.500v4M15.500 3.500v4"/>',
+    clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.500V12l3 2"/>',
+    eye: '<path d="M3 12s3.500-6 9-6 9 6 9 6-3.500 6-9 6-9-6-9-6z"/><circle cx="12" cy="12" r="2.400"/>',
+    wallet: '<rect x="3.500" y="6" width="17" height="13" rx="2.500"/><path d="M3.500 10h17M15.500 14.500h2"/>',
+    tag: '<path d="M4 12.500V5a1 1 0 0 1 1-1h7.500l7.500 7.500-8.500 8.500z"/><circle cx="8.500" cy="8.500" r="1.200"/>',
+    lift: '<rect x="5" y="3.500" width="14" height="17" rx="2"/><path d="m9 10 3-3 3 3M9 14l3 3 3-3"/>',
+    car: '<path d="M5 16V12l1.800-4.500A1.500 1.500 0 0 1 8.200 6.500h7.600a1.500 1.500 0 0 1 1.400 1L19 12v4M5 12h14M5 16v2.500M19 16v2.500M5 16h14"/><circle cx="8.500" cy="14" r=".6"/><circle cx="15.500" cy="14" r=".6"/>',
+    paw: '<circle cx="7" cy="10" r="1.800"/><circle cx="11" cy="6.600" r="1.800"/><circle cx="16" cy="7.400" r="1.800"/><circle cx="18.200" cy="12" r="1.700"/><path d="M12 12.500c-3 0-5 2.200-5 4.200 0 1.600 1.600 2.300 3 2 1.200-.3 1.600-.5 2-.5s.8.200 2 .5c1.400.3 3-.4 3-2 0-2-2-4.200-5-4.200z"/>',
+    tree: '<path d="M12 21v-6M12 15c-3.500 0-6-2.200-6-5 0-2 1.400-3.500 3.200-3.800C9.800 4.600 10.800 3.500 12 3.500s2.200 1.100 2.800 2.700C16.600 6.500 18 8 18 10c0 2.800-2.500 5-6 5z"/>',
+    box: '<path d="M4 8 12 4l8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>',
+    sun: '<circle cx="12" cy="12" r="3.600"/><path d="M12 3.500v2M12 18.500v2M3.500 12h2M18.500 12h2M6 6l1.400 1.400M16.600 16.600 18 18M6 18l1.400-1.400M16.600 7.400 18 6"/>',
+    access: '<circle cx="12" cy="5" r="1.600"/><path d="M12 8.500v5h4l2 4.500M12 11h4M10 14a4 4 0 1 0 5 5"/>',
+    users: '<circle cx="9" cy="8.500" r="3"/><path d="M3.500 19a5.500 5.500 0 0 1 11 0M16 5.800a3 3 0 0 1 0 5.400M17.500 14a5 5 0 0 1 3 5"/>',
+    hash: '<path d="M9 4 7.500 20M16.500 4 15 20M4.500 9h15.500M4 15h15.500"/>',
+    info: '<circle cx="12" cy="12" r="8.500"/><path d="M12 11v5M12 8h.01"/>',
+  };
+
+  function factIcon(name) {
+    return `<svg class="fact-ico" viewBox="0 0 24 24" aria-hidden="true">${FACT_ICONS[name] || FACT_ICONS.info}</svg>`;
+  }
+
+  const FACT_RULES = [
+    [/^(užitná\s+)?plocha/i, "ruler"],
+    [/dispozic/i, "layout"],
+    [/podlaží budovy|počet podlaží/i, "floor"],
+    [/patro|podlaží/i, "floor"],
+    [/stav/i, "wrench"],
+    [/konstrukc/i, "landmark"],
+    [/vlastnictv/i, "key"],
+    [/vybaven/i, "sofa"],
+    [/energet|penb/i, "zap"],
+    [/přidáno|volné od|dostupn/i, "calendar"],
+    [/poplatk|kauce|náklady|energie|cena/i, "wallet"],
+    [/zobrazen/i, "eye"],
+    [/výtah/i, "lift"],
+    [/parkov|garáž/i, "car"],
+    [/mazlí/i, "paw"],
+    [/zahrad/i, "tree"],
+    [/sklep/i, "box"],
+    [/balkon|lodžie|terasa/i, "sun"],
+    [/bezbariér/i, "access"],
+    [/spolubydlen/i, "users"],
+    [/krátkodob/i, "clock"],
+    [/zakázk|číslo/i, "hash"],
+    [/typ|nabídka|druh/i, "tag"],
+  ];
+
+  function factIconFor(label) {
+    for (const [re, name] of FACT_RULES) if (re.test(label)) return name;
+    return "info";
+  }
+
+  function fmtDate(value) {
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric", year: "numeric" });
+  }
+
+  function fxNote(item) {
+    const fx = item.extras?.fx;
+    if (!fx || !fx.amount) return "";
+    const sym = { EUR: "€", USD: "$", GBP: "£", PLN: "zł" }[fx.currency] || fx.currency;
+    const orig = `${Number(fx.amount).toLocaleString("cs-CZ")} ${sym}`;
+    return `<p class="detail-fx">Přepočteno z ${escapeHtml(fx.currency)} · původně <b>${escapeHtml(orig)}</b></p>`;
+  }
+
+  function detailFacts(item) {
+    const extras = item.extras || {};
+    const specs = (extras.specs || []).filter((row) => row && row.label && row.value);
+    const facts = [];
+    const seen = new Set();
+    const add = (label, value, iconName) => {
+      const key = String(label).toLowerCase().replace(/^vybaven(í|ost)$/, "vybavenost");
+      if (/^undefined$|^null$/i.test(String(value).trim())) return;
+      if (value == null || value === "" || seen.has(key)) return;
+      seen.add(key);
+      facts.push({ label, value: String(value), icon: iconName || factIconFor(label) });
+    };
+    const spec = (re) => specs.find((row) => re.test(row.label));
+    const typ = [extras.offer, extras.estate].filter(Boolean).join(" · ");
+    add("Plocha", item.area_m2 ? `${item.area_m2} m²` : "", "ruler");
+    add("Dispozice", item.disposition, "layout");
+    add("Typ", typ, "tag");
+    const floor = spec(/^podlaží$|^patro$/i);
+    if (floor) add("Patro", floor.value, "floor");
+    for (const [label, re] of [["Stav", /^stav( bytu)?$/i], ["Konstrukce", /^konstrukce/i], ["Vlastnictví", /^vlastnictv/i], ["Vybavenost", /^vybaven/i], ["Energetická třída", /energet|penb/i]]) {
+      const row = spec(re);
+      if (row) add(label, row.value);
+    }
+    if (extras.charges_czk) add("Poplatky", formatKc(extras.charges_czk), "wallet");
+    const free = spec(/volné od/i);
+    if (free) add("Volné od", free.value, "calendar");
+    if (item.first_seen) add("Přidáno", fmtDate(item.first_seen), "calendar");
+    if (item.views != null) add("Zobrazení", item.views, "eye");
+    for (const row of specs) {
+      if (/^(cena|číslo zakázky|užitná plocha)$/i.test(row.label)) continue;
+      add(row.label, row.value);
+    }
+    for (const flag of item.flags || extras.flags || []) {
+      if (flag === "discounted") continue;
+      const label = flagLabel(flag);
+      add(label.charAt(0).toUpperCase() + label.slice(1), "ano", factIconFor(label));
+    }
+    return facts;
+  }
+
+  function factsHtml(item) {
+    const facts = detailFacts(item);
+    if (!facts.length) return "";
+    return `<div class="detail-facts">${facts
+      .map((f) => `<div class="fact">${factIcon(f.icon)}<span class="fact-label">${escapeHtml(f.label)}</span><strong class="fact-value">${escapeHtml(f.value)}</strong></div>`)
+      .join("")}</div>`;
   }
 
   const PRO_FEATURES = [
@@ -1510,9 +1714,45 @@
       }
       openDetail(item.monitor_id, item.id, item);
     });
-    marker.on("mouseover", () => highlightCard(listingKey(item)));
-    marker.on("mouseout", () => clearCardHighlight());
+    // Mobile: no hover-driven scrolling; a direct tap on a price scrolls to its listing.
+    marker.on("mouseover", () => { if (!touchMap.matches) highlightCard(listingKey(item)); });
+    marker.on("mouseout", () => { if (!touchMap.matches) clearCardHighlight(); });
     return marker;
+  }
+
+  let pinRefreshTimer = 0;
+  let pinRefreshAbort = null;
+  let lastPinViewKey = "";
+
+  function schedulePinRefresh() {
+    window.clearTimeout(pinRefreshTimer);
+    pinRefreshTimer = window.setTimeout(async () => {
+      if (!catalogMap || catalogBusy) return;
+      const b = catalogMap.getBounds();
+      const key = [catalogMap.getZoom(), b.getSouth().toFixed(4), b.getNorth().toFixed(4), b.getWest().toFixed(4), b.getEast().toFixed(4)].join("|");
+      if (key === lastPinViewKey) return;
+      lastPinViewKey = key;
+      pinRefreshAbort?.abort();
+      const ac = new AbortController();
+      pinRefreshAbort = ac;
+      try {
+        const query = queryString({
+          limit: 1,
+          south: String(b.getSouth()),
+          north: String(b.getNorth()),
+          west: String(b.getWest()),
+          east: String(b.getEast()),
+        });
+        const response = await fetch(`/api/catalog/pins?${query}`, { signal: ac.signal });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (ac.signal.aborted || !catalogMap) return;
+        pinItems = uniqueOffers(data.items || []);
+        drawPinLayer();
+      } catch (_) {
+        /* superseded or offline — keep the pins we have */
+      }
+    }, 250);
   }
 
   function ensureMap() {
@@ -1537,7 +1777,12 @@
       drawPinLayer();
     });
     catalogMap.on("moveend", () => {
-      if (ignoreMapMove || drawingCircle || selectedPlaces.length || circleFilter) return;
+      if (ignoreMapMove || drawingCircle) return;
+      // A place / circle limits the list; only the pins follow the viewport (so zooming splits clusters).
+      if (selectedPlaces.length || circleFilter) {
+        if (!circleFilter && !selected.monitor) schedulePinRefresh();
+        return;
+      }
       window.clearTimeout(mapReloadTimer);
       mapReloadTimer = window.setTimeout(() => {
         const b = catalogMap.getBounds();
@@ -1559,12 +1804,14 @@
     return `${item.monitor_id}:${item.id}`;
   }
 
-  function highlightCard(key) {
+  const touchMap = window.matchMedia ? window.matchMedia("(hover: none), (max-width: 900px)") : { matches: false };
+
+  function highlightCard(key, { scroll = true } = {}) {
     listEl.querySelectorAll(".offer-card.is-hot").forEach((el) => el.classList.remove("is-hot"));
     const card = listEl.querySelector(`[data-open-offer="${CSS.escape(String(key))}"]`);
     if (!card) return;
     card.classList.add("is-hot");
-    card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (scroll) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   function clearCardHighlight() {
@@ -1728,10 +1975,11 @@
         catalogMap.setView([group.lat, group.lon], Math.min(catalogMap.getZoom() + 2, 16));
       });
       marker.on("mouseover", () => {
+        if (touchMap.matches) return; // mobile: grouping never scrolls the list
         const first = group.items.find((item) => listEl.querySelector(`[data-open-offer="${CSS.escape(listingKey(item))}"]`));
         if (first) highlightCard(listingKey(first));
       });
-      marker.on("mouseout", () => clearCardHighlight());
+      marker.on("mouseout", () => { if (!touchMap.matches) clearCardHighlight(); });
       catalogLayer.addLayer(marker);
       for (const item of group.items) clusterByKey.set(listingKey(item), { marker, item });
     }
@@ -1753,46 +2001,191 @@
     drawPinLayer();
   }
 
+  let priceChart = null;
+  let priceChartData = null;
+
+  function priceSeries(history) {
+    const pts = (history || [])
+      .map((row) => ({ t: new Date(row.seen_at).getTime(), p: Number(row.price_czk) }))
+      .filter((pt) => Number.isFinite(pt.t) && Number.isFinite(pt.p))
+      .sort((a, b) => a.t - b.t);
+    // Zachovat první, každou změnu a poslední záznam (kontroly bez změny jen zahušťují graf).
+    const out = [];
+    pts.forEach((pt, index) => {
+      const prev = out.length ? out[out.length - 1] : null;
+      if (!prev || prev.p !== pt.p || index === pts.length - 1) out.push(pt);
+    });
+    if (out.length === 1) out.push({ t: Math.max(Date.now(), out[0].t + 3600e3), p: out[0].p });
+    return out;
+  }
+
   function historyChart(history) {
     if (!history?.length) return `<p class="empty">Cena se začne ukládat při další kontrole monitoru.</p>`;
-    const prices = history.map((row) => Number(row.price_czk)).filter((n) => Number.isFinite(n));
-    if (!prices.length) return `<p class="empty">U této nabídky zatím není číselná cena.</p>`;
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
-    const span = Math.max(max - min, 1);
-    const w = 520;
-    const h = 120;
-    const coords = history.map((row, index) => {
-      const x = history.length === 1 ? w / 2 : (index / (history.length - 1)) * (w - 24) + 12;
-      const y = h - 18 - ((Number(row.price_czk) - min) / span) * (h - 36);
-      return { x, y, row };
-    });
-    const line = coords.map((pt) => `${pt.x},${pt.y}`).join(" ");
-    const dots = coords.map((pt) => `<circle cx="${pt.x}" cy="${pt.y}" r="4" fill="#163300" />`).join("");
-    const unique = new Set(prices);
-    const rows = [];
-    history.forEach((row, index) => {
-      const prev = index ? Number(history[index - 1].price_czk) : null;
-      const price = Number(row.price_czk);
-      const changed = prev != null && Number.isFinite(prev) && Number.isFinite(price) && prev !== price;
-      if (!changed && index !== 0 && index !== history.length - 1) return;
-      const delta = changed ? `<em class="${price < prev ? "down" : "up"}">${escapeHtml(formatKcDelta(price - prev))}</em>` : "";
-      rows.push(
-        `<li><span>${escapeHtml(formatTime(row.seen_at))}</span><strong>${escapeHtml(row.price_label || formatKc(price))}${delta}</strong></li>`
-      );
-    });
-    const note =
-      unique.size === 1
-        ? `<p class="price-note">Zatím bez změny · ${escapeHtml(history[0].price_label || formatKc(prices[0]))}</p>`
-        : `<p class="price-note">Nejnižší ${escapeHtml(formatKc(min))} · nejvyšší ${escapeHtml(formatKc(max))}</p>`;
+    const series = priceSeries(history);
+    if (!series.length) return `<p class="empty">U této nabídky zatím není číselná cena.</p>`;
+    priceChartData = series;
+    const first = series[0].p;
+    const last = series[series.length - 1].p;
+    const diff = last - first;
+    const pct = first ? (diff / first) * 100 : 0;
+    const dir = diff < 0 ? "down" : diff > 0 ? "up" : "flat";
+    const arrow = dir === "down" ? "▼" : dir === "up" ? "▲" : "●";
+    const pctText = `${Math.abs(pct) < 10 ? Math.abs(pct).toFixed(1).replace(".", ",") : Math.round(Math.abs(pct))} %`;
+    const head =
+      dir === "flat"
+        ? `<span class="ph-chip flat">${arrow} Cena beze změny</span><span class="ph-sub">od ${escapeHtml(new Date(series[0].t).toLocaleDateString("cs-CZ"))}</span>`
+        : `<span class="ph-chip ${dir}">${arrow} ${escapeHtml(formatKcDelta(diff))} (${diff < 0 ? "−" : "+"}${pctText})</span><span class="ph-sub">od první ceny ${escapeHtml(formatKc(first))}</span>`;
+    const changes = [];
+    for (let k = series.length - 1; k > 0; k--) {
+      const d = series[k].p - series[k - 1].p;
+      if (d) changes.push(`<li><span>${escapeHtml(formatTime(series[k].t))}</span><strong>${escapeHtml(formatKc(series[k].p))}<em class="${d < 0 ? "down" : "up"}">${d < 0 ? "▼" : "▲"} ${escapeHtml(formatKcDelta(d))}</em></strong></li>`);
+    }
     return `
-      <svg class="price-chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-        <polyline fill="none" stroke="#163300" stroke-width="3" points="${line}" />
-        ${dots}
-      </svg>
-      ${note}
-      <ul class="price-log">${rows.join("")}</ul>
+      <div class="price-history">
+        <div class="ph-head">${head}</div>
+        <div class="ph-canvas"><canvas id="price-chart-canvas" aria-label="Vývoj ceny"></canvas></div>
+        ${changes.length ? `<ul class="price-log">${changes.join("")}</ul>` : ""}
+      </div>
     `;
+  }
+
+  function loadChartJs() {
+    if (window.Chart) return Promise.resolve();
+    if (window.__chartJsLoading) return window.__chartJsLoading;
+    window.__chartJsLoading = new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = "https://unpkg.com/chart.js@4.4.1/dist/chart.umd.js";
+      el.integrity = "sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG";
+      el.crossOrigin = "anonymous";
+      el.onload = resolve;
+      el.onerror = reject;
+      document.head.appendChild(el);
+    });
+    return window.__chartJsLoading;
+  }
+
+  async function mountPriceChart() {
+    priceChart?.destroy();
+    priceChart = null;
+    const canvas = $("price-chart-canvas");
+    const series = priceChartData;
+    if (!canvas || !series?.length) return;
+    try {
+      await loadChartJs();
+    } catch (_) {
+      canvas.parentElement.innerHTML = `<p class="empty">Graf se nepodařilo načíst.</p>`;
+      return;
+    }
+    if (!canvas.isConnected) return;
+    const prices = series.map((pt) => pt.p);
+    const lo = Math.min(...prices);
+    const hi = Math.max(...prices);
+    // Dynamické osy: i při malém pohybu je rozdíl na grafu čitelný.
+    const range = hi - lo;
+    const pad = Math.max(range * 0.6, hi * 0.01, 50);
+    const yMin = Math.max(0, Math.floor((lo - pad) / 50) * 50);
+    const yMax = Math.ceil((hi + pad) / 50) * 50;
+    const spanMs = series[series.length - 1].t - series[0].t;
+    const fmtTick = (v) =>
+      new Date(v).toLocaleDateString("cs-CZ", spanMs > 2 * 86400e3 ? { day: "numeric", month: "numeric" } : { day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit" });
+    const green = "#2f8f2f";
+    const red = "#cf2929";
+    const ink = "#163300";
+    const deltaLabels = {
+      id: "deltaLabels",
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        const meta = chart.getDatasetMeta(0);
+        ctx.save();
+        ctx.font = "700 11px Inter, sans-serif";
+        ctx.textAlign = "center";
+        series.forEach((pt, k) => {
+          if (!k) return;
+          const d = pt.p - series[k - 1].p;
+          if (!d) return;
+          const el = meta.data[k];
+          ctx.fillStyle = d < 0 ? green : red;
+          const text = `${d < 0 ? "−" : "+"}${Math.abs(d).toLocaleString("cs-CZ")}`;
+          const half = ctx.measureText(text).width / 2;
+          const x = Math.min(Math.max(el.x, chart.chartArea.left + half), chart.width - half - 2);
+          ctx.fillText(text, x, el.y + (d < 0 ? 20 : -12));
+        });
+        ctx.restore();
+      },
+    };
+    priceChart = new window.Chart(canvas, {
+      type: "line",
+      data: {
+        datasets: [
+          {
+            data: series.map((pt) => ({ x: pt.t, y: pt.p })),
+            stepped: "after",
+            borderColor: ink,
+            borderWidth: 2.5,
+            backgroundColor: (ctx) => {
+              const { chart } = ctx;
+              if (!chart.chartArea) return "rgba(159,232,112,0.2)";
+              const g = chart.ctx.createLinearGradient(0, chart.chartArea.top, 0, chart.chartArea.bottom);
+              g.addColorStop(0, "rgba(159,232,112,0.35)");
+              g.addColorStop(1, "rgba(159,232,112,0)");
+              return g;
+            },
+            fill: true,
+            clip: false,
+            pointRadius: (ctx) => (ctx.dataIndex === 0 || series[ctx.dataIndex].p !== series[ctx.dataIndex - 1]?.p || ctx.dataIndex === series.length - 1 ? 4 : 0),
+            pointHoverRadius: 6,
+            pointBackgroundColor: "#fff",
+            pointBorderColor: ink,
+            pointBorderWidth: 2,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 18, right: 22, bottom: 0, left: 8 } },
+        interaction: { mode: "nearest", intersect: false },
+        scales: {
+          x: {
+            type: "linear",
+            min: series[0].t,
+            max: series[series.length - 1].t,
+            offset: false,
+            grid: { display: false },
+            border: { display: false },
+            ticks: { maxTicksLimit: 4, color: "#7a8178", font: { size: 11, weight: 600 }, callback: fmtTick, align: "inner" },
+          },
+          y: {
+            min: yMin,
+            max: yMax,
+            grid: { color: "rgba(14,15,12,0.07)" },
+            border: { display: false },
+            ticks: {
+              maxTicksLimit: 5,
+              color: "#7a8178",
+              font: { size: 11, weight: 600 },
+              callback: (v) => Number(v).toLocaleString("cs-CZ"),
+            },
+          },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            displayColors: false,
+            backgroundColor: "#0e0f0c",
+            padding: 10,
+            cornerRadius: 10,
+            titleFont: { size: 11, weight: 600 },
+            bodyFont: { size: 13, weight: 800 },
+            callbacks: {
+              title: (items) => formatTime(items[0].parsed.x),
+              label: (item) => formatKc(item.parsed.y),
+            },
+          },
+        },
+      },
+      plugins: [deltaLabels],
+    });
   }
 
   function closeLightbox() {
@@ -1924,7 +2317,7 @@
     destroyDetailMap();
     host.innerHTML = `
       <div class="detail-gallery" data-index="0">
-        ${photos[0] ? `<img id="detail-photo" src="${escapeHtml(photos[0])}" alt="" />` : ""}
+        ${photos[0] ? `<img id="detail-photo" src="${escapeHtml(photos[0])}" alt="" />` : `<div class="no-photo detail-no-photo" aria-hidden="true"></div>`}
         ${
           photos.length > 1
             ? `<button class="gallery-nav prev" type="button">‹</button><button class="gallery-nav next" type="button">›</button>`
@@ -1948,34 +2341,19 @@
                   .join("")}</div>`
               : ""
           }
-          <div class="detail-specs">
-            <span>${escapeHtml(item.disposition || "—")}</span>
-            <span>${item.area_m2 ? `${item.area_m2} m²` : "rozloha neuvedena"}</span>
-            ${extras.offer ? `<span>${escapeHtml(extras.offer)}</span>` : ""}
-            ${extras.estate ? `<span>${escapeHtml(extras.estate)}</span>` : ""}
-            ${item.views != null ? `<span>${item.views} zobrazení</span>` : ""}
-            ${flags.map((flag) => `<span>${escapeHtml(flagLabel(flag))}</span>`).join("")}
-          </div>
-          ${
-            specs.length
-              ? `<div class="detail-rows">${specs
-                  .map((row) => `<div class="row"><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`)
-                  .join("")}</div>`
-              : ""
-          }
+          ${factsHtml(item)}
           <section class="detail-ai" id="detail-ai" hidden>
             <p class="detail-ai-label">AI shrnutí</p>
             <p class="detail-ai-text" id="detail-ai-text"></p>
             <p class="detail-ai-note">Vygenerováno AI, může obsahovat nepřesnosti.</p>
           </section>
-          ${description ? `<p class="detail-desc">${escapeHtml(item.description)}</p>` : `<p class="empty">Portál u této nabídky zatím neposlal popis.</p>`}
+          ${description ? `<div class="detail-desc-wrap"><p class="detail-desc" id="detail-desc">${escapeHtml(item.description)}</p><div class="detail-desc-toggle" id="detail-desc-toggle" hidden><button type="button" class="detail-desc-more" id="detail-desc-more" aria-expanded="false"><span>Zobrazit více</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button></div></div>` : `<p class="empty">Portál u této nabídky zatím neposlal popis.</p>`}
           <section class="detail-note">
-            <div class="detail-note-head">
-              <p class="detail-note-title">Poznámka</p>
-              <p class="detail-note-hint" id="detail-note-hint">${item.note ? "Uloženo" : "Jen u tebe"}</p>
-            </div>
-            <textarea id="detail-note" rows="4" placeholder="Termín prohlídky, dojem, co ještě ověřit…">${escapeHtml(item.note || "")}</textarea>
-            <p class="detail-note-ai">Poznámky může číst AI asistent.</p>
+            <label class="detail-note-head" for="detail-note">
+              <span class="detail-note-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.6 5.6 18.4 10.4 8 20.8H3.2V16z"/><path d="M11.8 7.4 16.6 12.2"/></svg>Moje poznámka</span>
+              <span class="detail-note-hint" id="detail-note-hint">${item.note ? "Uloženo" : "Vidíš jen ty"}</span>
+            </label>
+            <textarea id="detail-note" rows="2" placeholder="Termín prohlídky, dojem, co ještě ověřit…">${escapeHtml(item.note || "")}</textarea>
           </section>
           <h3>Historie cen</h3>
           ${historyChart(item.price_history)}
@@ -1984,6 +2362,7 @@
           <div class="detail-price">
             <p>Cena</p>
             <strong>${escapeHtml(item.price_label || "Cena na dotaz")}</strong>
+            ${fxNote(item)}
             ${item.discount_czk ? `<p>Sleva ${escapeHtml(formatKc(item.discount_czk))}${item.discount_pct ? ` · ${item.discount_pct} %` : ""}</p>` : ""}
             ${listingLinks(item)
               .map(
@@ -2032,7 +2411,40 @@
         show(lightboxIndex + 1);
       });
     }
+    const descEl = $("detail-desc");
+    const descMore = $("detail-desc-more");
+    const descToggle = $("detail-desc-toggle");
+    if (descEl && descMore && descToggle) {
+      const wrap = descEl.parentElement;
+      let collapsedPx = 0;
+      const measure = () => {
+        const lh = parseFloat(getComputedStyle(descEl).lineHeight) || 24;
+        collapsedPx = Math.round(lh * 10);
+      };
+      requestAnimationFrame(() => {
+        measure();
+        if (descEl.scrollHeight > collapsedPx + 4) {
+          descEl.style.maxHeight = `${collapsedPx}px`;
+          descToggle.hidden = false;
+          wrap.classList.add("is-collapsed");
+        }
+      });
+      descMore.addEventListener("click", () => {
+        const opening = descMore.getAttribute("aria-expanded") !== "true";
+        descMore.setAttribute("aria-expanded", String(opening));
+        descMore.querySelector("span").textContent = opening ? "Zobrazit méně" : "Zobrazit více";
+        wrap.classList.toggle("is-collapsed", !opening);
+        if (opening) {
+          descEl.style.maxHeight = `${descEl.scrollHeight}px`;
+        } else {
+          descEl.style.maxHeight = `${descEl.scrollHeight}px`;
+          void descEl.offsetHeight;
+          descEl.style.maxHeight = `${collapsedPx}px`;
+        }
+      });
+    }
     mountDetailMap(item);
+    mountPriceChart();
     loadAiSummary(item);
     $("detail-map-full")?.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -2042,7 +2454,11 @@
       if (item.url) setListingUser(item.url, item.status || "", $("detail-note").value);
     });
     let noteTimer;
+    const noteEl = $("detail-note");
+    const growNote = () => { if (noteEl) { noteEl.style.height = "auto"; noteEl.style.height = `${Math.max(64, noteEl.scrollHeight)}px`; } };
+    growNote();
     $("detail-note")?.addEventListener("input", () => {
+      growNote();
       const hint = $("detail-note-hint");
       if (hint) hint.textContent = "Ukládám…";
       clearTimeout(noteTimer);
@@ -2169,9 +2585,104 @@
     host.innerHTML = compareUrls
       .map((url) => {
         const item = itemByUrl(url);
-        return `<button type="button" class="chip" data-drop-compare="${escapeHtml(url)}">${escapeHtml(item?.locality || item?.name || "Položka")} ×</button>`;
+        return `<button type="button" class="chip" data-drop-compare="${escapeHtml(url)}"><span class="cmp-name">${escapeHtml(item?.locality || item?.name || "Položka")}</span><span class="cmp-x" aria-hidden="true">×</span></button>`;
       })
       .join("");
+  }
+
+  let cmpItems = [];
+
+  function cmpRows(items) {
+    // Union of all parameters; a missing value is shown as an en dash.
+    const rows = [];
+    const index = new Map();
+    const put = (label, ownerIdx, value) => {
+      const key = String(label).toLowerCase();
+      if (!index.has(key)) {
+        index.set(key, rows.length);
+        rows.push({ label, values: items.map(() => "–") });
+      }
+      if (value != null && value !== "") rows[index.get(key)].values[ownerIdx] = String(value);
+    };
+    items.forEach((item, i) => {
+      const per = item.price_czk && item.area_m2 ? `${formatKc(Math.round(item.price_czk / item.area_m2))} / m²` : "";
+      put("Cena", i, item.price_label || (item.price_czk ? formatKc(item.price_czk) : ""));
+      put("Cena za m²", i, per);
+      put("Sleva", i, item.discount_czk ? `${formatKc(item.discount_czk)}${item.discount_pct ? ` (${item.discount_pct} %)` : ""}` : "");
+      const hist = (item.price_history || []).map((r) => Number(r.price_czk)).filter(Number.isFinite);
+      if (hist.length > 1 && hist[0] !== item.price_czk) put("Původní cena", i, formatKc(hist[0]));
+      if (hist.length > 1) put("Změn ceny", i, String(hist.filter((p, k) => k && p !== hist[k - 1]).length));
+      const vp = Number(item.value_pct);
+      if (Number.isFinite(vp) && item.value_comps) put("Cena oproti okolí", i, `${vp >= 0 ? "−" : "+"}${Math.abs(Math.round(vp))} %`);
+      if (item.value_median_m2) put("Medián okolí", i, `${Number(item.value_median_m2).toLocaleString("cs-CZ")} Kč / m²`);
+    });
+    items.forEach((item, i) => {
+      for (const fact of detailFacts(item)) put(fact.label, i, fact.value);
+    });
+    items.forEach((item, i) => {
+      if (item.first_seen) {
+        const days = Math.max(0, Math.floor((Date.now() - new Date(item.first_seen).getTime()) / 86400000));
+        if (Number.isFinite(days)) put("V nabídce", i, days === 0 ? "dnes" : days === 1 ? "1 den" : days < 5 ? `${days} dny` : `${days} dní`);
+      }
+      put("Stav inzerátu", i, item.gone ? "nedostupný" : "aktivní");
+      put("Portál", i, item.portal || "");
+      const sources = (item.links || []).filter((l) => l.url && !l.gone).length;
+      if (sources > 1) put("Počet zdrojů", i, String(sources));
+      put("Hlídání", i, (item.monitors || []).map((row) => row.name).join(", ") || item.monitor_name || "");
+    });
+    return rows;
+  }
+
+  function renderCompareView() {
+    const grid = $("compare-grid");
+    if (!grid) return;
+    const items = cmpItems;
+    const n = items.length;
+    const rows = cmpRows(items);
+    const cell = (col, html, cls = "") => `<div class="cmp-cell c${col % 2}${cls ? " " + cls : ""}">${html}</div>`;
+    let html = "";
+    items.forEach((item, i) => {
+      const photo = item.photos?.[0] || item.image_url;
+      html += cell(
+        i,
+        `${photo ? `<img src="${escapeHtml(photo)}" alt="" loading="lazy" />` : `<div class="no-photo compare-no-photo" aria-hidden="true"></div>`}
+        <h3>${escapeHtml(item.locality || item.name || "")}</h3>
+        <div class="cmp-actions">
+          <a class="btn btn-ghost" href="${escapeHtml(item.url || "")}" target="_blank" rel="noreferrer">Otevřít</a>
+          <button type="button" class="btn btn-ghost cmp-remove" data-cmp-remove="${escapeHtml(item.url || "")}">Odebrat</button>
+        </div>`,
+        "cmp-head"
+      );
+    });
+    for (const row of rows) {
+      row.values.forEach((value, i) => {
+        html += cell(i, `<span class="cmp-l">${escapeHtml(row.label)}</span><strong class="${value === "–" ? "is-empty" : ""}">${escapeHtml(value)}</strong>`, "cmp-row");
+      });
+    }
+    grid.style.setProperty("--n", String(n));
+    grid.classList.toggle("is-single", n === 1);
+    grid.innerHTML = html;
+    grid.scrollLeft = 0;
+    let dots = $("compare-dots");
+    if (!dots) {
+      dots = document.createElement("div");
+      dots.id = "compare-dots";
+      dots.className = "cmp-dots";
+      grid.insertAdjacentElement("afterend", dots);
+    }
+    const perPage = window.matchMedia("(max-width: 900px)").matches ? 2 : 3;
+    const pages = Math.ceil(n / perPage);
+    dots.hidden = pages <= 1;
+    dots.innerHTML = Array.from({ length: pages }, (_, i) => `<button type="button" aria-label="Strana ${i + 1}" data-cmp-page="${i}" class="${i === 0 ? "on" : ""}"></button>`).join("");
+    const pageW = () => grid.clientWidth + 12;
+    grid.onscroll = () => {
+      const p = Math.round(grid.scrollLeft / Math.max(1, pageW()));
+      dots.querySelectorAll("button").forEach((b, i) => b.classList.toggle("on", i === p));
+    };
+    dots.onclick = (event) => {
+      const btn = event.target.closest("[data-cmp-page]");
+      if (btn) grid.scrollTo({ left: Number(btn.dataset.cmpPage) * pageW(), behavior: "smooth" });
+    };
   }
 
   async function openCompare() {
@@ -2180,34 +2691,28 @@
     if (!modal || !grid || !compareUrls.length) return;
     const items = [];
     for (const url of compareUrls) {
-      const local = itemByUrl(url);
-      if (!local) continue;
+      const local = itemByUrl(url) || { url };
       const response = await fetchCatalogItem(local);
-      items.push(response.ok ? await response.json() : local);
+      if (response.ok) items.push(await response.json());
+      else if (itemByUrl(url)) items.push(local);
     }
-    grid.innerHTML = items
-      .map((item) => {
-        const per = item.price_czk && item.area_m2 ? `${formatKc(Math.round(item.price_czk / item.area_m2))} / m²` : "—";
-        return `
-        <article class="compare-col">
-          ${item.image_url || item.photos?.[0] ? `<img src="${escapeHtml(item.photos?.[0] || item.image_url)}" alt="" />` : ""}
-          <h3>${escapeHtml(item.locality || item.name || "")}</h3>
-          <p>${escapeHtml(item.price_label || "")}</p>
-          <p>${escapeHtml(per)}</p>
-          <p>${escapeHtml(item.disposition || "—")} · ${item.area_m2 ? `${item.area_m2} m²` : "—"}</p>
-          <p>${item.discount_czk ? `Sleva ${escapeHtml(formatKc(item.discount_czk))}` : "Bez slevy"}</p>
-          <p>${escapeHtml((item.monitors || []).map((row) => row.name).join(" · ") || item.monitor_name || "")}</p>
-          <a href="${escapeHtml(item.url || "")}" target="_blank" rel="noreferrer">Otevřít</a>
-          ${(item.links || [])
-            .filter((link) => link.url && !link.gone && link.url !== item.url)
-            .map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label || link.portal || "Další zdroj")}</a>`)
-            .join("")}
-        </article>`;
-      })
-      .join("");
+    cmpItems = items;
+    renderCompareView();
     modal.hidden = false;
     document.body.classList.add("catalog-modal-open");
   }
+
+  $("compare-grid")?.addEventListener("click", (event) => {
+    const rm = event.target.closest("[data-cmp-remove]");
+    if (!rm) return;
+    const url = rm.dataset.cmpRemove;
+    cmpItems = cmpItems.filter((item) => (item.url || "") !== url);
+    compareUrls = compareUrls.filter((u) => u !== url);
+    renderCompareTray();
+    renderList(lastItems, false);
+    if (!cmpItems.length) closeCompare();
+    else renderCompareView();
+  });
 
   function closeCompare() {
     $("compare-modal").hidden = true;
@@ -3074,6 +3579,138 @@
   renderFacets({});
   syncFilterUi();
 
+  // Přepínač zobrazení: seznam + mapa / karty / mapa.
+  (function initViewSwitch() {
+    const root = $("view-catalog");
+    const sw = $("catalog-view-switch");
+    if (!root || !sw) return;
+    let mode = "list";
+    try { mode = localStorage.getItem("catalogView") || "list"; } catch (_) {}
+    // Phones: no list view — cards are the default.
+    if (window.matchMedia && window.matchMedia("(max-width: 900px)").matches && mode === "list") mode = "grid";
+    const host = $("cat-inline-filters");
+    const placeFilters = (inline) => {
+      const scroll = document.querySelector(".filters-scroll");
+      const card = document.querySelector(".filters-card");
+      if (!scroll || !host || !card) return;
+      if (inline) {
+        if (scroll.parentElement !== host) {
+          host.appendChild(scroll);
+          if (!host.querySelector(".cat-inline-reset")) {
+            const reset = document.createElement("button");
+            reset.type = "button";
+            reset.className = "btn btn-ghost cat-inline-reset";
+            reset.textContent = "Vymazat filtry";
+            reset.addEventListener("click", () => $("filters-reset")?.click());
+            host.appendChild(reset);
+          }
+        }
+        syncFilterUi();
+        host.hidden = false;
+      } else {
+        host.hidden = true;
+        if (scroll.parentElement !== card) card.insertBefore(scroll, card.querySelector(".filters-actions"));
+      }
+    };
+    const applyInline = () => {
+      readFilterUi();
+      syncPlacesFromDistricts();
+      updateFilterToggle();
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => loadCatalog(), 250);
+    };
+    host?.addEventListener("click", (event) => {
+      const button = event.target.closest(".chip");
+      if (!button || !host.contains(button)) return;
+      const tri = event.target.closest("[data-tri]");
+      if (tri && tri.contains(button)) {
+        const on = button.classList.contains("on");
+        tri.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("on"));
+        if (!on) button.classList.add("on");
+      } else {
+        const group = event.target.closest("[data-filter]");
+        if (group && group.contains(button)) button.classList.toggle("on");
+      }
+      // chipy s vlastním handlerem (portály) už načetly samy; ostatní načteme zde
+      if (!button.closest("#cat-portals")) applyInline();
+    });
+    host?.addEventListener("change", (event) => {
+      if (event.target.closest("select")) applyInline();
+    });
+    const apply = (next) => {
+      mode = ["list", "grid", "map"].includes(next) ? next : "list";
+      placeFilters(mode === "map");
+      root.classList.remove("cv-list", "cv-grid", "cv-map");
+      root.classList.add(`cv-${mode}`);
+      sw.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.cv === mode));
+      try { localStorage.setItem("catalogView", mode); } catch (_) {}
+      [60, 250, 600].forEach((ms) => setTimeout(() => catalogMap?.invalidateSize(), ms));
+    };
+    sw.addEventListener("click", (event) => {
+      const btn = event.target.closest("button[data-cv]");
+      if (btn) apply(btn.dataset.cv);
+    });
+    apply(mode);
+  })();
+
+  // Bridge for the assistant (Bára): reads what the user sees and drives the catalog UI.
+  const UI_FILTER_KEYS = ["q", "portal", "disposition", "price_from", "price_to", "area_from", "area_to", "offer", "estate", "district", "amenities", "sort", "status", "discounted", "ownership", "condition", "building", "equipped", "roommate", "pets", "short_term", "monitor_id", "hits", "lat", "lon", "radius_m"];
+  window.RealitifyUI = {
+    state() {
+      const onCatalog = location.pathname.replace(/\/$/, "") === "/nabidka";
+      const out = { page: location.pathname };
+      if (!onCatalog) return out;
+      const active = {};
+      for (const [key, value] of filterStateParams().entries()) {
+        if (UI_FILTER_KEYS.includes(key)) active[key] = value;
+      }
+      out.filters = active;
+      out.total = total;
+      out.compare = compareUrls.map((url) => {
+        const item = itemByUrl(url);
+        return item ? `${item.name || item.locality || ""} (${url})` : url;
+      });
+      out.visible = lastItems.slice(0, 5).map((item) => `${item.name || ""}, ${item.locality || ""}, ${item.price_label || item.price_czk || ""} (${item.url})`);
+      const modal = $("catalog-modal");
+      if (modal && !modal.hidden) out.detail = (modal.querySelector("h1,h2,h3")?.textContent || "").trim();
+      return out;
+    },
+    async applyFilters(params, keepCurrent) {
+      if (location.pathname.replace(/\/$/, "") !== "/nabidka") return false;
+      const next = keepCurrent ? filterStateParams() : new URLSearchParams();
+      for (const [key, value] of Object.entries(params || {})) {
+        if (value !== "" && value != null) next.set(key, String(value));
+      }
+      if (!keepCurrent || !next.has("places")) next.delete("places");
+      if (params && params.q) {
+        next.delete("district");
+        next.delete("places");
+      }
+      circleFilter = null;
+      readUrlState(next);
+      await resolveQueryPlace();
+      await loadCatalog();
+      return true;
+    },
+    compare(action, urls) {
+      if (action === "clear") compareUrls = [];
+      else if (action === "add") for (const url of urls || []) if (url && !compareUrls.includes(url) && compareUrls.length < 3) compareUrls.push(url);
+      else if (action === "remove") compareUrls = compareUrls.filter((url) => !(urls || []).includes(url));
+      renderCompareTray();
+      renderList(lastItems, false);
+      if (action === "open") openCompare();
+    },
+    ready() {
+      return loaded && !catalogBusy;
+    },
+    setView(mode) {
+      document.querySelector(`#catalog-views-switch [data-cv="${mode}"], [data-cv="${mode}"]`)?.click();
+    },
+    openListing(target) {
+      return openDetail("", target.id || "", { listing_key: target.listing_key || "", url: target.url || "" });
+    },
+  };
+
   if (location.pathname.replace(/\/$/, "") === "/nabidka") {
     loaded = true;
     ensureMap();
@@ -3091,4 +3728,36 @@
       setTimeout(open, 0);
     }
   }
+
+  // Karty na přehledu (karusely) používají stejný vzhled i chování jako karty v nabídce.
+  window.RealitifyCard = { html: cardHtml, open: openDetail };
+  (function bindOverviewCards() {
+    let down = null;
+    document.addEventListener("pointerdown", (event) => {
+      down = event.target.closest(".carousel-track") ? { x: event.clientX, y: event.clientY } : null;
+    }, true);
+    document.addEventListener("click", (event) => {
+      const card = event.target.closest(".carousel-track .offer-card");
+      if (!card) return;
+      if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > 6) return;
+      const nav = event.target.closest(".offer-nav");
+      const gallery = event.target.closest(".offer-photo");
+      if (nav && gallery) {
+        showGallery(gallery, Number(gallery.dataset.index || 0) + (nav.classList.contains("next") ? 1 : -1));
+        return;
+      }
+      const save = event.target.closest("[data-save-url]");
+      const hide = event.target.closest("[data-hide-url]");
+      if (save || hide) {
+        const btn = save || hide;
+        const status = save ? "saved" : "hidden";
+        setListingUser(btn.dataset.saveUrl || btn.dataset.hideUrl, btn.classList.contains("on") ? "" : status, "");
+        btn.classList.toggle("on");
+        return;
+      }
+      if (event.target.closest("[data-compare-url]")) return;
+      const [monitorId, listingId] = String(card.dataset.openOffer || "").split(":");
+      if (listingId) openDetail(monitorId, listingId, { url: card.dataset.url || "" });
+    });
+  })();
 })();

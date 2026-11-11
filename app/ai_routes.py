@@ -15,7 +15,7 @@ from ai import actions, limits, llm, summary
 from ai import chat as ai_chat
 from ai.context import Services, ToolContext
 from ai.tools import ChatTools
-from app import billing, rate_limit
+from app import billing, config, rate_limit
 from app.store import CATALOG_MONITOR_ID
 
 logger = logging.getLogger("realitify.ai")
@@ -99,7 +99,7 @@ def register(
             cards: list[dict[str, Any]] = []
             yield _sse({"type": "chat", "id": chat_id})
             try:
-                async for event in ai_chat.run_chat(llm, tools, SYSTEM_PROMPT, history, ctx):
+                async for event in ai_chat.run_chat(llm, tools, SYSTEM_PROMPT + ai_chat.ui_context_block(payload.get("ui")), history, ctx):
                     if event["type"] == "delta":
                         text += event["text"]
                     elif event["type"] == "cards":
@@ -168,6 +168,9 @@ def register(
         realitify_session: str | None = Cookie(default=None, alias="realitify_session"),
         realitify_guest: str | None = Cookie(default=None, alias="realitify_guest"),
     ):
+        if not config.AI_SUMMARY_ENABLED:
+            # Temporarily disabled: no generation and no cached text. The frontend hides the box on 404.
+            raise HTTPException(404, "AI shrnutí je dočasně vypnuté")
         catalog_store(realitify_session, realitify_guest)  # 401 unless logged in or e-mail guest
         store = public_store() or hub.store
         item = await asyncio.to_thread(store.catalog_item, CATALOG_MONITOR_ID, listing_id)

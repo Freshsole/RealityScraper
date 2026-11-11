@@ -188,3 +188,89 @@
 @media (prefers-reduced-motion:reduce){
   .how-section>.steps,.sold-cards,.quotes,.browser .results,#hry .game-hub,.loc-grid{scroll-behavior:auto}
 }
+
+/* audit fix: grid položky FAQ nesmí natáhnout stránku (nowrap chipy v kontaktu) */
+.faq-layout>*,.faq-tools{min-width:0}
+
+/* audit fix: čitelné písmo (min. 12 px) a dostatečně velké cíle (min. 44 px) */
+.mock-badge,.code-box .code-label,.notif-header p,.badge-mint,.filter-field label,.filter-search .ghost,.source,.pop,.apt-grid p,
+.cookie-always,.cookie-table th,.hs-field label,.live-kicker,.hs-tag,.hs-tag b,.hs-tag em,.sold-when small,.sold-badge,
+.results .mock-card .src-badge,.cmp-row .feat,.strength-label,.tag-pro{font-size:12px}
+@media (max-width:820px),(pointer:coarse){
+  .footer-col a,.footer-mark,.crumbs a,.legal-crumbs a,.legal-toc a,.legal-toc-note a,.auth-foot a,.auth-logo,.nx .brand,.nx-pill .brand,.info-value,.live-empty a{
+    display:inline-flex;align-items:center;min-height:44px}
+  .soc-i{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px}
+  .pg td a,.pg-section td a,table td>a{display:inline-flex;align-items:center;min-height:44px;padding:0 2px}
+  .faq-cat,.help-chips button,.hs-tab,.pw-toggle,.rf-lang-btn{min-height:44px}
+  .field-input input,.hs-field input,.db-input,.help-box input,.filter-field input{min-height:44px}
+  .link-row,.search-btn{min-height:44px}
+  .legal-toc nav a,.legal-toc a{padding-block:6px}
+}
+
+/* audit fix (CLS): rezervace místa pro obsah vykreslený až JS (příběhy) */
+#featured{min-height:740px}
+#stories-grid{min-height:1020px}
+@media (max-width:820px){#featured{min-height:900px}#stories-grid{min-height:3400px}}
+
+/* home hero on phones: no photo collage; search form sits right over the map */
+@media (max-width:860px){
+  .hs-collage,.hs-city,.hs-orb{display:none}
+  .hs-top{min-height:0}
+  .hs-stage{margin-top:158px}
+  .is-home .hs-map{top:270px}
+  .is-home .hs-orb-1{top:340px}
+}
+
+/* mobile-only price label above the search form, top right */
+.hs-tag-m{display:none}
+@media (max-width:860px){
+  .hs-tag-m{display:flex;right:4px;left:auto;top:-138px;bottom:auto;transform:rotate(-3deg);z-index:3;padding:8px 14px 8px 8px}
+}
+
+/* sold-cards carousel: room for the shadow so it isn't cut off by the scroller */
+@media (max-width:860px){
+  .sold-cards{padding-top:12px;padding-bottom:40px;margin-bottom:-28px}
+  .sold-card{box-shadow:0 1px 2px #0e0f0c0d,0 6px 18px #0e0f0c14}
+}
+
+/* fomo section: left-aligned copy on phones */
+@media (max-width:860px){
+  .fomo,.fomo-copy,.fomo-copy .display,.fomo-copy .lead{text-align:left}
+  .fomo-copy{align-items:flex-start;justify-items:start}
+  .fomo-actions{align-items:stretch}
+  .fomo-actions .link-row{justify-content:flex-start}
+}
+
+/* catalog preview: "Zobrazit všechny" button goes below the listings */
+@media (max-width:860px){
+  .browser{display:flex;flex-direction:column}
+  .browser .live-head{display:contents}
+  .browser .live-head>div{order:1;padding:16px 16px 0}
+  .browser .results{order:2}
+  .browser .m-dots{order:3}
+  .browser .live-head .search-btn{order:4;margin:4px 16px 16px;width:auto;justify-content:center}
+}
+
+/* testimonials: author avatar to the right of name + property */
+.quote-who{display:flex;align-items:center;gap:12px}
+.quote-who .quote-avatar{order:-1}
+.quote-avatar{flex:none;width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--mint)}
+
+/* final CTA: everything left-aligned on phones */
+.final-br{display:none}
+@media (max-width:860px){
+  .final-cta,.final-copy,.final-copy .display,.final-copy .lead,.final-note{text-align:left}
+  .final-cta{align-items:flex-start}
+  .final-copy{align-items:flex-start;justify-items:start}
+  .final-actions{align-items:flex-start!important;width:100%}
+  .final-actions .pill{width:260px;max-width:100%}
+  .final-dot{display:none}
+  .final-br{display:inline}
+}
+
+/* urgency strip: left-aligned stats on phones */
+@media (max-width:860px){
+  .urgency{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));justify-content:stretch;gap:16px;text-align:left}
+  .urg-div{display:none}
+  .urg-item{align-items:flex-start;text-align:left}
+}

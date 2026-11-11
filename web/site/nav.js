@@ -14,7 +14,7 @@
   var SCROLL_THRESHOLD = 24;
   var MAX_VISIBLE = 4;
   var TRIGGER = 99;
-  var MOBILE_MQ = '(max-width: 860px)';
+  var MOBILE_MQ = '(max-width: 1040px)';
 
   var path = location.pathname.replace(/\/+$/, '') || '/';
   var isHome = path === '/';
@@ -35,6 +35,9 @@
     'hry': ['Hry', 'Zkuste trefit cenu dřív, než byt zmizí'],
     'faq': ['FAQ', 'Odpovědi na nejčastější otázky']
   };
+
+  // FAQ má vlastní stránku /faq, ne kotvu na úvodní stránce.
+  function secHref(id) { return id === 'faq' ? '/faq' : '#' + id; }
 
   function clean(t) { return (t || '').replace(/\s+/g, ' ').trim(); }
   function titleCase(t) {
@@ -108,7 +111,7 @@
         { title: 'O nás', desc: 'Kdo za Realitify stojí', href: '/o-nas' },
         { title: 'Hry', desc: 'Higher / Lower a tip nájmu', href: '/hry' },
         { title: 'Kontakt', desc: 'Napište nám', href: '/kontakt' },
-        { title: 'FAQ', desc: 'Časté otázky', href: '/#faq' }
+        { title: 'FAQ', desc: 'Časté otázky', href: '/faq' }
       ]
     }
   ];
@@ -117,7 +120,7 @@
     CATEGORIES.unshift({
       key: 'page', title: 'Na této stránce', desc: 'Sekce aktuální stránky', icon: 'list',
       items: SECTIONS.map(function (s) {
-        return { title: s.title, desc: s.desc, href: '#' + s.id, id: s.id };
+        return { title: s.title, desc: s.desc, href: secHref(s.id), id: s.id };
       })
     });
   }
@@ -136,7 +139,7 @@
   /* ---------- state ---------- */
   var useSections = BAR_SECTIONS.length > 1;
   var barLinks = useSections
-    ? BAR_SECTIONS.map(function (x) { return { title: x.short, href: '#' + x.id, id: x.id }; })
+    ? BAR_SECTIONS.map(function (x) { return { title: x.short, href: secHref(x.id), id: x.id }; })
     : PAGE_LINKS.map(function (l) { return { title: l.title, href: href(l.href), path: l.path }; });
 
   var secEls = SECTIONS.map(function (x) { return x.el; });
@@ -234,17 +237,22 @@
   }
 
   /* ---------- carousel window + highlight ---------- */
+  var visibleCount = MAX_VISIBLE;
+
   function winStart() {
     var n = linkEls.length;
-    if (n <= MAX_VISIBLE) return 0;
-    return Math.max(0, Math.min(activeIdx - 1, n - MAX_VISIBLE));
+    var v = Math.min(visibleCount, n);
+    if (n <= v) return 0;
+    var start = Math.max(0, Math.min(activeIdx - 1, n - v));
+    if (activeIdx > start + v - 1) start = Math.min(activeIdx - v + 1, n - v);
+    return Math.max(0, start);
   }
 
-  function layout() {
+  function applyWindow(v) {
     var n = linkEls.length;
-    if (!n) return;
+    visibleCount = v;
     var start = winStart();
-    var end = Math.min(n, start + MAX_VISIBLE) - 1;
+    var end = Math.min(n, start + v) - 1;
     var first = linkEls[start];
     var last = linkEls[end];
     tx = first.offsetLeft;
@@ -255,6 +263,26 @@
       el.tabIndex = visible ? 0 : -1;
       el.setAttribute('aria-hidden', visible ? 'false' : 'true');
     });
+  }
+
+  function fits() {
+    var cs = getComputedStyle(pill);
+    var brandEl = pill.firstElementChild;
+    var rightEl = pill.querySelector('.nx-right');
+    var need = brandEl.offsetWidth + rightEl.scrollWidth + (parseFloat(cs.columnGap) || 16) +
+      (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    return need <= pill.clientWidth + 0.5;
+  }
+
+  function layout() {
+    var n = linkEls.length;
+    if (!n) return;
+    var v = Math.min(MAX_VISIBLE, n);
+    applyWindow(v);
+    // Not enough room (narrow screen / long translations)? Show fewer links, keeping the active one.
+    if (!mq.matches) {
+      while (v > 1 && !fits()) { v--; applyWindow(v); }
+    }
   }
 
   function place() {
@@ -390,6 +418,17 @@
 
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', function () { layout(); place(); }, { passive: true });
+  // The pill's max-width animates when the header becomes "scrolled", so re-fit whenever its size changes.
+  if (window.ResizeObserver) {
+    var roTick = false;
+    new ResizeObserver(function () {
+      if (roTick) return;
+      roTick = true;
+      requestAnimationFrame(function () { roTick = false; layout(); place(); });
+    }).observe(pill);
+  }
+  pill.addEventListener('transitionend', function (e) { if (e.propertyName === 'max-width') { layout(); place(); } });
+  window.addEventListener('rf:langchange', function () { setTimeout(function () { layout(); place(); }, 50); });
 
   /* ---------- init ---------- */
   refresh();

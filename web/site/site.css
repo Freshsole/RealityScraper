@@ -367,3 +367,88 @@ a.mock-card:hover{transform:translateY(-3px)}
 
 /* odkazy ve tvaru tlačítek nikdy nepodtrhávat */
 a.pill,a.pill:hover,a[class*="pill-"],a[class*="pill-"]:hover,a.btn,a[class*="btn-"],a.search-btn,a.auth-btn,a.link-row,a.gh-ghost,a.hl-ghost,a.copy-btn-lg{text-decoration:none}
+/* Sold cards: inset-photo listing card style */
+.sold-card{padding:12px;border-radius:28px;border:1px solid var(--line);box-shadow:0 1px 2px #0e0f0c0a,0 12px 32px #0e0f0c14;display:flex;flex-direction:column;overflow:visible}
+.sold-img{border-radius:20px;height:220px}
+.sold-noimg{border-radius:20px}
+.sold-badge{top:auto;bottom:12px;left:12px;display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:7px 12px}
+.sold-badge:before{content:"";width:6px;height:6px;border-radius:50%;background:#fff;flex:none}
+.sold-meta{gap:6px;padding:16px 8px 6px}
+.sold-top{flex-direction:column-reverse;align-items:flex-start;gap:4px}
+.sold-top span:first-child{font-size:16px;font-weight:700;color:var(--ink);line-height:1.3}
+.sold-top span:last-child{font-size:24px;font-weight:800;color:var(--forest);letter-spacing:-.02em;line-height:1.1;white-space:nowrap}
+.sold-meta .spec{font-size:14px}
+.sold-meta .when{margin-top:8px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;color:var(--body)}
+/* Sold cards v2: clean listing card */
+.sold-card{padding:10px;border-radius:30px;gap:0;box-shadow:0 1px 2px #0e0f0c0a,0 16px 40px #0e0f0c14}
+.sold-img{height:230px;border-radius:22px}
+.sold-badge{top:auto;bottom:12px;left:12px;background:#fdeaea;color:#b21f1f;font-size:12px;font-weight:600;padding:6px 12px 6px 10px;border-radius:999px;gap:7px}
+.sold-badge:before{width:7px;height:7px;background:var(--sold)}
+.sold-meta{gap:0;padding:18px 10px 8px}
+.sold-price{display:flex;align-items:baseline;gap:6px;padding-bottom:16px;border-bottom:1px solid #eceee9}
+.sold-price b{font-size:26px;font-weight:700;color:var(--ink);letter-spacing:-.02em;line-height:1;white-space:nowrap}
+.sold-price span{font-size:14px;color:var(--body)}
+.sold-body{padding:16px 0 18px}
+.sold-title{margin:0;font-size:18px;font-weight:600;color:var(--ink);line-height:1.3}
+.sold-addr{margin:4px 0 0;font-size:14px;color:var(--body);line-height:1.4}
+.sold-when{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:16px;background:var(--pale);margin-top:auto}
+.sold-when div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.sold-when small{font-size:11px;color:var(--body);font-weight:500}
+.sold-when span{font-size:12px;font-weight:600;color:var(--ink);line-height:1.3}
+.sold-when div:last-child{text-align:right}
+.sold-meta{flex:1;display:flex;flex-direction:column}
+/* Sold cards v3 tweaks */
+.sold-cards{gap:14px}
+.sold-card{border:0;box-shadow:0 2px 4px #0e0f0c0a,0 10px 28px #0e0f0c17}
+.sold-badge{bottom:10px;left:10px;background:rgba(255,255,255,.92);color:var(--ink);font-size:11px;font-weight:600;padding:5px 10px 5px 8px;gap:6px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.sold-badge:before{width:6px;height:6px}
+.sold-when{flex-direction:column;gap:6px;padding:12px 14px}
+.sold-when div,.sold-when div:last-child{flex-direction:row;justify-content:space-between;align-items:baseline;text-align:left;gap:8px}
+.sold-when small{font-size:12px;font-weight:500}
+.sold-when span{font-size:12px;font-weight:600;white-space:nowrap}
+/* Homepage catalog cards: same language as the sold cards */
+.results .mock-card{border:0;padding:10px;border-radius:30px;box-shadow:0 2px 4px #0e0f0c0a,0 10px 28px #0e0f0c17;display:flex;flex-direction:column}
+.results a.mock-card:hover{box-shadow:0 2px 4px #0e0f0c0a,0 16px 36px #0e0f0c22}
+.results .mock-card .thumb{position:relative;height:200px;border-radius:22px}
+.results .mock-card .thumb img{border-radius:22px}
+.results .mock-card .src-badge{position:absolute;left:10px;bottom:10px;background:rgba(255,255,255,.92);color:var(--ink);font-size:11px;font-weight:600;line-height:1;padding:6px 10px;border-radius:999px;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.results .mock-card .mock-body{padding:16px 10px 8px;gap:0;flex:1}
+.mock-price{display:flex;align-items:baseline;gap:6px;padding-bottom:14px;border-bottom:1px solid #eceee9}
+.mock-price b{font-size:24px;font-weight:700;color:var(--ink);letter-spacing:-.02em;line-height:1;white-space:nowrap}
+.mock-price span{font-size:14px;color:var(--body)}
+.mock-txt{padding-top:14px}
+.mock-txt h3{margin:0;font-size:16px;font-weight:600;color:var(--ink);line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.mock-txt p{margin:4px 0 0;font-size:14px;color:var(--body);line-height:1.4}
+.results .mock-card.is-sold{background:var(--pale);box-shadow:none}
+.results .mock-card.is-sold .mock-body{padding-top:18px}
+.results .mock-card.is-sold h3{font-size:16px;font-weight:600;color:var(--ink);margin:0}
+.results .mock-card.is-sold p{margin:4px 0 0;font-size:14px;color:var(--body)}
+/* Homepage catalog: horizontal scroller, 3 cards visible on desktop */
+@media (min-width:861px){
+  .browser .results{flex-wrap:nowrap;overflow-x:auto;scroll-snap-type:x mandatory;scroll-padding:0 24px;overscroll-behavior-x:contain;scrollbar-width:none;padding-bottom:12px;cursor:grab;user-select:none}
+  .browser .results.is-dragging{cursor:grabbing;scroll-snap-type:none;scroll-behavior:auto}
+  .browser .results.is-dragging a{pointer-events:none}
+  .browser .results img{-webkit-user-drag:none}
+  .browser .results>*{flex:0 0 calc((100% - 40px) / 3);min-width:0;scroll-snap-align:start}
+  .browser .results::-webkit-scrollbar{display:none}
+}
+.results-pager{display:flex;align-items:center;justify-content:center;gap:10px;min-height:36px;padding:0 0 20px}
+.results-pager[hidden]{display:none}
+.results-nav{width:36px;height:36px;border:0;border-radius:50%;background:#fff;box-shadow:0 2px 10px #0e0f0c1f;color:var(--forest);font:600 20px/1 Inter,sans-serif;cursor:pointer}
+.results-nav:disabled{opacity:.35;cursor:default}
+.results-dots{display:flex;align-items:center;gap:6px}
+.results-dot{width:8px;height:8px;padding:0;border:0;border-radius:999px;background:#c9ccc6;cursor:pointer;transition:width .2s ease,background .2s ease}
+.results-dot.on{width:22px;background:var(--forest)}
+@media (max-width:860px){.results-pager{display:none}}
+/* Catalog cards: no shadow (it was clipped by the scroller), image always fills the frame */
+.results .mock-card,.results a.mock-card:hover,.results .mock-card.is-sold{box-shadow:none}
+.results a.mock-card:hover{transform:none}
+.results .mock-card .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.results .mock-card.is-sold .thumb img{object-fit:contain}
+/* "Zobrazit všechny": same look as the site's other pill buttons */
+.live-head .search-btn{background:var(--green);color:var(--forest);border-radius:var(--radius-pill);height:40px;min-height:40px;padding:0 22px;font-size:14px;font-weight:700;gap:8px;transition:filter .2s ease}
+.live-head .search-btn:after{display:none}
+.live-head .search-btn:hover{transform:none;filter:brightness(.96)}
+.live-head .search-btn:active{transform:none}
+.live-head .search-btn .icon{background:currentColor;-webkit-mask:url(/static/site/assets/search.svg) center/contain no-repeat;mask:url(/static/site/assets/search.svg) center/contain no-repeat}
+.live-head .search-btn .icon img{opacity:0}

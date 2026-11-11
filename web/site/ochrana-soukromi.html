@@ -2,7 +2,7 @@
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
-    <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/gtag.js?v=3"></script>
     <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
@@ -25,12 +25,11 @@
     <meta name="twitter:title" content="Ochrana soukromí — REALITIFY" />
     <meta name="twitter:description" content="Zásady ochrany osobních údajů služby Realitify." />
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=28" />
-    <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="/static/site/site.css?v=39" />
+    <link rel="stylesheet" href="/static/site/nav.css?v=5" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1f3" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
   <body class="legal-page privacy-page">
@@ -52,6 +51,7 @@
         <a class="pill pill-nav" href="/registrace">Vyzkoušet zdarma</a>
       </div>
     </header>
+    <main id="main">
 
     <div class="legal-crumbs">
       <a href="/obchodni-podminky">Právní dokumenty</a>
@@ -59,11 +59,11 @@
       <strong>Ochrana soukromí</strong>
     </div>
 
-    <header class="privacy-hero">
+    <div class="privacy-hero">
       <span class="privacy-pill">Aktualizováno k 1. lednu 2026</span>
       <h1 class="display is-caps">Ochrana soukromí</h1>
       <p>Zásady zpracování osobních údajů platformy REALITIFY</p>
-    </header>
+    </div>
 
     <div class="legal-cols">
       <aside class="legal-toc">
@@ -283,15 +283,15 @@
       </div>
     </div>
 
-    <section class="legal-cta">
+    <section class="legal-cta" data-nav="JEŠTĚ NEMÁTE ÚČET?">
       <div class="final-copy">
-        <p class="eyebrow">JEŠTĚ NEMÁTE ÚČET?</p>
         <h2 class="display is-caps">Nezmeškejte už žádnou skvělou nabídku</h2>
         <p class="lead">Založte si bezplatný účet za 30 sekund, nastavte si parametry a nechte technologii pracovat za vás. Vaše vysněné bydlení už vám neuteče.</p>
       </div>
       <a class="pill pill-lg" href="/registrace">Zaregistrovat se zdarma</a>
     </section>
 
+    </main>
     <footer class="footer">
       <div class="footer-top">
         <div class="footer-brand">
@@ -342,6 +342,6 @@
     </footer>
     <script src="/static/site/legal.js?v=2"></script>
     <script src="/static/t.js?v=10"></script>
-      <script src="/static/site/nav.js?v=3" defer></script>
+      <script src="/static/site/nav.js?v=8" defer></script>
 </body>
 </html>

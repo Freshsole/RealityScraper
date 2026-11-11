@@ -2,7 +2,7 @@
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
-    <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/gtag.js?v=3"></script>
     <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
@@ -13,6 +13,7 @@
     <meta name="robots" content="index, follow" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Realitify" />
+    <link rel="canonical" href="https://realitify.cz/byt" />
     <meta property="og:title" content="Detail bytu k pronájmu | REALITIFY" />
     <meta property="og:description" content="Detail bytu k pronájmu či prodeji z 10 českých realitních portálů." />
     <meta property="og:url" content="https://realitify.cz/byt" />
@@ -22,14 +23,13 @@
     <meta name="twitter:title" content="Detail bytu k pronájmu | REALITIFY" />
     <meta name="twitter:description" content="Detail bytu k pronájmu či prodeji z 10 českých realitních portálů." />
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=28" />
-    <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=11" />
-    <link rel="stylesheet" href="/static/site/mobile.css?v=1" />
-    <link rel="stylesheet" href="/static/site/ai-chat.css?v=8" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="/static/site/site.css?v=39" />
+    <link rel="stylesheet" href="/static/site/nav.css?v=5" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=11f1" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=1f3" />
+    <link rel="stylesheet" href="/static/site/ai-chat.css?v=9" />
     <script src="/static/site/mobile.js?v=1" defer></script>
     <link rel="preload" as="image" href="/static/site/assets/room/dum.webp" fetchpriority="high" />
     <style>
@@ -169,9 +169,8 @@
       </div>
     </div>
 
-    <section class="sold-section">
+    <section class="sold-section" data-nav="Příklady z trhu">
       <div class="section-head">
-        <p class="eyebrow">Příklady z trhu</p>
         <h2 class="display is-caps">Tyto byty byly pryč za pár hodin</h2>
       </div>
       <div class="sold-cards" id="sold-cards">
@@ -241,9 +240,8 @@
       </div>
     </section>
 
-    <section class="how-section" id="jak-to-funguje">
+    <section class="how-section" id="jak-to-funguje" data-nav="Jak Realitify funguje">
       <div class="section-head">
-        <p class="eyebrow">Jak Realitify funguje</p>
         <h2 class="display is-caps">Získejte unikátní náskok před ostatními zájemci</h2>
       </div>
       <div class="steps">
@@ -280,9 +278,8 @@
       </div>
     </section>
 
-    <section class="fomo">
+    <section class="fomo" data-nav="Čas hraje proti vám">
       <div class="fomo-copy">
-        <p class="eyebrow">Čas hraje proti vám</p>
         <h2 class="display is-caps">Zatímco vy ručně hledáte, někdo jiný už kupuje.</h2>
         <p class="lead">Nejlepší byty v Praze a krajských městech jsou často zarezervované do několika hodin. Spoléhat na ruční prohledávání portálů jednou denně znamená sbírat zbytky. Realitify vám dává technologický náskok, který rozhoduje o vašem budoucím bydlení.</p>
       </div>
@@ -295,9 +292,8 @@
       </div>
     </section>
 
-    <section class="db-section" id="databaze">
+    <section class="db-section" id="databaze" data-nav="První hledání máte za sebou">data-nav="Kompletní trh na jednom místě">
       <div class="section-head">
-        <p class="eyebrow">Kompletní trh na jednom místě</p>
         <h2 class="display is-caps">Všechny byty v ČR zdarma k prohlížení</h2>
         <p class="lead" style="max-width:680px">První hledání je bez registrace. Neomezené prohlížení celé databáze máte po bezplatné registraci — bez placených účtů na portálech.</p>
       </div>
@@ -380,7 +376,6 @@
       </div>
       <div class="db-gate" id="db-gate" hidden>
         <div class="db-gate-card">
-          <p class="eyebrow">První hledání máte za sebou</p>
           <h3>Prohlížení databáze je po registraci zdarma</h3>
           <p>Další hledání už potřebuje účet. Registrace nic nestojí a odemkne neomezené prohlížení. Chcete i hlídání a okamžité notifikace? Vyberte předplatné.</p>
           <div class="db-gate-actions">
@@ -396,9 +391,8 @@
       </div>
     </section>
 
-    <section class="compare-section" id="srovnani">
+    <section class="compare-section" id="srovnani" hidden style="display:none" data-nav="Ušetřete čas i peníze"><!-- TEMP HIDDEN: remove "hidden" + style to show again -->
       <div class="section-head">
-        <p class="eyebrow">Ušetřete čas i peníze</p>
         <h2 class="display is-caps">Jedna služba místo pěti hlídacích psů</h2>
         <p class="lead" style="max-width:680px">Už nemusíte platit prémiové hlídače na každém webu samostatně. Realitify vše sjednocuje pod jedno přehledné rozhraní s bezkonkurenční rychlostí.</p>
       </div>
@@ -461,9 +455,8 @@
       </div>
     </section>
 
-    <section class="pricing-section" id="cenik">
+    <section class="pricing-section" id="cenik" data-nav="Cenové plány">
       <div class="section-head">
-        <p class="eyebrow">Cenové plány</p>
         <h2 class="display is-caps">Flexibilní tarify pro každého</h2>
       </div>
       <div class="pricing-grid">
@@ -520,9 +513,8 @@
       </div>
     </section>
 
-    <section class="quotes-section">
+    <section class="quotes-section" data-nav="Zkušenosti našich uživatelů">
       <div class="section-head">
-        <p class="eyebrow">Zkušenosti našich uživatelů</p>
         <h2 class="display is-caps">Našli své bydlení díky rychlosti</h2>
       </div>
       <div class="quotes">
@@ -583,9 +575,8 @@
       </div>
     </section>
 
-    <section class="faq-section" id="faq">
+    <section class="faq-section" id="faq" data-nav="MÁTE OTÁZKY?">
       <div class="section-head">
-        <p class="eyebrow">MÁTE OTÁZKY?</p>
         <h2 class="display is-caps">Často kladené dotazy</h2>
       </div>
       <div class="qa-list"><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Jak rychle dostanu notifikaci o novém bytu?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>U tarifu Start odesíláme upozornění do 60 sekund od zveřejnění inzerátu. PRO má prioritu a stihne to do 30 sekund. Tarif Zdarma hlídá do 5 minut na 4 hlavních portálech.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Které české portály systém aktuálně hlídá?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Sledujeme Sreality, Bezrealitky, Reality.cz, Idnes Reality, UlovDomov, Reality.iDNES, a řadu dalších menších regionálních serverů včetně inzerátů na sociálních sítích.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Můžu předplatné kdykoliv zrušit?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano, předplatné je zcela bez závazků. Můžete ho kdykoliv zrušit v nastavení svého profilu jedním kliknutím. Žádné skryté poplatky.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>Je prohlížení sjednocené databáze opravdu zdarma?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Ano. Prohlížení a ruční vyhledávání všech aktivních inzerátů v ČR je pro všechny uživatele zcela zdarma. Platíte pouze za automatické real-time hlídání a rychlé notifikace.</p></div></div></div><div class="qa" data-cat="all"><button type="button" class="qa-q" aria-expanded="false"><span>V čem se Realitify liší od klasického hlídacího psa na Sreality?</span><span class="qa-ico"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></span></button><div class="qa-a"><div><p>Sreality vám hlídají pouze své vlastní stránky. Realitify hlídá přes 12 různých portálů najednou, filtruje duplicity, odstraňuje RK a doručuje notifikace okamžitě, zatímco standardní hlídací psi mívají zpoždění 15 minut až několik hodin.</p></div></div></div></div>
@@ -658,7 +649,7 @@
         <div id="landing-modal-body"></div>
       </div>
     </div>
-    <script src="/static/site/site.js?v=9" defer></script>
+    <script src="/static/site/site.js?v=12" defer></script>
     <script src="/static/site/landing-search.js?v=2"></script>
     <script src="/static/t.js?v=10" defer></script>
     <script>
@@ -707,8 +698,8 @@
       })();
     </script>
 
-      <script src="/static/site/nav.js?v=3" defer></script>
-    <script src="/static/site/pages.js?v=2" defer></script>
-    <script src="/static/site/ai-chat.js?v=8" defer></script>
+      <script src="/static/site/nav.js?v=8" defer></script>
+    <script src="/static/site/pages.js?v=2f1" defer></script>
+    <script src="/static/site/ai-chat.js?v=11" defer></script>
 </body>
 </html>

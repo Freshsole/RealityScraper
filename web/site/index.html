@@ -2,13 +2,13 @@
 <html lang="cs">
   <head>
     <meta charset="utf-8" />
-    <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/gtag.js?v=3"></script>
     <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
     <link rel="icon" href="/favicon.ico?v=2" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
-    <title>Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR</title>
+    <title>Realitify – realitní agregátor nemovitostí v ČR</title>
     <meta name="description" content="Realitify je realitní agregátor: dostupné byty a domy k pronájmu i prodeji z Sreality, Bezrealitky, iDNES, Bazoše a dalších portálů v jednom vyhledávači. Zdarma, bez duplicit, s indexem nájmů a hlídáním nových nabídek." />
     <meta name="keywords" content="realitní agregátor, vyhledávač nemovitostí, dostupné bydlení, byty k pronájmu, byty na prodej, domy na prodej, nemovitosti Praha, nemovitosti Brno, pronájem bytu, hlídací pes nemovitostí, index nájmů, Realitify" />
     <meta name="author" content="Realitify" />
@@ -17,7 +17,7 @@
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Realitify" />
-    <meta property="og:title" content="Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR" />
+    <meta property="og:title" content="Realitify – realitní agregátor nemovitostí v ČR" />
     <meta property="og:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Dostupné bydlení z více portálů v jednom vyhledávači, zdarma." />
     <meta property="og:url" content="https://realitify.cz/" />
     <meta property="og:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
@@ -26,7 +26,7 @@
     <meta property="og:locale" content="cs_CZ" />
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Realitify – realitní agregátor a vyhledávač nemovitostí: byty a domy k pronájmu i prodeji v ČR" />
+    <meta name="twitter:title" content="Realitify – realitní agregátor nemovitostí v ČR" />
     <meta name="twitter:description" content="Realitify agreguje nabídky bytů a domů z hlavních českých realitních portálů. Dostupné bydlení z více portálů v jednom vyhledávači, zdarma." />
     <meta name="twitter:image" content="https://realitify.cz/static/site/assets/og-cover.png" />
     <script type="application/ld+json">
@@ -155,14 +155,13 @@
       ]
     }
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/static/site/site.css?v=69" />
-    <link rel="stylesheet" href="/static/site/nav.css?v=1" />
-    <link rel="stylesheet" href="/static/site/pages.css?v=11" />
-    <link rel="stylesheet" href="/static/site/help.css?v=3" />
-    <link rel="stylesheet" href="/static/site/mobile.css?v=2" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="/static/site/site.css?v=79" />
+    <link rel="stylesheet" href="/static/site/nav.css?v=5" />
+    <link rel="stylesheet" href="/static/site/pages.css?v=11f1" />
+    <link rel="stylesheet" href="/static/site/help.css?v=3f6" />
+    <link rel="stylesheet" href="/static/site/mobile.css?v=2fn" />
     <script src="/static/site/mobile.js?v=1" defer></script>
   </head>
   <body class="is-home">
@@ -216,6 +215,7 @@
         </div>
       </div>
       <div class="hs-stage">
+      <div class="hs-tag hs-tag-m" aria-hidden="true"><span class="hs-pin"></span><span><b>Praha</b><em>od 8 999 Kč</em></span></div>
       <form class="hs-form" id="hs-form" novalidate>
         <div class="hs-tabs" role="tablist" aria-label="Typ nabídky">
           <span class="hs-seg"><button type="button" class="hs-tab on" role="tab" aria-selected="true" data-offer="pronajem">Pronájem</button>
@@ -246,7 +246,6 @@
     <div class="hs-modal" id="hs-modal" hidden>
       <div class="hs-modal-card" role="dialog" aria-modal="true" aria-labelledby="hs-modal-title">
         <button type="button" class="hs-close" id="hs-close" aria-label="Zavřít">×</button>
-        <p class="eyebrow" id="hs-modal-eyebrow">Vaše vyhledávání</p>
         <h2 id="hs-modal-title">Vytvořte si účet zdarma</h2>
         <div class="hs-summary" id="hs-summary"></div>
         <div class="hs-teaser" id="hs-teaser"></div>
@@ -281,7 +280,6 @@
       <div class="sold-cards" id="sold-cards"></div>
       <div class="cta-row">
         <a class="pill pill-lg" href="/registrace">Nechci přijít o další</a>
-        <p>Aktivujte si hlídání a buďte u toho jako první.</p>
       </div>
     </section>
 
@@ -369,7 +367,7 @@
       </div>
     </section>
 
-    <section class="compare-section" id="srovnani">
+    <section class="compare-section" id="srovnani" hidden style="display:none"><!-- TEMP HIDDEN: remove "hidden" + style to show again -->
       <div class="section-head">
         <h2 class="display is-caps">Jedna služba místo pěti hlídacích psů</h2>
         <p class="lead" style="max-width:680px">Už nemusíte platit prémiové hlídače na každém webu samostatně. Realitify vše sjednocuje pod jedno přehledné rozhraní s bezkonkurenční rychlostí.</p>
@@ -505,9 +503,12 @@
             <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star-filled.svg" width="16" height="16" alt="" /></span>
           </div>
           <blockquote>„Dva měsíce jsem marně hledal byt v Brně. Sreality hlídač mi poslal upozornění vždy až hodinu po zveřejnění, kdy už bylo obsazeno. S Realitify jsem volal majiteli 30 sekund po podání inzerátu a hned druhý den podepsal smlouvu.“</blockquote>
+<div class="quote-who">
           <div>
             <strong>Martin K.</strong>
             <p class="who">pronájem 2+kk, Brno-Královo Pole</p>
+          </div>
+          <img class="quote-avatar" src="/static/site/assets/bara/004.webp" width="44" height="44" alt="" loading="lazy" decoding="async" />
           </div>
         </article>
         <article class="quote">
@@ -519,9 +520,12 @@
             <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star-filled.svg" width="16" height="16" alt="" /></span>
           </div>
           <blockquote>„Díky SMS notifikaci mě Realitify upozornil na skvělý byt bez provize na Bezrealitky během mé polední pauzy. Okamžitě jsem zareagovala a stala se první zájemkyní. Bez této služby bych neměla šanci.“</blockquote>
+<div class="quote-who">
           <div>
             <strong>Lenka Š.</strong>
             <p class="who">pronájem 1+kk, Praha-Žižkov</p>
+          </div>
+          <img class="quote-avatar" src="/static/site/assets/bara/012.webp" width="44" height="44" alt="" loading="lazy" decoding="async" />
           </div>
         </article>
         <article class="quote">
@@ -533,9 +537,12 @@
             <span class="icon" style="width:16px;height:16px"><img src="/static/site/assets/star-filled.svg" width="16" height="16" alt="" /></span>
           </div>
           <blockquote>„Realitify nám zachránil krk. Hledali jsme větší rodinný byt v Praze 5 a díky okamžité notifikaci z reality.cz jsme byli na prohlídce jako první z padesáti zájemců. Skvělá investice!“</blockquote>
+<div class="quote-who">
           <div>
             <strong>Tomáš a Klára</strong>
             <p class="who">koupě 4+kk, Praha 5</p>
+          </div>
+          <img class="quote-avatar" src="/static/site/assets/bara/023.webp" width="44" height="44" alt="" loading="lazy" decoding="async" />
           </div>
         </article>
       </div>
@@ -575,7 +582,7 @@
         </form>
         <div class="help-ans" id="help-ans" hidden aria-live="polite"></div>
       </div>
-      <div class="help-chips"><span>Časté dotazy:</span><button type="button" data-q="Cena tarifu">Cena tarifu</button><button type="button" data-q="Jak rychle dostanu upozornění">Jak rychle dostanu upozornění</button><button type="button" data-q="Zrušení předplatného">Zrušení předplatného</button></div>
+      <div class="help-chips"><span>Časté dotazy:</span><div class="help-chips-row"><button type="button" data-q="Cena tarifu">Cena tarifu</button><button type="button" data-q="Jak rychle dostanu upozornění">Jak rychle dostanu upozornění</button><button type="button" data-q="Zrušení předplatného">Zrušení předplatného</button></div></div>
       <div class="help-grid"><div class="help-cat"><a class="help-cat-h" href="/faq#q1">Začínáme<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q1"><span>Co je Realitify?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q12"><span>Musím se registrovat, abych viděl nabídky?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q10"><span>Které portály Realitify sleduje?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div><div class="help-cat"><a class="help-cat-h" href="/faq#q3">Hlídání a notifikace<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q3"><span>Jak být první u nové nabídky?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q11"><span>Jak často se nabídky aktualizují?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q2"><span>Jak rychle sehnat byt v Praze?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div><div class="help-cat"><a class="help-cat-h" href="/faq#q5">Tarify a platby<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q5"><span>Jaké jsou tarify?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q5"><span>Můžu předplatné kdykoliv zrušit?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q12"><span>Je prohlížení nabídek zdarma?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div><div class="help-cat"><a class="help-cat-h" href="/trh">Ceny a trh<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q4"><span>Kolik stojí pronájem 2+kk v Praze?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q6"><span>Jak poznat předraženou nabídku?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q7"><span>Jak Realitify počítá cenu za m²?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div><div class="help-cat"><a class="help-cat-h" href="/ochrana-soukromi">Soukromí a cookies<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/ochrana-soukromi"><span>Jak nakládáte s osobními údaji?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/nastaveni-cookies"><span>Jaké cookies používáte?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="help-q" href="/faq#q9"><span>Souvisí Realitify se společností Realtify?</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></div><div class="help-contact"><div><h3>Nenašli jste, co potřebujete?</h3><p>Napište nám, rádi pomůžeme.</p></div><a href="/kontakt">Kontaktovat nás</a></div></div>
     </section>
 
@@ -588,9 +595,9 @@
         <h2 class="display is-caps">Přestaňte přicházet o nejlepší byty.</h2>
         <p class="lead">Založte si bezplatný účet a začněte sledovat kompletní český realitní trh na jednom místě ještě dnes. První notifikaci můžete dostat už za minutu.</p>
       </div>
-      <div style="display:flex;flex-direction:column;align-items:center;gap:16px">
+      <div class="final-actions" style="display:flex;flex-direction:column;align-items:center;gap:16px">
         <a class="pill pill-lg" href="/registrace">Začít hlídat zdarma</a>
-        <p class="final-note">Registrace trvá 30 sekund • Bez platební karty</p>
+        <p class="final-note">Registrace trvá 30 sekund<br class="final-br" /><span class="final-dot"> • </span>Bez platební karty</p>
       </div>
     </section>
 
@@ -646,13 +653,13 @@
         </div>
       </div>
     </footer>
-    <script src="/static/site/site.js?v=9" defer></script>
+    <script src="/static/site/site.js?v=12" defer></script>
     <script src="/static/t.js?v=10" defer></script>
-      <script src="/static/site/nav.js?v=3" defer></script>
-    <script src="/static/site/pages.js?v=2" defer></script>
+      <script src="/static/site/nav.js?v=8" defer></script>
+    <script src="/static/site/pages.js?v=2f1" defer></script>
     <script src="/static/site/hero-search.js?v=11" defer></script>
-    <script src="/static/site/home-live.js?v=3" defer></script>
-    <script src="/static/site/help.js?v=1" defer></script>
+    <script src="/static/site/home-live.js?v=9" defer></script>
+    <script src="/static/site/help.js?v=2" defer></script>
     <script src="/static/site/webmcp.js?v=1" defer></script>
 </body>
 </html>

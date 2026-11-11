@@ -49,7 +49,7 @@
         '<button type="button" class="bara-shuffle" data-shuffle>Náhodný výběr</button>' +
         '<button type="button" class="bara-upload" data-upload>Nahrát vlastní</button>' +
         '<p class="bara-msg" data-msg role="status" aria-live="polite"></p>' +
-        '<input type="file" accept="image/*" hidden data-file />' +
+        '<input type="file" accept="image/*" hidden data-file aria-label="Nahrát vlastní obrázek" />' +
       '</div>' +
       '<div class="bara-main">' +
         '<div class="bara-grid" role="listbox" aria-label="Avatary hlídacího psa Báry" data-grid></div>' +

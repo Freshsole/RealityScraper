@@ -149,17 +149,24 @@ def register_client(store: Store, payload: dict[str, Any]) -> dict[str, Any]:
     redirects = [str(item).strip() for item in (payload.get("redirect_uris") or []) if str(item).strip()]
     if not redirects:
         raise ValueError("Chybí redirect_uris")
+    redirects = redirects[:10]
+    if not all(redirect_allowed(item) for item in redirects):
+        raise ValueError("Nepovolený redirect_uri")
+    # The consent screen shows this name: strip control characters and always append where the user will be sent,
+    # so a client cannot pass itself off as "Realitify Official".
+    raw_name = "".join(ch for ch in str(payload.get("client_name") or "Claude") if ch.isprintable())[:80].strip() or "Claude"
+    host = urlparse(redirects[0]).hostname or "localhost"
     client_id = secrets.token_urlsafe(24)
     row = {
         "client_id": client_id,
         "redirect_uris": redirects,
-        "client_name": str(payload.get("client_name") or "Claude")[:120],
+        "client_name": f"{raw_name} ({host})"[:120],
         "token_endpoint_auth_method": "none",
         "created_at": int(time.time()),
     }
     rows = _read(store, CLIENTS_META)
     rows.append(row)
-    _write(store, CLIENTS_META, rows)
+    _write(store, CLIENTS_META, rows[-500:])  # bounded: registration is unauthenticated
     return {
         "client_id": client_id,
         "client_id_issued_at": row["created_at"],

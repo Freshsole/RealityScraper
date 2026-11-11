@@ -20,7 +20,7 @@ def store(tmp_path):
     return Store(tmp_path / "central.sqlite")
 
 
-def _register(store, email, name="Test User", password="password123"):
+def _register(store, email, name="Test User", password="Pass-word-123"):
     return user_account.register(store, name, email, password)
 
 
@@ -49,7 +49,7 @@ def test_login_ok_and_wrong_password(store):
 
 def test_session_roundtrip_and_logout(store):
     user, _ = _register(store, "sess@example.com")
-    _, token = user_account.login(store, "sess@example.com", "password123")
+    _, token = user_account.login(store, "sess@example.com", "Pass-word-123")
     seen = user_account.user_from_session(store, token)
     assert seen and seen["id"] == user["id"]
     user_account.clear_session(store, token)
@@ -59,8 +59,8 @@ def test_session_roundtrip_and_logout(store):
 def test_sessions_are_isolated_between_users(store):
     a, _ = _register(store, "iso-a@example.com")
     b, _ = _register(store, "iso-b@example.com")
-    _, tok_a = user_account.login(store, "iso-a@example.com", "password123")
-    _, tok_b = user_account.login(store, "iso-b@example.com", "password123")
+    _, tok_a = user_account.login(store, "iso-a@example.com", "Pass-word-123")
+    _, tok_b = user_account.login(store, "iso-b@example.com", "Pass-word-123")
     assert user_account.user_from_session(store, tok_a)["id"] == a["id"]
     assert user_account.user_from_session(store, tok_b)["id"] == b["id"]
     # logging out A does not affect B
@@ -79,7 +79,7 @@ def test_password_reset_flow(store):
     assert session
     # old password no longer works, new one does
     with pytest.raises(ValueError):
-        user_account.login(store, "reset@example.com", "password123")
+        user_account.login(store, "reset@example.com", "Pass-word-123")
     user2, _ = user_account.login(store, "reset@example.com", "newpassword1")
     assert user2["id"] == user["id"]
     # token is single-use
@@ -88,10 +88,10 @@ def test_password_reset_flow(store):
 
 def test_change_password_invalidates_sessions(store):
     user, _ = _register(store, "chpw@example.com")
-    _, tok1 = user_account.login(store, "chpw@example.com", "password123")
-    _, tok2 = user_account.login(store, "chpw@example.com", "password123")
+    _, tok1 = user_account.login(store, "chpw@example.com", "Pass-word-123")
+    _, tok2 = user_account.login(store, "chpw@example.com", "Pass-word-123")
     assert user_account.user_from_session(store, tok1)
-    user_account.change_password(store, user["id"], "password123", "brandnewpw1")
+    user_account.change_password(store, user["id"], "Pass-word-123", "brandnewpw1")
     assert user_account.user_from_session(store, tok1) is None
     assert user_account.user_from_session(store, tok2) is None
     user_account.login(store, "chpw@example.com", "brandnewpw1")

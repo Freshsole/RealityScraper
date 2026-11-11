@@ -11,13 +11,12 @@ import html
 import json
 from typing import Any, Iterable
 
-ASSET_V = {"site": "29", "nav": "1", "pages": "11", "navjs": "3", "pagesjs": "1", "mobile": "1"}
+ASSET_V = {"site": "39", "nav": "5", "pages": "12", "navjs": "8", "pagesjs": "1", "mobile": "2"}
 
 FONTS_LINK = (
-    '<link rel="preconnect" href="https://fonts.googleapis.com" />\n'
-    '    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
-    '    <link href="https://fonts.googleapis.com/css2?family='
-    'Inter:ital,wght@0,400;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet" />'
+    # Inter is self-hosted (no request to Google Fonts, so no visitor IP leaves the site).
+    '<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />\n'
+    '    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />'
 )
 
 HEADER_HTML = """<header class="navbar">
@@ -166,7 +165,6 @@ def cta_band(title: str, text: str, button: str = "Vyzkoušet zdarma", href: str
 
 def not_found_page() -> str:
     body = """      <section class="pg-hero" data-nav="404">
-        <p class="eyebrow">CHYBA 404</p>
         <h1 class="display">Tuhle stránku jsme nenašli</h1>
         <p class="lead">Odkaz je možná zastaralý, nebo byla stránka přesunuta. Zkuste jednu z těchto cest.</p>
         <div class="pg-actions">

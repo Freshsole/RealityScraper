@@ -79,3 +79,7 @@ V aplikaci (Configuration → Environment Variables) přidejte:
 Pak aplikaci znovu nasaďte. Při `AI_ENABLED=true` a chybějící `LLM_API_KEY` nebo `LLM_MODEL` aplikace hned při startu
 spadne s chybou. Dávkové dogenerování shrnutí: v terminálu kontejneru
 `python scripts/generate_summaries.py --limit 50`.
+
+## Jazyky (automatický překlad UI)
+
+Web a aplikace jsou psané česky a `web/site/i18n.js` je automaticky překládá do **sk, uk, en, ru, vi, de**. Skript se vkládá do každé HTML stránky middlewarem `inject_i18n` (`app/main.py`), takže nový text se přeloží sám, bez překladových souborů. Jazyk se bere z uloženého výběru, pak z jazyka prohlížeče, jinak čeština; přepínač je v hlavičce. Překlady dělá LLM (`LLM_API_KEY`, `LLM_MODEL`, volitelně `I18N_MODEL`) přes `POST /api/i18n/translate` a cachují se v `data/i18n.sqlite`. Čísla se nahrazují `{0}`, `{1}`, takže "Nalezeno 1 234 nabídek" je jeden záznam. Obsah z portálů (adresy, názvy) se nepřekládá; vyloučit prvek jde přes `translate="no"`.

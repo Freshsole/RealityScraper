@@ -136,3 +136,6 @@
 
 @media (max-width:480px){.aic-panel{right:12px;bottom:90px;height:min(620px,calc(100dvh - 104px))}.aic-fab{right:12px;bottom:12px}.aic-hero{height:210px}.aic-dog{width:128px}}
 @media (prefers-reduced-motion:reduce){.aic-panel *,.aic-fab *,.aic-panel,.aic-fab{animation:none!important;transition:none!important}}
+
+.aic-msg a.aic-reco{display:inline-block;padding:1px 10px;border-radius:999px;background:var(--aic-green);color:var(--aic-forest);font-weight:700;text-decoration:none;line-height:1.5}
+.aic-msg a.aic-reco:hover{filter:brightness(.96)}

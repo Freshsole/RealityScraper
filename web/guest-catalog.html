@@ -2,7 +2,7 @@
 <html lang="cs" data-page="catalog">
   <head>
     <meta charset="utf-8" />
-    <script src="/static/site/gtag.js"></script>
+    <script src="/static/site/gtag.js?v=3"></script>
     <script src="/static/site/error-report.js"></script>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" />
@@ -13,11 +13,10 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Realitify" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" />
+<link rel="preload" href="/static/site/assets/fonts/inter-normal-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/static/site/fonts.css?v=1" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.css" integrity="sha384-uTttxo/aOKbdE5RlD/SPzSDoDmNvGlUYPjONi2MN/b7c9HPSvW07OIuyP7uL6jxK" crossorigin="anonymous" />
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
     <link rel="stylesheet" href="/static/mobile-app.css?v=__ASSET_VERSION__" />
     <meta name="robots" content="noindex" />
@@ -66,7 +65,14 @@
                 <p class="kicker">Aktuální nabídky ze všech portálů</p>
                 <h2>Nabídka</h2>
               </div>
-              <p id="catalog-count">Načítám…</p>
+              <div class="catalog-head-right">
+                <p id="catalog-count">Načítám…</p>
+                <div class="view-switch" id="catalog-view-switch" role="group" aria-label="Zobrazení nabídky">
+                  <button type="button" data-cv="list" class="on" aria-label="Seznam s mapou" title="Seznam s mapou"><svg viewBox="0 0 24 24"><path d="M9 7h10M9 12h10M9 17h10M5 7h.01M5 12h.01M5 17h.01"/></svg></button>
+                  <button type="button" data-cv="grid" aria-label="Karty" title="Karty"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4"/></svg></button>
+                  <button type="button" data-cv="map" aria-label="Mapa" title="Mapa"><svg viewBox="0 0 24 24"><path d="M9 5 3.5 7v12L9 17l6 2 5.5-2V5L15 7zM9 5v12M15 7v12"/></svg></button>
+                </div>
+              </div>
             </div>
             <div class="chip-row" id="cat-status">
               <button type="button" class="chip on" data-status="" data-icon="eye">Aktivní</button>
@@ -128,7 +134,6 @@
         <div id="compare-grid" class="compare-grid"></div>
       </div>
     </div>
-    <footer class="footer">Realitify — osobní hlídání veřejných inzerátů. <span id="footer-version"></span></footer>
     <div id="app-confirm" class="bill-confirm" hidden>
       <div class="bill-confirm-card">
         <h2 id="app-confirm-title">Opravdu?</h2>
@@ -291,10 +296,10 @@
       <button class="lightbox-nav next" id="lightbox-next" type="button">›</button>
       <p id="lightbox-count"></p>
     </div>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
-    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet/leaflet-maplibre-gl.js"></script>
-    <script src="/static/map-basemap.js?v=2"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/maplibre-gl@5.24.1/dist/maplibre-gl.js" integrity="sha384-nXMl9YiLoSG5KBPTFgvxVuIqQQcqIvo0bFrvoEaGJC6r7IibIzF1S36Zbf/sKBtL" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js" integrity="sha384-tXYNKOHx4T02jMP7YYCtBxPIv1B5gaA5mcVPBzqMp6d7VzWzxJgI2aWF/nJLrQdS" crossorigin="anonymous"></script>
+    <script src="/static/map-basemap.js?v=2f1"></script>
     <script src="/static/portals.js?v=1"></script>
     <script src="/static/icons.js?v=__ASSET_VERSION__"></script>
     <script src="/static/catalog.js?v=__ASSET_VERSION__"></script>

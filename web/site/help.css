@@ -58,3 +58,13 @@
 .faq-help .qa-a p{padding:0 24px 22px;font-size:15px;line-height:1.7;color:var(--body)}
 .faq-help .qa-a p mark{background:#ffe98a;border-radius:3px}
 .faq-help .faq-aside{border-radius:20px}
+.help-chips-row{display:contents}
+@media (max-width:860px){
+  .help-chips{width:100%;min-width:0;flex-direction:column;align-items:stretch;gap:10px;text-align:left}
+  .help-chips>span{text-align:left}
+  .help-chips-row{display:flex;flex-wrap:nowrap;min-width:0;width:calc(100% + var(--gutter,20px) * 2);max-width:calc(100% + var(--gutter,20px) * 2);box-sizing:border-box;align-self:flex-start;touch-action:pan-x pan-y;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none;-webkit-overflow-scrolling:touch;margin:0 calc(var(--gutter,20px) * -1);padding:2px var(--gutter,20px) 4px}
+  .help-chips-row{cursor:grab;user-select:none}
+  .help-chips-row::-webkit-scrollbar{display:none}
+  .help-chips-row button{flex:none;white-space:nowrap}
+}
+@media (max-width:860px){.help-contact{min-height:0;gap:18px}}
